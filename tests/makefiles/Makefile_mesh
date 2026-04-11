@@ -1,5 +1,4 @@
 SHELL := /bin/zsh
-ARCH := arch -x86_64
 CC := cc
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
@@ -18,13 +17,13 @@ MESH_OBJ := src/prj_mesh.o
 all: $(TEST_BIN)
 
 $(MESH_OBJ): $(MESH_SRC) src/prj_mesh.h src/prj_types.h src/prj_defs.h src/prj_eos.h src/prj_reconstruct.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_BIN): $(TEST_SRC) $(MESH_OBJ)
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(MESH_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(MESH_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
 
 run: $(TEST_BIN)
-	$(ARCH) ./$(TEST_BIN)
+	./$(TEST_BIN)
 
 clean:
 	rm -f $(MESH_OBJ) $(TEST_BIN)

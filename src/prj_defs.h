@@ -2,6 +2,10 @@
 #define PRJ_DEFS_H
 
 #define PRJ_NDIM 3
+#ifndef PRJ_USE_GRAVITY
+#define PRJ_USE_GRAVITY 1
+#endif
+
 #ifndef PRJ_USE_RADIATION
 #define PRJ_USE_RADIATION 0
 #endif

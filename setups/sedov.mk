@@ -1,0 +1,2 @@
+GRAVITY := 0
+RADIATION := 0

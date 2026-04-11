@@ -1,12 +1,16 @@
 CC := $(shell command -v mpicc >/dev/null 2>&1 && echo mpicc || echo cc)
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
+
+-include setup.mk
+
+GRAVITY ?= 1
 RADIATION ?= 0
 MPI_CFLAGS := $(shell mpicc --showme:compile 2>/dev/null)
 MPI_LIBS := $(shell mpicc --showme:link 2>/dev/null)
 HDF5_CFLAGS := $(shell pkg-config --cflags hdf5)
 HDF5_LIBS := $(shell pkg-config --libs hdf5)
-CPPFLAGS := -Isrc -DPRJ_ENABLE_MPI -DPRJ_USE_RADIATION=$(RADIATION) $(MPI_CFLAGS) $(HDF5_CFLAGS)
+CPPFLAGS := -Isrc -DPRJ_ENABLE_MPI -DPRJ_USE_GRAVITY=$(GRAVITY) -DPRJ_USE_RADIATION=$(RADIATION) $(MPI_CFLAGS) $(HDF5_CFLAGS)
 LDFLAGS :=
 LDLIBS := $(HDF5_LIBS) $(MPI_LIBS)
 
@@ -16,7 +20,7 @@ else
 CFLAGS := $(STD) $(WARN) -O3
 endif
 
-TARGET := prj
+TARGET ?= prj
 SRC_DIR := src
 TEST_DIR := tests
 

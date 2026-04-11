@@ -46,23 +46,61 @@ static void prj_copy_file(const char *src, const char *dst)
     fclose(fout);
 }
 
-static void prj_print_build_config(int rank)
+static const char *prj_eos_label(const prj_sim *sim)
 {
-    if (rank != 0) {
+    if (sim == 0) {
+        return "unknown";
+    }
+    if (sim->eos.filename[0] != '\0') {
+        return sim->eos.filename;
+    }
+    return "ideal-gamma";
+}
+
+static const char *prj_amr_label(const prj_sim *sim)
+{
+    if (sim == 0) {
+        return "off";
+    }
+    if (sim->mesh.max_level > 0 && sim->amr_interval > 0) {
+        return "on";
+    }
+    return "off";
+}
+
+static void prj_print_config(const prj_sim *sim, int rank)
+{
+    if (rank != 0 || sim == 0) {
         return;
     }
 
-    printf("build: mpi=%s radiation=%s\n",
+    printf("config:\n");
+    printf("mpi: %s\n",
 #if defined(PRJ_ENABLE_MPI)
-        "on",
+        "on"
 #else
-        "off",
+        "off"
 #endif
+    );
+    printf("radiation: %s\n",
 #if PRJ_USE_RADIATION
         "on"
 #else
         "off"
 #endif
+    );
+    printf("gravity: %s\n",
+#if PRJ_USE_GRAVITY
+        "on"
+#else
+        "off"
+#endif
+    );
+    printf("eos: %s\n",
+        prj_eos_label(sim)
+    );
+    printf("amr: %s\n",
+        prj_amr_label(sim)
     );
 }
 
@@ -111,7 +149,7 @@ int main(int argc, char *argv[])
     prj_mpi_init(&argc, &argv, &mpi);
     prj_mpi_decompose(&sim.mesh);
     prj_mpi_prepare(&sim.mesh, &mpi);
-    prj_print_build_config(mpi.rank);
+    prj_print_config(&sim, mpi.rank);
     if (mpi.rank == 0) {
         mkdir("output", 0777);
     }
@@ -124,9 +162,12 @@ int main(int argc, char *argv[])
         sim.mesh.amr_refine_thresh = saved_amr_refine_thresh;
         sim.mesh.amr_derefine_thresh = saved_amr_derefine_thresh;
         sim.mesh.amr_pressure_reference = saved_amr_pressure_reference;
+        prj_print_config(&sim, mpi.rank);
     }
     prj_rad_init(&sim.rad);
+ #if PRJ_USE_GRAVITY
     prj_gravity_init(&sim);
+ #endif
     prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
     prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
 
@@ -164,7 +205,9 @@ int main(int argc, char *argv[])
         snprintf(final_restart, sizeof(final_restart), "output/restart_%08d.h5", sim.step);
         prj_copy_file(final_restart, "output/final.h5");
     }
+#if PRJ_USE_GRAVITY
     prj_gravity_free(&sim.monopole_grav);
+#endif
     prj_mesh_destroy(&sim.mesh);
     prj_mpi_finalize();
     return 0;

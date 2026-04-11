@@ -1,5 +1,4 @@
 SHELL := /bin/zsh
-ARCH := arch -x86_64
 CC := cc
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
@@ -18,13 +17,13 @@ EOS_OBJ := src/prj_eos.o
 all: $(TEST_BIN)
 
 $(EOS_OBJ): $(EOS_SRC) src/prj_eos.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_BIN): $(TEST_SRC) $(EOS_OBJ)
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(EOS_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(EOS_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
 
 run: $(TEST_BIN)
-	$(ARCH) ./$(TEST_BIN)
+	./$(TEST_BIN)
 
 clean:
 	rm -f $(EOS_OBJ) $(TEST_BIN)

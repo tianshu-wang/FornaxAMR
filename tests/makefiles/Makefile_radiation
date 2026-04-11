@@ -1,5 +1,4 @@
 SHELL := /bin/zsh
-ARCH := arch -x86_64
 CC ?= cc
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
@@ -36,23 +35,23 @@ OBJS := \
 all: $(TEST_BIN)
 
 $(TEST_BIN): $(TEST_SRC) $(OBJS)
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(TEST_MPI_BIN): $(TEST_SRC) $(OBJS)
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
 
 run: $(TEST_BIN)
-	$(ARCH) zsh -lc 'cd "$(PWD)" && ./$(TEST_BIN)'
+	zsh -lc 'cd "$(PWD)" && ./$(TEST_BIN)'
 
 mpi:
-	$(MAKE) -f setups/Makefile_radiation clean
-	$(MAKE) -f setups/Makefile_radiation $(TEST_MPI_BIN) \
+	$(MAKE) -f tests/makefiles/Makefile_radiation clean
+	$(MAKE) -f tests/makefiles/Makefile_radiation $(TEST_MPI_BIN) \
 		CC=mpicc \
 		CPPFLAGS="-Isrc -DPRJ_ENABLE_MPI $(MPI_CFLAGS) $(HDF5_CFLAGS)" \
 		LDLIBS="$(HDF5_LIBS) $(MPI_LIBS) -lm"
 
 run-mpi: mpi
-	$(ARCH) mpirun -n 3 ./$(TEST_MPI_BIN)
+	mpirun -n 3 ./$(TEST_MPI_BIN)
 
 clean:
 	rm -f $(OBJS) $(TEST_BIN) $(TEST_MPI_BIN)

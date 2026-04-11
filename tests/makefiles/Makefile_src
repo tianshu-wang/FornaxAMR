@@ -1,5 +1,4 @@
 SHELL := /bin/zsh
-ARCH := arch -x86_64
 CC := cc
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
@@ -17,13 +16,13 @@ SRC_OBJ := src/prj_src.o
 all: $(TEST_BIN)
 
 $(SRC_OBJ): src/prj_src.c src/prj.h src/prj_src.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_BIN): $(TEST_SRC) $(SRC_OBJ)
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(SRC_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(SRC_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
 
 run: $(TEST_BIN)
-	$(ARCH) ./$(TEST_BIN)
+	./$(TEST_BIN)
 
 clean:
 	rm -f $(SRC_OBJ) $(TEST_BIN)

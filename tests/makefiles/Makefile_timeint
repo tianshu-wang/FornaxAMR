@@ -1,5 +1,4 @@
 SHELL := /bin/zsh
-ARCH := arch -x86_64
 CC := cc
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
@@ -25,37 +24,37 @@ RECON_OBJ := src/prj_reconstruct.o
 all: $(TEST_BIN)
 
 $(TIMEINT_OBJ): src/prj_timeint.c src/prj.h src/prj_timeint.h src/prj_boundary.h src/prj_flux.h src/prj_riemann.h src/prj_src.h src/prj_eos.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(BOUNDARY_OBJ): src/prj_boundary.c src/prj.h src/prj_boundary.h src/prj_amr.h src/prj_mesh.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(FLUX_OBJ): src/prj_flux.c src/prj.h src/prj_flux.h src/prj_riemann.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(RIEMANN_OBJ): src/prj_riemann.c src/prj.h src/prj_riemann.h src/prj_eos.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(SRC_OBJ): src/prj_src.c src/prj.h src/prj_src.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(EOS_OBJ): src/prj_eos.c src/prj.h src/prj_eos.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(MESH_OBJ): src/prj_mesh.c src/prj.h src/prj_mesh.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(AMR_OBJ): src/prj_amr.c src/prj.h src/prj_amr.h src/prj_mesh.h src/prj_eos.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(RECON_OBJ): src/prj_reconstruct.c src/prj.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_BIN): $(TEST_SRC) $(TIMEINT_OBJ) $(BOUNDARY_OBJ) $(FLUX_OBJ) $(RIEMANN_OBJ) $(SRC_OBJ) $(EOS_OBJ) $(MESH_OBJ) $(AMR_OBJ) $(RECON_OBJ)
-	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(TIMEINT_OBJ) $(BOUNDARY_OBJ) $(FLUX_OBJ) $(RIEMANN_OBJ) $(SRC_OBJ) $(EOS_OBJ) $(MESH_OBJ) $(AMR_OBJ) $(RECON_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(TIMEINT_OBJ) $(BOUNDARY_OBJ) $(FLUX_OBJ) $(RIEMANN_OBJ) $(SRC_OBJ) $(EOS_OBJ) $(MESH_OBJ) $(AMR_OBJ) $(RECON_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
 
 run: $(TEST_BIN)
-	$(ARCH) ./$(TEST_BIN)
+	./$(TEST_BIN)
 
 clean:
 	rm -f $(TIMEINT_OBJ) $(BOUNDARY_OBJ) $(FLUX_OBJ) $(RIEMANN_OBJ) $(SRC_OBJ) $(EOS_OBJ) $(MESH_OBJ) $(AMR_OBJ) $(RECON_OBJ) $(TEST_BIN)
