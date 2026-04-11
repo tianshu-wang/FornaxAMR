@@ -1,0 +1,58 @@
+SHELL := /bin/zsh
+ARCH := arch -x86_64
+CC ?= cc
+STD := -std=c99
+WARN := -Wall -Wextra -pedantic
+HDF5_CFLAGS := $(shell pkg-config --cflags hdf5)
+HDF5_LIBS := $(shell pkg-config --libs hdf5)
+MPI_CFLAGS := $(shell mpicc --showme:compile 2>/dev/null)
+MPI_LIBS := $(shell mpicc --showme:link 2>/dev/null)
+CPPFLAGS ?= -Isrc $(HDF5_CFLAGS)
+CFLAGS := $(STD) $(WARN) -O3
+LDFLAGS :=
+LDLIBS ?= $(HDF5_LIBS) -lm
+
+TEST_SRC := tests/test_radiation.c
+TEST_BIN := tests/test_radiation
+TEST_MPI_BIN := tests/test_radiation_mpi
+OBJS := \
+	src/prj_amr.o \
+	src/prj_boundary.o \
+	src/prj_eos.o \
+	src/prj_flux.o \
+	src/prj_gravity.o \
+	src/prj_io.o \
+	src/prj_mesh.o \
+	src/prj_mpi.o \
+	src/prj_radiation.o \
+	src/prj_reconstruct.o \
+	src/prj_riemann.o \
+	src/prj_src.o \
+	src/prj_timeint.o \
+	src/prj_utils.o
+
+.PHONY: all run mpi run-mpi clean
+
+all: $(TEST_BIN)
+
+$(TEST_BIN): $(TEST_SRC) $(OBJS)
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
+
+$(TEST_MPI_BIN): $(TEST_SRC) $(OBJS)
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
+
+run: $(TEST_BIN)
+	$(ARCH) zsh -lc 'cd "$(PWD)" && ./$(TEST_BIN)'
+
+mpi:
+	$(MAKE) -f setups/Makefile_radiation clean
+	$(MAKE) -f setups/Makefile_radiation $(TEST_MPI_BIN) \
+		CC=mpicc \
+		CPPFLAGS="-Isrc -DPRJ_ENABLE_MPI $(MPI_CFLAGS) $(HDF5_CFLAGS)" \
+		LDLIBS="$(HDF5_LIBS) $(MPI_LIBS) -lm"
+
+run-mpi: mpi
+	$(ARCH) mpirun -n 3 ./$(TEST_MPI_BIN)
+
+clean:
+	rm -f $(OBJS) $(TEST_BIN) $(TEST_MPI_BIN)

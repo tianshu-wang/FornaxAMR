@@ -1,0 +1,29 @@
+SHELL := /bin/zsh
+ARCH := arch -x86_64
+CC := cc
+STD := -std=c99
+WARN := -Wall -Wextra -pedantic
+CPPFLAGS := -Isrc
+CFLAGS := $(STD) $(WARN) -O3
+LDFLAGS :=
+LDLIBS :=
+
+TEST_SRC := tests/test_prj_src.c
+TEST_BIN := tests/test_prj_src
+SRC_OBJ := src/prj_src.o
+
+.PHONY: all run clean
+
+all: $(TEST_BIN)
+
+$(SRC_OBJ): src/prj_src.c src/prj.h src/prj_src.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_BIN): $(TEST_SRC) $(SRC_OBJ)
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(SRC_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
+
+run: $(TEST_BIN)
+	$(ARCH) ./$(TEST_BIN)
+
+clean:
+	rm -f $(SRC_OBJ) $(TEST_BIN)

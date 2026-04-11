@@ -1,0 +1,45 @@
+SHELL := /bin/zsh
+ARCH := arch -x86_64
+CC := cc
+STD := -std=c99
+WARN := -Wall -Wextra -pedantic
+CPPFLAGS := -Isrc
+CFLAGS := $(STD) $(WARN) -O3
+LDFLAGS :=
+LDLIBS := -lm
+
+TEST_SRC := tests/test_flux.c
+TEST_BIN := tests/test_flux
+FLUX_OBJ := src/prj_flux.o
+RIEMANN_OBJ := src/prj_riemann.o
+EOS_OBJ := src/prj_eos.o
+RECON_OBJ := src/prj_reconstruct.o
+MESH_OBJ := src/prj_mesh.o
+
+.PHONY: all run clean
+
+all: $(TEST_BIN)
+
+$(FLUX_OBJ): src/prj_flux.c src/prj.h src/prj_flux.h src/prj_riemann.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(RIEMANN_OBJ): src/prj_riemann.c src/prj.h src/prj_riemann.h src/prj_eos.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(EOS_OBJ): src/prj_eos.c src/prj.h src/prj_eos.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(RECON_OBJ): src/prj_reconstruct.c src/prj.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(MESH_OBJ): src/prj_mesh.c src/prj.h src/prj_mesh.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_BIN): $(TEST_SRC) $(FLUX_OBJ) $(RIEMANN_OBJ) $(EOS_OBJ) $(RECON_OBJ) $(MESH_OBJ)
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(FLUX_OBJ) $(RIEMANN_OBJ) $(EOS_OBJ) $(RECON_OBJ) $(MESH_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
+
+run: $(TEST_BIN)
+	$(ARCH) ./$(TEST_BIN)
+
+clean:
+	rm -f $(FLUX_OBJ) $(RIEMANN_OBJ) $(EOS_OBJ) $(RECON_OBJ) $(MESH_OBJ) $(TEST_BIN)

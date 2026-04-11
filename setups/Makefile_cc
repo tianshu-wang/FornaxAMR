@@ -1,0 +1,112 @@
+SHELL := /bin/zsh
+ARCH := arch -x86_64
+CC ?= cc
+STD := -std=c99
+WARN := -Wall -Wextra -pedantic
+HDF5_CFLAGS := $(shell pkg-config --cflags hdf5)
+HDF5_LIBS := $(shell pkg-config --libs hdf5)
+MPI_CFLAGS := $(shell mpicc --showme:compile 2>/dev/null)
+MPI_LIBS := $(shell mpicc --showme:link 2>/dev/null)
+CPPFLAGS ?= -Isrc $(HDF5_CFLAGS) -Iproblems
+CFLAGS := $(STD) $(WARN) -O3
+LDFLAGS :=
+LDLIBS ?= $(HDF5_LIBS) -lm
+
+TEST_SRC := tests/test_cc.c
+TEST_BIN := tests/test_cc
+TEST_MPI_BIN := tests/test_cc_mpi
+OBJS := \
+	src/prj_amr.o \
+	src/prj_boundary.o \
+	src/prj_eos.o \
+	src/prj_flux.o \
+	src/prj_gravity.o \
+	src/prj_io.o \
+	src/prj_mesh.o \
+	src/prj_mpi.o \
+	src/prj_reconstruct.o \
+	src/prj_riemann.o \
+	src/prj_src.o \
+	src/prj_timeint.o \
+	src/prj_utils.o \
+	problems/prj_problem_general.o \
+	problems/prj_problem_cc.o \
+	problems/prj_problem_sedov.o \
+	problems/prj_problem_sedov_offcenter.o
+
+.PHONY: all run mpi run-mpi clean
+
+all: $(TEST_BIN)
+
+src/prj_amr.o: src/prj_amr.c src/prj.h src/prj_amr.h src/prj_mesh.h src/prj_eos.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_boundary.o: src/prj_boundary.c src/prj.h src/prj_boundary.h src/prj_amr.h src/prj_mesh.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_eos.o: src/prj_eos.c src/prj.h src/prj_eos.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_flux.o: src/prj_flux.c src/prj.h src/prj_flux.h src/prj_riemann.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_gravity.o: src/prj_gravity.c src/prj.h src/prj_gravity.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_io.o: src/prj_io.c src/prj.h src/prj_io.h src/prj_mesh.h src/prj_boundary.h src/prj_amr.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_mesh.o: src/prj_mesh.c src/prj.h src/prj_mesh.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_mpi.o: src/prj_mpi.c src/prj.h src/prj_mpi.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_reconstruct.o: src/prj_reconstruct.c src/prj.h src/prj_reconstruct.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_riemann.o: src/prj_riemann.c src/prj.h src/prj_riemann.h src/prj_eos.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_src.o: src/prj_src.c src/prj.h src/prj_src.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_timeint.o: src/prj_timeint.c src/prj.h src/prj_timeint.h src/prj_boundary.h src/prj_flux.h src/prj_riemann.h src/prj_src.h src/prj_eos.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+src/prj_utils.o: src/prj_utils.c src/prj.h src/prj_utils.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+problems/prj_problem_general.o: problems/prj_problem_general.c src/prj.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+problems/prj_problem_cc.o: problems/prj_problem_cc.c src/prj.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+problems/prj_problem_sedov.o: problems/prj_problem_sedov.c src/prj.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+problems/prj_problem_sedov_offcenter.o: problems/prj_problem_sedov_offcenter.c src/prj.h src/prj_types.h src/prj_defs.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_BIN): $(TEST_SRC) $(OBJS)
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
+
+$(TEST_MPI_BIN): $(TEST_SRC) $(OBJS)
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
+
+run: $(TEST_BIN)
+	$(ARCH) ./$(TEST_BIN)
+
+mpi:
+	$(MAKE) -f setups/Makefile_cc clean
+	$(MAKE) -f setups/Makefile_cc $(TEST_MPI_BIN) \
+		CC=mpicc \
+		CPPFLAGS="-Isrc -Iproblems -DPRJ_ENABLE_MPI $(MPI_CFLAGS) $(HDF5_CFLAGS)" \
+		LDLIBS="$(HDF5_LIBS) $(MPI_LIBS) -lm"
+
+run-mpi: mpi
+	$(ARCH) mpirun -n 2 ./$(TEST_MPI_BIN)
+
+clean:
+	rm -f $(OBJS) $(TEST_BIN) $(TEST_MPI_BIN)

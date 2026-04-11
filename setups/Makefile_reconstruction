@@ -1,0 +1,30 @@
+SHELL := /bin/zsh
+ARCH := arch -x86_64
+CC := cc
+STD := -std=c99
+WARN := -Wall -Wextra -pedantic
+CPPFLAGS := -Isrc
+CFLAGS := $(STD) $(WARN) -O3
+LDFLAGS :=
+LDLIBS := -lm
+
+TEST_SRC := tests/test_reconstruction.c
+TEST_BIN := tests/test_reconstruction
+RECON_SRC := src/prj_reconstruct.c
+RECON_OBJ := src/prj_reconstruct.o
+
+.PHONY: all run clean
+
+all: $(TEST_BIN)
+
+$(RECON_OBJ): $(RECON_SRC) src/prj_reconstruct.h
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(TEST_BIN): $(TEST_SRC) $(RECON_OBJ)
+	$(ARCH) $(CC) $(CPPFLAGS) $(CFLAGS) $< $(RECON_OBJ) $(LDFLAGS) $(LDLIBS) -o $@
+
+run: $(TEST_BIN)
+	$(ARCH) ./$(TEST_BIN)
+
+clean:
+	rm -f $(RECON_OBJ) $(TEST_BIN)
