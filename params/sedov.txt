@@ -1,0 +1,31 @@
+# Sample runtime parameters for the centered Sedov blast setup.
+
+x1min = -2.0
+x1max = 2.0
+x2min = -2.0
+x2max = 2.0
+x3min = -2.0
+x3max = 2.0
+
+root_nx = 4
+max_level = 2
+
+cfl = 0.8
+t_end = 10.0
+max_steps = 12
+output_interval = 10
+restart_interval = 10
+amr_interval = 1
+
+amr_refine_thresh = 0.5
+amr_derefine_thresh = 0.1
+amr_pressure_reference = -1
+
+output_dir = output/dump
+
+bc_x1_inner = outflow
+bc_x1_outer = outflow
+bc_x2_inner = outflow
+bc_x2_outer = outflow
+bc_x3_inner = outflow
+bc_x3_outer = outflow

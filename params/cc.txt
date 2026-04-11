@@ -1,0 +1,33 @@
+# Sample runtime parameters for the core-collapse style setup.
+# Update eos_file if your table lives somewhere else.
+
+x1min = -3.0e9
+x1max = 3.0e9
+x2min = -3.0e9
+x2max = 3.0e9
+x3min = -3.0e9
+x3max = 3.0e9
+
+root_nx = 4
+max_level = 2
+
+cfl = 0.4
+t_end = 1.0e9
+max_steps = 100
+output_interval = 10
+restart_interval = 50
+amr_interval = 1
+
+amr_refine_thresh = 1.0e-3
+amr_derefine_thresh = 2.5e-4
+amr_pressure_reference = -1.0
+
+output_dir = output/dump
+eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
+
+bc_x1_inner = outflow
+bc_x1_outer = outflow
+bc_x2_inner = outflow
+bc_x2_outer = outflow
+bc_x3_inner = outflow
+bc_x3_outer = outflow

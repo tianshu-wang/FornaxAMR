@@ -2,7 +2,15 @@
 #define PRJ_DEFS_H
 
 #define PRJ_NDIM 3
+#ifndef PRJ_USE_RADIATION
+#define PRJ_USE_RADIATION 0
+#endif
+
+#if PRJ_USE_RADIATION
 #define PRJ_NRAD 1
+#else
+#define PRJ_NRAD 0
+#endif
 #define PRJ_NEGROUP 3
 #define PRJ_NHYDRO 6
 #define PRJ_NRAD_VAR (PRJ_NRAD * PRJ_NEGROUP * (1 + PRJ_NDIM))

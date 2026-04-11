@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #include <hdf5.h>
 
@@ -11,6 +12,244 @@
 #include "prj.h"
 
 #define PRJ_IO_METADATA_SIZE 638
+
+static void prj_io_fail(const char *message);
+
+static void prj_io_trim(char *text)
+{
+    char *start;
+    char *end;
+
+    if (text == 0) {
+        return;
+    }
+    start = text;
+    while (*start != '\0' && isspace((unsigned char)*start)) {
+        start += 1;
+    }
+    if (start != text) {
+        memmove(text, start, strlen(start) + 1);
+    }
+    end = text + strlen(text);
+    while (end > text && isspace((unsigned char)end[-1])) {
+        end -= 1;
+    }
+    *end = '\0';
+}
+
+static int prj_io_parse_bc(const char *value, int *bc_type)
+{
+    if (value == 0 || bc_type == 0) {
+        return 1;
+    }
+    if (strcmp(value, "outflow") == 0) {
+        *bc_type = PRJ_BC_OUTFLOW;
+        return 0;
+    }
+    if (strcmp(value, "reflect") == 0) {
+        *bc_type = PRJ_BC_REFLECT;
+        return 0;
+    }
+    if (strcmp(value, "user") == 0) {
+        *bc_type = PRJ_BC_USER;
+        return 0;
+    }
+    return 1;
+}
+
+static void prj_io_set_default_runtime(prj_sim *sim)
+{
+    if (sim == 0) {
+        return;
+    }
+
+    sim->coord.x1min = -2.0;
+    sim->coord.x1max = 2.0;
+    sim->coord.x2min = -2.0;
+    sim->coord.x2max = 2.0;
+    sim->coord.x3min = -2.0;
+    sim->coord.x3max = 2.0;
+    sim->bc.bc_x1_inner = PRJ_BC_OUTFLOW;
+    sim->bc.bc_x1_outer = PRJ_BC_OUTFLOW;
+    sim->bc.bc_x2_inner = PRJ_BC_OUTFLOW;
+    sim->bc.bc_x2_outer = PRJ_BC_OUTFLOW;
+    sim->bc.bc_x3_inner = PRJ_BC_OUTFLOW;
+    sim->bc.bc_x3_outer = PRJ_BC_OUTFLOW;
+    sim->cfl = 0.8;
+    sim->t_end = 0.1;
+    sim->max_steps = 100;
+    sim->output_interval = 10;
+    sim->restart_interval = 50;
+    sim->amr_interval = -1;
+    strncpy(sim->output_dir, "output/dump", sizeof(sim->output_dir) - 1);
+    sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
+    sim->mesh.root_nx[0] = 8;
+    sim->mesh.root_nx[1] = 8;
+    sim->mesh.root_nx[2] = 8;
+    sim->mesh.max_level = 0;
+    sim->mesh.amr_refine_thresh = 0.05;
+    sim->mesh.amr_derefine_thresh = 0.01;
+    sim->mesh.amr_pressure_reference = 0.0;
+    sim->eos.filename[0] = '\0';
+}
+
+void prj_io_parser(prj_sim *sim, char *filename)
+{
+    FILE *fp;
+    char line[1024];
+    int lineno = 0;
+
+    if (sim == 0) {
+        prj_io_fail("prj_io_parser: sim is null");
+    }
+
+    prj_io_set_default_runtime(sim);
+    if (filename == 0) {
+        return;
+    }
+
+    fp = fopen(filename, "r");
+    if (fp == 0) {
+        prj_io_fail("prj_io_parser: failed to open parameter file");
+    }
+
+    while (fgets(line, sizeof(line), fp) != 0) {
+        char *comment;
+        char *eq;
+        char *key;
+        char *value;
+        char *endptr;
+
+        lineno += 1;
+        comment = strchr(line, '#');
+        if (comment != 0) {
+            *comment = '\0';
+        }
+        comment = strstr(line, "//");
+        if (comment != 0) {
+            *comment = '\0';
+        }
+        prj_io_trim(line);
+        if (line[0] == '\0') {
+            continue;
+        }
+
+        eq = strchr(line, '=');
+        if (eq == 0) {
+            fprintf(stderr, "prj_io_parser: invalid line %d in %s\n", lineno, filename);
+            fclose(fp);
+            exit(1);
+        }
+        *eq = '\0';
+        key = line;
+        value = eq + 1;
+        prj_io_trim(key);
+        prj_io_trim(value);
+
+        if (strcmp(key, "x1min") == 0) {
+            sim->coord.x1min = strtod(value, &endptr);
+        } else if (strcmp(key, "x1max") == 0) {
+            sim->coord.x1max = strtod(value, &endptr);
+        } else if (strcmp(key, "x2min") == 0) {
+            sim->coord.x2min = strtod(value, &endptr);
+        } else if (strcmp(key, "x2max") == 0) {
+            sim->coord.x2max = strtod(value, &endptr);
+        } else if (strcmp(key, "x3min") == 0) {
+            sim->coord.x3min = strtod(value, &endptr);
+        } else if (strcmp(key, "x3max") == 0) {
+            sim->coord.x3max = strtod(value, &endptr);
+        } else if (strcmp(key, "cfl") == 0) {
+            sim->cfl = strtod(value, &endptr);
+        } else if (strcmp(key, "t_end") == 0) {
+            sim->t_end = strtod(value, &endptr);
+        } else if (strcmp(key, "max_steps") == 0) {
+            sim->max_steps = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "output_interval") == 0) {
+            sim->output_interval = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "restart_interval") == 0) {
+            sim->restart_interval = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "amr_interval") == 0) {
+            sim->amr_interval = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "root_nx") == 0) {
+            int root_n = (int)strtol(value, &endptr, 10);
+
+            sim->mesh.root_nx[0] = root_n;
+            sim->mesh.root_nx[1] = root_n;
+            sim->mesh.root_nx[2] = root_n;
+        } else if (strcmp(key, "root_nx1") == 0) {
+            sim->mesh.root_nx[0] = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "root_nx2") == 0) {
+            sim->mesh.root_nx[1] = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "root_nx3") == 0) {
+            sim->mesh.root_nx[2] = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "max_level") == 0) {
+            sim->mesh.max_level = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "amr_refine_thresh") == 0) {
+            sim->mesh.amr_refine_thresh = strtod(value, &endptr);
+        } else if (strcmp(key, "amr_derefine_thresh") == 0) {
+            sim->mesh.amr_derefine_thresh = strtod(value, &endptr);
+        } else if (strcmp(key, "amr_pressure_reference") == 0) {
+            sim->mesh.amr_pressure_reference = strtod(value, &endptr);
+        } else if (strcmp(key, "output_dir") == 0) {
+            strncpy(sim->output_dir, value, sizeof(sim->output_dir) - 1);
+            sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
+            endptr = value + strlen(value);
+        } else if (strcmp(key, "eos_file") == 0) {
+            strncpy(sim->eos.filename, value, sizeof(sim->eos.filename) - 1);
+            sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
+            endptr = value + strlen(value);
+        } else if (strcmp(key, "bc_x1_inner") == 0) {
+            if (prj_io_parse_bc(value, &sim->bc.bc_x1_inner) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (strcmp(key, "bc_x1_outer") == 0) {
+            if (prj_io_parse_bc(value, &sim->bc.bc_x1_outer) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (strcmp(key, "bc_x2_inner") == 0) {
+            if (prj_io_parse_bc(value, &sim->bc.bc_x2_inner) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (strcmp(key, "bc_x2_outer") == 0) {
+            if (prj_io_parse_bc(value, &sim->bc.bc_x2_outer) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (strcmp(key, "bc_x3_inner") == 0) {
+            if (prj_io_parse_bc(value, &sim->bc.bc_x3_inner) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (strcmp(key, "bc_x3_outer") == 0) {
+            if (prj_io_parse_bc(value, &sim->bc.bc_x3_outer) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else {
+            fprintf(stderr, "prj_io_parser: unknown key '%s' in %s:%d\n", key, filename, lineno);
+            fclose(fp);
+            exit(1);
+        }
+
+        prj_io_trim(endptr);
+        if (*endptr != '\0') {
+            fprintf(stderr, "prj_io_parser: invalid value for '%s' in %s:%d\n", key, filename, lineno);
+            fclose(fp);
+            exit(1);
+        }
+    }
+
+    fclose(fp);
+}
 
 static void prj_io_dataset_name(int var, char *name, size_t size)
 {
@@ -52,6 +291,13 @@ static int prj_io_is_local_owner(const prj_block *block)
     prj_mpi *mpi = prj_mpi_current();
 
     return block != 0 && block->id >= 0 && (mpi == 0 || block->rank == mpi->rank);
+}
+
+static int prj_io_is_root_rank(void)
+{
+    prj_mpi *mpi = prj_mpi_current();
+
+    return mpi == 0 || mpi->rank == 0;
 }
 
 static hid_t prj_io_create_file(const char *filename)
@@ -211,7 +457,7 @@ static void prj_io_fill_metadata(const prj_block *block, double *metadata_row)
         metadata_row[n] = 0.0;
     }
     metadata_row[0] = (double)block->id;
-    metadata_row[1] = (double)block->rank;
+    metadata_row[1] = 0.0;
     metadata_row[2] = (double)block->level;
     metadata_row[3] = (double)block->active;
     metadata_row[4] = block->xmin[0];
@@ -232,7 +478,7 @@ static void prj_io_fill_metadata(const prj_block *block, double *metadata_row)
         int d;
 
         metadata_row[idx++] = (double)block->slot[n].id;
-        metadata_row[idx++] = (double)block->slot[n].rank;
+        metadata_row[idx++] = 0.0;
         for (d = 0; d < 3; ++d) {
             metadata_row[idx++] = block->slot[n].xmin[d];
         }
@@ -298,6 +544,9 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step)
     int bidx;
 
     snprintf(filename, sizeof(filename), "output/restart_%08d.h5", step);
+    if (prj_io_is_root_rank()) {
+        printf("save restart file %s\n", filename);
+    }
     dims_data[0] = (hsize_t)mesh->nblocks;
     dims_data[1] = (hsize_t)PRJ_NVAR_PRIM;
     dims_data[2] = (hsize_t)(PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE);
@@ -321,10 +570,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step)
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
 
-        if (block->id < 0 || !prj_io_is_local_owner(block)) {
-            continue;
-        }
-        {
+        if (prj_io_is_root_rank()) {
             hsize_t start_meta[2] = {(hsize_t)bidx, 0};
             hsize_t count_meta[2] = {1, (hsize_t)PRJ_IO_METADATA_SIZE};
             hid_t mem_meta = H5Screate_simple(2, count_meta, count_meta);
@@ -392,6 +638,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     prj_coord coord;
     double *metadata;
     int bidx;
+    prj_mpi *mpi = prj_mpi_current();
     prj_bc bc = {
         PRJ_BC_OUTFLOW, PRJ_BC_OUTFLOW,
         PRJ_BC_OUTFLOW, PRJ_BC_OUTFLOW,
@@ -430,10 +677,18 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
         const double *meta_row = &metadata[(size_t)bidx * PRJ_IO_METADATA_SIZE];
 
         prj_io_unpack_metadata(block, meta_row);
-        if (block->id >= 0 && prj_io_is_local_owner(block) && block->W == 0) {
-            prj_block_alloc_data(block);
-        }
         prj_block_setup_geometry(block, &coord);
+    }
+
+    prj_mpi_decompose(mesh);
+    if (mpi != 0) {
+        prj_mpi_prepare(mesh, mpi);
+    }
+
+    dset_data = H5Dopen2(file, "Data", H5P_DEFAULT);
+    for (bidx = 0; bidx < nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
         if (block->id >= 0 && block->active == 1 && prj_io_is_local_owner(block) && block->W != 0) {
             hsize_t start_data[3] = {(hsize_t)bidx, 0, 0};
             hsize_t count_data[3] = {1, (hsize_t)PRJ_NVAR_PRIM, (hsize_t)(PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE)};
@@ -449,13 +704,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
             if (buffer == 0) {
                 prj_io_fail("prj_io_read_restart: allocation failed");
             }
-            dset_data = H5Dopen2(file, "Data", H5P_DEFAULT);
             file_data = H5Dget_space(dset_data);
             H5Sselect_hyperslab(file_data, H5S_SELECT_SET, start_data, 0, count_data, 0);
             H5Dread(dset_data, H5T_NATIVE_DOUBLE, mem_data, file_data, dxpl, buffer);
             prj_io_close_dxpl(dxpl);
             H5Sclose(file_data);
-            H5Dclose(dset_data);
             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                 for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                     for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -466,11 +719,35 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
                     }
                 }
             }
+            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                        double Wcell[PRJ_NVAR_PRIM];
+                        double Ucell[PRJ_NVAR_CONS];
+
+                        for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                            Wcell[v] = block->W[VIDX(v, i, j, k)];
+                        }
+                        prj_eos_prim2cons((prj_eos *)eos, Wcell, Ucell);
+                        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                            block->U[VIDX(v, i, j, k)] = Ucell[v];
+                            block->dUdt[VIDX(v, i, j, k)] = 0.0;
+                            block->flux[0][VIDX(v, i, j, k)] = 0.0;
+                            block->flux[1][VIDX(v, i, j, k)] = 0.0;
+                            block->flux[2][VIDX(v, i, j, k)] = 0.0;
+                        }
+                    }
+                }
+            }
             free(buffer);
             H5Sclose(mem_data);
         }
     }
+    H5Dclose(dset_data);
     H5Fclose(file);
+    if (prj_io_is_root_rank()) {
+        printf("read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
+    }
     prj_boundary_fill_ghosts(mesh, &bc, 1);
     (void)eos;
     free(metadata);
@@ -495,6 +772,9 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
     int active_idx = 0;
 
     snprintf(filename, sizeof(filename), "%s_%05d.h5", basename, step);
+    if (prj_io_is_root_rank()) {
+        printf("save dump file %s\n", filename);
+    }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         if (mesh->blocks[bidx].id >= 0 && mesh->blocks[bidx].active == 1 && prj_io_is_local_owner(&mesh->blocks[bidx])) {
             local_active += 1;

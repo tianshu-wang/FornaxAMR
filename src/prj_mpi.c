@@ -310,17 +310,17 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh)
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *block = &mesh->blocks[i];
         int oct;
-        int parent_rank;
+        int block_rank;
 
         if (block->id < 0 || block->active == 1 || block->parent < 0 || block->parent >= mesh->nblocks) {
             continue;
         }
-        parent_rank = mesh->blocks[block->parent].rank;
+        block_rank = block->rank;
         for (oct = 0; oct < 8; ++oct) {
             int child_id = block->children[oct];
 
             if (child_id >= 0 && child_id < mesh->nblocks) {
-                mesh->blocks[child_id].rank = parent_rank;
+                mesh->blocks[child_id].rank = block_rank;
             }
         }
     }

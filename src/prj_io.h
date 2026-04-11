@@ -4,5 +4,6 @@
 void prj_io_write_restart(const prj_mesh *mesh, double time, int step);
 void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename, double *time, int *step);
 void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step);
+void prj_io_parser(prj_sim *sim, char *filename);
 
 #endif

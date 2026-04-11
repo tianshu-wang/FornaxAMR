@@ -46,20 +46,47 @@ static void prj_copy_file(const char *src, const char *dst)
     fclose(fout);
 }
 
+static void prj_print_build_config(int rank)
+{
+    if (rank != 0) {
+        return;
+    }
+
+    printf("build: mpi=%s radiation=%s\n",
+#if defined(PRJ_ENABLE_MPI)
+        "on",
+#else
+        "off",
+#endif
+#if PRJ_USE_RADIATION
+        "on"
+#else
+        "off"
+#endif
+    );
+}
+
 int main(int argc, char *argv[])
 {
     prj_sim sim;
+    prj_mpi mpi;
     prj_problem_init_fn init_fn = prj_problem_general;
     const char *restart_file = 0;
+    char *param_file = 0;
+    double saved_amr_refine_thresh;
+    double saved_amr_derefine_thresh;
+    double saved_amr_pressure_reference;
     int resolution = -1;
     int max_level_override = -1;
     int i;
 
     memset(&sim, 0, sizeof(sim));
-    sim.mesh.max_level = -1;
+    prj_io_parser(&sim, 0);
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--problem") == 0 && i + 1 < argc) {
             init_fn = prj_select_problem(argv[++i]);
+        } else if (strcmp(argv[i], "--param") == 0 && i + 1 < argc) {
+            param_file = argv[++i];
         } else if (strcmp(argv[i], "--resolution") == 0 && i + 1 < argc) {
             resolution = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--max_level") == 0 && i + 1 < argc) {
@@ -67,6 +94,9 @@ int main(int argc, char *argv[])
         } else if (strcmp(argv[i], "--restart") == 0 && i + 1 < argc) {
             restart_file = argv[++i];
         }
+    }
+    if (param_file != 0) {
+        prj_io_parser(&sim, param_file);
     }
     if (resolution > 0) {
         sim.mesh.root_nx[0] = resolution;
@@ -78,10 +108,22 @@ int main(int argc, char *argv[])
     }
 
     init_fn(&sim);
-    mkdir("output", 0777);
+    prj_mpi_init(&argc, &argv, &mpi);
+    prj_mpi_decompose(&sim.mesh);
+    prj_mpi_prepare(&sim.mesh, &mpi);
+    prj_print_build_config(mpi.rank);
+    if (mpi.rank == 0) {
+        mkdir("output", 0777);
+    }
     if (restart_file != 0) {
+        saved_amr_refine_thresh = sim.mesh.amr_refine_thresh;
+        saved_amr_derefine_thresh = sim.mesh.amr_derefine_thresh;
+        saved_amr_pressure_reference = sim.mesh.amr_pressure_reference;
         prj_mesh_destroy(&sim.mesh);
         prj_io_read_restart(&sim.mesh, &sim.eos, restart_file, &sim.time, &sim.step);
+        sim.mesh.amr_refine_thresh = saved_amr_refine_thresh;
+        sim.mesh.amr_derefine_thresh = saved_amr_derefine_thresh;
+        sim.mesh.amr_pressure_reference = saved_amr_pressure_reference;
     }
     prj_rad_init(&sim.rad);
     prj_gravity_init(&sim);
@@ -99,21 +141,24 @@ int main(int argc, char *argv[])
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             prj_amr_adapt(&sim.mesh, &sim.eos);
+            prj_mpi_rebalance(&sim.mesh);
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-        }
-        if (sim.restart_interval > 0 && sim.step % sim.restart_interval == 0) {
-            prj_io_write_restart(&sim.mesh, sim.time, sim.step);
         }
         if (sim.output_interval > 0 && sim.step % sim.output_interval == 0) {
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
         }
-        printf("step=%d  t=%.6e  dt=%.6e  blocks=%d\n",
-            sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh));
+        if (sim.restart_interval > 0 && sim.step % sim.restart_interval == 0) {
+            prj_io_write_restart(&sim.mesh, sim.time, sim.step);
+        }
+        if (mpi.rank == 0) {
+            printf("step=%d  t=%.6e  dt=%.6e  blocks=%d\n",
+                sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh));
+        }
     }
 
     prj_io_write_restart(&sim.mesh, sim.time, sim.step);
-    {
+    if (mpi.rank == 0) {
         char final_restart[64];
 
         snprintf(final_restart, sizeof(final_restart), "output/restart_%08d.h5", sim.step);
@@ -121,5 +166,6 @@ int main(int argc, char *argv[])
     }
     prj_gravity_free(&sim.monopole_grav);
     prj_mesh_destroy(&sim.mesh);
+    prj_mpi_finalize();
     return 0;
 }

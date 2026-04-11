@@ -1,11 +1,14 @@
-CC := cc
+CC := $(shell command -v mpicc >/dev/null 2>&1 && echo mpicc || echo cc)
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
+RADIATION ?= 0
+MPI_CFLAGS := $(shell mpicc --showme:compile 2>/dev/null)
+MPI_LIBS := $(shell mpicc --showme:link 2>/dev/null)
 HDF5_CFLAGS := $(shell pkg-config --cflags hdf5)
 HDF5_LIBS := $(shell pkg-config --libs hdf5)
-CPPFLAGS := -Isrc $(HDF5_CFLAGS)
+CPPFLAGS := -Isrc -DPRJ_ENABLE_MPI -DPRJ_USE_RADIATION=$(RADIATION) $(MPI_CFLAGS) $(HDF5_CFLAGS)
 LDFLAGS :=
-LDLIBS := $(HDF5_LIBS)
+LDLIBS := $(HDF5_LIBS) $(MPI_LIBS)
 
 ifeq ($(DEBUG),1)
 CFLAGS := $(STD) $(WARN) -g -O0 -DPRJ_DEBUG
@@ -36,7 +39,8 @@ SRCS := \
 	problems/prj_problem_general.c \
 	problems/prj_problem_cc.c \
 	problems/prj_problem_sedov.c \
-	problems/prj_problem_sedov_offcenter.c
+	problems/prj_problem_sedov_offcenter.c \
+	problems/prj_problem_shock1d.c
 
 OBJS := $(SRCS:.c=.o)
 CORE_SRCS := $(filter-out $(SRC_DIR)/main.c,$(SRCS))

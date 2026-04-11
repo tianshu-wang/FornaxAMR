@@ -1,0 +1,31 @@
+# Sample runtime parameters for the 1D shock/inflow setup.
+
+x1min = -2.0
+x1max = 2.0
+x2min = -2.0
+x2max = 2.0
+x3min = -2.0
+x3max = 2.0
+
+root_nx = 8
+max_level = 0
+
+cfl = 0.4
+t_end = 10.0
+max_steps = 2000
+output_interval = 10
+restart_interval = 100
+amr_interval = -1
+
+amr_refine_thresh = 0.5
+amr_derefine_thresh = 0.1
+amr_pressure_reference = 0.0
+
+output_dir = output/dump
+
+bc_x1_inner = user
+bc_x1_outer = outflow
+bc_x2_inner = outflow
+bc_x2_outer = outflow
+bc_x3_inner = outflow
+bc_x3_outer = outflow
