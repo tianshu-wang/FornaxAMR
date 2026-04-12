@@ -1,2 +1,1 @@
-GRAVITY := 0
-RADIATION := 0
+setups/cc.mk

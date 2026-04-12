@@ -13,12 +13,14 @@ max_level = 2
 
 cfl = 0.4
 t_end = 1.0e9
-max_steps = 100
+max_steps = 10
 output_interval = 10
 restart_interval = 50
-amr_interval = 1
+amr_interval = -1
 
+#eos_type = ideal
 eos_type = table
+eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
 
 amr_refine_thresh = 1.0e-3
 amr_derefine_thresh = 2.5e-4
@@ -26,7 +28,6 @@ amr_estimator = lohner
 amr_eps = 0.1
 
 output_dir = output/dump
-eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
 
 bc_x1_inner = outflow
 bc_x1_outer = outflow

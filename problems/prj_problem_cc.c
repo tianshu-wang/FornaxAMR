@@ -7,6 +7,7 @@
 
 #define PRJ_CC_PROGENITOR_PATH "../s9.0.swbj15.fornax"
 #define PRJ_CC_EOS_PATH "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat"
+#define PRJ_CC_KELVIN_PER_MEV 1.160451812e10
 
 typedef struct prj_cc_profile {
     int npts;
@@ -58,6 +59,11 @@ static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         block->U[VIDX(v, i, j, k)] = U[v];
     }
+}
+
+static double prj_cc_kelvin_to_mev(double temperature_kelvin)
+{
+    return temperature_kelvin / PRJ_CC_KELVIN_PER_MEV;
 }
 
 static void prj_cc_profile_free(prj_cc_profile *profile)
@@ -257,7 +263,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
                     double U[PRJ_NVAR_CONS];
 
                     prj_cc_profile_sample(profile, r, &rho, &temp, &ye, &vr);
-                    prj_eos_rty(&sim->eos, rho, temp, ye, eos_q);
+                    prj_eos_rty(&sim->eos, rho, prj_cc_kelvin_to_mev(temp), ye, eos_q);
                     W[PRJ_PRIM_RHO] = rho;
                     if (r > 0.0) {
                         W[PRJ_PRIM_V1] = vr * x1 / r;
