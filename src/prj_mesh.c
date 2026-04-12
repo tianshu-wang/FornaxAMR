@@ -32,6 +32,7 @@ static void prj_block_init_empty(prj_block *b)
     b->refine_flag = 0;
     b->W = 0;
     b->W1 = 0;
+    b->eosvar = 0;
     b->U = 0;
     b->dUdt = 0;
     b->flux[0] = 0;
@@ -64,6 +65,7 @@ static void prj_block_init_empty(prj_block *b)
 int prj_block_alloc_data(prj_block *b)
 {
     size_t prim_count;
+    size_t eosvar_count;
     size_t cons_count;
     size_t total_count;
     double *base;
@@ -75,8 +77,9 @@ int prj_block_alloc_data(prj_block *b)
     prj_block_free_data(b);
 
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
+    eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    total_count = 2U * prim_count + 5U * cons_count;
+    total_count = 2U * prim_count + eosvar_count + 5U * cons_count;
 
     base = (double *)malloc(total_count * sizeof(*base));
     if (base == 0) {
@@ -87,6 +90,8 @@ int prj_block_alloc_data(prj_block *b)
     base += prim_count;
     b->W1 = base;
     base += prim_count;
+    b->eosvar = base;
+    base += eosvar_count;
     b->U = base;
     base += cons_count;
     b->dUdt = base;
@@ -108,6 +113,7 @@ void prj_block_free_data(prj_block *b)
     free(b->W);
     b->W = 0;
     b->W1 = 0;
+    b->eosvar = 0;
     b->U = 0;
     b->dUdt = 0;
     b->flux[0] = 0;

@@ -20,6 +20,7 @@
 #define PRJ_NRAD_VAR (PRJ_NRAD * PRJ_NEGROUP * (1 + PRJ_NDIM))
 #define PRJ_NVAR_CONS (PRJ_NHYDRO + PRJ_NRAD_VAR)
 #define PRJ_NVAR_PRIM (PRJ_NHYDRO + PRJ_NRAD_VAR)
+#define PRJ_NVAR_EOSVAR 3
 #define PRJ_BLOCK_SIZE 16
 #define PRJ_NGHOST 2
 #define PRJ_BS (PRJ_BLOCK_SIZE + 2 * PRJ_NGHOST)
@@ -28,6 +29,7 @@
 #define IDX(i, j, k) \
     (((i) + PRJ_NGHOST) * PRJ_BS * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST))
 #define VIDX(v, i, j, k) ((v) * PRJ_BLOCK_NCELLS + IDX(i, j, k))
+#define EIDX(v, i, j, k) ((v) * PRJ_BLOCK_NCELLS + IDX(i, j, k))
 
 enum prj_cons_var {
     PRJ_CONS_RHO = 0,

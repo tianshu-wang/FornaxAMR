@@ -8,7 +8,7 @@ double prj_riemann_max_double(double a, double b);
 void prj_riemann_set_mesh(prj_mesh *mesh);
 void prj_riemann_hlle(const double *WL, const double *WR, const prj_eos *eos, double *flux);
 void prj_riemann_hllc(const double *WL, const double *WR, const prj_eos *eos, double *flux);
-int prj_riemann_detect_shock(const double *WL, const double *WR, const prj_eos *eos);
+int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, double pR);
 void prj_riemann_flux_send(prj_block *block);
 
 #endif

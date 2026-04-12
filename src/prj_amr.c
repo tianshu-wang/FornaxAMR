@@ -128,6 +128,7 @@ static void prj_zero_block_arrays(prj_block *b)
     }
 
     total = (size_t)2U * (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS +
+        (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
         (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     for (n = 0; n < total; ++n) {
         b->W[n] = 0.0;
@@ -141,7 +142,7 @@ static size_t prj_block_data_count(void)
 
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return 2U * prim_count + 5U * cons_count;
+    return 2U * prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS + 5U * cons_count;
 }
 
 static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, prj_block *parent)
@@ -338,19 +339,11 @@ static int prj_amr_clamp_storage_index(int idx)
 
 static double prj_block_pressure_at(const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
-    double rho;
-    double eint;
-    double ye;
-    double eos_quant[PRJ_EOS_NQUANT];
-
+    (void)eos;
     i = prj_amr_clamp_storage_index(i);
     j = prj_amr_clamp_storage_index(j);
     k = prj_amr_clamp_storage_index(k);
-    rho = b->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
-    eint = b->W[VIDX(PRJ_PRIM_EINT, i, j, k)];
-    ye = b->W[VIDX(PRJ_PRIM_YE, i, j, k)];
-    prj_eos_rey(eos, rho, eint, ye, eos_quant);
-    return eos_quant[PRJ_EOS_PRESSURE];
+    return b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
 }
 
 static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, int k)
@@ -365,20 +358,17 @@ static double prj_block_sound_speed_at(const prj_block *b, prj_eos *eos, int i, 
 {
     double rho;
     double eint;
-    double ye;
-    double eos_quant[PRJ_EOS_NQUANT];
     double pressure;
     double gamma;
 
     rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
     eint = prj_block_primitive_at(b, PRJ_PRIM_EINT, i, j, k);
-    ye = prj_block_primitive_at(b, PRJ_PRIM_YE, i, j, k);
+    (void)eos;
     if (rho <= 0.0 || eint < 0.0) {
         return 0.0;
     }
-    prj_eos_rey(eos, rho, eint, ye, eos_quant);
-    pressure = eos_quant[PRJ_EOS_PRESSURE];
-    gamma = eos_quant[PRJ_EOS_GAMMA];
+    pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    gamma = b->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)];
     if (pressure <= 0.0 || gamma <= 0.0) {
         return 0.0;
     }
@@ -946,6 +936,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         } else {
             child->W = 0;
             child->W1 = 0;
+            child->eosvar = 0;
             child->U = 0;
             child->dUdt = 0;
             child->flux[0] = 0;
@@ -1013,6 +1004,7 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     }
 
     prj_amr_init_neighbors(mesh);
+    prj_eos_fill_mesh(mesh, eos, 1);
     prj_amr_tag(mesh, eos);
     prj_amr_sync_refine_flags(mesh);
     prj_enforce_two_to_one(mesh);
@@ -1045,4 +1037,5 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     }
     prj_amr_init_neighbors(mesh);
     prj_sync_primitive_from_conserved(mesh, eos);
+    prj_eos_fill_mesh(mesh, eos, 1);
 }

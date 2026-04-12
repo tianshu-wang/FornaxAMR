@@ -197,10 +197,8 @@ void prj_riemann_set_mesh(prj_mesh *mesh)
     prj_riemann_flux_mesh = mesh;
 }
 
-int prj_riemann_detect_shock(const double *WL, const double *WR, const prj_eos *eos)
+int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, double pR)
 {
-    double eos_qL[PRJ_EOS_NQUANT];
-    double eos_qR[PRJ_EOS_NQUANT];
     double pressure_ratio;
     double compression[3];
     int best_dir;
@@ -210,10 +208,8 @@ int prj_riemann_detect_shock(const double *WL, const double *WR, const prj_eos *
         return -1;
     }
 
-    prj_eos_rey((prj_eos *)eos, WL[PRJ_PRIM_RHO], WL[PRJ_PRIM_EINT], WL[PRJ_PRIM_YE], eos_qL);
-    prj_eos_rey((prj_eos *)eos, WR[PRJ_PRIM_RHO], WR[PRJ_PRIM_EINT], WR[PRJ_PRIM_YE], eos_qR);
-    pressure_ratio = prj_riemann_max_double(eos_qL[PRJ_EOS_PRESSURE], eos_qR[PRJ_EOS_PRESSURE]) /
-        prj_riemann_max_double(prj_riemann_min_double(eos_qL[PRJ_EOS_PRESSURE], eos_qR[PRJ_EOS_PRESSURE]), 1.0e-12);
+    pressure_ratio = prj_riemann_max_double(pL, pR) /
+        prj_riemann_max_double(prj_riemann_min_double(pL, pR), 1.0e-12);
     if (pressure_ratio < 1.5 || WR[PRJ_PRIM_V1] - WL[PRJ_PRIM_V1] >= 0.0) {
         return -1;
     }

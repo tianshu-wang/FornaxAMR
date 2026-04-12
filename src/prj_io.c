@@ -800,7 +800,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
         printf("read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
     }
     prj_boundary_fill_ghosts(mesh, &bc, 1);
-    (void)eos;
+    prj_eos_fill_mesh(mesh, (prj_eos *)eos, 1);
     free(metadata);
 }
 

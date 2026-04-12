@@ -189,6 +189,7 @@ int main(int argc, char *argv[])
     prj_gravity_init(&sim);
  #endif
     prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+    prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
     prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
 
     while (sim.time < sim.t_end && sim.step < sim.max_steps) {
@@ -201,12 +202,15 @@ int main(int argc, char *argv[])
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+            prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
             prj_amr_adapt(&sim.mesh, &sim.eos);
             prj_mpi_rebalance(&sim.mesh);
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+            prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
         }
         if (sim.output_interval > 0 && sim.step % sim.output_interval == 0) {
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+            prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
             prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
         }
         if (sim.restart_interval > 0 && sim.step % sim.restart_interval == 0) {

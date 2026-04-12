@@ -63,6 +63,8 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
     double dt_min = 1.0e99;
     int bidx;
 
+    (void)eos;
+
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
         int i;
@@ -78,14 +80,17 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
                     double q[PRJ_EOS_NQUANT];
                     double w[PRJ_NVAR_PRIM];
                     double denom;
+                    double cs;
                     double dt_cell;
 
                     prj_timeint_cell_prim(block->W, i, j, k, w);
-                    prj_eos_rey(eos, w[PRJ_PRIM_RHO], w[PRJ_PRIM_EINT], w[PRJ_PRIM_YE], q);
+                    q[PRJ_EOS_PRESSURE] = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+                    q[PRJ_EOS_GAMMA] = block->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)];
+                    cs = sqrt(q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / w[PRJ_PRIM_RHO]);
                     denom =
-                        (fabs(w[PRJ_PRIM_V1]) + sqrt(q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / w[PRJ_PRIM_RHO])) / block->dx[0] +
-                        (fabs(w[PRJ_PRIM_V2]) + sqrt(q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / w[PRJ_PRIM_RHO])) / block->dx[1] +
-                        (fabs(w[PRJ_PRIM_V3]) + sqrt(q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / w[PRJ_PRIM_RHO])) / block->dx[2];
+                        (fabs(w[PRJ_PRIM_V1]) + cs) / block->dx[0] +
+                        (fabs(w[PRJ_PRIM_V2]) + cs) / block->dx[1] +
+                        (fabs(w[PRJ_PRIM_V3]) + cs) / block->dx[2];
                     dt_cell = cfl / denom;
                     if (PRJ_NRAD_VAR > 0) {
                         double dx_min = block->dx[0];
@@ -116,7 +121,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
-    prj_gravity_monopole_reduce(mesh, eos);
+    prj_eos_fill_mesh(mesh, eos, 1);
+    prj_gravity_monopole_reduce(mesh, 1);
     prj_gravity_monopole_integrate(mesh);
     prj_boundary_fill_ghosts(mesh, bc, 1);
     prj_riemann_set_mesh(mesh);
@@ -124,7 +130,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(block)) {
-            prj_flux_update(eos, rad, block->W, block->flux);
+            prj_flux_update(eos, rad, block->W, block->eosvar, block->flux);
         }
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -173,7 +179,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
-    prj_gravity_monopole_reduce(mesh, eos);
+    prj_eos_fill_mesh(mesh, eos, 2);
+    prj_gravity_monopole_reduce(mesh, 2);
     prj_gravity_monopole_integrate(mesh);
     prj_boundary_fill_ghosts(mesh, bc, 2);
     prj_riemann_set_mesh(mesh);
@@ -181,7 +188,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(block)) {
-            prj_flux_update(eos, rad, block->W1, block->flux);
+            prj_flux_update(eos, rad, block->W1, block->eosvar, block->flux);
         }
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {

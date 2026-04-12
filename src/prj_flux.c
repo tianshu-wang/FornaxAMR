@@ -162,7 +162,7 @@ static void prj_flux_cell_state(double *W, int i, int j, int k, double *Wc)
     }
 }
 
-void prj_flux_update(prj_eos *eos, prj_rad *rad, double *W, double *flux[3])
+void prj_flux_update(prj_eos *eos, prj_rad *rad, double *W, double *eosvar, double *flux[3])
 {
     int dir;
 
@@ -186,6 +186,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, double *W, double *flux[3])
                     double WCR[PRJ_NVAR_PRIM];
                     double WLL[PRJ_NVAR_PRIM];
                     double WRR[PRJ_NVAR_PRIM];
+                    double pCLg;
+                    double pCRg;
+                    double pLLg;
+                    double pRRg;
                     double Fl[PRJ_NVAR_CONS];
                     double Fg[PRJ_NVAR_CONS];
                     int shock_left;
@@ -240,10 +244,22 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, double *W, double *flux[3])
                     prj_flux_rotate_to_local(WCRg, dir, WCR);
                     prj_flux_rotate_to_local(WLLg, dir, WLL);
                     prj_flux_rotate_to_local(WRRg, dir, WRR);
+                    pCLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il, jl, kl)] : 0.0;
+                    pCRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir, jr, kr)] : 0.0;
+                    if (dir == X1DIR) {
+                        pLLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il - 1, jl, kl)] : 0.0;
+                        pRRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir + 1, jr, kr)] : 0.0;
+                    } else if (dir == X2DIR) {
+                        pLLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il, jl - 1, kl)] : 0.0;
+                        pRRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir, jr + 1, kr)] : 0.0;
+                    } else {
+                        pLLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il, jl, kl - 1)] : 0.0;
+                        pRRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir, jr, kr + 1)] : 0.0;
+                    }
                     /* Detect the dominant shock direction in global coordinates.
                      * Use HLLE only on transverse fluxes; keep HLLC on the shock-aligned direction. */
-                    shock_left = prj_riemann_detect_shock(WLLg, WCLg, eos);
-                    shock_right = prj_riemann_detect_shock(WCRg, WRRg, eos);
+                    shock_left = prj_riemann_detect_shock(WLLg, WCLg, pLLg, pCLg);
+                    shock_right = prj_riemann_detect_shock(WCRg, WRRg, pCRg, pRRg);
                     if ((shock_left >= 0 && shock_left != dir) ||
                         (shock_right >= 0 && shock_right != dir)) {
                         prj_riemann_hlle(WL, WR, eos, Fl);

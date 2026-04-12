@@ -159,7 +159,7 @@ const prj_grav_mono *prj_gravity_active_monopole(void)
     return prj_gravity_active;
 }
 
-void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_eos *eos)
+void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
 {
     prj_grav_mono *grav_mono = prj_gravity_active;
     int bidx;
@@ -205,25 +205,22 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_eos *eos)
                     double v2;
                     double v3;
                     double eint;
-                    double ye;
-                    double eos_quant[PRJ_EOS_NQUANT];
-                    double vr;
                     double pgas;
+                    double vr;
                     double erad;
                     double prad;
                     double vdotF;
+                    double *W = stage == 2 ? block->W1 : block->W;
 
                     idx = prj_gravity_bin_index(grav_mono, r);
                     if (idx >= 0) {
-                        rho = block->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
-                        v1 = block->W[VIDX(PRJ_PRIM_V1, i, j, k)];
-                        v2 = block->W[VIDX(PRJ_PRIM_V2, i, j, k)];
-                        v3 = block->W[VIDX(PRJ_PRIM_V3, i, j, k)];
-                        eint = block->W[VIDX(PRJ_PRIM_EINT, i, j, k)];
-                        ye = block->W[VIDX(PRJ_PRIM_YE, i, j, k)];
+                        rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+                        v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
+                        v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
+                        v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
+                        eint = W[VIDX(PRJ_PRIM_EINT, i, j, k)];
                         vr = r > 0.0 ? (v1 * x1 + v2 * x2 + v3 * x3) / r : 0.0;
-                        prj_eos_rey(eos, rho, eint, ye, eos_quant);
-                        pgas = eos_quant[PRJ_EOS_PRESSURE];
+                        pgas = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
                         erad = 0.0;
                         prad = 0.0;
                         vdotF = 0.0;
@@ -234,10 +231,10 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_eos *eos)
 
                             for (field = 0; field < PRJ_NRAD; ++field) {
                                 for (group = 0; group < PRJ_NEGROUP; ++group) {
-                                    double e_rad = block->W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
-                                    double f1 = block->W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
-                                    double f2 = block->W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
-                                    double f3 = block->W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
+                                    double e_rad = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
+                                    double f1 = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
+                                    double f2 = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
+                                    double f3 = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
                                     double fr = r > 0.0 ? (f1 * x1 + f2 * x2 + f3 * x3) / r : 0.0;
 
                                     erad += e_rad / (PRJ_CLIGHT * PRJ_CLIGHT);

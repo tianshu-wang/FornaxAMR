@@ -55,6 +55,7 @@ struct prj_block {
     double dx[3];
     double *W;
     double *W1;
+    double *eosvar;
     double *U;
     double *dUdt;
     double *flux[3];
@@ -93,6 +94,9 @@ struct prj_eos {
     double t2;
     double y1c;
     double y2c;
+    double dlogrho;
+    double dlogT;
+    double dYe;
     size_t table_bytes;
     double *table;
 };
