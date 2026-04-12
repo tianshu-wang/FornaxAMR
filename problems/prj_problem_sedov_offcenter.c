@@ -254,7 +254,9 @@ void prj_problem_sedov_offcenter(prj_sim *sim)
     char output_dir[sizeof(sim->output_dir)];
     double amr_refine_thresh = sim->mesh.amr_refine_thresh;
     double amr_derefine_thresh = sim->mesh.amr_derefine_thresh;
-    double amr_pressure_reference = sim->mesh.amr_pressure_reference;
+    double amr_eps = sim->mesh.amr_eps;
+    int amr_estimator = sim->mesh.amr_estimator;
+    double E_floor = sim->mesh.E_floor;
 
     strncpy(output_dir, sim->output_dir, sizeof(output_dir) - 1);
     output_dir[sizeof(output_dir) - 1] = '\0';
@@ -274,7 +276,9 @@ void prj_problem_sedov_offcenter(prj_sim *sim)
     }
     sim->mesh.amr_refine_thresh = amr_refine_thresh;
     sim->mesh.amr_derefine_thresh = amr_derefine_thresh;
-    sim->mesh.amr_pressure_reference = amr_pressure_reference;
+    sim->mesh.amr_eps = amr_eps;
+    sim->mesh.amr_estimator = amr_estimator;
+    sim->mesh.E_floor = E_floor;
     prj_problem_fill_ambient(sim, 1.0, 1.0e-3);
     prj_problem_inject_energy(sim, 0.2, 0.2, 0.2);
 }

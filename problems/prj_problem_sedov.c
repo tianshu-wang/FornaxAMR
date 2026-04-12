@@ -90,6 +90,7 @@ static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
 
 static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double cz)
 {
+    const double injection_radius = 0.05;
     int bidx;
     int selected = 0;
     double best_dist[8];
@@ -124,7 +125,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
                     double z = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
                     double r = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy) + (z - cz) * (z - cz));
 
-                    if (r < 0.2) {
+                    if (r < injection_radius) {
                         selected += 1;
                     }
                     for (n = 0; n < 8; ++n) {
@@ -159,7 +160,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
         for (n = 0; n < 8; ++n) {
             if (best_block[n] != 0) {
                 weights[n] = prj_problem_ball_overlap_fraction(
-                    best_block[n], best_i[n], best_j[n], best_k[n], cx, cy, cz, 0.2);
+                    best_block[n], best_i[n], best_j[n], best_k[n], cx, cy, cz, injection_radius);
                 weight_sum += weights[n];
             } else {
                 weights[n] = 0.0;
@@ -196,7 +197,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
                         double z = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
                         double r = sqrt((x - cx) * (x - cx) + (y - cy) * (y - cy) + (z - cz) * (z - cz));
 
-                        if (r < 0.2) {
+                        if (r < injection_radius) {
                             double cell_energy_density = (1.0 / (double)selected) / block->vol;
 
                             block->U[VIDX(PRJ_CONS_ETOT, i, j, k)] += cell_energy_density;
@@ -254,7 +255,9 @@ void prj_problem_sedov(prj_sim *sim)
     char output_dir[sizeof(sim->output_dir)];
     double amr_refine_thresh = sim->mesh.amr_refine_thresh;
     double amr_derefine_thresh = sim->mesh.amr_derefine_thresh;
-    double amr_pressure_reference = sim->mesh.amr_pressure_reference;
+    double amr_eps = sim->mesh.amr_eps;
+    int amr_estimator = sim->mesh.amr_estimator;
+    double E_floor = sim->mesh.E_floor;
 
     strncpy(output_dir, sim->output_dir, sizeof(output_dir) - 1);
     output_dir[sizeof(output_dir) - 1] = '\0';
@@ -274,7 +277,9 @@ void prj_problem_sedov(prj_sim *sim)
     }
     sim->mesh.amr_refine_thresh = amr_refine_thresh;
     sim->mesh.amr_derefine_thresh = amr_derefine_thresh;
-    sim->mesh.amr_pressure_reference = amr_pressure_reference;
+    sim->mesh.amr_eps = amr_eps;
+    sim->mesh.amr_estimator = amr_estimator;
+    sim->mesh.E_floor = E_floor;
     prj_problem_fill_ambient(sim, 1.0, 1.0e-3);
     prj_problem_inject_energy(sim, 0.0, 0.0, 0.0);
 }

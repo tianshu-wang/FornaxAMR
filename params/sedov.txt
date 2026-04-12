@@ -7,19 +7,21 @@ x2max = 2.0
 x3min = -2.0
 x3max = 2.0
 
-root_nx = 4
-max_level = 2
+root_nx = 5
+max_level = 1
 
 cfl = 0.8
 t_end = 10.0
-max_steps = 12
+max_steps = 10000
 output_interval = 10
-restart_interval = 10
+restart_interval = 100
 amr_interval = 1
 
+E_floor = 1e-10
+
+amr_estimator = velocity
 amr_refine_thresh = 0.5
-amr_derefine_thresh = 0.1
-amr_pressure_reference = -1
+amr_derefine_thresh = 0.2
 
 output_dir = output/dump
 

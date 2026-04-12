@@ -332,7 +332,9 @@ void prj_problem_cc(prj_sim *sim)
     char eos_filename[sizeof(sim->eos.filename)];
     double amr_refine_thresh = sim->mesh.amr_refine_thresh;
     double amr_derefine_thresh = sim->mesh.amr_derefine_thresh;
-    double amr_pressure_reference = sim->mesh.amr_pressure_reference;
+    double amr_eps = sim->mesh.amr_eps;
+    int amr_estimator = sim->mesh.amr_estimator;
+    double E_floor = sim->mesh.E_floor;
     prj_cc_profile profile;
 
     strncpy(output_dir, sim->output_dir, sizeof(output_dir) - 1);
@@ -363,7 +365,9 @@ void prj_problem_cc(prj_sim *sim)
     }
     sim->mesh.amr_refine_thresh = amr_refine_thresh;
     sim->mesh.amr_derefine_thresh = amr_derefine_thresh;
-    sim->mesh.amr_pressure_reference = amr_pressure_reference;
+    sim->mesh.amr_eps = amr_eps;
+    sim->mesh.amr_estimator = amr_estimator;
+    sim->mesh.E_floor = E_floor;
 
     if (prj_cc_profile_load(&profile, PRJ_CC_PROGENITOR_PATH) != 0) {
         return;

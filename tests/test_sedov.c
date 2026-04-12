@@ -183,7 +183,7 @@ static int prj_run_case(int mode, int argc, char **argv)
         center[1] = 0.0;
         center[2] = 0.0;
     }
-    sim.mesh.amr_pressure_reference = 1.0;
+    sim.mesh.amr_eps = 0.1;
     prj_mpi_init(&argc, &argv, &mpi);
     prj_mpi_decompose(&sim.mesh);
     prj_mpi_prepare(&sim.mesh, &mpi);

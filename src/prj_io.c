@@ -57,6 +57,22 @@ static int prj_io_parse_bc(const char *value, int *bc_type)
     return 1;
 }
 
+static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
+{
+    if (value == 0 || amr_estimator == 0) {
+        return 1;
+    }
+    if (strcmp(value, "lohner") == 0 || strcmp(value, "loehner") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_LOEHNER;
+        return 0;
+    }
+    if (strcmp(value, "velocity") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
+        return 0;
+    }
+    return 1;
+}
+
 static void prj_io_set_default_runtime(prj_sim *sim)
 {
     if (sim == 0) {
@@ -89,7 +105,9 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.max_level = 0;
     sim->mesh.amr_refine_thresh = 0.05;
     sim->mesh.amr_derefine_thresh = 0.01;
-    sim->mesh.amr_pressure_reference = 0.0;
+    sim->mesh.amr_eps = 0.1;
+    sim->mesh.amr_estimator = PRJ_AMR_ESTIMATOR_LOEHNER;
+    sim->mesh.E_floor = -1.0;
     sim->eos.filename[0] = '\0';
 }
 
@@ -188,8 +206,16 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.amr_refine_thresh = strtod(value, &endptr);
         } else if (strcmp(key, "amr_derefine_thresh") == 0) {
             sim->mesh.amr_derefine_thresh = strtod(value, &endptr);
-        } else if (strcmp(key, "amr_pressure_reference") == 0) {
-            sim->mesh.amr_pressure_reference = strtod(value, &endptr);
+        } else if (strcmp(key, "amr_eps") == 0) {
+            sim->mesh.amr_eps = strtod(value, &endptr);
+        } else if (strcmp(key, "amr_estimator") == 0) {
+            if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (strcmp(key, "E_floor") == 0) {
+            sim->mesh.E_floor = strtod(value, &endptr);
         } else if (strcmp(key, "output_dir") == 0) {
             strncpy(sim->output_dir, value, sizeof(sim->output_dir) - 1);
             sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';

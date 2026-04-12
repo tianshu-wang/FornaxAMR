@@ -40,7 +40,9 @@ void prj_problem_shock1d(prj_sim *sim)
     char output_dir[sizeof(sim->output_dir)];
     double amr_refine_thresh = sim->mesh.amr_refine_thresh;
     double amr_derefine_thresh = sim->mesh.amr_derefine_thresh;
-    double amr_pressure_reference = sim->mesh.amr_pressure_reference;
+    double amr_eps = sim->mesh.amr_eps;
+    int amr_estimator = sim->mesh.amr_estimator;
+    double E_floor = sim->mesh.E_floor;
     int bidx;
 
     strncpy(output_dir, sim->output_dir, sizeof(output_dir) - 1);
@@ -61,7 +63,9 @@ void prj_problem_shock1d(prj_sim *sim)
     }
     sim->mesh.amr_refine_thresh = amr_refine_thresh;
     sim->mesh.amr_derefine_thresh = amr_derefine_thresh;
-    sim->mesh.amr_pressure_reference = amr_pressure_reference;
+    sim->mesh.amr_eps = amr_eps;
+    sim->mesh.amr_estimator = amr_estimator;
+    sim->mesh.E_floor = E_floor;
 
     for (bidx = 0; bidx < sim->mesh.nblocks; ++bidx) {
         prj_block *block = &sim->mesh.blocks[bidx];

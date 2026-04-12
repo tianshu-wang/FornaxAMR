@@ -74,4 +74,9 @@ enum prj_bc_type {
     PRJ_BC_USER = 2
 };
 
+enum prj_amr_estimator {
+    PRJ_AMR_ESTIMATOR_LOEHNER = 0,
+    PRJ_AMR_ESTIMATOR_VELOCITY = 1
+};
+
 #endif

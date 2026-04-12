@@ -74,7 +74,9 @@ struct prj_mesh {
     prj_coord coord;
     double amr_refine_thresh;
     double amr_derefine_thresh;
-    double amr_pressure_reference;
+    double amr_eps;
+    int amr_estimator;
+    double E_floor;
 };
 
 struct prj_eos {

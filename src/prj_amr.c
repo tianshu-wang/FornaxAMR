@@ -325,36 +325,6 @@ static int prj_add_neighbor(prj_block *a, const prj_block *b)
     return 1;
 }
 
-static double prj_block_average_pressure(const prj_block *b)
-{
-    double sum_rho;
-    double sum_eint;
-    double sum_ye;
-    double eos_quant[PRJ_EOS_NQUANT];
-    int i;
-    int j;
-    int k;
-    int count;
-
-    sum_rho = 0.0;
-    sum_eint = 0.0;
-    sum_ye = 0.0;
-    count = 0;
-    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                sum_rho += b->U[VIDX(PRJ_CONS_RHO, i, j, k)];
-                sum_eint += b->U[VIDX(PRJ_CONS_ETOT, i, j, k)] / prj_max_double(b->U[VIDX(PRJ_CONS_RHO, i, j, k)], 1.0e-30);
-                sum_ye += b->U[VIDX(PRJ_CONS_YE, i, j, k)] / prj_max_double(b->U[VIDX(PRJ_CONS_RHO, i, j, k)], 1.0e-30);
-                count += 1;
-            }
-        }
-    }
-
-    prj_eos_rey((prj_eos *)0, sum_rho / (double)count, sum_eint / (double)count, sum_ye / (double)count, eos_quant);
-    return eos_quant[PRJ_EOS_PRESSURE];
-}
-
 static int prj_amr_clamp_storage_index(int idx)
 {
     if (idx < -PRJ_NGHOST) {
@@ -383,6 +353,38 @@ static double prj_block_pressure_at(const prj_block *b, int i, int j, int k)
     return eos_quant[PRJ_EOS_PRESSURE];
 }
 
+static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, int k)
+{
+    i = prj_amr_clamp_storage_index(i);
+    j = prj_amr_clamp_storage_index(j);
+    k = prj_amr_clamp_storage_index(k);
+    return b->W[VIDX(v, i, j, k)];
+}
+
+static double prj_block_sound_speed_at(const prj_block *b, int i, int j, int k)
+{
+    double rho;
+    double eint;
+    double ye;
+    double eos_quant[PRJ_EOS_NQUANT];
+    double pressure;
+    double gamma;
+
+    rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
+    eint = prj_block_primitive_at(b, PRJ_PRIM_EINT, i, j, k);
+    ye = prj_block_primitive_at(b, PRJ_PRIM_YE, i, j, k);
+    if (rho <= 0.0 || eint < 0.0) {
+        return 0.0;
+    }
+    prj_eos_rey((prj_eos *)0, rho, eint, ye, eos_quant);
+    pressure = eos_quant[PRJ_EOS_PRESSURE];
+    gamma = eos_quant[PRJ_EOS_GAMMA];
+    if (pressure <= 0.0 || gamma <= 0.0) {
+        return 0.0;
+    }
+    return prj_sqrt_double(gamma * pressure / rho);
+}
+
 static double prj_block_conserved_at(const prj_block *b, int v, int i, int j, int k)
 {
     i = prj_clamp_storage_index(i);
@@ -391,51 +393,116 @@ static double prj_block_conserved_at(const prj_block *b, int v, int i, int j, in
     return b->U[VIDX(v, i, j, k)];
 }
 
-static double prj_loehner_indicator(const prj_mesh *mesh, const prj_block *b)
+static void prj_apply_eint_floor(double E_floor, double *U, double *W)
 {
-    const double eps = 1.0e-1;
-    const double small = 1.0e-14;
-    double max_indicator;
-    double ref_scale;
-    int i;
-    int j;
-    int k;
+    double rho;
+    double v1;
+    double v2;
+    double v3;
+    double kinetic;
 
-    ref_scale = mesh != 0 && mesh->amr_pressure_reference > 0.0 ?
-        mesh->amr_pressure_reference : prj_abs_double(prj_block_average_pressure(b));
-    max_indicator = 0.0;
-
-    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                double p0 = prj_block_pressure_at(b, i, j, k);
-                double pxm = prj_block_pressure_at(b, i - 1, j, k);
-                double pxp = prj_block_pressure_at(b, i + 1, j, k);
-                double pym = prj_block_pressure_at(b, i, j - 1, k);
-                double pyp = prj_block_pressure_at(b, i, j + 1, k);
-                double pzm = prj_block_pressure_at(b, i, j, k - 1);
-                double pzp = prj_block_pressure_at(b, i, j, k + 1);
-                double d2x = (pxp - 2.0 * p0 + pxm) / (b->dx[0] * b->dx[0]);
-                double d2y = (pyp - 2.0 * p0 + pym) / (b->dx[1] * b->dx[1]);
-                double d2z = (pzp - 2.0 * p0 + pzm) / (b->dx[2] * b->dx[2]);
-                double d1x = 0.5 * (pxp - pxm) / b->dx[0];
-                double d1y = 0.5 * (pyp - pym) / b->dx[1];
-                double d1z = 0.5 * (pzp - pzm) / b->dx[2];
-                double numerator = prj_sqrt_double(d2x * d2x + d2y * d2y + d2z * d2z);
-                double denominator = prj_abs_double(d1x) / b->dx[0] +
-                    prj_abs_double(d1y) / b->dx[1] +
-                    prj_abs_double(d1z) / b->dx[2] +
-                    eps * ref_scale + small;
-                double indicator = numerator / denominator;
-
-                if (indicator > max_indicator) {
-                    max_indicator = indicator;
-                }
-            }
-        }
+    if (E_floor <= 0.0 || U == 0 || W == 0) {
+        return;
     }
 
+    rho = W[PRJ_PRIM_RHO];
+    if (rho <= 0.0) {
+        return;
+    }
+
+    if (W[PRJ_PRIM_EINT] >= E_floor) {
+        return;
+    }
+
+    v1 = W[PRJ_PRIM_V1];
+    v2 = W[PRJ_PRIM_V2];
+    v3 = W[PRJ_PRIM_V3];
+    kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
+    W[PRJ_PRIM_EINT] = E_floor;
+    U[PRJ_CONS_ETOT] = rho * (E_floor + kinetic);
+}
+
+static double prj_loehner_cell_indicator(const prj_mesh *mesh, const prj_block *b, int i, int j, int k)
+{
+    const double small = 1.0e-14;
+    double eps = mesh != 0 ? mesh->amr_eps : 0.1;
+    double p0 = prj_block_pressure_at(b, i, j, k);
+    double pxm = prj_block_pressure_at(b, i - 1, j, k);
+    double pxp = prj_block_pressure_at(b, i + 1, j, k);
+    double pym = prj_block_pressure_at(b, i, j - 1, k);
+    double pyp = prj_block_pressure_at(b, i, j + 1, k);
+    double pzm = prj_block_pressure_at(b, i, j, k - 1);
+    double pzp = prj_block_pressure_at(b, i, j, k + 1);
+    double pxpyp = prj_block_pressure_at(b, i + 1, j + 1, k);
+    double pxmyp = prj_block_pressure_at(b, i - 1, j + 1, k);
+    double pxpym = prj_block_pressure_at(b, i + 1, j - 1, k);
+    double pxmym = prj_block_pressure_at(b, i - 1, j - 1, k);
+    double pxpzp = prj_block_pressure_at(b, i + 1, j, k + 1);
+    double pxmzp = prj_block_pressure_at(b, i - 1, j, k + 1);
+    double pxpzm = prj_block_pressure_at(b, i + 1, j, k - 1);
+    double pxmzm = prj_block_pressure_at(b, i - 1, j, k - 1);
+    double pypzp = prj_block_pressure_at(b, i, j + 1, k + 1);
+    double pymzp = prj_block_pressure_at(b, i, j - 1, k + 1);
+    double pypzm = prj_block_pressure_at(b, i, j + 1, k - 1);
+    double pymzm = prj_block_pressure_at(b, i, j - 1, k - 1);
+    double d2xx = pxp - 2.0 * p0 + pxm;
+    double d2yy = pyp - 2.0 * p0 + pym;
+    double d2zz = pzp - 2.0 * p0 + pzm;
+    double d2xy = 0.25 * (pxpyp - pxmyp - pxpym + pxmym);
+    double d2xz = 0.25 * (pxpzp - pxmzp - pxpzm + pxmzm);
+    double d2yz = 0.25 * (pypzp - pymzp - pypzm + pymzm);
+    double grad_x = prj_abs_double(pxp - p0) + prj_abs_double(p0 - pxm);
+    double grad_y = prj_abs_double(pyp - p0) + prj_abs_double(p0 - pym);
+    double grad_z = prj_abs_double(pzp - p0) + prj_abs_double(p0 - pzm);
+    double numerator = d2xx * d2xx + d2yy * d2yy + d2zz * d2zz +
+        2.0 * (d2xy * d2xy + d2xz * d2xz + d2yz * d2yz);
+    double denominator = grad_x + grad_y + grad_z +
+        eps * (prj_abs_double(d2xx) + prj_abs_double(d2yy) + prj_abs_double(d2zz) +
+            2.0 * (prj_abs_double(d2xy) + prj_abs_double(d2xz) + prj_abs_double(d2yz))) +
+        small;
+
+    return prj_sqrt_double(numerator) / denominator;
+}
+
+static double prj_velocity_cell_indicator(const prj_block *b, int i, int j, int k)
+{
+    static const int offset[6][3] = {
+        {-1, 0, 0},
+        {1, 0, 0},
+        {0, -1, 0},
+        {0, 1, 0},
+        {0, 0, -1},
+        {0, 0, 1}
+    };
+    const double small = 1.0e-14;
+    double v1;
+    double v2;
+    double v3;
+    double cs;
+    double max_indicator = 0.0;
+    int n;
+
+    v1 = prj_block_primitive_at(b, PRJ_PRIM_V1, i, j, k);
+    v2 = prj_block_primitive_at(b, PRJ_PRIM_V2, i, j, k);
+    v3 = prj_block_primitive_at(b, PRJ_PRIM_V3, i, j, k);
+    cs = prj_block_sound_speed_at(b, i, j, k);
+    for (n = 0; n < 6; ++n) {
+        double dv1 = v1 - prj_block_primitive_at(b, PRJ_PRIM_V1, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
+        double dv2 = v2 - prj_block_primitive_at(b, PRJ_PRIM_V2, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
+        double dv3 = v3 - prj_block_primitive_at(b, PRJ_PRIM_V3, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
+        double dv = prj_sqrt_double(dv1 * dv1 + dv2 * dv2 + dv3 * dv3) / (cs + small);
+
+        max_indicator = prj_max_double(max_indicator, dv);
+    }
     return max_indicator;
+}
+
+static double prj_amr_cell_indicator(const prj_mesh *mesh, const prj_block *b, int i, int j, int k)
+{
+    if (mesh != 0 && mesh->amr_estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
+        return prj_velocity_cell_indicator(b, i, j, k);
+    }
+    return prj_loehner_cell_indicator(mesh, b, i, j, k);
 }
 
 static int prj_has_active_finer_neighbor_than_level(const prj_mesh *mesh, const prj_block *b, int level)
@@ -535,6 +602,10 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos)
                         Uc[v] = b->U[VIDX(v, i, j, k)];
                     }
                     prj_eos_cons2prim(eos, Uc, Wc);
+                    prj_apply_eint_floor(mesh->E_floor, Uc, Wc);
+                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                        b->U[VIDX(v, i, j, k)] = Uc[v];
+                    }
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                         b->W[VIDX(v, i, j, k)] = Wc[v];
                     }
@@ -612,7 +683,11 @@ void prj_amr_tag(prj_mesh *mesh)
 
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *b = &mesh->blocks[i];
-        double indicator;
+        int refine = 0;
+        int derefine = b->parent >= 0 ? 1 : 0;
+        int j;
+        int k;
+        int ii;
 
         if (!prj_is_local_active_block(b)) {
             continue;
@@ -621,15 +696,37 @@ void prj_amr_tag(prj_mesh *mesh)
             continue;
         }
 
-        indicator = prj_loehner_indicator(mesh, b);
+        for (ii = 0; ii < PRJ_BLOCK_SIZE && refine == 0; ++ii) {
+            for (j = 0; j < PRJ_BLOCK_SIZE && refine == 0; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    if (prj_amr_cell_indicator(mesh, b, ii, j, k) > mesh->amr_refine_thresh) {
+                        refine = 1;
+                        break;
+                    }
+                }
+            }
+        }
 
-        if (indicator > mesh->amr_refine_thresh && b->level < mesh->max_level) {
+        if (derefine != 0) {
+            for (ii = -1; ii <= PRJ_BLOCK_SIZE && derefine != 0; ++ii) {
+                for (j = -1; j <= PRJ_BLOCK_SIZE && derefine != 0; ++j) {
+                    for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
+                        if (prj_amr_cell_indicator(mesh, b, ii, j, k) >= mesh->amr_derefine_thresh) {
+                            derefine = 0;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (refine != 0 && b->level < mesh->max_level) {
             if (prj_has_face_neighbor_coarser_than(mesh, b, b->level - 1)) {
                 b->refine_flag = 0;
             } else {
                 b->refine_flag = 1;
             }
-        } else if (indicator < mesh->amr_derefine_thresh && b->parent >= 0) {
+        } else if (derefine != 0) {
             b->refine_flag = -1;
         } else {
             b->refine_flag = 0;
@@ -638,9 +735,8 @@ void prj_amr_tag(prj_mesh *mesh)
     prj_amr_sync_refine_flags(mesh);
 }
 
-void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct)
+void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct, double E_floor)
 {
-    const double eint_floor = 1.0e-10;
     int i;
     int j;
     int k;
@@ -708,7 +804,10 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
                     child->U[VIDX(PRJ_CONS_RHO, i, j, k)] = rho;
                 }
                 kinetic = 0.5 * (mom1 * mom1 + mom2 * mom2 + mom3 * mom3) / rho;
-                min_etot = kinetic + rho * eint_floor;
+                min_etot = child->U[VIDX(PRJ_CONS_ETOT, i, j, k)];
+                if (E_floor > 0.0) {
+                    min_etot = kinetic + rho * E_floor;
+                }
                 if (child->U[VIDX(PRJ_CONS_ETOT, i, j, k)] < min_etot) {
                     child->U[VIDX(PRJ_CONS_ETOT, i, j, k)] = min_etot;
                 }
@@ -843,7 +942,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
                 return;
             }
             prj_block_setup_geometry(child, &mesh->coord);
-            prj_amr_prolongate(parent, child, oct);
+            prj_amr_prolongate(parent, child, oct, mesh->E_floor);
         } else {
             child->W = 0;
             child->W1 = 0;

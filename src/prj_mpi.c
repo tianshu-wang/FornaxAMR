@@ -717,7 +717,7 @@ void prj_mpi_decompose(prj_mesh *mesh)
 
 void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
 {
-    int rank_seen[256];
+    int *rank_seen;
     int count;
     int bidx;
     int i;
@@ -726,7 +726,10 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
         return;
     }
     prj_mpi_clear_neighbors(mpi);
-    memset(rank_seen, 0, sizeof(rank_seen));
+    rank_seen = (int *)calloc((size_t)mpi->totrank, sizeof(*rank_seen));
+    if (rank_seen == 0) {
+        return;
+    }
     count = 0;
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
@@ -743,7 +746,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
                 continue;
             }
             nrank = mesh->blocks[nid].rank;
-            if (nrank != mpi->rank && nrank >= 0 && nrank < 256 && rank_seen[nrank] == 0) {
+            if (nrank != mpi->rank && nrank >= 0 && nrank < mpi->totrank && rank_seen[nrank] == 0) {
                 rank_seen[nrank] = 1;
                 count += 1;
             }
@@ -753,10 +756,11 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
     mpi->neighbor_buffer = (prj_mpi_buffer *)calloc((size_t)count, sizeof(*mpi->neighbor_buffer));
     if (mpi->neighbor_buffer == 0) {
         mpi->neighbor_number = 0;
+        free(rank_seen);
         return;
     }
     count = 0;
-    for (i = 0; i < 256; ++i) {
+    for (i = 0; i < mpi->totrank; ++i) {
         if (rank_seen[i] != 0) {
             mpi->neighbor_buffer[count].receiver_rank = i;
             count += 1;
@@ -805,6 +809,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
         }
         prj_mpi_build_ghost_plan_for_neighbor(mesh, mpi, buffer);
     }
+    free(rank_seen);
 }
 
 void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage)

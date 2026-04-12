@@ -19,7 +19,8 @@ amr_interval = 1
 
 amr_refine_thresh = 0.5
 amr_derefine_thresh = 0.1
-amr_pressure_reference = 0.0
+amr_estimator = lohner
+amr_eps = 0.1
 
 output_dir = output/dump
 

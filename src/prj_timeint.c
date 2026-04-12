@@ -37,6 +37,27 @@ static void prj_timeint_cell_prim_store(double *dst, int i, int j, int k, const 
     }
 }
 
+static void prj_timeint_apply_eint_floor(const prj_mesh *mesh, double *u, double *w)
+{
+    double rho;
+    double kinetic;
+
+    if (mesh == 0 || u == 0 || w == 0 || mesh->E_floor <= 0.0) {
+        return;
+    }
+
+    rho = w[PRJ_PRIM_RHO];
+    if (rho <= 0.0 || w[PRJ_PRIM_EINT] >= mesh->E_floor) {
+        return;
+    }
+
+    kinetic = 0.5 * (w[PRJ_PRIM_V1] * w[PRJ_PRIM_V1] +
+        w[PRJ_PRIM_V2] * w[PRJ_PRIM_V2] +
+        w[PRJ_PRIM_V3] * w[PRJ_PRIM_V3]);
+    w[PRJ_PRIM_EINT] = mesh->E_floor;
+    u[PRJ_CONS_ETOT] = rho * (mesh->E_floor + kinetic);
+}
+
 double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
 {
     double dt_min = 1.0e99;
@@ -136,8 +157,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u1[v] = u[v] + dt * block->dUdt[VIDX(v, i, j, k)];
                         }
-                        prj_timeint_cell_cons_store(block->U, i, j, k, u1);
                         prj_eos_cons2prim(eos, u1, w);
+                        prj_timeint_apply_eint_floor(mesh, u1, w);
+                        prj_timeint_cell_cons_store(block->U, i, j, k, u1);
                         prj_timeint_cell_prim_store(block->W1, i, j, k, w);
                     }
                 }
@@ -194,8 +216,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u[v] = 0.5 * u[v] + 0.5 * (u1[v] + dt * block->dUdt[VIDX(v, i, j, k)]);
                         }
-                        prj_timeint_cell_cons_store(block->U, i, j, k, u);
                         prj_eos_cons2prim(eos, u, w);
+                        prj_timeint_apply_eint_floor(mesh, u, w);
+                        prj_timeint_cell_cons_store(block->U, i, j, k, u);
                         prj_timeint_cell_prim_store(block->W, i, j, k, w);
                     }
                 }

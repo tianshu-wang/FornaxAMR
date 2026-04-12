@@ -68,6 +68,17 @@ static const char *prj_amr_label(const prj_sim *sim)
     return "off";
 }
 
+static const char *prj_amr_estimator_label(const prj_sim *sim)
+{
+    if (sim == 0) {
+        return "unknown";
+    }
+    if (sim->mesh.amr_estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
+        return "velocity";
+    }
+    return "lohner";
+}
+
 static void prj_print_config(const prj_sim *sim, int rank)
 {
     if (rank != 0 || sim == 0) {
@@ -102,6 +113,9 @@ static void prj_print_config(const prj_sim *sim, int rank)
     printf("amr: %s\n",
         prj_amr_label(sim)
     );
+    printf("amr estimator: %s\n",
+        prj_amr_estimator_label(sim)
+    );
 }
 
 int main(int argc, char *argv[])
@@ -113,7 +127,8 @@ int main(int argc, char *argv[])
     char *param_file = 0;
     double saved_amr_refine_thresh;
     double saved_amr_derefine_thresh;
-    double saved_amr_pressure_reference;
+    double saved_amr_eps;
+    int saved_amr_estimator;
     int resolution = -1;
     int max_level_override = -1;
     int i;
@@ -156,12 +171,14 @@ int main(int argc, char *argv[])
     if (restart_file != 0) {
         saved_amr_refine_thresh = sim.mesh.amr_refine_thresh;
         saved_amr_derefine_thresh = sim.mesh.amr_derefine_thresh;
-        saved_amr_pressure_reference = sim.mesh.amr_pressure_reference;
+        saved_amr_eps = sim.mesh.amr_eps;
+        saved_amr_estimator = sim.mesh.amr_estimator;
         prj_mesh_destroy(&sim.mesh);
         prj_io_read_restart(&sim.mesh, &sim.eos, restart_file, &sim.time, &sim.step);
         sim.mesh.amr_refine_thresh = saved_amr_refine_thresh;
         sim.mesh.amr_derefine_thresh = saved_amr_derefine_thresh;
-        sim.mesh.amr_pressure_reference = saved_amr_pressure_reference;
+        sim.mesh.amr_eps = saved_amr_eps;
+        sim.mesh.amr_estimator = saved_amr_estimator;
         prj_print_config(&sim, mpi.rank);
     }
     prj_rad_init(&sim.rad);
