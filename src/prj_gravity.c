@@ -159,7 +159,7 @@ const prj_grav_mono *prj_gravity_active_monopole(void)
     return prj_gravity_active;
 }
 
-void prj_gravity_monopole_reduce(prj_mesh *mesh)
+void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_eos *eos)
 {
     prj_grav_mono *grav_mono = prj_gravity_active;
     int bidx;
@@ -222,7 +222,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh)
                         eint = block->W[VIDX(PRJ_PRIM_EINT, i, j, k)];
                         ye = block->W[VIDX(PRJ_PRIM_YE, i, j, k)];
                         vr = r > 0.0 ? (v1 * x1 + v2 * x2 + v3 * x3) / r : 0.0;
-                        prj_eos_rey((prj_eos *)0, rho, eint, ye, eos_quant);
+                        prj_eos_rey(eos, rho, eint, ye, eos_quant);
                         pgas = eos_quant[PRJ_EOS_PRESSURE];
                         erad = 0.0;
                         prad = 0.0;

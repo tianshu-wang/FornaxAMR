@@ -242,8 +242,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, double *W, double *flux[3])
                     prj_flux_rotate_to_local(WRRg, dir, WRR);
                     /* Detect the dominant shock direction in global coordinates.
                      * Use HLLE only on transverse fluxes; keep HLLC on the shock-aligned direction. */
-                    shock_left = prj_riemann_detect_shock(WLLg, WCLg);
-                    shock_right = prj_riemann_detect_shock(WCRg, WRRg);
+                    shock_left = prj_riemann_detect_shock(WLLg, WCLg, eos);
+                    shock_right = prj_riemann_detect_shock(WCRg, WRRg, eos);
                     if ((shock_left >= 0 && shock_left != dir) ||
                         (shock_right >= 0 && shock_right != dir)) {
                         prj_riemann_hlle(WL, WR, eos, Fl);

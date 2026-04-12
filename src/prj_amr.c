@@ -336,7 +336,7 @@ static int prj_amr_clamp_storage_index(int idx)
     return idx;
 }
 
-static double prj_block_pressure_at(const prj_block *b, int i, int j, int k)
+static double prj_block_pressure_at(const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     double rho;
     double eint;
@@ -349,7 +349,7 @@ static double prj_block_pressure_at(const prj_block *b, int i, int j, int k)
     rho = b->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
     eint = b->W[VIDX(PRJ_PRIM_EINT, i, j, k)];
     ye = b->W[VIDX(PRJ_PRIM_YE, i, j, k)];
-    prj_eos_rey((prj_eos *)0, rho, eint, ye, eos_quant);
+    prj_eos_rey(eos, rho, eint, ye, eos_quant);
     return eos_quant[PRJ_EOS_PRESSURE];
 }
 
@@ -361,7 +361,7 @@ static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, in
     return b->W[VIDX(v, i, j, k)];
 }
 
-static double prj_block_sound_speed_at(const prj_block *b, int i, int j, int k)
+static double prj_block_sound_speed_at(const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     double rho;
     double eint;
@@ -376,7 +376,7 @@ static double prj_block_sound_speed_at(const prj_block *b, int i, int j, int k)
     if (rho <= 0.0 || eint < 0.0) {
         return 0.0;
     }
-    prj_eos_rey((prj_eos *)0, rho, eint, ye, eos_quant);
+    prj_eos_rey(eos, rho, eint, ye, eos_quant);
     pressure = eos_quant[PRJ_EOS_PRESSURE];
     gamma = eos_quant[PRJ_EOS_GAMMA];
     if (pressure <= 0.0 || gamma <= 0.0) {
@@ -422,29 +422,29 @@ static void prj_apply_eint_floor(double E_floor, double *U, double *W)
     U[PRJ_CONS_ETOT] = rho * (E_floor + kinetic);
 }
 
-static double prj_loehner_cell_indicator(const prj_mesh *mesh, const prj_block *b, int i, int j, int k)
+static double prj_loehner_cell_indicator(const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     const double small = 1.0e-14;
     double eps = mesh != 0 ? mesh->amr_eps : 0.1;
-    double p0 = prj_block_pressure_at(b, i, j, k);
-    double pxm = prj_block_pressure_at(b, i - 1, j, k);
-    double pxp = prj_block_pressure_at(b, i + 1, j, k);
-    double pym = prj_block_pressure_at(b, i, j - 1, k);
-    double pyp = prj_block_pressure_at(b, i, j + 1, k);
-    double pzm = prj_block_pressure_at(b, i, j, k - 1);
-    double pzp = prj_block_pressure_at(b, i, j, k + 1);
-    double pxpyp = prj_block_pressure_at(b, i + 1, j + 1, k);
-    double pxmyp = prj_block_pressure_at(b, i - 1, j + 1, k);
-    double pxpym = prj_block_pressure_at(b, i + 1, j - 1, k);
-    double pxmym = prj_block_pressure_at(b, i - 1, j - 1, k);
-    double pxpzp = prj_block_pressure_at(b, i + 1, j, k + 1);
-    double pxmzp = prj_block_pressure_at(b, i - 1, j, k + 1);
-    double pxpzm = prj_block_pressure_at(b, i + 1, j, k - 1);
-    double pxmzm = prj_block_pressure_at(b, i - 1, j, k - 1);
-    double pypzp = prj_block_pressure_at(b, i, j + 1, k + 1);
-    double pymzp = prj_block_pressure_at(b, i, j - 1, k + 1);
-    double pypzm = prj_block_pressure_at(b, i, j + 1, k - 1);
-    double pymzm = prj_block_pressure_at(b, i, j - 1, k - 1);
+    double p0 = prj_block_pressure_at(b, eos, i, j, k);
+    double pxm = prj_block_pressure_at(b, eos, i - 1, j, k);
+    double pxp = prj_block_pressure_at(b, eos, i + 1, j, k);
+    double pym = prj_block_pressure_at(b, eos, i, j - 1, k);
+    double pyp = prj_block_pressure_at(b, eos, i, j + 1, k);
+    double pzm = prj_block_pressure_at(b, eos, i, j, k - 1);
+    double pzp = prj_block_pressure_at(b, eos, i, j, k + 1);
+    double pxpyp = prj_block_pressure_at(b, eos, i + 1, j + 1, k);
+    double pxmyp = prj_block_pressure_at(b, eos, i - 1, j + 1, k);
+    double pxpym = prj_block_pressure_at(b, eos, i + 1, j - 1, k);
+    double pxmym = prj_block_pressure_at(b, eos, i - 1, j - 1, k);
+    double pxpzp = prj_block_pressure_at(b, eos, i + 1, j, k + 1);
+    double pxmzp = prj_block_pressure_at(b, eos, i - 1, j, k + 1);
+    double pxpzm = prj_block_pressure_at(b, eos, i + 1, j, k - 1);
+    double pxmzm = prj_block_pressure_at(b, eos, i - 1, j, k - 1);
+    double pypzp = prj_block_pressure_at(b, eos, i, j + 1, k + 1);
+    double pymzp = prj_block_pressure_at(b, eos, i, j - 1, k + 1);
+    double pypzm = prj_block_pressure_at(b, eos, i, j + 1, k - 1);
+    double pymzm = prj_block_pressure_at(b, eos, i, j - 1, k - 1);
     double d2xx = pxp - 2.0 * p0 + pxm;
     double d2yy = pyp - 2.0 * p0 + pym;
     double d2zz = pzp - 2.0 * p0 + pzm;
@@ -464,7 +464,7 @@ static double prj_loehner_cell_indicator(const prj_mesh *mesh, const prj_block *
     return prj_sqrt_double(numerator) / denominator;
 }
 
-static double prj_velocity_cell_indicator(const prj_block *b, int i, int j, int k)
+static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     static const int offset[6][3] = {
         {-1, 0, 0},
@@ -485,7 +485,7 @@ static double prj_velocity_cell_indicator(const prj_block *b, int i, int j, int 
     v1 = prj_block_primitive_at(b, PRJ_PRIM_V1, i, j, k);
     v2 = prj_block_primitive_at(b, PRJ_PRIM_V2, i, j, k);
     v3 = prj_block_primitive_at(b, PRJ_PRIM_V3, i, j, k);
-    cs = prj_block_sound_speed_at(b, i, j, k);
+    cs = prj_block_sound_speed_at(b, eos, i, j, k);
     for (n = 0; n < 6; ++n) {
         double dv1 = v1 - prj_block_primitive_at(b, PRJ_PRIM_V1, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
         double dv2 = v2 - prj_block_primitive_at(b, PRJ_PRIM_V2, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
@@ -497,12 +497,12 @@ static double prj_velocity_cell_indicator(const prj_block *b, int i, int j, int 
     return max_indicator;
 }
 
-static double prj_amr_cell_indicator(const prj_mesh *mesh, const prj_block *b, int i, int j, int k)
+static double prj_amr_cell_indicator(const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     if (mesh != 0 && mesh->amr_estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
-        return prj_velocity_cell_indicator(b, i, j, k);
+        return prj_velocity_cell_indicator(b, eos, i, j, k);
     }
-    return prj_loehner_cell_indicator(mesh, b, i, j, k);
+    return prj_loehner_cell_indicator(mesh, b, eos, i, j, k);
 }
 
 static int prj_has_active_finer_neighbor_than_level(const prj_mesh *mesh, const prj_block *b, int level)
@@ -677,7 +677,7 @@ void prj_amr_init_neighbors(prj_mesh *mesh)
     }
 }
 
-void prj_amr_tag(prj_mesh *mesh)
+void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
 {
     int i;
 
@@ -699,7 +699,7 @@ void prj_amr_tag(prj_mesh *mesh)
         for (ii = 0; ii < PRJ_BLOCK_SIZE && refine == 0; ++ii) {
             for (j = 0; j < PRJ_BLOCK_SIZE && refine == 0; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    if (prj_amr_cell_indicator(mesh, b, ii, j, k) > mesh->amr_refine_thresh) {
+                    if (prj_amr_cell_indicator(mesh, b, eos, ii, j, k) > mesh->amr_refine_thresh) {
                         refine = 1;
                         break;
                     }
@@ -711,7 +711,7 @@ void prj_amr_tag(prj_mesh *mesh)
             for (ii = -1; ii <= PRJ_BLOCK_SIZE && derefine != 0; ++ii) {
                 for (j = -1; j <= PRJ_BLOCK_SIZE && derefine != 0; ++j) {
                     for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
-                        if (prj_amr_cell_indicator(mesh, b, ii, j, k) >= mesh->amr_derefine_thresh) {
+                        if (prj_amr_cell_indicator(mesh, b, eos, ii, j, k) >= mesh->amr_derefine_thresh) {
                             derefine = 0;
                             break;
                         }
@@ -1013,7 +1013,7 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     }
 
     prj_amr_init_neighbors(mesh);
-    prj_amr_tag(mesh);
+    prj_amr_tag(mesh, eos);
     prj_amr_sync_refine_flags(mesh);
     prj_enforce_two_to_one(mesh);
     prj_amr_sync_refine_flags(mesh);

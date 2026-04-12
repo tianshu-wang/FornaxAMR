@@ -16,6 +16,7 @@
 #define PRJ_EOS_EXT_T2 (2.176)
 #define PRJ_EOS_EXT_Y1 (0.035)
 #define PRJ_EOS_EXT_Y2 (0.56)
+/* 1 MeV per baryon in cgs specific-energy units (erg g^-1). */
 #define PRJ_EOS_ENERGY_SCALE 0.95655684e18
 #define PRJ_EOS_PRESSURE_SCALE 1.60217733e33
 
@@ -252,9 +253,9 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
     }
 
     gamma = prj_eos_gamma_value();
-    eint = T / (gamma - 1.0);
+    eint = PRJ_EOS_ENERGY_SCALE * T / (gamma - 1.0);
     eos_quantities[PRJ_EOS_EINT] = eint;
-    eos_quantities[PRJ_EOS_PRESSURE] = rho * T;
+    eos_quantities[PRJ_EOS_PRESSURE] = rho * PRJ_EOS_ENERGY_SCALE * T;
     eos_quantities[PRJ_EOS_GAMMA] = gamma;
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }
@@ -373,9 +374,9 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
     }
 
     gamma = prj_eos_gamma_value();
-    T = (gamma - 1.0) * eint;
+    T = (gamma - 1.0) * eint / PRJ_EOS_ENERGY_SCALE;
     eos_quantities[PRJ_EOS_EINT] = eint;
-    eos_quantities[PRJ_EOS_PRESSURE] = rho * T;
+    eos_quantities[PRJ_EOS_PRESSURE] = rho * PRJ_EOS_ENERGY_SCALE * T;
     eos_quantities[PRJ_EOS_GAMMA] = gamma;
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }

@@ -116,7 +116,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
-    prj_gravity_monopole_reduce(mesh);
+    prj_gravity_monopole_reduce(mesh, eos);
     prj_gravity_monopole_integrate(mesh);
     prj_boundary_fill_ghosts(mesh, bc, 1);
     prj_riemann_set_mesh(mesh);
@@ -173,7 +173,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
-    prj_gravity_monopole_reduce(mesh);
+    prj_gravity_monopole_reduce(mesh, eos);
     prj_gravity_monopole_integrate(mesh);
     prj_boundary_fill_ghosts(mesh, bc, 2);
     prj_riemann_set_mesh(mesh);
