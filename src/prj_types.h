@@ -81,6 +81,7 @@ struct prj_mesh {
 
 struct prj_eos {
     char filename[100];
+    int kind;
     int table_loaded;
     int table_is_mmap;
     int nt;

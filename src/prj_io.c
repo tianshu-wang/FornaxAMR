@@ -73,6 +73,22 @@ static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
     return 1;
 }
 
+static int prj_io_parse_eos_kind(const char *value, int *eos_kind)
+{
+    if (value == 0 || eos_kind == 0) {
+        return 1;
+    }
+    if (strcmp(value, "ideal") == 0) {
+        *eos_kind = PRJ_EOS_KIND_IDEAL;
+        return 0;
+    }
+    if (strcmp(value, "table") == 0 || strcmp(value, "tabulated") == 0) {
+        *eos_kind = PRJ_EOS_KIND_TABLE;
+        return 0;
+    }
+    return 1;
+}
+
 static void prj_io_set_default_runtime(prj_sim *sim)
 {
     if (sim == 0) {
@@ -108,6 +124,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.amr_eps = 0.1;
     sim->mesh.amr_estimator = PRJ_AMR_ESTIMATOR_LOEHNER;
     sim->mesh.E_floor = -1.0;
+    sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
 }
 
@@ -223,6 +240,14 @@ void prj_io_parser(prj_sim *sim, char *filename)
         } else if (strcmp(key, "eos_file") == 0) {
             strncpy(sim->eos.filename, value, sizeof(sim->eos.filename) - 1);
             sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
+            sim->eos.kind = PRJ_EOS_KIND_TABLE;
+            endptr = value + strlen(value);
+        } else if (strcmp(key, "eos_type") == 0) {
+            if (prj_io_parse_eos_kind(value, &sim->eos.kind) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
             endptr = value + strlen(value);
         } else if (strcmp(key, "bc_x1_inner") == 0) {
             if (prj_io_parse_bc(value, &sim->bc.bc_x1_inner) != 0) {

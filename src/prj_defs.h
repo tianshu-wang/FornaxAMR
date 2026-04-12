@@ -79,4 +79,9 @@ enum prj_amr_estimator {
     PRJ_AMR_ESTIMATOR_VELOCITY = 1
 };
 
+enum prj_eos_kind {
+    PRJ_EOS_KIND_IDEAL = 0,
+    PRJ_EOS_KIND_TABLE = 1
+};
+
 #endif

@@ -316,58 +316,17 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
 
 void prj_problem_cc(prj_sim *sim)
 {
-    int root_nx1 = sim->mesh.root_nx[0];
-    int root_nx2 = sim->mesh.root_nx[1];
-    int root_nx3 = sim->mesh.root_nx[2];
-    int max_level = sim->mesh.max_level;
-    prj_coord coord = sim->coord;
-    prj_bc bc = sim->bc;
-    double cfl = sim->cfl;
-    double t_end = sim->t_end;
-    int max_steps = sim->max_steps;
-    int output_interval = sim->output_interval;
-    int restart_interval = sim->restart_interval;
-    int amr_interval = sim->amr_interval;
-    char output_dir[sizeof(sim->output_dir)];
-    char eos_filename[sizeof(sim->eos.filename)];
-    double amr_refine_thresh = sim->mesh.amr_refine_thresh;
-    double amr_derefine_thresh = sim->mesh.amr_derefine_thresh;
-    double amr_eps = sim->mesh.amr_eps;
-    int amr_estimator = sim->mesh.amr_estimator;
-    double E_floor = sim->mesh.E_floor;
     prj_cc_profile profile;
 
-    strncpy(output_dir, sim->output_dir, sizeof(output_dir) - 1);
-    output_dir[sizeof(output_dir) - 1] = '\0';
-    strncpy(eos_filename, sim->eos.filename, sizeof(eos_filename) - 1);
-    eos_filename[sizeof(eos_filename) - 1] = '\0';
-    memset(sim, 0, sizeof(*sim));
-    if (eos_filename[0] == '\0') {
+    if (sim->eos.kind == PRJ_EOS_KIND_TABLE && sim->eos.filename[0] == '\0') {
         strncpy(sim->eos.filename, PRJ_CC_EOS_PATH, sizeof(sim->eos.filename) - 1);
-        sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
-    } else {
-        strncpy(sim->eos.filename, eos_filename, sizeof(sim->eos.filename) - 1);
         sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
     }
     prj_eos_init(&sim->eos);
-    sim->coord = coord;
-    sim->bc = bc;
-    sim->cfl = cfl;
-    sim->t_end = t_end;
-    sim->max_steps = max_steps;
-    sim->output_interval = output_interval;
-    sim->restart_interval = restart_interval;
-    sim->amr_interval = amr_interval;
-    strncpy(sim->output_dir, output_dir, sizeof(sim->output_dir) - 1);
-    sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
-    if (prj_mesh_init(&sim->mesh, root_nx1, root_nx2, root_nx3, max_level, &sim->coord) != 0) {
+    if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
+        sim->mesh.max_level, &sim->coord) != 0) {
         return;
     }
-    sim->mesh.amr_refine_thresh = amr_refine_thresh;
-    sim->mesh.amr_derefine_thresh = amr_derefine_thresh;
-    sim->mesh.amr_eps = amr_eps;
-    sim->mesh.amr_estimator = amr_estimator;
-    sim->mesh.E_floor = E_floor;
 
     if (prj_cc_profile_load(&profile, PRJ_CC_PROGENITOR_PATH) != 0) {
         return;

@@ -17,6 +17,8 @@ output_interval = 10
 restart_interval = 50
 amr_interval = -1
 
+eos_type = ideal
+
 amr_refine_thresh = 0.05
 amr_derefine_thresh = 0.01
 amr_estimator = lohner

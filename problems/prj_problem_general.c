@@ -113,45 +113,9 @@ static void prj_problem_fill_until_amr_converged(prj_sim *sim)
 
 void prj_problem_general(prj_sim *sim)
 {
-    int root_nx1 = sim->mesh.root_nx[0];
-    int root_nx2 = sim->mesh.root_nx[1];
-    int root_nx3 = sim->mesh.root_nx[2];
-    int max_level = sim->mesh.max_level;
-    prj_coord coord = sim->coord;
-    prj_bc bc = sim->bc;
-    double cfl = sim->cfl;
-    double t_end = sim->t_end;
-    int max_steps = sim->max_steps;
-    int output_interval = sim->output_interval;
-    int restart_interval = sim->restart_interval;
-    int amr_interval = sim->amr_interval;
-    char output_dir[sizeof(sim->output_dir)];
-    double amr_refine_thresh = sim->mesh.amr_refine_thresh;
-    double amr_derefine_thresh = sim->mesh.amr_derefine_thresh;
-    double amr_eps = sim->mesh.amr_eps;
-    int amr_estimator = sim->mesh.amr_estimator;
-    double E_floor = sim->mesh.E_floor;
-
-    strncpy(output_dir, sim->output_dir, sizeof(output_dir) - 1);
-    output_dir[sizeof(output_dir) - 1] = '\0';
-    memset(sim, 0, sizeof(*sim));
-    sim->coord = coord;
-    sim->bc = bc;
-    sim->cfl = cfl;
-    sim->t_end = t_end;
-    sim->max_steps = max_steps;
-    sim->output_interval = output_interval;
-    sim->restart_interval = restart_interval;
-    sim->amr_interval = amr_interval;
-    strncpy(sim->output_dir, output_dir, sizeof(sim->output_dir) - 1);
-    sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
-    if (prj_mesh_init(&sim->mesh, root_nx1, root_nx2, root_nx3, max_level, &sim->coord) != 0) {
+    if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
+        sim->mesh.max_level, &sim->coord) != 0) {
         return;
     }
-    sim->mesh.amr_refine_thresh = amr_refine_thresh;
-    sim->mesh.amr_derefine_thresh = amr_derefine_thresh;
-    sim->mesh.amr_eps = amr_eps;
-    sim->mesh.amr_estimator = amr_estimator;
-    sim->mesh.E_floor = E_floor;
     prj_problem_fill_until_amr_converged(sim);
 }

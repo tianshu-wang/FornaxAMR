@@ -18,6 +18,8 @@ output_interval = 10
 restart_interval = 50
 amr_interval = 1
 
+eos_type = table
+
 amr_refine_thresh = 1.0e-3
 amr_derefine_thresh = 2.5e-4
 amr_estimator = lohner

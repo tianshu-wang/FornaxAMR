@@ -51,10 +51,13 @@ static const char *prj_eos_label(const prj_sim *sim)
     if (sim == 0) {
         return "unknown";
     }
-    if (sim->eos.filename[0] != '\0') {
+    if (sim->eos.kind == PRJ_EOS_KIND_TABLE && sim->eos.filename[0] != '\0') {
         return sim->eos.filename;
     }
-    return "ideal-gamma";
+    if (sim->eos.kind == PRJ_EOS_KIND_TABLE) {
+        return "table";
+    }
+    return "ideal";
 }
 
 static const char *prj_amr_label(const prj_sim *sim)

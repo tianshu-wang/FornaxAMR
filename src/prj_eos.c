@@ -69,7 +69,7 @@ static int prj_eos_prepare_table(prj_eos *eos)
     size_t expected_bytes;
     int rec;
 
-    if (eos == 0 || eos->filename[0] == '\0') {
+    if (eos == 0 || eos->kind != PRJ_EOS_KIND_TABLE || eos->filename[0] == '\0') {
         return 0;
     }
     if (eos->table_loaded == 1 && eos->table != 0) {
@@ -119,7 +119,7 @@ void prj_eos_init(prj_eos *eos)
     if (eos == 0) {
         return;
     }
-    if (eos->filename[0] == '\0') {
+    if (eos->kind != PRJ_EOS_KIND_TABLE || eos->filename[0] == '\0') {
         eos->table_loaded = 0;
         eos->table_is_mmap = 0;
         eos->nt = 0;
@@ -225,7 +225,8 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
     if (eos_quantities == 0) {
         return;
     }
-    if (eos != 0 && eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
+    if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
+        eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
         int jy;
         int jyp;
         int jr;
@@ -268,7 +269,8 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
     if (eos_quantities == 0) {
         return;
     }
-    if (eos != 0 && eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
+    if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
+        eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
         double e_table;
         double rl;
         double dr;

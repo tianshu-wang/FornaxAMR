@@ -17,6 +17,8 @@ output_interval = 10
 restart_interval = 100
 amr_interval = 1
 
+eos_type = ideal
+
 E_floor = 1e-10
 
 amr_estimator = velocity
