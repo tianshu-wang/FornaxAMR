@@ -30,6 +30,31 @@ static double prj_src_interp_accel(const prj_grav_mono *grav_mono, double r)
     return grav_mono->accel[grav_mono->nbins - 1];
 }
 
+#if PRJ_NRAD > 0
+static double prj_src_interp_lapse(const prj_grav_mono *grav_mono, double r)
+{
+    int idx;
+
+    if (grav_mono == 0 || grav_mono->nbins <= 0 || grav_mono->lapse == 0) {
+        return 1.0;
+    }
+    if (r <= grav_mono->rf[0]) {
+        return grav_mono->lapse[0];
+    }
+    for (idx = 0; idx < grav_mono->nbins; ++idx) {
+        double r0 = grav_mono->rf[idx];
+        double r1 = grav_mono->rf[idx + 1];
+
+        if (r <= r1) {
+            double weight = (r - r0) / (r1 - r0);
+
+            return (1.0 - weight) * grav_mono->lapse[idx] + weight * grav_mono->lapse[idx + 1];
+        }
+    }
+    return grav_mono->lapse[grav_mono->nbins];
+}
+#endif
+
 void prj_src_geom(prj_eos *eos, double *W, double *dUdt)
 {
     (void)eos;
@@ -90,6 +115,24 @@ void prj_src_monopole_gravity(prj_mesh *mesh, const prj_grav_mono *grav_mono,
                         U[VIDX(PRJ_CONS_MOM1, i, j, k)] * g1 +
                         U[VIDX(PRJ_CONS_MOM2, i, j, k)] * g2 +
                         U[VIDX(PRJ_CONS_MOM3, i, j, k)] * g3;
+#if PRJ_NRAD > 0
+                    {
+                        double lapse = prj_src_interp_lapse(grav_mono, r);
+                        int field;
+                        int group;
+
+                        for (field = 0; field < PRJ_NRAD; ++field) {
+                            for (group = 0; group < PRJ_NEGROUP; ++group) {
+                                dUdt[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)] +=
+                                    lapse * U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] * g1;
+                                dUdt[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)] +=
+                                    lapse * U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] * g2;
+                                dUdt[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)] +=
+                                    lapse * U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] * g3;
+                            }
+                        }
+                    }
+#endif
                 }
             }
         }

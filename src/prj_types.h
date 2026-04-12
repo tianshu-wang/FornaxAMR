@@ -103,6 +103,15 @@ struct prj_grav_mono {
     double *ms;
     double *phi;
     double *accel;
+    double *lapse;
+    double *vol;
+    double *rho_avg;
+    double *vr_avg;
+    double *pgas_avg;
+    double *eint_avg;
+    double *erad_avg;
+    double *prad_avg;
+    double *vdotF_avg;
 };
 
 struct prj_rad {

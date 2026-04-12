@@ -2,6 +2,7 @@
 #define PRJ_GRAVITY_H
 
 #define PRJ_GNEWT 6.67430e-8
+#define PRJ_GRAVITY_USE_GR 1
 
 void prj_gravity_init(prj_sim *sim);
 void prj_gravity_free(prj_grav_mono *grav_mono);
