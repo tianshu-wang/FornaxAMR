@@ -155,9 +155,8 @@ int main(int argc, char *argv[])
 {
     prj_sim sim;
     prj_mpi mpi;
-    prj_problem_init_fn init_fn = prj_problem_general;
+    prj_problem_init_fn init_fn;
     int init_with_mpi = 0;
-    const char *restart_file = 0;
     char *param_file = 0;
     double saved_amr_refine_thresh[PRJ_AMR_N];
     double saved_amr_derefine_thresh[PRJ_AMR_N];
@@ -175,20 +174,21 @@ int main(int argc, char *argv[])
     memset(&sim, 0, sizeof(sim));
     prj_io_parser(&sim, 0);
     for (i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--problem") == 0 && i + 1 < argc) {
-            init_fn = prj_select_problem(argv[++i]);
-        } else if (strcmp(argv[i], "--param") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--param") == 0 && i + 1 < argc) {
             param_file = argv[++i];
         } else if (strcmp(argv[i], "--resolution") == 0 && i + 1 < argc) {
             resolution = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--max_level") == 0 && i + 1 < argc) {
             max_level_override = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--restart") == 0 && i + 1 < argc) {
-            restart_file = argv[++i];
         }
     }
     if (param_file != 0) {
         prj_io_parser(&sim, param_file);
+    }
+    init_fn = prj_select_problem(sim.problem_name);
+    if (sim.restart_from_file != 0 && sim.restart_file_name[0] == '\0') {
+        fprintf(stderr, "restart_from_file is enabled but restart_file_name is empty\n");
+        return 1;
     }
     if (resolution > 0) {
         sim.mesh.root_nx[0] = resolution;
@@ -213,7 +213,7 @@ int main(int argc, char *argv[])
     if (mpi.rank == 0) {
         mkdir("output", 0777);
     }
-    if (restart_file != 0) {
+    if (sim.restart_from_file != 0) {
         for (i = 0; i < PRJ_AMR_N; ++i) {
             saved_amr_refine_thresh[i] = sim.mesh.amr_refine_thresh[i];
             saved_amr_derefine_thresh[i] = sim.mesh.amr_derefine_thresh[i];
@@ -224,7 +224,7 @@ int main(int argc, char *argv[])
         saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
         saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
         prj_mesh_destroy(&sim.mesh);
-        prj_io_read_restart(&sim.mesh, &sim.eos, restart_file, &sim.time, &sim.step);
+        prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step);
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];

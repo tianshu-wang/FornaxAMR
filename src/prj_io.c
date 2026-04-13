@@ -152,6 +152,10 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     strncpy(sim->output_dir, "output/dump", sizeof(sim->output_dir) - 1);
     sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
     sim->progenitor_file[0] = '\0';
+    strncpy(sim->problem_name, "general", sizeof(sim->problem_name) - 1);
+    sim->problem_name[sizeof(sim->problem_name) - 1] = '\0';
+    sim->restart_from_file = 0;
+    sim->restart_file_name[0] = '\0';
     sim->mesh.root_nx[0] = 8;
     sim->mesh.root_nx[1] = 8;
     sim->mesh.root_nx[2] = 8;
@@ -302,6 +306,16 @@ void prj_io_parser(prj_sim *sim, char *filename)
         } else if (strcmp(key, "progenitor_file") == 0) {
             strncpy(sim->progenitor_file, value, sizeof(sim->progenitor_file) - 1);
             sim->progenitor_file[sizeof(sim->progenitor_file) - 1] = '\0';
+            endptr = value + strlen(value);
+        } else if (strcmp(key, "problem") == 0) {
+            strncpy(sim->problem_name, value, sizeof(sim->problem_name) - 1);
+            sim->problem_name[sizeof(sim->problem_name) - 1] = '\0';
+            endptr = value + strlen(value);
+        } else if (strcmp(key, "restart_from_file") == 0) {
+            sim->restart_from_file = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "restart_file_name") == 0) {
+            strncpy(sim->restart_file_name, value, sizeof(sim->restart_file_name) - 1);
+            sim->restart_file_name[sizeof(sim->restart_file_name) - 1] = '\0';
             endptr = value + strlen(value);
         } else if (strcmp(key, "eos_file") == 0) {
             strncpy(sim->eos.filename, value, sizeof(sim->eos.filename) - 1);

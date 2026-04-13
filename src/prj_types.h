@@ -146,6 +146,9 @@ struct prj_sim {
     int restart_interval;
     char output_dir[256];
     char progenitor_file[256];
+    char problem_name[64];
+    int restart_from_file;
+    char restart_file_name[256];
     int amr_interval;
 };
 

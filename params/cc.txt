@@ -1,6 +1,10 @@
 # Sample runtime parameters for the core-collapse style setup.
 # Update eos_file or progenitor_file if your inputs live somewhere else.
 
+problem = cc
+restart_from_file = 0
+restart_file_name = output/final.h5
+
 x1min = -3.0e9
 x1max = 3.0e9
 x2min = -3.0e9

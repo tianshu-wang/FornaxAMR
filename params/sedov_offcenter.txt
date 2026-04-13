@@ -1,5 +1,9 @@
 # Sample runtime parameters for the off-center Sedov blast setup.
 
+problem = sedov_offcenter
+restart_from_file = 0
+restart_file_name = output/final.h5
+
 x1min = -2.0
 x1max = 2.0
 x2min = -2.0
