@@ -17,6 +17,8 @@ max_steps = 100000
 output_interval = 10
 restart_interval = 50
 amr_interval = 16
+use_amr_angle_resolution = 0
+amr_angle_resolution_limit = 0.0
 
 #eos_type = ideal
 eos_type = table

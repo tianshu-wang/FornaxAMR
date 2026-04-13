@@ -78,6 +78,8 @@ struct prj_mesh {
     double amr_derefine_thresh;
     double amr_eps;
     int amr_estimator;
+    int use_amr_angle_resolution;
+    double amr_angle_resolution_limit;
     double E_floor;
 };
 

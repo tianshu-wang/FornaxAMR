@@ -202,6 +202,8 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->amr_derefine_thresh = 0.2;
     mesh->amr_eps = 0.1;
     mesh->amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
+    mesh->use_amr_angle_resolution = 0;
+    mesh->amr_angle_resolution_limit = 0.0;
     mesh->blocks = 0;
 
     nroot = root_nx1 * root_nx2 * root_nx3;

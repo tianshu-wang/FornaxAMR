@@ -876,6 +876,47 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
     }
 }
 
+static int prj_amr_all_cells_meet_angle_resolution_limit(const prj_mesh *mesh, const prj_block *block)
+{
+    double cell_size;
+    int i;
+    int j;
+    int k;
+
+    if (mesh == 0 || block == 0 || mesh->use_amr_angle_resolution == 0 ||
+        mesh->amr_angle_resolution_limit <= 0.0) {
+        return 0;
+    }
+
+    cell_size = block->dx[0];
+    if (block->dx[1] > cell_size) {
+        cell_size = block->dx[1];
+    }
+    if (block->dx[2] > cell_size) {
+        cell_size = block->dx[2];
+    }
+
+    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                double x = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                double y = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                double z = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                double radius = sqrt(x * x + y * y + z * z);
+
+                if (radius <= 0.0) {
+                    return 0;
+                }
+                if (cell_size / radius >= mesh->amr_angle_resolution_limit) {
+                    return 0;
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+
 void prj_amr_refine_block(prj_mesh *mesh, int block_id)
 {
     prj_block *parent;
@@ -888,6 +929,10 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
     }
     parent = &mesh->blocks[block_id];
     if (!prj_is_active_block(parent) || parent->level >= mesh->max_level) {
+        return;
+    }
+    if (prj_amr_all_cells_meet_angle_resolution_limit(mesh, parent)) {
+        parent->refine_flag = 0;
         return;
     }
     owner_local = prj_is_local_block_owner(parent);

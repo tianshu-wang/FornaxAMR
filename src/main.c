@@ -133,6 +133,8 @@ int main(int argc, char *argv[])
     double saved_amr_derefine_thresh;
     double saved_amr_eps;
     int saved_amr_estimator;
+    int saved_use_amr_angle_resolution;
+    double saved_amr_angle_resolution_limit;
     int resolution = -1;
     int max_level_override = -1;
     int i;
@@ -183,12 +185,16 @@ int main(int argc, char *argv[])
         saved_amr_derefine_thresh = sim.mesh.amr_derefine_thresh;
         saved_amr_eps = sim.mesh.amr_eps;
         saved_amr_estimator = sim.mesh.amr_estimator;
+        saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
+        saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
         prj_mesh_destroy(&sim.mesh);
         prj_io_read_restart(&sim.mesh, &sim.eos, restart_file, &sim.time, &sim.step);
         sim.mesh.amr_refine_thresh = saved_amr_refine_thresh;
         sim.mesh.amr_derefine_thresh = saved_amr_derefine_thresh;
         sim.mesh.amr_eps = saved_amr_eps;
         sim.mesh.amr_estimator = saved_amr_estimator;
+        sim.mesh.use_amr_angle_resolution = saved_use_amr_angle_resolution;
+        sim.mesh.amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
         prj_print_config(&sim, mpi.rank);
     }
     prj_mesh_mark_base_blocks(&sim.mesh);
