@@ -12,7 +12,7 @@
 #include <mpi.h>
 #endif
 
-#define PRJ_GRAVITY_DEFAULT_NBINS 256
+#define PRJ_GRAVITY_DEFAULT_NBINS 1024
 
 static prj_grav_mono *prj_gravity_active = 0;
 static double prj_gravity_rmax = 0.0;

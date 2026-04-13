@@ -168,6 +168,8 @@ int main(int argc, char *argv[])
     double saved_amr_angle_resolution_limit;
     int resolution = -1;
     int max_level_override = -1;
+    double next_output_time = -1.0;
+    double next_restart_time = -1.0;
     int i;
 
     memset(&sim, 0, sizeof(sim));
@@ -242,9 +244,29 @@ int main(int argc, char *argv[])
     prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
     prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
+    if (sim.output_dt >= 0.0) {
+        next_output_time = sim.time + sim.output_dt;
+    }
+    if (sim.restart_dt >= 0.0) {
+        next_restart_time = sim.time + sim.restart_dt;
+    }
 
     while (sim.time < sim.t_end && sim.step < sim.max_steps) {
+        int write_output = 0;
+        int write_restart = 0;
+        double next_event_time = -1.0;
+
         sim.dt = prj_timeint_calc_dt(&sim.mesh, &sim.eos, sim.cfl);
+        if (sim.output_dt >= 0.0 && next_output_time >= 0.0) {
+            next_event_time = next_output_time;
+        }
+        if (sim.restart_dt >= 0.0 && next_restart_time >= 0.0 &&
+            (next_event_time < 0.0 || next_restart_time < next_event_time)) {
+            next_event_time = next_restart_time;
+        }
+        if (next_event_time >= 0.0 && sim.time + sim.dt > next_event_time) {
+            sim.dt = 1.000001 * (next_event_time - sim.time);
+        }
         if (sim.time + sim.dt > sim.t_end) {
             sim.dt = sim.t_end - sim.time;
         }
@@ -260,11 +282,37 @@ int main(int argc, char *argv[])
             prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
         }
         if (sim.output_interval > 0 && sim.step % sim.output_interval == 0) {
+            write_output = 1;
+        }
+        if (sim.restart_interval > 0 && sim.step % sim.restart_interval == 0) {
+            write_restart = 1;
+        }
+        if (sim.output_dt >= 0.0 && next_output_time >= 0.0 && sim.time >= next_output_time) {
+            write_output = 1;
+            if (sim.output_dt > 0.0) {
+                do {
+                    next_output_time += sim.output_dt;
+                } while (sim.time >= next_output_time);
+            } else {
+                next_output_time = -1.0;
+            }
+        }
+        if (sim.restart_dt >= 0.0 && next_restart_time >= 0.0 && sim.time >= next_restart_time) {
+            write_restart = 1;
+            if (sim.restart_dt > 0.0) {
+                do {
+                    next_restart_time += sim.restart_dt;
+                } while (sim.time >= next_restart_time);
+            } else {
+                next_restart_time = -1.0;
+            }
+        }
+        if (write_output) {
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
             prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
         }
-        if (sim.restart_interval > 0 && sim.step % sim.restart_interval == 0) {
+        if (write_restart) {
             prj_io_write_restart(&sim.mesh, sim.time, sim.step);
         }
         if (mpi.rank == 0) {

@@ -143,9 +143,11 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->bc.bc_x3_outer = PRJ_BC_OUTFLOW;
     sim->cfl = 0.8;
     sim->t_end = 0.1;
+    sim->output_dt = -1.0;
+    sim->restart_dt = -1.0;
     sim->max_steps = 100;
-    sim->output_interval = 10;
-    sim->restart_interval = 50;
+    sim->output_interval = -1;
+    sim->restart_interval = -1;
     sim->amr_interval = -1;
     strncpy(sim->output_dir, "output/dump", sizeof(sim->output_dir) - 1);
     sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
@@ -244,6 +246,10 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->cfl = strtod(value, &endptr);
         } else if (strcmp(key, "t_end") == 0) {
             sim->t_end = strtod(value, &endptr);
+        } else if (strcmp(key, "output_dt") == 0) {
+            sim->output_dt = strtod(value, &endptr);
+        } else if (strcmp(key, "restart_dt") == 0) {
+            sim->restart_dt = strtod(value, &endptr);
         } else if (strcmp(key, "max_steps") == 0) {
             sim->max_steps = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "output_interval") == 0) {
