@@ -10,6 +10,10 @@
 #define PRJ_USE_RADIATION 0
 #endif
 
+#ifndef PRJ_DUMP_SINGLE_PRECISION
+#define PRJ_DUMP_SINGLE_PRECISION 1
+#endif
+
 #if PRJ_USE_RADIATION
 #define PRJ_NRAD 1
 #else

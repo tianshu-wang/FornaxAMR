@@ -392,6 +392,15 @@ static void prj_io_close_dxpl(hid_t dxpl)
     }
 }
 
+static hid_t prj_io_dump_real_hdf5_type(void)
+{
+#if PRJ_DUMP_SINGLE_PRECISION
+    return H5T_NATIVE_FLOAT;
+#else
+    return H5T_NATIVE_DOUBLE;
+#endif
+}
+
 static void prj_io_write_attr_double(hid_t obj, const char *name, double value)
 {
     hid_t space = H5Screate(H5S_SCALAR);
@@ -806,6 +815,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
     int nactive = 0;
     int bidx;
     int active_idx = 0;
+    hid_t dump_real_type = prj_io_dump_real_hdf5_type();
 
     snprintf(filename, sizeof(filename), "%s_%05d.h5", basename, step);
     if (prj_io_is_root_rank()) {
@@ -838,7 +848,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
         char name[32];
 
         prj_io_dataset_name(bidx, name, sizeof(name));
-        dset_var[bidx] = H5Dcreate2(file, name, H5T_NATIVE_DOUBLE, space_var, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        dset_var[bidx] = H5Dcreate2(file, name, dump_real_type, space_var, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
     }
     {
         int offset = 0;
@@ -897,11 +907,30 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
             hsize_t count_var[4] = {1, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE};
             hid_t mem_var = H5Screate_simple(4, count_var, count_var);
             hid_t file_var = H5Dget_space(dset_var[var]);
-            double *buffer = (double *)calloc((size_t)(PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE), sizeof(*buffer));
             hid_t dxpl = prj_io_data_xfer_plist();
             int i;
             int j;
             int k;
+            size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
+
+            #if PRJ_DUMP_SINGLE_PRECISION
+            float *buffer = (float *)calloc(ncells, sizeof(*buffer));
+
+            if (buffer == 0) {
+                prj_io_fail("prj_io_write_dump: allocation failed");
+            }
+            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                        size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                        buffer[cell] = (float)block->W[VIDX(var, i, j, k)];
+                    }
+                }
+            }
+            H5Sselect_hyperslab(file_var, H5S_SELECT_SET, start_var, 0, count_var, 0);
+            H5Dwrite(dset_var[var], H5T_NATIVE_FLOAT, mem_var, file_var, dxpl, buffer);
+            #else
+            double *buffer = (double *)calloc(ncells, sizeof(*buffer));
 
             if (buffer == 0) {
                 prj_io_fail("prj_io_write_dump: allocation failed");
@@ -916,6 +945,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
             }
             H5Sselect_hyperslab(file_var, H5S_SELECT_SET, start_var, 0, count_var, 0);
             H5Dwrite(dset_var[var], H5T_NATIVE_DOUBLE, mem_var, file_var, dxpl, buffer);
+            #endif
             prj_io_close_dxpl(dxpl);
             free(buffer);
             H5Sclose(file_var);
