@@ -178,6 +178,8 @@ static int prj_eos_prepare_table(prj_eos *eos)
 
 void prj_eos_init(prj_eos *eos)
 {
+    prj_mpi *mpi;
+
     if (eos == 0) {
         return;
     }
@@ -201,6 +203,10 @@ void prj_eos_init(prj_eos *eos)
         return;
     }
     (void)prj_eos_prepare_table(eos);
+    mpi = prj_mpi_current();
+    if (eos->table_loaded == 1 && (mpi == 0 || mpi->rank == 0)) {
+        printf("EOS table initialization finished (%zu bytes loaded)\n", eos->table_bytes);
+    }
 }
 
 static void prj_eos_table_interp_base(const prj_eos *eos, double rho, double T, double ye,
