@@ -1150,7 +1150,6 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
         return;
     }
     parent = &mesh->blocks[parent_id];
-    owner_local = prj_is_local_block_owner(parent);
     for (oct = 0; oct < 8; ++oct) {
         int id = parent->children[oct];
 
@@ -1178,6 +1177,7 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
             parent->rank = child_ranks[oct];
         }
     }
+    owner_local = prj_is_local_block_owner(parent);
 
     prj_amr_move_children_to_parent_rank(mesh, parent);
     if (owner_local) {
