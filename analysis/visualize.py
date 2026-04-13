@@ -1,11 +1,28 @@
 #!/usr/bin/env python3
 
 from pathlib import Path
-import sys
 
 import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LogNorm, Normalize, SymLogNorm
+
+
+# User settings
+VARIABLE = "density"
+OUTPUT_DIR = Path("output")
+PLANES = ("xy", "yz", "xz")
+
+# Set these to None to show the full domain.
+X_RANGE = [-1e8,1e8]
+Y_RANGE = [-1e8,1e8]
+
+# Choose from "normalize", "lognorm", or "symlognorm".
+COLOR_SCALE = "lognorm"
+COLOR_VMIN = 1e7
+COLOR_VMAX = 1e15
+SYMLOG_LINTHRESH = 1.0e-6
+SYMLOG_LINSCALE = 1.0
 
 
 def load_dump_files(output_dir: Path):
@@ -85,6 +102,38 @@ def draw_block_grid(ax, xmin: np.ndarray, xmax: np.ndarray, plane: str) -> None:
     ax.plot([xmax[axis_a], xmax[axis_a]], [xmin[axis_b], xmax[axis_b]], color="grey", alpha=0.35, linewidth=0.8)
 
 
+def color_limits(plane_blocks):
+    vmin = min(np.min(plane_values) for _, _, _, _, plane_values in plane_blocks)
+    vmax = max(np.max(plane_values) for _, _, _, _, plane_values in plane_blocks)
+    if np.isclose(vmin, vmax):
+        pad = max(1.0e-12, 1.0e-6 * max(1.0, abs(vmin)))
+        vmin -= pad
+        vmax += pad
+    if COLOR_VMIN is not None:
+        vmin = COLOR_VMIN
+    if COLOR_VMAX is not None:
+        vmax = COLOR_VMAX
+    return vmin, vmax
+
+
+def build_norm(vmin: float, vmax: float):
+    scale = COLOR_SCALE.lower()
+    if scale == "normalize":
+        return Normalize(vmin=vmin, vmax=vmax)
+    if scale == "lognorm":
+        if vmin <= 0.0:
+            raise ValueError("LogNorm requires positive color limits; set COLOR_VMIN > 0 or choose another scale")
+        return LogNorm(vmin=vmin, vmax=vmax)
+    if scale == "symlognorm":
+        return SymLogNorm(
+            linthresh=SYMLOG_LINTHRESH,
+            linscale=SYMLOG_LINSCALE,
+            vmin=vmin,
+            vmax=vmax,
+        )
+    raise ValueError(f"unknown COLOR_SCALE '{COLOR_SCALE}'")
+
+
 def plot_plane(output_dir: Path, step: int, coords: np.ndarray, levels: np.ndarray, values: np.ndarray, variable: str, plane: str, coord: np.ndarray, root_nx: np.ndarray) -> None:
     plot_dir = output_dir / "plots" / variable
     plot_dir.mkdir(parents=True, exist_ok=True)
@@ -98,25 +147,25 @@ def plot_plane(output_dir: Path, step: int, coords: np.ndarray, levels: np.ndarr
     plane_blocks = collect_plane_blocks(coords, levels, values, plane, coord, root_nx)
     if not plane_blocks:
         raise RuntimeError(f"no blocks intersect the {plane} plane")
-    vmin = min(np.min(plane_values) for _, _, _, _, plane_values in plane_blocks)
-    vmax = max(np.max(plane_values) for _, _, _, _, plane_values in plane_blocks)
-    if np.isclose(vmin, vmax):
-        pad = max(1.0e-12, 1.0e-6 * max(1.0, abs(vmin)))
-        vmin -= pad
-        vmax += pad
+    vmin, vmax = color_limits(plane_blocks)
+    norm = build_norm(vmin, vmax)
     for xmin, xmax, xedges, yedges, plane_values in plane_blocks:
-        pcm = ax.pcolormesh(xedges, yedges, plane_values.T, shading="flat", cmap="viridis", vmin=vmin, vmax=vmax)
+        pcm = ax.pcolormesh(xedges, yedges, plane_values.T, shading="flat", cmap="viridis", norm=norm)
         draw_block_grid(ax, xmin, xmax, plane)
     fig.colorbar(pcm, ax=ax, label=variable)
     ax.set_title(f"{variable} {plane} step {step:05d}")
     ax.set_aspect("equal")
+    if X_RANGE is not None:
+        ax.set_xlim(X_RANGE)
+    if Y_RANGE is not None:
+        ax.set_ylim(Y_RANGE)
     fig.savefig(plot_path, dpi=150)
     plt.close(fig)
 
 
 def main() -> None:
-    variable = sys.argv[1] if len(sys.argv) > 1 else "pressure"
-    output_dir = Path("output")
+    variable = VARIABLE
+    output_dir = OUTPUT_DIR
     dump_files = load_dump_files(output_dir)
 
     for dump_path in dump_files:
@@ -130,7 +179,7 @@ def main() -> None:
                 values = pressure_from_state(h5["density"][...], h5["eint"][...])
             else:
                 values = h5[variable][...]
-        for plane in ("xy", "yz", "xz"):
+        for plane in PLANES:
             plot_plane(output_dir, step, coords, levels, values, variable, plane, coord, root_nx)
 
 

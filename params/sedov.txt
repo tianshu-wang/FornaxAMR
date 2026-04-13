@@ -21,10 +21,6 @@ eos_type = ideal
 
 E_floor = 1e-10
 
-amr_estimator = velocity
-amr_refine_thresh = 0.5
-amr_derefine_thresh = 0.2
-
 output_dir = output/dump
 
 bc_x1_inner = outflow

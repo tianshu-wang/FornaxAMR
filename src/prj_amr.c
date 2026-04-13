@@ -548,6 +548,9 @@ static int prj_can_coarsen_parent(const prj_mesh *mesh, int parent_id)
             !prj_is_active_block(&mesh->blocks[child_id])) {
             return 0;
         }
+        if (mesh->blocks[child_id].base_block != 0) {
+            return 0;
+        }
         if (mesh->blocks[child_id].refine_flag > 0) {
             return 0;
         }
@@ -910,6 +913,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         child->level = parent->level + 1;
         child->active = 1;
         child->refine_flag = 0;
+        child->base_block = 0;
         child->parent = parent->id;
         prj_reset_children(child);
         prj_clear_neighbors(child);
@@ -956,6 +960,8 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
 {
     prj_block *parent;
     const prj_block *children[8];
+    int child_ranks[8];
+    int child_counts[8];
     int oct;
     int owner_local;
 
@@ -971,6 +977,25 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
             return;
         }
         children[oct] = &mesh->blocks[id];
+        child_ranks[oct] = mesh->blocks[id].rank;
+        child_counts[oct] = 0;
+    }
+
+    for (oct = 0; oct < 8; ++oct) {
+        int other;
+
+        for (other = 0; other < 8; ++other) {
+            if (child_ranks[other] == child_ranks[oct]) {
+                child_counts[oct] += 1;
+            }
+        }
+    }
+    parent->rank = child_ranks[0];
+    for (oct = 1; oct < 8; ++oct) {
+        if (child_counts[oct] > child_counts[0]) {
+            child_counts[0] = child_counts[oct];
+            parent->rank = child_ranks[oct];
+        }
     }
 
     prj_amr_move_children_to_parent_rank(mesh, parent);
@@ -987,6 +1012,7 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
         }
         child->id = -1;
         child->active = 0;
+        child->base_block = 0;
         child->parent = -1;
         prj_reset_children(child);
         prj_clear_neighbors(child);

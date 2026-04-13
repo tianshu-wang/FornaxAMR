@@ -9,6 +9,7 @@ void prj_block_free_data(prj_block *b);
 void prj_block_setup_geometry(prj_block *b, const prj_coord *coord);
 prj_block *prj_mesh_get_block(prj_mesh *mesh, int id);
 int prj_mesh_count_active(const prj_mesh *mesh);
+void prj_mesh_mark_base_blocks(prj_mesh *mesh);
 void prj_mesh_destroy(prj_mesh *mesh);
 
 #endif

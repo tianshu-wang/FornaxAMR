@@ -17,11 +17,6 @@ output_interval = 10
 restart_interval = 100
 amr_interval = -1
 
-amr_refine_thresh = 0.5
-amr_derefine_thresh = 0.1
-amr_estimator = lohner
-amr_eps = 0.1
-
 output_dir = output/dump
 
 bc_x1_inner = user

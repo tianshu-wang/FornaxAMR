@@ -11,7 +11,7 @@
 
 #include "prj.h"
 
-#define PRJ_IO_METADATA_SIZE 638
+#define PRJ_IO_METADATA_SIZE 639
 
 static void prj_io_fail(const char *message);
 
@@ -52,22 +52,6 @@ static int prj_io_parse_bc(const char *value, int *bc_type)
     }
     if (strcmp(value, "user") == 0) {
         *bc_type = PRJ_BC_USER;
-        return 0;
-    }
-    return 1;
-}
-
-static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
-{
-    if (value == 0 || amr_estimator == 0) {
-        return 1;
-    }
-    if (strcmp(value, "lohner") == 0 || strcmp(value, "loehner") == 0) {
-        *amr_estimator = PRJ_AMR_ESTIMATOR_LOEHNER;
-        return 0;
-    }
-    if (strcmp(value, "velocity") == 0) {
-        *amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
         return 0;
     }
     return 1;
@@ -119,10 +103,10 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.root_nx[1] = 8;
     sim->mesh.root_nx[2] = 8;
     sim->mesh.max_level = 0;
-    sim->mesh.amr_refine_thresh = 0.05;
-    sim->mesh.amr_derefine_thresh = 0.01;
+    sim->mesh.amr_refine_thresh = 0.5;
+    sim->mesh.amr_derefine_thresh = 0.2;
     sim->mesh.amr_eps = 0.1;
-    sim->mesh.amr_estimator = PRJ_AMR_ESTIMATOR_LOEHNER;
+    sim->mesh.amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
     sim->mesh.E_floor = -1.0;
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
@@ -219,18 +203,6 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.root_nx[2] = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "max_level") == 0) {
             sim->mesh.max_level = (int)strtol(value, &endptr, 10);
-        } else if (strcmp(key, "amr_refine_thresh") == 0) {
-            sim->mesh.amr_refine_thresh = strtod(value, &endptr);
-        } else if (strcmp(key, "amr_derefine_thresh") == 0) {
-            sim->mesh.amr_derefine_thresh = strtod(value, &endptr);
-        } else if (strcmp(key, "amr_eps") == 0) {
-            sim->mesh.amr_eps = strtod(value, &endptr);
-        } else if (strcmp(key, "amr_estimator") == 0) {
-            if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator) != 0) {
-                endptr = value;
-            } else {
-                endptr = value + strlen(value);
-            }
         } else if (strcmp(key, "E_floor") == 0) {
             sim->mesh.E_floor = strtod(value, &endptr);
         } else if (strcmp(key, "output_dir") == 0) {
@@ -521,10 +493,11 @@ static void prj_io_fill_metadata(const prj_block *block, double *metadata_row)
     metadata_row[11] = block->dx[1];
     metadata_row[12] = block->dx[2];
     metadata_row[13] = (double)block->parent;
+    metadata_row[14] = (double)block->base_block;
     for (n = 0; n < 8; ++n) {
-        metadata_row[14 + n] = (double)block->children[n];
+        metadata_row[15 + n] = (double)block->children[n];
     }
-    idx = 22;
+    idx = 23;
     for (n = 0; n < 56; ++n) {
         int d;
 
@@ -561,10 +534,11 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
     block->dx[1] = metadata_row[11];
     block->dx[2] = metadata_row[12];
     block->parent = (int)metadata_row[13];
+    block->base_block = (int)metadata_row[14];
     for (n = 0; n < 8; ++n) {
-        block->children[n] = (int)metadata_row[14 + n];
+        block->children[n] = (int)metadata_row[15 + n];
     }
-    idx = 22;
+    idx = 23;
     for (n = 0; n < 56; ++n) {
         int d;
 

@@ -50,6 +50,7 @@ struct prj_block {
     int level;
     int active;
     int refine_flag;
+    int base_block;
     double xmin[3];
     double xmax[3];
     double dx[3];

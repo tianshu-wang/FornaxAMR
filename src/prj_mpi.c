@@ -307,23 +307,6 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh)
         }
         mesh->blocks[items[i].id].rank = rank;
     }
-    for (i = 0; i < mesh->nblocks; ++i) {
-        prj_block *block = &mesh->blocks[i];
-        int oct;
-        int block_rank;
-
-        if (block->id < 0 || block->active == 1 || block->parent < 0 || block->parent >= mesh->nblocks) {
-            continue;
-        }
-        block_rank = block->rank;
-        for (oct = 0; oct < 8; ++oct) {
-            int child_id = block->children[oct];
-
-            if (child_id >= 0 && child_id < mesh->nblocks) {
-                mesh->blocks[child_id].rank = block_rank;
-            }
-        }
-    }
     prj_mpi_sync_slot_ranks(mesh);
     free(items);
 }

@@ -30,6 +30,7 @@ static void prj_block_init_empty(prj_block *b)
     b->level = 0;
     b->active = 1;
     b->refine_flag = 0;
+    b->base_block = 0;
     b->W = 0;
     b->W1 = 0;
     b->eosvar = 0;
@@ -162,6 +163,20 @@ int prj_mesh_count_active(const prj_mesh *mesh)
     return count;
 }
 
+void prj_mesh_mark_base_blocks(prj_mesh *mesh)
+{
+    int i;
+
+    if (mesh == 0) {
+        return;
+    }
+    for (i = 0; i < mesh->nblocks; ++i) {
+        prj_block *block = &mesh->blocks[i];
+
+        block->base_block = (block->id >= 0 && block->active == 1) ? 1 : 0;
+    }
+}
+
 int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int max_level, const prj_coord *coord)
 {
     int i;
@@ -183,10 +198,10 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->root_nx[1] = root_nx2;
     mesh->root_nx[2] = root_nx3;
     mesh->coord = *coord;
-    mesh->amr_refine_thresh = 0.0;
-    mesh->amr_derefine_thresh = 0.0;
+    mesh->amr_refine_thresh = 0.5;
+    mesh->amr_derefine_thresh = 0.2;
     mesh->amr_eps = 0.1;
-    mesh->amr_estimator = PRJ_AMR_ESTIMATOR_LOEHNER;
+    mesh->amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
     mesh->blocks = 0;
 
     nroot = root_nx1 * root_nx2 * root_nx3;
@@ -217,6 +232,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                 b->level = 0;
                 b->active = 1;
                 b->refine_flag = 0;
+                b->base_block = 0;
                 b->xmin[0] = coord->x1min + (double)i * block_dx[0];
                 b->xmax[0] = b->xmin[0] + block_dx[0];
                 b->xmin[1] = coord->x2min + (double)j * block_dx[1];

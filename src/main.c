@@ -126,6 +126,7 @@ int main(int argc, char *argv[])
     prj_sim sim;
     prj_mpi mpi;
     prj_problem_init_fn init_fn = prj_problem_general;
+    int init_with_mpi = 0;
     const char *restart_file = 0;
     char *param_file = 0;
     double saved_amr_refine_thresh;
@@ -163,10 +164,16 @@ int main(int argc, char *argv[])
         sim.mesh.max_level = max_level_override;
     }
 
+    init_with_mpi = (init_fn == prj_problem_cc);
+    if (init_with_mpi) {
+        prj_mpi_init(&argc, &argv, &mpi);
+    }
     init_fn(&sim);
-    prj_mpi_init(&argc, &argv, &mpi);
-    prj_mpi_decompose(&sim.mesh);
-    prj_mpi_prepare(&sim.mesh, &mpi);
+    if (!init_with_mpi) {
+        prj_mpi_init(&argc, &argv, &mpi);
+        prj_mpi_decompose(&sim.mesh);
+        prj_mpi_prepare(&sim.mesh, &mpi);
+    }
     prj_print_config(&sim, mpi.rank);
     if (mpi.rank == 0) {
         mkdir("output", 0777);
@@ -184,6 +191,7 @@ int main(int argc, char *argv[])
         sim.mesh.amr_estimator = saved_amr_estimator;
         prj_print_config(&sim, mpi.rank);
     }
+    prj_mesh_mark_base_blocks(&sim.mesh);
     prj_rad_init(&sim.rad);
  #if PRJ_USE_GRAVITY
     prj_gravity_init(&sim);
