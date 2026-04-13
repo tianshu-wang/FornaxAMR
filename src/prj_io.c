@@ -99,6 +99,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->amr_interval = -1;
     strncpy(sim->output_dir, "output/dump", sizeof(sim->output_dir) - 1);
     sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
+    sim->progenitor_file[0] = '\0';
     sim->mesh.root_nx[0] = 8;
     sim->mesh.root_nx[1] = 8;
     sim->mesh.root_nx[2] = 8;
@@ -208,6 +209,10 @@ void prj_io_parser(prj_sim *sim, char *filename)
         } else if (strcmp(key, "output_dir") == 0) {
             strncpy(sim->output_dir, value, sizeof(sim->output_dir) - 1);
             sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
+            endptr = value + strlen(value);
+        } else if (strcmp(key, "progenitor_file") == 0) {
+            strncpy(sim->progenitor_file, value, sizeof(sim->progenitor_file) - 1);
+            sim->progenitor_file[sizeof(sim->progenitor_file) - 1] = '\0';
             endptr = value + strlen(value);
         } else if (strcmp(key, "eos_file") == 0) {
             strncpy(sim->eos.filename, value, sizeof(sim->eos.filename) - 1);

@@ -1,5 +1,5 @@
 # Sample runtime parameters for the core-collapse style setup.
-# Update eos_file if your table lives somewhere else.
+# Update eos_file or progenitor_file if your inputs live somewhere else.
 
 x1min = -3.0e9
 x1max = 3.0e9
@@ -21,6 +21,7 @@ amr_interval = 1
 #eos_type = ideal
 eos_type = table
 eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
+progenitor_file = ../s9.0.swbj15.fornax
 
 output_dir = output/dump
 

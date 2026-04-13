@@ -5,7 +5,6 @@
 
 #include "prj.h"
 
-#define PRJ_CC_PROGENITOR_PATH "../s9.0.swbj15.fornax"
 #define PRJ_CC_EOS_PATH "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat"
 #define PRJ_CC_KELVIN_PER_MEV 1.160451812e10
 
@@ -484,6 +483,9 @@ void prj_problem_cc(prj_sim *sim)
 {
     prj_cc_profile profile;
 
+    if (sim->progenitor_file[0] == '\0') {
+        return;
+    }
     if (sim->eos.kind == PRJ_EOS_KIND_TABLE && sim->eos.filename[0] == '\0') {
         strncpy(sim->eos.filename, PRJ_CC_EOS_PATH, sizeof(sim->eos.filename) - 1);
         sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
@@ -496,7 +498,7 @@ void prj_problem_cc(prj_sim *sim)
     prj_mpi_decompose(&sim->mesh);
     prj_mpi_prepare(&sim->mesh, prj_mpi_current());
 
-    if (prj_cc_profile_load(&profile, PRJ_CC_PROGENITOR_PATH) != 0) {
+    if (prj_cc_profile_load(&profile, sim->progenitor_file) != 0) {
         return;
     }
     if (prj_cc_profile_prepare_pressure_scale_height(&profile, &sim->eos) != 0) {
