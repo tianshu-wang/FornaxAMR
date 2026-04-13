@@ -1181,6 +1181,10 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
 
     prj_amr_move_children_to_parent_rank(mesh, parent);
     if (owner_local) {
+        if (parent->W == 0) {
+            prj_block_alloc_data(parent);
+            prj_block_setup_geometry(parent, &mesh->coord);
+        }
         prj_amr_restrict(children, parent);
     }
     parent->active = 1;
