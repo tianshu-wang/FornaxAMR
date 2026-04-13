@@ -530,9 +530,54 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
     return cell_size / Hp;
 }
 
+static double prj_pressure_jump_cell_indicator(const prj_block *b, int i, int j, int k)
+{
+    const double small = 1.0e-14;
+    double p0;
+    double max_indicator = 0.0;
+    int di;
+    int dj;
+    int dk;
+
+    if (b == 0 || b->eosvar == 0) {
+        return 0.0;
+    }
+
+    p0 = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    if (p0 <= 0.0) {
+        return 0.0;
+    }
+
+    for (di = -1; di <= 1; ++di) {
+        for (dj = -1; dj <= 1; ++dj) {
+            for (dk = -1; dk <= 1; ++dk) {
+                double pnei;
+                double denom;
+                double jump;
+
+                if (di == 0 && dj == 0 && dk == 0) {
+                    continue;
+                }
+                pnei = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i + di, j + dj, k + dk)];
+                denom = p0 + pnei;
+                if (pnei <= 0.0) {
+                    continue;
+                }
+                jump = 2.0 * prj_abs_double(p0 - pnei) / (denom + small);
+                max_indicator = prj_max_double(max_indicator, jump);
+            }
+        }
+    }
+
+    return max_indicator;
+}
+
 static double prj_amr_cell_indicator_for_estimator(
     const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int estimator, int i, int j, int k)
 {
+    if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_PRESSURE_JUMP) {
+        return prj_pressure_jump_cell_indicator(b, i, j, k);
+    }
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
         return prj_pressure_scale_height_cell_indicator(b, i, j, k);
     }
