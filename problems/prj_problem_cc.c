@@ -8,8 +8,6 @@
 #define PRJ_CC_EOS_PATH "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat"
 #define PRJ_CC_KELVIN_PER_MEV 1.160451812e10
 
-static const double prj_cc_pressure_jump_thresh = 0.5;
-
 typedef struct prj_cc_profile {
     int npts;
     double *radius;
@@ -288,76 +286,10 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
     }
 }
 
-static double prj_cc_pressure_jump_refine_threshold(const prj_mesh *mesh)
-{
-    int amr_idx;
-
-    if (mesh == 0) {
-        return prj_cc_pressure_jump_thresh;
-    }
-
-    for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
-        if (mesh->amr_criterion_set[amr_idx] != 0 &&
-            mesh->amr_estimator[amr_idx] == PRJ_AMR_ESTIMATOR_PRESSURE_JUMP) {
-            return mesh->amr_refine_thresh[amr_idx];
-        }
-    }
-
-    return prj_cc_pressure_jump_thresh;
-}
-
-static int prj_cc_block_needs_refine_from_pressure_jump(const prj_block *block, double pressure_jump_thresh)
-{
-    const double small = 1.0e-14;
-    int i;
-    int j;
-    int k;
-
-    if (block == 0 || block->eosvar == 0) {
-        return 0;
-    }
-
-    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                double p0 = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
-                int di;
-                int dj;
-                int dk;
-
-                if (p0 <= 0.0) {
-                    continue;
-                }
-                for (di = -1; di <= 1; ++di) {
-                    for (dj = -1; dj <= 1; ++dj) {
-                        for (dk = -1; dk <= 1; ++dk) {
-                            double pnei;
-                            double jump;
-
-                            if (di == 0 && dj == 0 && dk == 0) {
-                                continue;
-                            }
-                            pnei = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i + di, j + dj, k + dk)];
-                            if (pnei <= 0.0) {
-                                continue;
-                            }
-                            jump = 2.0 * fabs(p0 - pnei) / (p0 + pnei + small);
-                            if (jump > pressure_jump_thresh) {
-                                return 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    return 0;
-}
-
 static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
 {
-    int level;
-    double pressure_jump_thresh = prj_cc_pressure_jump_refine_threshold(&sim->mesh);
+    unsigned long long prev_sig;
+    unsigned long long next_sig;
 
     prj_cc_fill_mesh(sim, profile);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
@@ -369,39 +301,25 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
     if (sim->mesh.max_level <= 0) {
         return;
     }
-    for (level = 0; level < sim->mesh.max_level; ++level) {
-        int bidx;
-        unsigned long long prev_sig = prj_problem_mesh_signature(&sim->mesh);
-        int marked = 0;
 
-        for (bidx = 0; bidx < sim->mesh.nblocks; ++bidx) {
-            prj_block *block = &sim->mesh.blocks[bidx];
-
-            if (block->id >= 0 && block->active == 1 && block->level == level) {
-                if (prj_cc_block_needs_refine_from_pressure_jump(block, pressure_jump_thresh) != 0) {
-                    block->refine_flag = 1;
-                    marked = 1;
-                }
-            }
-        }
-        if (marked == 0) {
-            break;
-        }
-        prj_amr_init_neighbors(&sim->mesh);
-        prj_amr_enforce_two_to_one(&sim->mesh);
-        prj_amr_refine_marked_blocks(&sim->mesh);
+    do {
+        prev_sig = prj_problem_mesh_signature(&sim->mesh);
+        prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
+        prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
+        prj_amr_adapt(&sim->mesh, &sim->eos);
         prj_mpi_rebalance(&sim->mesh);
         prj_cc_fill_mesh(sim, profile);
+        prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
 #if PRJ_USE_GRAVITY
         prj_gravity_monopole_reduce(&sim->mesh, 1);
         prj_gravity_monopole_integrate(&sim->mesh);
 #endif
-        if (prj_problem_mesh_signature(&sim->mesh) == prev_sig) {
-            break;
-        }
-    }
+        next_sig = prj_problem_mesh_signature(&sim->mesh);
+    } while ((int)prj_mpi_global_sum((double)(next_sig != prev_sig ? 1 : 0)) != 0);
+
     prj_amr_init_neighbors(&sim->mesh);
+    prj_mpi_prepare(&sim->mesh, prj_mpi_current());
 }
 
 void prj_problem_cc(prj_sim *sim)

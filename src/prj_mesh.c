@@ -186,10 +186,30 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     int nroot;
     int capacity;
     double block_dx[3];
+    double saved_amr_refine_thresh[PRJ_AMR_N];
+    double saved_amr_derefine_thresh[PRJ_AMR_N];
+    int saved_amr_estimator[PRJ_AMR_N];
+    int saved_amr_criterion_set[PRJ_AMR_N];
+    double saved_amr_eps;
+    int saved_use_amr_angle_resolution;
+    double saved_amr_angle_resolution_limit;
+    double saved_E_floor;
+    int amr_idx;
 
     if (mesh == 0 || coord == 0 || root_nx1 <= 0 || root_nx2 <= 0 || root_nx3 <= 0 || max_level < 0) {
         return 1;
     }
+
+    for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+        saved_amr_refine_thresh[amr_idx] = mesh->amr_refine_thresh[amr_idx];
+        saved_amr_derefine_thresh[amr_idx] = mesh->amr_derefine_thresh[amr_idx];
+        saved_amr_estimator[amr_idx] = mesh->amr_estimator[amr_idx];
+        saved_amr_criterion_set[amr_idx] = mesh->amr_criterion_set[amr_idx];
+    }
+    saved_amr_eps = mesh->amr_eps;
+    saved_use_amr_angle_resolution = mesh->use_amr_angle_resolution;
+    saved_amr_angle_resolution_limit = mesh->amr_angle_resolution_limit;
+    saved_E_floor = mesh->E_floor;
 
     mesh->nblocks = 0;
     mesh->nblocks_max = 0;
@@ -198,21 +218,16 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->root_nx[1] = root_nx2;
     mesh->root_nx[2] = root_nx3;
     mesh->coord = *coord;
-    {
-        int amr_idx;
-
-        for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
-            mesh->amr_refine_thresh[amr_idx] = 0.5;
-            mesh->amr_derefine_thresh[amr_idx] = 0.2;
-            mesh->amr_estimator[amr_idx] = PRJ_AMR_ESTIMATOR_LOEHNER;
-            mesh->amr_criterion_set[amr_idx] = 0;
-        }
-        mesh->amr_estimator[0] = PRJ_AMR_ESTIMATOR_VELOCITY;
-        mesh->amr_criterion_set[0] = 1;
+    for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+        mesh->amr_refine_thresh[amr_idx] = saved_amr_refine_thresh[amr_idx];
+        mesh->amr_derefine_thresh[amr_idx] = saved_amr_derefine_thresh[amr_idx];
+        mesh->amr_estimator[amr_idx] = saved_amr_estimator[amr_idx];
+        mesh->amr_criterion_set[amr_idx] = saved_amr_criterion_set[amr_idx];
     }
-    mesh->amr_eps = 0.1;
-    mesh->use_amr_angle_resolution = 0;
-    mesh->amr_angle_resolution_limit = 0.0;
+    mesh->amr_eps = saved_amr_eps;
+    mesh->use_amr_angle_resolution = saved_use_amr_angle_resolution;
+    mesh->amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
+    mesh->E_floor = saved_E_floor;
     mesh->blocks = 0;
 
     nroot = root_nx1 * root_nx2 * root_nx3;

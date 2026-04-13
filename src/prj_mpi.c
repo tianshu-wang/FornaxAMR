@@ -337,14 +337,35 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const int *old_ranks)
             continue;
         }
         tag = 500 + bidx;
-        if (prj_mpi_active->rank == new_rank) {
-            if (block->W == 0 && prj_block_alloc_data(block) != 0) {
-                continue;
+        if (prj_mpi_active->rank == new_rank || prj_mpi_active->rank == old_rank) {
+            double *sendbuf = 0;
+            double *recvbuf = 0;
+            int source = MPI_PROC_NULL;
+            int dest = MPI_PROC_NULL;
+            int recvcount = 0;
+            int sendcount = 0;
+
+            if (prj_mpi_active->rank == new_rank) {
+                if (block->W == 0 && prj_block_alloc_data(block) != 0) {
+                    continue;
+                }
+                recvbuf = block->W;
+                recvcount = (int)data_count;
+                source = old_rank;
             }
-            MPI_Recv(block->W, (int)data_count, MPI_DOUBLE, old_rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        } else if (prj_mpi_active->rank == old_rank && block->W != 0) {
-            MPI_Send(block->W, (int)data_count, MPI_DOUBLE, new_rank, tag, MPI_COMM_WORLD);
-            prj_block_free_data(block);
+            if (prj_mpi_active->rank == old_rank && block->W != 0) {
+                sendbuf = block->W;
+                sendcount = (int)data_count;
+                dest = new_rank;
+            }
+
+            MPI_Sendrecv(sendbuf, sendcount, MPI_DOUBLE, dest, tag,
+                recvbuf, recvcount, MPI_DOUBLE, source, tag,
+                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+            if (prj_mpi_active->rank == old_rank && block->W != 0) {
+                prj_block_free_data(block);
+            }
         }
     }
 #else
