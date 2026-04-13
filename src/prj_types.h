@@ -74,10 +74,11 @@ struct prj_mesh {
     int root_nx[3];
     prj_block *blocks;
     prj_coord coord;
-    double amr_refine_thresh;
-    double amr_derefine_thresh;
+    double amr_refine_thresh[PRJ_AMR_N];
+    double amr_derefine_thresh[PRJ_AMR_N];
     double amr_eps;
-    int amr_estimator;
+    int amr_estimator[PRJ_AMR_N];
+    int amr_criterion_set[PRJ_AMR_N];
     int use_amr_angle_resolution;
     double amr_angle_resolution_limit;
     double E_floor;

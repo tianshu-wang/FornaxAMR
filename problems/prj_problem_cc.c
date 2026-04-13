@@ -425,9 +425,28 @@ static double prj_cc_profile_min_Hp_in_range(const prj_cc_profile *profile, doub
     return min_Hp;
 }
 
+static double prj_cc_pressure_scale_height_refine_threshold(const prj_mesh *mesh)
+{
+    int amr_idx;
+
+    if (mesh == 0) {
+        return prj_cc_Hp_scale;
+    }
+
+    for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+        if (mesh->amr_criterion_set[amr_idx] != 0 &&
+            mesh->amr_estimator[amr_idx] == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+            return mesh->amr_refine_thresh[amr_idx];
+        }
+    }
+
+    return prj_cc_Hp_scale;
+}
+
 static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
 {
     int level;
+    double Hp_refine_scale = prj_cc_pressure_scale_height_refine_threshold(&sim->mesh);
 
     prj_cc_fill_mesh(sim, profile);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
@@ -461,7 +480,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
                 }
                 prj_cc_block_radius_range(block, &rmin, &rmax);
                 min_Hp = prj_cc_profile_min_Hp_in_range(profile, rmin, rmax);
-                if (cell_size > prj_cc_Hp_scale * min_Hp) {
+                if (cell_size > Hp_refine_scale * min_Hp) {
                     block->refine_flag = 1;
                     marked = 1;
                 }

@@ -530,12 +530,13 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
     return cell_size / Hp;
 }
 
-static double prj_amr_cell_indicator(const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
+static double prj_amr_cell_indicator_for_estimator(
+    const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int estimator, int i, int j, int k)
 {
-    if (mesh != 0 && mesh->amr_estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+    if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
         return prj_pressure_scale_height_cell_indicator(b, i, j, k);
     }
-    if (mesh != 0 && mesh->amr_estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
+    if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
         return prj_velocity_cell_indicator(b, eos, i, j, k);
     }
     return prj_loehner_cell_indicator(mesh, b, eos, i, j, k);
@@ -740,9 +741,11 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
         prj_block *b = &mesh->blocks[i];
         int refine = 0;
         int derefine = b->parent >= 0 ? 1 : 0;
+        int has_criterion = 0;
         int j;
         int k;
         int ii;
+        int amr_idx;
 
         if (!prj_is_local_active_block(b)) {
             continue;
@@ -751,28 +754,54 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             continue;
         }
 
-        for (ii = 0; ii < PRJ_BLOCK_SIZE && refine == 0; ++ii) {
-            for (j = 0; j < PRJ_BLOCK_SIZE && refine == 0; ++j) {
-                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    if (prj_amr_cell_indicator(mesh, b, eos, ii, j, k) > mesh->amr_refine_thresh) {
-                        refine = 1;
-                        break;
-                    }
-                }
-            }
-        }
+        for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+            int criterion_refine = 0;
+            int criterion_derefine = 1;
 
-        if (derefine != 0) {
-            for (ii = -1; ii <= PRJ_BLOCK_SIZE && derefine != 0; ++ii) {
-                for (j = -1; j <= PRJ_BLOCK_SIZE && derefine != 0; ++j) {
-                    for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
-                        if (prj_amr_cell_indicator(mesh, b, eos, ii, j, k) >= mesh->amr_derefine_thresh) {
-                            derefine = 0;
+            if (mesh->amr_criterion_set[amr_idx] == 0) {
+                continue;
+            }
+            has_criterion = 1;
+
+            for (ii = 0; ii < PRJ_BLOCK_SIZE && criterion_refine == 0; ++ii) {
+                for (j = 0; j < PRJ_BLOCK_SIZE && criterion_refine == 0; ++j) {
+                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                        if (prj_amr_cell_indicator_for_estimator(
+                                mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) >
+                            mesh->amr_refine_thresh[amr_idx]) {
+                            criterion_refine = 1;
                             break;
                         }
                     }
                 }
             }
+
+            if (criterion_refine != 0) {
+                refine = 1;
+            }
+
+            if (derefine != 0) {
+                for (ii = -1; ii <= PRJ_BLOCK_SIZE && criterion_derefine != 0; ++ii) {
+                    for (j = -1; j <= PRJ_BLOCK_SIZE && criterion_derefine != 0; ++j) {
+                        for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
+                            if (prj_amr_cell_indicator_for_estimator(
+                                    mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) >=
+                                mesh->amr_derefine_thresh[amr_idx]) {
+                                criterion_derefine = 0;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (criterion_derefine == 0) {
+                derefine = 0;
+            }
+        }
+
+        if (has_criterion == 0) {
+            refine = 0;
         }
 
         if (refine != 0 && b->level < mesh->max_level) {

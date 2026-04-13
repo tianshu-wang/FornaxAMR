@@ -76,13 +76,38 @@ static const char *prj_amr_estimator_label(const prj_sim *sim)
     if (sim == 0) {
         return "unknown";
     }
-    if (sim->mesh.amr_estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
-        return "pressure_scale_height";
+    {
+        static char label[128];
+        int offset = 0;
+        int i;
+        int any = 0;
+
+        label[0] = '\0';
+        for (i = 0; i < PRJ_AMR_N; ++i) {
+            const char *name;
+
+            if (sim->mesh.amr_criterion_set[i] == 0) {
+                continue;
+            }
+            if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+                name = "pressure_scale_height";
+            } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_VELOCITY) {
+                name = "velocity";
+            } else {
+                name = "lohner";
+            }
+            offset += snprintf(label + offset, sizeof(label) - (size_t)offset,
+                "%s%s", any ? "," : "", name);
+            any = 1;
+            if (offset >= (int)sizeof(label) - 1) {
+                break;
+            }
+        }
+        if (any != 0) {
+            return label;
+        }
     }
-    if (sim->mesh.amr_estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
-        return "velocity";
-    }
-    return "lohner";
+    return "none";
 }
 
 static void prj_print_config(const prj_sim *sim, int rank)
@@ -132,10 +157,11 @@ int main(int argc, char *argv[])
     int init_with_mpi = 0;
     const char *restart_file = 0;
     char *param_file = 0;
-    double saved_amr_refine_thresh;
-    double saved_amr_derefine_thresh;
+    double saved_amr_refine_thresh[PRJ_AMR_N];
+    double saved_amr_derefine_thresh[PRJ_AMR_N];
     double saved_amr_eps;
-    int saved_amr_estimator;
+    int saved_amr_estimator[PRJ_AMR_N];
+    int saved_amr_criterion_set[PRJ_AMR_N];
     int saved_use_amr_angle_resolution;
     double saved_amr_angle_resolution_limit;
     int resolution = -1;
@@ -184,18 +210,24 @@ int main(int argc, char *argv[])
         mkdir("output", 0777);
     }
     if (restart_file != 0) {
-        saved_amr_refine_thresh = sim.mesh.amr_refine_thresh;
-        saved_amr_derefine_thresh = sim.mesh.amr_derefine_thresh;
+        for (i = 0; i < PRJ_AMR_N; ++i) {
+            saved_amr_refine_thresh[i] = sim.mesh.amr_refine_thresh[i];
+            saved_amr_derefine_thresh[i] = sim.mesh.amr_derefine_thresh[i];
+            saved_amr_estimator[i] = sim.mesh.amr_estimator[i];
+            saved_amr_criterion_set[i] = sim.mesh.amr_criterion_set[i];
+        }
         saved_amr_eps = sim.mesh.amr_eps;
-        saved_amr_estimator = sim.mesh.amr_estimator;
         saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
         saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
         prj_mesh_destroy(&sim.mesh);
         prj_io_read_restart(&sim.mesh, &sim.eos, restart_file, &sim.time, &sim.step);
-        sim.mesh.amr_refine_thresh = saved_amr_refine_thresh;
-        sim.mesh.amr_derefine_thresh = saved_amr_derefine_thresh;
+        for (i = 0; i < PRJ_AMR_N; ++i) {
+            sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
+            sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
+            sim.mesh.amr_estimator[i] = saved_amr_estimator[i];
+            sim.mesh.amr_criterion_set[i] = saved_amr_criterion_set[i];
+        }
         sim.mesh.amr_eps = saved_amr_eps;
-        sim.mesh.amr_estimator = saved_amr_estimator;
         sim.mesh.use_amr_angle_resolution = saved_use_amr_angle_resolution;
         sim.mesh.amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
         prj_print_config(&sim, mpi.rank);

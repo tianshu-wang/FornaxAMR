@@ -27,6 +27,7 @@
 #define PRJ_NVAR_EOSVAR 3
 #define PRJ_BLOCK_SIZE 16
 #define PRJ_NGHOST 2
+#define PRJ_AMR_N 4
 #define PRJ_BS (PRJ_BLOCK_SIZE + 2 * PRJ_NGHOST)
 #define PRJ_BLOCK_NCELLS (PRJ_BS * PRJ_BS * PRJ_BS)
 

@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <stdio.h>
 
 #include <hdf5.h>
 
@@ -93,6 +94,31 @@ static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
     return 1;
 }
 
+static int prj_io_parse_amr_slot_key(const char *key, const char *prefix, int *slot)
+{
+    size_t prefix_len;
+    char *endptr;
+    long idx;
+
+    if (key == 0 || prefix == 0 || slot == 0) {
+        return 0;
+    }
+    prefix_len = strlen(prefix);
+    if (strncmp(key, prefix, prefix_len) != 0) {
+        return 0;
+    }
+    if (key[prefix_len] == '\0') {
+        *slot = 0;
+        return 1;
+    }
+    idx = strtol(key + prefix_len, &endptr, 10);
+    if (*endptr != '\0' || idx < 1 || idx > PRJ_AMR_N) {
+        return 0;
+    }
+    *slot = (int)idx - 1;
+    return 1;
+}
+
 static void prj_io_set_default_runtime(prj_sim *sim)
 {
     if (sim == 0) {
@@ -124,10 +150,19 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.root_nx[1] = 8;
     sim->mesh.root_nx[2] = 8;
     sim->mesh.max_level = 0;
-    sim->mesh.amr_refine_thresh = 0.5;
-    sim->mesh.amr_derefine_thresh = 0.2;
+    {
+        int amr_idx;
+
+        for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+            sim->mesh.amr_refine_thresh[amr_idx] = 0.5;
+            sim->mesh.amr_derefine_thresh[amr_idx] = 0.2;
+            sim->mesh.amr_estimator[amr_idx] = PRJ_AMR_ESTIMATOR_LOEHNER;
+            sim->mesh.amr_criterion_set[amr_idx] = 0;
+        }
+        sim->mesh.amr_estimator[0] = PRJ_AMR_ESTIMATOR_VELOCITY;
+        sim->mesh.amr_criterion_set[0] = 1;
+    }
     sim->mesh.amr_eps = 0.1;
-    sim->mesh.amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
     sim->mesh.use_amr_angle_resolution = 0;
     sim->mesh.amr_angle_resolution_limit = 0.0;
     sim->mesh.E_floor = -1.0;
@@ -161,6 +196,7 @@ void prj_io_parser(prj_sim *sim, char *filename)
         char *key;
         char *value;
         char *endptr;
+        int amr_slot;
 
         lineno += 1;
         comment = strchr(line, '#');
@@ -226,11 +262,22 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.root_nx[2] = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "max_level") == 0) {
             sim->mesh.max_level = (int)strtol(value, &endptr, 10);
-        } else if (strcmp(key, "amr_estimator") == 0) {
-            if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator) != 0) {
+        } else if (prj_io_parse_amr_slot_key(key, "amr_estimator", &amr_slot)) {
+            if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator[amr_slot]) != 0) {
                 endptr = value;
             } else {
                 endptr = value + strlen(value);
+                sim->mesh.amr_criterion_set[amr_slot] = 1;
+            }
+        } else if (prj_io_parse_amr_slot_key(key, "amr_refine_thresh", &amr_slot)) {
+            sim->mesh.amr_refine_thresh[amr_slot] = strtod(value, &endptr);
+            if (endptr != value) {
+                sim->mesh.amr_criterion_set[amr_slot] = 1;
+            }
+        } else if (prj_io_parse_amr_slot_key(key, "amr_derefine_thresh", &amr_slot)) {
+            sim->mesh.amr_derefine_thresh[amr_slot] = strtod(value, &endptr);
+            if (endptr != value) {
+                sim->mesh.amr_criterion_set[amr_slot] = 1;
             }
         } else if (strcmp(key, "use_amr_angle_resolution") == 0) {
             sim->mesh.use_amr_angle_resolution = (int)strtol(value, &endptr, 10);

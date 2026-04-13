@@ -198,10 +198,19 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->root_nx[1] = root_nx2;
     mesh->root_nx[2] = root_nx3;
     mesh->coord = *coord;
-    mesh->amr_refine_thresh = 0.5;
-    mesh->amr_derefine_thresh = 0.2;
+    {
+        int amr_idx;
+
+        for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+            mesh->amr_refine_thresh[amr_idx] = 0.5;
+            mesh->amr_derefine_thresh[amr_idx] = 0.2;
+            mesh->amr_estimator[amr_idx] = PRJ_AMR_ESTIMATOR_LOEHNER;
+            mesh->amr_criterion_set[amr_idx] = 0;
+        }
+        mesh->amr_estimator[0] = PRJ_AMR_ESTIMATOR_VELOCITY;
+        mesh->amr_criterion_set[0] = 1;
+    }
     mesh->amr_eps = 0.1;
-    mesh->amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
     mesh->use_amr_angle_resolution = 0;
     mesh->amr_angle_resolution_limit = 0.0;
     mesh->blocks = 0;
