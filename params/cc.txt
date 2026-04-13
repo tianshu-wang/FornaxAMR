@@ -16,7 +16,7 @@ t_end = 1.0e9
 max_steps = 100000
 output_interval = 10
 restart_interval = 50
-amr_interval = 1
+amr_interval = 16
 
 #eos_type = ideal
 eos_type = table
