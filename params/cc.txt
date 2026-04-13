@@ -17,7 +17,7 @@ max_steps = 100000
 output_interval = 10
 restart_interval = 50
 
-amr_interval = 16
+amr_interval = 1
 amr_estimator = velocity
 amr_refine_thresh = 0.5
 amr_derefine_thresh = 0.2

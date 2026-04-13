@@ -15,7 +15,7 @@ t_end = 0.1
 max_steps = 100
 output_interval = 10
 restart_interval = 50
-amr_interval = -1
+amr_interval = 1
 
 eos_type = ideal
 
