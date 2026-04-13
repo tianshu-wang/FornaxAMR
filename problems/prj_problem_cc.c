@@ -442,6 +442,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
     for (level = 0; level < sim->mesh.max_level; ++level) {
         int bidx;
         unsigned long long prev_sig = prj_problem_mesh_signature(&sim->mesh);
+        int marked = 0;
 
         for (bidx = 0; bidx < sim->mesh.nblocks; ++bidx) {
             prj_block *block = &sim->mesh.blocks[bidx];
@@ -461,10 +462,17 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
                 prj_cc_block_radius_range(block, &rmin, &rmax);
                 min_Hp = prj_cc_profile_min_Hp_in_range(profile, rmin, rmax);
                 if (cell_size > prj_cc_Hp_scale * min_Hp) {
-                    prj_amr_refine_block(&sim->mesh, bidx);
+                    block->refine_flag = 1;
+                    marked = 1;
                 }
             }
         }
+        if (marked == 0) {
+            break;
+        }
+        prj_amr_init_neighbors(&sim->mesh);
+        prj_amr_enforce_two_to_one(&sim->mesh);
+        prj_amr_refine_marked_blocks(&sim->mesh);
         prj_mpi_rebalance(&sim->mesh);
         prj_cc_fill_mesh(sim, profile);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);

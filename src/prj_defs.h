@@ -82,7 +82,8 @@ enum prj_bc_type {
 
 enum prj_amr_estimator {
     PRJ_AMR_ESTIMATOR_LOEHNER = 0,
-    PRJ_AMR_ESTIMATOR_VELOCITY = 1
+    PRJ_AMR_ESTIMATOR_VELOCITY = 1,
+    PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT = 2
 };
 
 enum prj_eos_kind {

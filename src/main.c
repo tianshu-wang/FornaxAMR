@@ -76,6 +76,9 @@ static const char *prj_amr_estimator_label(const prj_sim *sim)
     if (sim == 0) {
         return "unknown";
     }
+    if (sim->mesh.amr_estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+        return "pressure_scale_height";
+    }
     if (sim->mesh.amr_estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
         return "velocity";
     }

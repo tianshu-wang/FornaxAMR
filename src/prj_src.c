@@ -2,34 +2,6 @@
 
 #include "prj.h"
 
-static double prj_src_radius_center(const prj_grav_mono *grav_mono, int idx)
-{
-    return 0.5 * (grav_mono->rf[idx] + grav_mono->rf[idx + 1]);
-}
-
-static double prj_src_interp_accel(const prj_grav_mono *grav_mono, double r)
-{
-    int idx;
-
-    if (grav_mono == 0 || grav_mono->nbins <= 0 || grav_mono->accel == 0) {
-        return 0.0;
-    }
-    if (r <= prj_src_radius_center(grav_mono, 0)) {
-        return grav_mono->accel[0];
-    }
-    for (idx = 0; idx < grav_mono->nbins - 1; ++idx) {
-        double r0 = prj_src_radius_center(grav_mono, idx);
-        double r1 = prj_src_radius_center(grav_mono, idx + 1);
-
-        if (r <= r1) {
-            double weight = (r - r0) / (r1 - r0);
-
-            return (1.0 - weight) * grav_mono->accel[idx] + weight * grav_mono->accel[idx + 1];
-        }
-    }
-    return grav_mono->accel[grav_mono->nbins - 1];
-}
-
 #if PRJ_NRAD > 0
 static double prj_src_interp_lapse(const prj_grav_mono *grav_mono, double r)
 {
@@ -103,7 +75,7 @@ void prj_src_monopole_gravity(prj_mesh *mesh, const prj_grav_mono *grav_mono,
                         continue;
                     }
 
-                    accel = prj_src_interp_accel(grav_mono, r);
+                    accel = prj_gravity_interp_accel(grav_mono, r);
                     g1 = accel * x1 / r;
                     g2 = accel * x2 / r;
                     g3 = accel * x3 / r;

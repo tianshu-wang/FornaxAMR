@@ -22,6 +22,11 @@ static double prj_gravity_min_double(double a, double b)
     return a < b ? a : b;
 }
 
+static double prj_gravity_radius_center(const prj_grav_mono *grav_mono, int idx)
+{
+    return 0.5 * (grav_mono->rf[idx] + grav_mono->rf[idx + 1]);
+}
+
 static double prj_gravity_abs_double(double a)
 {
     return a < 0.0 ? -a : a;
@@ -161,6 +166,29 @@ void prj_gravity_init(prj_sim *sim)
 const prj_grav_mono *prj_gravity_active_monopole(void)
 {
     return prj_gravity_active;
+}
+
+double prj_gravity_interp_accel(const prj_grav_mono *grav_mono, double r)
+{
+    int idx;
+
+    if (grav_mono == 0 || grav_mono->nbins <= 0 || grav_mono->accel == 0) {
+        return 0.0;
+    }
+    if (r <= prj_gravity_radius_center(grav_mono, 0)) {
+        return grav_mono->accel[0];
+    }
+    for (idx = 0; idx < grav_mono->nbins - 1; ++idx) {
+        double r0 = prj_gravity_radius_center(grav_mono, idx);
+        double r1 = prj_gravity_radius_center(grav_mono, idx + 1);
+
+        if (r <= r1) {
+            double weight = (r - r0) / (r1 - r0);
+
+            return (1.0 - weight) * grav_mono->accel[idx] + weight * grav_mono->accel[idx + 1];
+        }
+    }
+    return grav_mono->accel[grav_mono->nbins - 1];
 }
 
 void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)

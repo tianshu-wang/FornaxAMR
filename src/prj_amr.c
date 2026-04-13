@@ -487,8 +487,54 @@ static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int 
     return max_indicator;
 }
 
+static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i, int j, int k)
+{
+    const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+    double rho;
+    double x1;
+    double x2;
+    double x3;
+    double radius;
+    double pressure;
+    double accel;
+    double cell_size;
+    double Hp;
+
+    if (b == 0) {
+        return 0.0;
+    }
+
+    x1 = b->xmin[0] + ((double)i + 0.5) * b->dx[0];
+    x2 = b->xmin[1] + ((double)j + 0.5) * b->dx[1];
+    x3 = b->xmin[2] + ((double)k + 0.5) * b->dx[2];
+    rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
+    radius = prj_sqrt_double(x1 * x1 + x2 * x2 + x3 * x3);
+    pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    accel = prj_abs_double(prj_gravity_interp_accel(grav_mono, radius));
+    cell_size = b->dx[0];
+    if (b->dx[1] > cell_size) {
+        cell_size = b->dx[1];
+    }
+    if (b->dx[2] > cell_size) {
+        cell_size = b->dx[2];
+    }
+
+    if (rho <= 0.0 || pressure <= 0.0 || accel <= 0.0) {
+        return 0.0;
+    }
+
+    Hp = pressure / (rho * accel);
+    if (Hp <= 0.0) {
+        return 0.0;
+    }
+    return cell_size / Hp;
+}
+
 static double prj_amr_cell_indicator(const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
+    if (mesh != 0 && mesh->amr_estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+        return prj_pressure_scale_height_cell_indicator(b, i, j, k);
+    }
     if (mesh != 0 && mesh->amr_estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
         return prj_velocity_cell_indicator(b, eos, i, j, k);
     }
@@ -608,7 +654,7 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos)
     }
 }
 
-static void prj_enforce_two_to_one(prj_mesh *mesh)
+void prj_amr_enforce_two_to_one(prj_mesh *mesh)
 {
     int changed;
 
@@ -637,6 +683,22 @@ static void prj_enforce_two_to_one(prj_mesh *mesh)
         }
         prj_amr_sync_refine_flags(mesh);
     } while (changed != 0);
+}
+
+void prj_amr_refine_marked_blocks(prj_mesh *mesh)
+{
+    int i;
+
+    if (mesh == 0) {
+        return;
+    }
+
+    for (i = 0; i < mesh->nblocks; ++i) {
+        if (i < mesh->nblocks && prj_is_active_block(&mesh->blocks[i]) &&
+            mesh->blocks[i].refine_flag > 0) {
+            prj_amr_refine_block(mesh, i);
+        }
+    }
 }
 
 void prj_amr_init_neighbors(prj_mesh *mesh)
@@ -1078,14 +1140,10 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     prj_eos_fill_mesh(mesh, eos, 1);
     prj_amr_tag(mesh, eos);
     prj_amr_sync_refine_flags(mesh);
-    prj_enforce_two_to_one(mesh);
+    prj_amr_enforce_two_to_one(mesh);
     prj_amr_sync_refine_flags(mesh);
 
-    for (i = 0; i < mesh->nblocks; ++i) {
-        if (i < mesh->nblocks && prj_is_active_block(&mesh->blocks[i]) && mesh->blocks[i].refine_flag > 0) {
-            prj_amr_refine_block(mesh, i);
-        }
-    }
+    prj_amr_refine_marked_blocks(mesh);
 
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *parent = &mesh->blocks[i];

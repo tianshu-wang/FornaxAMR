@@ -73,6 +73,26 @@ static int prj_io_parse_eos_kind(const char *value, int *eos_kind)
     return 1;
 }
 
+static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
+{
+    if (value == 0 || amr_estimator == 0) {
+        return 1;
+    }
+    if (strcmp(value, "lohner") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_LOEHNER;
+        return 0;
+    }
+    if (strcmp(value, "velocity") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_VELOCITY;
+        return 0;
+    }
+    if (strcmp(value, "pressure_scale_height") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT;
+        return 0;
+    }
+    return 1;
+}
+
 static void prj_io_set_default_runtime(prj_sim *sim)
 {
     if (sim == 0) {
@@ -206,6 +226,12 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.root_nx[2] = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "max_level") == 0) {
             sim->mesh.max_level = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "amr_estimator") == 0) {
+            if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
         } else if (strcmp(key, "use_amr_angle_resolution") == 0) {
             sim->mesh.use_amr_angle_resolution = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_angle_resolution_limit") == 0) {
