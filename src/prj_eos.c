@@ -6,6 +6,10 @@
 
 #include "prj.h"
 
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
+
 #define PRJ_EOS_NUMEL 16
 #define PRJ_EOS_EXT_NT 500
 #define PRJ_EOS_EXT_NR 500
@@ -64,10 +68,12 @@ static double prj_eos_clamp_double(double x, double lo, double hi)
 
 static int prj_eos_prepare_table(prj_eos *eos)
 {
+    prj_mpi *mpi;
     FILE *f;
     size_t slab_size;
     size_t expected_bytes;
     int rec;
+    int status = 0;
 
     if (eos == 0 || eos->kind != PRJ_EOS_KIND_TABLE || eos->filename[0] == '\0') {
         return 0;
@@ -90,6 +96,59 @@ static int prj_eos_prepare_table(prj_eos *eos)
     eos->dYe = (eos->y2c - eos->y1c) / (double)(eos->ny - 1);
     slab_size = (size_t)eos->nt * (size_t)eos->nr * (size_t)eos->ny;
     expected_bytes = (size_t)PRJ_EOS_NUMEL * slab_size * sizeof(*eos->table);
+    mpi = prj_mpi_current();
+
+#if defined(PRJ_ENABLE_MPI)
+    if (mpi != 0 && mpi->totrank > 1) {
+        if (mpi->rank == 0) {
+            eos->table = (double *)malloc(expected_bytes);
+            if (eos->table == 0) {
+                status = 1;
+            } else {
+                f = fopen(eos->filename, "rb");
+                if (f == 0) {
+                    status = 1;
+                } else {
+                    for (rec = 0; rec < PRJ_EOS_NUMEL; ++rec) {
+                        if (fread(&eos->table[(size_t)rec * slab_size], sizeof(double), slab_size, f) != slab_size) {
+                            status = 1;
+                            break;
+                        }
+                    }
+                    fclose(f);
+                }
+            }
+        }
+
+        MPI_Bcast(&status, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        if (status != 0) {
+            if (mpi->rank == 0) {
+                free(eos->table);
+                eos->table = 0;
+            }
+            return 1;
+        }
+
+        if (mpi->rank != 0) {
+            eos->table = (double *)malloc(expected_bytes);
+            if (eos->table == 0) {
+                status = 1;
+            }
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &status, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+        if (status != 0) {
+            free(eos->table);
+            eos->table = 0;
+            return 1;
+        }
+
+        MPI_Bcast(eos->table, (int)(expected_bytes / sizeof(*eos->table)), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        eos->table_loaded = 1;
+        eos->table_is_mmap = 0;
+        eos->table_bytes = expected_bytes;
+        return 0;
+    }
+#endif
 
     eos->table = (double *)malloc(expected_bytes);
     if (eos->table == 0) {
