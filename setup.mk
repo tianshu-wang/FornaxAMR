@@ -1,1 +1,0 @@
-setups/cc.mk
