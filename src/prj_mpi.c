@@ -148,7 +148,7 @@ static int prj_mpi_abs_kind(double x, double target, double tol)
 
 static int prj_mpi_fraction_case(double frac)
 {
-    const double tol = 1.0e-8;
+    const double tol = 1.0e-2;
 
     if (prj_mpi_abs_kind(frac, 0.0, tol) || prj_mpi_abs_kind(frac, 1.0, tol)) {
         return 1;

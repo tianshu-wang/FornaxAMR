@@ -49,7 +49,7 @@ static int prj_boundary_point_inside(const prj_block *block, double x1, double x
 
 static int prj_boundary_fraction_case(double frac)
 {
-    const double tol = 1.0e-8;
+    const double tol = 1.0e-2;
 
     if (prj_abs_double(frac - 0.0) < tol || prj_abs_double(frac - 1.0) < tol) {
         return 1;
