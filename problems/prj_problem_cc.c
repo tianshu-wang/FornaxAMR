@@ -84,9 +84,10 @@ static void prj_problem_print_fill_neighbors(const prj_block *block, double x1, 
             x2 >= slot->xmin[1] - tol && x2 <= slot->xmax[1] + tol &&
             x3 >= slot->xmin[2] - tol && x3 <= slot->xmax[2] + tol) {
             fprintf(stderr,
-                "  slot=%d id=%d rank=%d xmin=(%.17e, %.17e, %.17e) "
-                "xmax=(%.17e, %.17e, %.17e) dx=(%.17e, %.17e, %.17e)\n",
-                n, slot->id, slot->rank,
+                "  slot=%d neighbor_id=%d current_rank=%d neighbor_rank=%d "
+                "xmin=(%.17e, %.17e, %.17e) xmax=(%.17e, %.17e, %.17e) "
+                "dx=(%.17e, %.17e, %.17e)\n",
+                n, slot->id, block->rank, slot->rank,
                 slot->xmin[0], slot->xmin[1], slot->xmin[2],
                 slot->xmax[0], slot->xmax[1], slot->xmax[2],
                 slot->dx[0], slot->dx[1], slot->dx[2]);
@@ -302,7 +303,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
                     prj_cc_profile_sample(profile, r, &rho, &temp, &ye, &vr);
                     if (rho == 0.0) {
                         fprintf(stderr,
-                            "prj_cc_fill_mesh: rho=0 before prj_eos_rty for block id=%d rank=%d level=%d "
+                            "prj_cc_fill_mesh: rho=0 before prj_eos_rty for current_block id=%d current_rank=%d level=%d "
                             "cell=(%d,%d,%d) x=(%.17e, %.17e, %.17e) r=%.17e temp=%.17e ye=%.17e\n",
                             block->id, block->rank, block->level, i, j, k, x1, x2, x3, r, temp, ye);
                         fprintf(stderr,

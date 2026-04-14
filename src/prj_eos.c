@@ -102,9 +102,10 @@ static void prj_eos_print_fill_neighbors(const prj_block *block, double x1, doub
             x2 >= slot->xmin[1] - tol && x2 <= slot->xmax[1] + tol &&
             x3 >= slot->xmin[2] - tol && x3 <= slot->xmax[2] + tol) {
             fprintf(stderr,
-                "  slot=%d id=%d rank=%d xmin=(%.17e, %.17e, %.17e) "
-                "xmax=(%.17e, %.17e, %.17e) dx=(%.17e, %.17e, %.17e)\n",
-                n, slot->id, slot->rank,
+                "  slot=%d neighbor_id=%d current_rank=%d neighbor_rank=%d "
+                "xmin=(%.17e, %.17e, %.17e) xmax=(%.17e, %.17e, %.17e) "
+                "dx=(%.17e, %.17e, %.17e)\n",
+                n, slot->id, block->rank, slot->rank,
                 slot->xmin[0], slot->xmin[1], slot->xmin[2],
                 slot->xmax[0], slot->xmax[1], slot->xmax[2],
                 slot->dx[0], slot->dx[1], slot->dx[2]);
@@ -132,7 +133,7 @@ static void prj_eos_fail_zero_rho_in_block(const char *caller, const prj_block *
     x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
     x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
     fprintf(stderr,
-        "%s: rho=0 before EOS call for block id=%d rank=%d level=%d cell=(%d,%d,%d) "
+        "%s: rho=0 before EOS call for current_block id=%d current_rank=%d level=%d cell=(%d,%d,%d) "
         "x=(%.17e, %.17e, %.17e)\n",
         caller, block->id, block->rank, block->level, i, j, k, x1, x2, x3);
     fprintf(stderr,
