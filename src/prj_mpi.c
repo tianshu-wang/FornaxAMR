@@ -199,12 +199,14 @@ static int prj_mpi_sample_kind(const prj_block *block, double x1, double x2, dou
     if (cases[0] == 2 && cases[1] == 2 && cases[2] == 2) {
         return 0;
     }
-    if ((cases[0] == 1 || cases[0] == 3) &&
-        (cases[1] == 1 || cases[1] == 3) &&
-        (cases[2] == 1 || cases[2] == 3)) {
+    if (cases[0] == 3 && cases[1] == 3 && cases[2] == 3) {
         return 1;
     }
-    return -1;
+    fprintf(stderr,
+        "prj_mpi_sample_kind: invalid fraction case tuple (%d,%d,%d) "
+        "at (x1=%g, x2=%g, x3=%g) -- violates 2:1 AMR constraint\n",
+        cases[0], cases[1], cases[2], x1, x2, x3);
+    abort();
 }
 
 static int prj_mpi_append_int(int **array, int *count, int *capacity, int value)
