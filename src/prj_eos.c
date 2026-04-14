@@ -311,7 +311,7 @@ void prj_eos_init(prj_eos *eos)
     (void)prj_eos_prepare_table(eos);
     mpi = prj_mpi_current();
     if (eos->table_loaded == 1 && (mpi == 0 || mpi->rank == 0)) {
-        printf("EOS table initialization finished (%zu bytes loaded)\n", eos->table_bytes);
+        fprintf(stderr, "EOS table initialization finished (%zu bytes loaded)\n", eos->table_bytes);
     }
 }
 

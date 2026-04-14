@@ -687,7 +687,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step)
 
     snprintf(filename, sizeof(filename), "output/restart_%08d.h5", step);
     if (prj_io_is_root_rank()) {
-        printf("save restart file %s\n", filename);
+        fprintf(stderr, "save restart file %s\n", filename);
     }
     dims_data[0] = (hsize_t)mesh->nblocks;
     dims_data[1] = (hsize_t)PRJ_NVAR_PRIM;
@@ -888,7 +888,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     H5Dclose(dset_data);
     H5Fclose(file);
     if (prj_io_is_root_rank()) {
-        printf("read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
+        fprintf(stderr, "read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
     }
     prj_boundary_fill_ghosts(mesh, &bc, 1);
     prj_eos_fill_mesh(mesh, (prj_eos *)eos, 1);
@@ -916,7 +916,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
 
     snprintf(filename, sizeof(filename), "%s_%05d.h5", basename, step);
     if (prj_io_is_root_rank()) {
-        printf("save dump file %s\n", filename);
+        fprintf(stderr, "save dump file %s\n", filename);
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         if (mesh->blocks[bidx].id >= 0 && mesh->blocks[bidx].active == 1 && prj_io_is_local_owner(&mesh->blocks[bidx])) {

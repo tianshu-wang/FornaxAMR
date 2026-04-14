@@ -118,35 +118,35 @@ static void prj_print_config(const prj_sim *sim, int rank)
         return;
     }
 
-    printf("config:\n");
-    printf("mpi: %s\n",
+    fprintf(stderr, "config:\n");
+    fprintf(stderr, "mpi: %s\n",
 #if defined(PRJ_ENABLE_MPI)
         "on"
 #else
         "off"
 #endif
     );
-    printf("radiation: %s\n",
+    fprintf(stderr, "radiation: %s\n",
 #if PRJ_USE_RADIATION
         "on"
 #else
         "off"
 #endif
     );
-    printf("gravity: %s\n",
+    fprintf(stderr, "gravity: %s\n",
 #if PRJ_USE_GRAVITY
         "on"
 #else
         "off"
 #endif
     );
-    printf("eos: %s\n",
+    fprintf(stderr, "eos: %s\n",
         prj_eos_label(sim)
     );
-    printf("amr: %s\n",
+    fprintf(stderr, "amr: %s\n",
         prj_amr_label(sim)
     );
-    printf("amr estimator: %s\n",
+    fprintf(stderr, "amr estimator: %s\n",
         prj_amr_estimator_label(sim)
     );
 }
@@ -200,16 +200,13 @@ int main(int argc, char *argv[])
     }
 
     init_with_mpi = (init_fn == prj_problem_cc);
-    if (init_with_mpi) {
-        prj_mpi_init(&argc, &argv, &mpi);
-    }
+    prj_mpi_init(&argc, &argv, &mpi);
+    prj_print_config(&sim, mpi.rank);
     init_fn(&sim);
     if (!init_with_mpi) {
-        prj_mpi_init(&argc, &argv, &mpi);
         prj_mpi_decompose(&sim.mesh);
         prj_mpi_prepare(&sim.mesh, &mpi);
     }
-    prj_print_config(&sim, mpi.rank);
     if (mpi.rank == 0) {
         mkdir("output", 0777);
     }
@@ -316,7 +313,7 @@ int main(int argc, char *argv[])
             prj_io_write_restart(&sim.mesh, sim.time, sim.step);
         }
         if (mpi.rank == 0) {
-            printf("step=%d  t=%.6e  dt=%.6e  blocks=%d\n",
+            fprintf(stderr, "step=%d  t=%.6e  dt=%.6e  blocks=%d\n",
                 sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh));
         }
     }

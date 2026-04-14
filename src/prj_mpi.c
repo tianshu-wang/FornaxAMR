@@ -486,8 +486,7 @@ static void prj_mpi_print_balance(const prj_mesh *mesh)
         min_count = counts[0];
         max_count = counts[0];
         total_active = counts[0];
-        printf("[mpi rebalance] active blocks per rank:");
-        for (rank = 0; rank < prj_mpi_active->totrank; ++rank) {
+        for (rank = 1; rank < prj_mpi_active->totrank; ++rank) {
             int count = counts[rank];
 
             if (count < min_count) {
@@ -496,14 +495,11 @@ static void prj_mpi_print_balance(const prj_mesh *mesh)
             if (count > max_count) {
                 max_count = count;
             }
-            if (rank > 0) {
-                total_active += count;
-            }
-            printf(" r%d=%d", rank, count);
+            total_active += count;
         }
-        printf(" total=%d min=%d max=%d spread=%d\n",
+        fprintf(stderr, "[mpi rebalance] total=%d min=%d max=%d spread=%d\n",
             total_active, min_count, max_count, max_count - min_count);
-        fflush(stdout);
+        fflush(stderr);
     }
 
     free(counts);
