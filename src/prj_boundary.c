@@ -20,17 +20,6 @@ static int prj_floor_to_int(double x)
     return i;
 }
 
-static int prj_clamp_storage_index(int idx)
-{
-    if (idx < -PRJ_NGHOST) {
-        return -PRJ_NGHOST;
-    }
-    if (idx >= PRJ_BLOCK_SIZE + PRJ_NGHOST) {
-        return PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
-    }
-    return idx;
-}
-
 static double *prj_boundary_stage_array(prj_block *block, int stage)
 {
     return stage == 2 ? block->W1 : block->W;
@@ -133,9 +122,15 @@ static int prj_boundary_sample_kind(const prj_block *block, double x1, double x2
 
 static double prj_boundary_read_prim(const double *src, int var, int i, int j, int k)
 {
-    i = prj_clamp_storage_index(i);
-    j = prj_clamp_storage_index(j);
-    k = prj_clamp_storage_index(k);
+    if (i < -PRJ_NGHOST || i >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        j < -PRJ_NGHOST || j >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        k < -PRJ_NGHOST || k >= PRJ_BLOCK_SIZE + PRJ_NGHOST) {
+        fprintf(stderr,
+            "prj_boundary_read_prim: out-of-range access var=%d i=%d j=%d k=%d "
+            "(valid [%d, %d])\n",
+            var, i, j, k, -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST - 1);
+        exit(EXIT_FAILURE);
+    }
     return src[VIDX(var, i, j, k)];
 }
 
