@@ -131,6 +131,82 @@ static int prj_mpi_cell_point_inside(const prj_block *block, double x1, double x
         x3 > block->xmin[2] - tol && x3 < block->xmax[2] + tol;
 }
 
+static int prj_mpi_floor_to_int(double x)
+{
+    int i = (int)x;
+
+    if ((double)i > x) {
+        i -= 1;
+    }
+    return i;
+}
+
+static int prj_mpi_abs_kind(double x, double target, double tol)
+{
+    return fabs(x - target) < tol;
+}
+
+static int prj_mpi_fraction_case(double frac)
+{
+    const double tol = 1.0e-8;
+
+    if (prj_mpi_abs_kind(frac, 0.0, tol) || prj_mpi_abs_kind(frac, 1.0, tol)) {
+        return 1;
+    }
+    if (prj_mpi_abs_kind(frac, 0.5, tol)) {
+        return 2;
+    }
+    if (prj_mpi_abs_kind(frac, 0.25, tol) || prj_mpi_abs_kind(frac, 0.75, tol)) {
+        return 3;
+    }
+    return 0;
+}
+
+static int prj_mpi_sample_kind(const prj_block *block, double x1, double x2, double x3)
+{
+    double ox[3];
+    double frac[3];
+    int cases[3];
+
+    if (block == 0) {
+        return -1;
+    }
+    ox[0] = (x1 - block->xmin[0]) / block->dx[0] - 0.5;
+    ox[1] = (x2 - block->xmin[1]) / block->dx[1] - 0.5;
+    ox[2] = (x3 - block->xmin[2]) / block->dx[2] - 0.5;
+    frac[0] = ox[0] - (double)prj_mpi_floor_to_int(ox[0]);
+    frac[1] = ox[1] - (double)prj_mpi_floor_to_int(ox[1]);
+    frac[2] = ox[2] - (double)prj_mpi_floor_to_int(ox[2]);
+    if (frac[0] < 0.0) {
+        frac[0] += 1.0;
+    }
+    if (frac[1] < 0.0) {
+        frac[1] += 1.0;
+    }
+    if (frac[2] < 0.0) {
+        frac[2] += 1.0;
+    }
+
+    cases[0] = prj_mpi_fraction_case(frac[0]);
+    cases[1] = prj_mpi_fraction_case(frac[1]);
+    cases[2] = prj_mpi_fraction_case(frac[2]);
+    if (cases[0] == 0 || cases[1] == 0 || cases[2] == 0) {
+        return -1;
+    }
+    if (cases[0] == 1 && cases[1] == 1 && cases[2] == 1) {
+        return 0;
+    }
+    if (cases[0] == 2 && cases[1] == 2 && cases[2] == 2) {
+        return 0;
+    }
+    if ((cases[0] == 1 || cases[0] == 3) &&
+        (cases[1] == 1 || cases[1] == 3) &&
+        (cases[2] == 1 || cases[2] == 3)) {
+        return 1;
+    }
+    return -1;
+}
+
 static int prj_mpi_append_int(int **array, int *count, int *capacity, int value)
 {
     int *next;
@@ -572,8 +648,10 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                         x2 = neighbor->xmin[1] + ((double)j + 0.5) * neighbor->dx[1];
                         x3 = neighbor->xmin[2] + ((double)k + 0.5) * neighbor->dx[2];
                         if (prj_mpi_cell_point_inside(block, x1, x2, x3)) {
+                            int sample_kind = prj_mpi_sample_kind(block, x1, x2, x3);
+
                             if (prj_mpi_append_triplet(idx_send, &record_count, &idx_capacity,
-                                    nid, prj_mpi_encode_cell_index(i, j, k), 0) != 0) {
+                                    nid, prj_mpi_encode_cell_index(i, j, k), sample_kind) != 0) {
                                 free(send_sizes);
                                 for (axis = 0; axis < 3; ++axis) {
                                     free(idx_send[axis]);
@@ -625,7 +703,8 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 #endif
 }
 
-static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buffer *buffer, int stage)
+static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buffer *buffer,
+    int stage, int fill_kind)
 {
     int bidx;
     int occ;
@@ -672,9 +751,17 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                         x3 = neighbor->xmin[2] + ((double)k + 0.5) * neighbor->dx[2];
                         if (prj_mpi_cell_point_inside(block, x1, x2, x3)) {
                             double w[PRJ_NVAR_PRIM];
+                            int sample_kind;
                             int v;
 
-                            prj_boundary_get_prim(block, stage, x1, x2, x3, w);
+                            sample_kind = prj_mpi_sample_kind(block, x1, x2, x3);
+                            if (sample_kind >= 0 && (fill_kind == 2 || sample_kind == fill_kind)) {
+                                prj_boundary_get_prim(block, stage, x1, x2, x3, w);
+                            } else {
+                                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                                    w[v] = 0.0;
+                                }
+                            }
                             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                                 buffer->cell_buffer_send[pos++] = w[v];
                             }
@@ -816,7 +903,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
     free(rank_seen);
 }
 
-void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage)
+void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind)
 {
 #if defined(PRJ_ENABLE_MPI)
     int nb;
@@ -839,7 +926,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage)
         record_count = prj_mpi_buffer_record_total(buffer->cell_data_size_send, buffer->number);
         recv_count = prj_mpi_buffer_recv_count(buffer);
         cell_size_total = prj_mpi_buffer_record_total(buffer->cell_data_size_recv, recv_count);
-        prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage);
+        prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
 
         if (request_count + 8 > request_capacity) {
             int new_capacity = request_capacity == 0 ? 16 : request_capacity * 2;
@@ -872,6 +959,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage)
         for (i = 0; i < total; ++i) {
             int block_id = buffer->cell_data_idx_recv[0][i];
             int code = buffer->cell_data_idx_recv[1][i];
+            int sample_kind = buffer->cell_data_idx_recv[2][i];
             int ii;
             int jj;
             int kk;
@@ -880,6 +968,10 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage)
             double *dst;
 
             if (block_id < 0 || block_id >= mesh->nblocks) {
+                pos += PRJ_NVAR_PRIM;
+                continue;
+            }
+            if (sample_kind < 0 || (fill_kind != 2 && sample_kind != fill_kind)) {
                 pos += PRJ_NVAR_PRIM;
                 continue;
             }
@@ -900,6 +992,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage)
     (void)mesh;
     (void)mpi;
     (void)stage;
+    (void)fill_kind;
 #endif
 }
 
