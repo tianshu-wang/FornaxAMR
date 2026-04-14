@@ -243,7 +243,12 @@ double prj_gravity_interp_accel(const prj_grav_mono *grav_mono, double r)
         return 0.0;
     }
     if (r <= prj_gravity_radius_center(grav_mono, 0)) {
-        return grav_mono->accel[0];
+        double r0 = prj_gravity_radius_center(grav_mono, 0);
+
+        if (r0 <= 0.0) {
+            return grav_mono->accel[0];
+        }
+        return grav_mono->accel[0] * (r / r0);
     }
     for (idx = 0; idx < grav_mono->nbins - 1; ++idx) {
         double r0 = prj_gravity_radius_center(grav_mono, idx);
@@ -486,7 +491,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh)
         double vedge = idx < grav_mono->nbins - 1 ?
             0.5 * (grav_mono->vr_avg[idx] + grav_mono->vr_avg[idx + 1]) :
             grav_mono->vr_avg[idx];
-        double gamma_avg = idx == 0 ? gamma_face[0] : 0.5 * (gamma_face[idx] + gamma_face[idx - 1]);
+        double gamma_avg = gamma_face[idx];
         double mass_density = (grav_mono->rho_avg[idx] +
             grav_mono->eint_avg[idx] / (PRJ_CLIGHT * PRJ_CLIGHT) +
             grav_mono->erad_avg[idx]) * gamma_avg +
@@ -543,7 +548,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh)
     grav_mono->phi[grav_mono->nbins] =
         -PRJ_GNEWT * baryon_mass_face[grav_mono->nbins] / prj_gravity_rmax;
     for (idx = grav_mono->nbins - 1; idx >= 0; --idx) {
-        grav_mono->phi[idx] = grav_mono->phi[idx + 1] - 0.5 *
+        grav_mono->phi[idx] = grav_mono->phi[idx + 1] + 0.5 *
             (grav_mono->rf[idx + 1] - grav_mono->rf[idx]) *
             (idx == grav_mono->nbins - 1 ? grav_mono->accel[idx] : grav_mono->accel[idx + 1] + grav_mono->accel[idx]);
     }

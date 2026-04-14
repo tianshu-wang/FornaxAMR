@@ -56,9 +56,10 @@ void prj_src_monopole_gravity(prj_mesh *mesh, const prj_grav_mono *grav_mono,
         int j;
         int k;
 
-        if (block->id < 0 || block->active != 1 || block->W != W || block->U != U || block->dUdt != dUdt) {
+        if (block->id < 0 || block->active != 1 || block->U != U || block->dUdt != dUdt) {
             continue;
         }
+        (void)W;
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
