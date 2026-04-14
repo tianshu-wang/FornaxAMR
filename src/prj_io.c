@@ -1058,5 +1058,33 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
         H5Dclose(dset_var[bidx]);
     }
     H5Sclose(space_var);
+    {
+        const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+
+        if (grav_mono != 0 && grav_mono->nbins > 0 && grav_mono->accel != 0 && grav_mono->lapse != 0) {
+            hsize_t dims_accel[1] = {(hsize_t)grav_mono->nbins};
+            hsize_t dims_lapse[1] = {(hsize_t)grav_mono->nbins + 1};
+            hid_t space_accel = H5Screate_simple(1, dims_accel, dims_accel);
+            hid_t space_lapse = H5Screate_simple(1, dims_lapse, dims_lapse);
+            hid_t dset_accel = H5Dcreate2(file, "accel", H5T_NATIVE_DOUBLE, space_accel,
+                                          H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+            hid_t dset_lapse = H5Dcreate2(file, "lapse", H5T_NATIVE_DOUBLE, space_lapse,
+                                          H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+
+            if (prj_io_is_root_rank()) {
+                hid_t dxpl_accel = prj_io_data_xfer_plist();
+                hid_t dxpl_lapse = prj_io_data_xfer_plist();
+
+                H5Dwrite(dset_accel, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_accel, grav_mono->accel);
+                H5Dwrite(dset_lapse, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_lapse, grav_mono->lapse);
+                prj_io_close_dxpl(dxpl_accel);
+                prj_io_close_dxpl(dxpl_lapse);
+            }
+            H5Dclose(dset_accel);
+            H5Dclose(dset_lapse);
+            H5Sclose(space_accel);
+            H5Sclose(space_lapse);
+        }
+    }
     H5Fclose(file);
 }
