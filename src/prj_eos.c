@@ -66,6 +66,39 @@ static double prj_eos_clamp_double(double x, double lo, double hi)
     return x;
 }
 
+static void prj_eos_table_range_fail(const char *name, double value, double lo, double hi)
+{
+    prj_mpi *mpi = prj_mpi_current();
+
+    fprintf(stderr,
+        "tabulated EOS lookup out of range for %s: value=%.17e allowed=[%.17e, %.17e]\n",
+        name, value, lo, hi);
+#if defined(PRJ_ENABLE_MPI)
+    if (mpi != 0 && mpi->totrank > 1) {
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+#endif
+    exit(1);
+}
+
+static void prj_eos_table_check_rty_inputs(const prj_eos *eos, double rho, double T, double ye)
+{
+    double rho_min = pow(10.0, eos->r1);
+    double rho_max = pow(10.0, eos->r2);
+    double temp_min = pow(10.0, eos->t1);
+    double temp_max = pow(10.0, eos->t2);
+
+    if (rho < rho_min || rho > rho_max) {
+        prj_eos_table_range_fail("rho", rho, rho_min, rho_max);
+    }
+    if (T < temp_min || T > temp_max) {
+        prj_eos_table_range_fail("T", T, temp_min, temp_max);
+    }
+    if (ye < eos->y1c || ye > eos->y2c) {
+        prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
+    }
+}
+
 static int prj_eos_prepare_table(prj_eos *eos)
 {
     prj_mpi *mpi;
@@ -215,17 +248,14 @@ static void prj_eos_table_interp_base(const prj_eos *eos, double rho, double T, 
 {
     double rl;
     double tl;
-    double yval;
-    double tval;
-
-    yval = prj_eos_clamp_double(ye, eos->y1c, eos->y2c);
-    tval = prj_eos_clamp_double(T, pow(10.0, eos->t1), pow(10.0, eos->t2));
-    rl = log10(prj_eos_clamp_double(rho, pow(10.0, eos->r1), pow(10.0, eos->r2)));
-    tl = log10(tval);
+    
+    prj_eos_table_check_rty_inputs(eos, rho, T, ye);
+    rl = log10(rho);
+    tl = log10(T);
 
     *jr = 1 + (int)((rl - eos->r1) / eos->dlogrho);
     *jt = 1 + (int)((tl - eos->t1) / eos->dlogT);
-    *jy = 1 + (int)((yval - eos->y1c) / eos->dYe);
+    *jy = 1 + (int)((ye - eos->y1c) / eos->dYe);
     *jr = *jr < 1 ? 1 : (*jr >= eos->nr ? eos->nr - 1 : *jr);
     *jt = *jt < 1 ? 1 : (*jt >= eos->nt ? eos->nt - 1 : *jt);
     *jy = *jy < 1 ? 1 : (*jy >= eos->ny ? eos->ny - 1 : *jy);
@@ -234,7 +264,7 @@ static void prj_eos_table_interp_base(const prj_eos *eos, double rho, double T, 
     *jyp = *jy + 1;
     *drho = (rl - (eos->r1 + (double)(*jr - 1) * eos->dlogrho)) / eos->dlogrho;
     *dtemp = (tl - (eos->t1 + (double)(*jt - 1) * eos->dlogT)) / eos->dlogT;
-    *dye = (yval - (eos->y1c + (double)(*jy - 1) * eos->dYe)) / eos->dYe;
+    *dye = (ye - (eos->y1c + (double)(*jy - 1) * eos->dYe)) / eos->dYe;
     *drho = prj_eos_clamp_double(*drho, 0.0, 1.0);
     *dtemp = prj_eos_clamp_double(*dtemp, 0.0, 1.0);
     *dye = prj_eos_clamp_double(*dye, 0.0, 1.0);
@@ -347,6 +377,8 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
         double e_table;
         double rl;
+        double rho_min = pow(10.0, eos->r1);
+        double rho_max = pow(10.0, eos->r2);
         double jyf;
         double jrf;
         int jy;
@@ -372,8 +404,13 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         int jt_mid;
 
         e_table = eint / PRJ_EOS_ENERGY_SCALE;
-        ye = prj_eos_clamp_double(ye, eos->y1c, eos->y2c);
-        rl = log10(prj_eos_clamp_double(rho, pow(10.0, eos->r1), pow(10.0, eos->r2)));
+        if (rho < rho_min || rho > rho_max) {
+            prj_eos_table_range_fail("rho", rho, rho_min, rho_max);
+        }
+        if (ye < eos->y1c || ye > eos->y2c) {
+            prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
+        }
+        rl = log10(rho);
         jrf = (rl - eos->r1) / eos->dlogrho;
         jyf = (ye - eos->y1c) / eos->dYe;
         jr = 1 + (int)jrf;
@@ -389,19 +426,15 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         coeff2 = drho * (1.0 - dye);
         coeff3 = drho * dye;
 
-        {
-            double temp_guess = prj_eos_clamp_double((prj_eos_gamma_value() - 1.0) * eint,
-                pow(10.0, eos->t1), pow(10.0, eos->t2));
-
-            jt = 1 + (int)((log10(temp_guess) - eos->t1) / eos->dlogT);
-        }
-        jt = jt < 1 ? 1 : (jt >= eos->nt ? eos->nt - 1 : jt);
         elo = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, 1, coeff0, coeff1, coeff2, coeff3);
         ehi = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, eos->nt, coeff0, coeff1, coeff2, coeff3);
-        if (e_table <= elo) {
+        if (e_table < elo || e_table > ehi) {
+            prj_eos_table_range_fail("eint/PRJ_EOS_ENERGY_SCALE", e_table, elo, ehi);
+        }
+        if (e_table == elo) {
             jt = 1;
             ehi = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, 2, coeff0, coeff1, coeff2, coeff3);
-        } else if (e_table >= ehi) {
+        } else if (e_table == ehi) {
             jt = eos->nt - 1;
             elo = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, jt, coeff0, coeff1, coeff2, coeff3);
             ehi = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, eos->nt, coeff0, coeff1, coeff2, coeff3);
