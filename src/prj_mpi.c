@@ -652,15 +652,6 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                         if (prj_mpi_cell_point_inside(block, x1, x2, x3)) {
                             int sample_kind = prj_mpi_sample_kind(block, x1, x2, x3);
 
-                            if (nid == 2345 && i == -2 && j == -2 && k == -2) {
-                                fprintf(stderr,
-                                    "DIAG plan-include: src_block=%d src_rank=%d"
-                                    " dst_block=2345 cell=(-2,-2,-2)"
-                                    " sample_kind=%d recv_rank=%d\n",
-                                    block->id, mpi->rank, sample_kind,
-                                    buffer->receiver_rank);
-                                fflush(stderr);
-                            }
                             if (prj_mpi_append_triplet(idx_send, &record_count, &idx_capacity,
                                     nid, prj_mpi_encode_cell_index(i, j, k), sample_kind) != 0) {
                                 free(send_sizes);
@@ -669,19 +660,6 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                                 }
                                 return 1;
                             }
-                        } else if (nid == 2345 && i == -2 && j == -2 && k == -2) {
-                            fprintf(stderr,
-                                "DIAG plan-miss: src_block=%d src_rank=%d"
-                                " dst_block=2345 cell=(-2,-2,-2)"
-                                " point=(%.6g,%.6g,%.6g)"
-                                " src_interior=[%.6g,%.6g]x[%.6g,%.6g]x[%.6g,%.6g]"
-                                " recv_rank=%d\n",
-                                block->id, mpi->rank, x1, x2, x3,
-                                block->xmin[0], block->xmax[0],
-                                block->xmin[1], block->xmax[1],
-                                block->xmin[2], block->xmax[2],
-                                buffer->receiver_rank);
-                            fflush(stderr);
                         }
                     }
                 }
@@ -792,15 +770,6 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                                 for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                                     w[v] = 0.0;
                                 }
-                            }
-                            if (nid == 2345 && i == -2 && j == -2 && k == -2) {
-                                fprintf(stderr,
-                                    "DIAG pack: src_block=%d src_rank=%d"
-                                    " dst_block=2345 cell=(-2,-2,-2)"
-                                    " fill_kind=%d sample_kind=%d rho=%.17g\n",
-                                    block->id, mpi->rank,
-                                    fill_kind, sample_kind, w[PRJ_PRIM_RHO]);
-                                fflush(stderr);
                             }
                             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                                 buffer->cell_buffer_send[pos++] = w[v];
@@ -1008,44 +977,15 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
             double *dst;
 
             if (block_id < 0 || block_id >= mesh->nblocks) {
-                if (block_id == 2345) {
-                    fprintf(stderr,
-                        "DIAG unpack-skip-bounds: block_id=2345 out of range nblocks=%d\n",
-                        mesh->nblocks);
-                    fflush(stderr);
-                }
                 pos += PRJ_NVAR_PRIM;
                 continue;
             }
             if (sample_kind < 0 || (fill_kind != 2 && sample_kind != fill_kind)) {
-                if (block_id == 2345) {
-                    int _ii, _jj, _kk;
-                    prj_mpi_decode_cell_index(code, &_ii, &_jj, &_kk);
-                    if (_ii == -2 && _jj == -2 && _kk == -2) {
-                        fprintf(stderr,
-                            "DIAG unpack-skip-kind: block=2345 cell=(-2,-2,-2)"
-                            " sample_kind=%d fill_kind=%d\n",
-                            sample_kind, fill_kind);
-                        fflush(stderr);
-                    }
-                }
                 pos += PRJ_NVAR_PRIM;
                 continue;
             }
             block = &mesh->blocks[block_id];
             if (block->rank != mpi->rank || block->W == 0) {
-                if (block_id == 2345) {
-                    int _ii, _jj, _kk;
-                    prj_mpi_decode_cell_index(code, &_ii, &_jj, &_kk);
-                    if (_ii == -2 && _jj == -2 && _kk == -2) {
-                        fprintf(stderr,
-                            "DIAG unpack-skip-rank: block=2345 cell=(-2,-2,-2)"
-                            " block->rank=%d mpi->rank=%d W=%s\n",
-                            block->rank, mpi->rank,
-                            block->W != 0 ? "non-null" : "NULL");
-                        fflush(stderr);
-                    }
-                }
                 pos += PRJ_NVAR_PRIM;
                 continue;
             }
@@ -1053,14 +993,6 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
             prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                 dst[VIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
-            }
-            if (block_id == 2345 && ii == -2 && jj == -2 && kk == -2) {
-                fprintf(stderr,
-                    "DIAG unpack-write: block=2345 cell=(-2,-2,-2)"
-                    " fill_kind=%d sample_kind=%d rho=%.17g\n",
-                    fill_kind, sample_kind,
-                    dst[VIDX(PRJ_PRIM_RHO, ii, jj, kk)]);
-                fflush(stderr);
             }
         }
     }
