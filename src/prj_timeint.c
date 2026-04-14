@@ -121,10 +121,10 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
+    prj_boundary_fill_ghosts(mesh, bc, 1);
     prj_eos_fill_mesh(mesh, eos, 1);
     prj_gravity_monopole_reduce(mesh, 1);
     prj_gravity_monopole_integrate(mesh);
-    prj_boundary_fill_ghosts(mesh, bc, 1);
     prj_riemann_set_mesh(mesh);
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -179,10 +179,10 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
+    prj_boundary_fill_ghosts(mesh, bc, 2);
     prj_eos_fill_mesh(mesh, eos, 2);
     prj_gravity_monopole_reduce(mesh, 2);
     prj_gravity_monopole_integrate(mesh);
-    prj_boundary_fill_ghosts(mesh, bc, 2);
     prj_riemann_set_mesh(mesh);
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
