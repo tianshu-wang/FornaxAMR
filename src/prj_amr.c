@@ -1244,5 +1244,4 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     }
     prj_amr_init_neighbors(mesh);
     prj_sync_primitive_from_conserved(mesh, eos);
-    prj_eos_fill_mesh(mesh, eos, 1);
 }
