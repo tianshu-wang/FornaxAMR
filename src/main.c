@@ -277,6 +277,9 @@ int main(int argc, char *argv[])
             prj_mpi_rebalance(&sim.mesh);
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+#if PRJ_USE_GRAVITY
+            prj_gravity_rebuild_grid(&sim);
+#endif
         }
         if (sim.output_interval > 0 && sim.step % sim.output_interval == 0) {
             write_output = 1;

@@ -45,22 +45,98 @@ static int prj_gravity_bin_index(const prj_grav_mono *grav_mono, double r)
     double log_span;
     int idx;
 
-    if (grav_mono == 0 || grav_mono->nbins <= 0 || r < grav_mono->dr_min || r >= prj_gravity_rmax) {
+    if (grav_mono == 0 || grav_mono->nbins <= 0 || r < 0.0 || r >= prj_gravity_rmax) {
         return -1;
     }
-
+    if (r < grav_mono->dr_min) {
+        return 0;
+    }
     log_span = log(prj_gravity_rmax / grav_mono->dr_min);
-    if (log_span <= 0.0) {
+    if (log_span <= 0.0 || grav_mono->nbins < 2) {
         return -1;
     }
-    idx = (int)((double)grav_mono->nbins * log(r / grav_mono->dr_min) / log_span);
-    if (idx < 0) {
-        idx = 0;
+    idx = 1 + (int)((double)(grav_mono->nbins - 1) * log(r / grav_mono->dr_min) / log_span);
+    if (idx < 1) {
+        idx = 1;
     }
     if (idx >= grav_mono->nbins) {
         return -1;
     }
     return idx;
+}
+
+static double prj_gravity_min_cell_size(const prj_mesh *mesh)
+{
+    double min_cell = 0.0;
+    int b;
+
+    if (mesh != 0) {
+        for (b = 0; b < mesh->nblocks; ++b) {
+            const prj_block *block = &mesh->blocks[b];
+            double dx;
+
+            if (!prj_gravity_block_is_local_active(block)) {
+                continue;
+            }
+            dx = prj_gravity_min_double(block->dx[0],
+                prj_gravity_min_double(block->dx[1], block->dx[2]));
+            if (min_cell == 0.0 || dx < min_cell) {
+                min_cell = dx;
+            }
+        }
+    }
+#if defined(PRJ_ENABLE_MPI)
+    {
+        double sentinel = min_cell > 0.0 ? min_cell : 1.0e300;
+        double global_min = sentinel;
+
+        MPI_Allreduce(&sentinel, &global_min, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        if (global_min < 1.0e300) {
+            min_cell = global_min;
+        }
+    }
+#endif
+    return min_cell;
+}
+
+static void prj_gravity_build_rf(prj_grav_mono *grav_mono, const prj_mesh *mesh)
+{
+    double min_cell;
+    double log_span;
+    int i;
+
+    if (grav_mono == 0 || grav_mono->nbins <= 0 || grav_mono->rf == 0 ||
+        prj_gravity_rmax <= 0.0) {
+        return;
+    }
+    min_cell = prj_gravity_min_cell_size(mesh);
+    grav_mono->dr_min = 0.5 * min_cell;
+    if (grav_mono->dr_min <= 0.0 || prj_gravity_rmax <= grav_mono->dr_min) {
+        grav_mono->dr_min = prj_gravity_rmax / (double)grav_mono->nbins;
+    }
+    log_span = log(prj_gravity_rmax / grav_mono->dr_min);
+    grav_mono->rf[0] = 0.0;
+    if (grav_mono->nbins == 1) {
+        grav_mono->rf[1] = prj_gravity_rmax;
+        return;
+    }
+    for (i = 1; i <= grav_mono->nbins; ++i) {
+        grav_mono->rf[i] = grav_mono->dr_min *
+            exp(log_span * (double)(i - 1) / (double)(grav_mono->nbins - 1));
+    }
+}
+
+void prj_gravity_rebuild_grid(prj_sim *sim)
+{
+    int i;
+
+    if (sim == 0) {
+        return;
+    }
+    prj_gravity_build_rf(&sim->monopole_grav, &sim->mesh);
+    for (i = 0; i <= sim->monopole_grav.nbins; ++i) {
+        sim->monopole_grav.lapse[i] = 1.0;
+    }
 }
 
 void prj_gravity_free(prj_grav_mono *grav_mono)
@@ -109,8 +185,6 @@ void prj_gravity_init(prj_sim *sim)
     double span1;
     double span2;
     double span3;
-    double min_cell;
-    double log_span;
     int i;
 
     if (sim == 0) {
@@ -124,14 +198,8 @@ void prj_gravity_init(prj_sim *sim)
     span2 = fabs(sim->mesh.coord.x2max - sim->mesh.coord.x2min);
     span3 = fabs(sim->mesh.coord.x3max - sim->mesh.coord.x3min);
     prj_gravity_rmax = 0.5 * prj_gravity_min_double(span1, prj_gravity_min_double(span2, span3));
-    min_cell = prj_gravity_min_double(sim->mesh.blocks[0].dx[0],
-        prj_gravity_min_double(sim->mesh.blocks[0].dx[1], sim->mesh.blocks[0].dx[2]));
 
     grav_mono->nbins = PRJ_GRAVITY_DEFAULT_NBINS;
-    grav_mono->dr_min = 0.5 * min_cell;
-    if (grav_mono->dr_min <= 0.0 || prj_gravity_rmax <= grav_mono->dr_min) {
-        grav_mono->dr_min = prj_gravity_rmax / (double)grav_mono->nbins;
-    }
 
     grav_mono->rf = (double *)calloc((size_t)grav_mono->nbins + 1U, sizeof(*grav_mono->rf));
     grav_mono->ms = (double *)calloc((size_t)grav_mono->nbins, sizeof(*grav_mono->ms));
@@ -154,9 +222,8 @@ void prj_gravity_init(prj_sim *sim)
         return;
     }
 
-    log_span = log(prj_gravity_rmax / grav_mono->dr_min);
+    prj_gravity_build_rf(grav_mono, &sim->mesh);
     for (i = 0; i <= grav_mono->nbins; ++i) {
-        grav_mono->rf[i] = exp(log_span * (double)i / (double)grav_mono->nbins) * grav_mono->dr_min;
         grav_mono->lapse[i] = 1.0;
     }
 
