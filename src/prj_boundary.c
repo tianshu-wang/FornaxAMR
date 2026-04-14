@@ -271,8 +271,14 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                             int v;
 
                             sample_kind = prj_boundary_sample_kind(block, x1, x2, x3);
-                            if (sample_kind < 0 ||
-                                (fill_kind != PRJ_BOUNDARY_FILL_ALL && sample_kind != fill_kind)) {
+                            if (sample_kind < 0) {
+                                fprintf(stderr,
+                                    "prj_boundary_send: failed to classify ghost sample "
+                                    "src_block=%d dst_block=%d i=%d j=%d k=%d x=(%.17g, %.17g, %.17g)\n",
+                                    block->id, neighbor->id, i, j, k, x1, x2, x3);
+                                exit(EXIT_FAILURE);
+                            }
+                            if (fill_kind != PRJ_BOUNDARY_FILL_ALL && sample_kind != fill_kind) {
                                 continue;
                             }
                             prj_boundary_get_prim(block, stage, x1, x2, x3, w);

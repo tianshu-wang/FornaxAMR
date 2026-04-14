@@ -81,6 +81,78 @@ static void prj_eos_table_range_fail(const char *name, double value, double lo, 
     exit(1);
 }
 
+static void prj_eos_print_fill_neighbors(const prj_block *block, double x1, double x2, double x3)
+{
+    int n;
+    const double tol = 1.0e-12;
+    int found = 0;
+
+    if (block == 0) {
+        return;
+    }
+
+    fprintf(stderr, "candidate fill neighbors for x=(%.17e, %.17e, %.17e):\n", x1, x2, x3);
+    for (n = 0; n < 56; ++n) {
+        const prj_neighbor *slot = &block->slot[n];
+
+        if (slot->id < 0) {
+            continue;
+        }
+        if (x1 >= slot->xmin[0] - tol && x1 <= slot->xmax[0] + tol &&
+            x2 >= slot->xmin[1] - tol && x2 <= slot->xmax[1] + tol &&
+            x3 >= slot->xmin[2] - tol && x3 <= slot->xmax[2] + tol) {
+            fprintf(stderr,
+                "  slot=%d id=%d rank=%d xmin=(%.17e, %.17e, %.17e) "
+                "xmax=(%.17e, %.17e, %.17e) dx=(%.17e, %.17e, %.17e)\n",
+                n, slot->id, slot->rank,
+                slot->xmin[0], slot->xmin[1], slot->xmin[2],
+                slot->xmax[0], slot->xmax[1], slot->xmax[2],
+                slot->dx[0], slot->dx[1], slot->dx[2]);
+            found = 1;
+        }
+    }
+    if (found == 0) {
+        fprintf(stderr, "  no neighbor slot contains this cell center\n");
+    }
+}
+
+static void prj_eos_fail_zero_rho_in_block(const char *caller, const prj_block *block,
+    int i, int j, int k, double *W)
+{
+    double x1;
+    double x2;
+    double x3;
+
+    if (block == 0 || W == 0) {
+        fprintf(stderr, "%s: rho is zero and block/state context is unavailable\n", caller);
+        exit(1);
+    }
+
+    x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+    x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+    x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+    fprintf(stderr,
+        "%s: rho=0 before EOS call for block id=%d rank=%d level=%d cell=(%d,%d,%d) "
+        "x=(%.17e, %.17e, %.17e)\n",
+        caller, block->id, block->rank, block->level, i, j, k, x1, x2, x3);
+    fprintf(stderr,
+        "  block xmin=(%.17e, %.17e, %.17e) xmax=(%.17e, %.17e, %.17e) "
+        "dx=(%.17e, %.17e, %.17e)\n",
+        block->xmin[0], block->xmin[1], block->xmin[2],
+        block->xmax[0], block->xmax[1], block->xmax[2],
+        block->dx[0], block->dx[1], block->dx[2]);
+    fprintf(stderr,
+        "  primitive state: rho=%.17e v=(%.17e, %.17e, %.17e) eint=%.17e ye=%.17e\n",
+        W[VIDX(PRJ_PRIM_RHO, i, j, k)],
+        W[VIDX(PRJ_PRIM_V1, i, j, k)],
+        W[VIDX(PRJ_PRIM_V2, i, j, k)],
+        W[VIDX(PRJ_PRIM_V3, i, j, k)],
+        W[VIDX(PRJ_PRIM_EINT, i, j, k)],
+        W[VIDX(PRJ_PRIM_YE, i, j, k)]);
+    prj_eos_print_fill_neighbors(block, x1, x2, x3);
+    exit(1);
+}
+
 static void prj_eos_table_check_rty_inputs(const prj_eos *eos, double rho, double T, double ye)
 {
     double rho_min = pow(10.0, eos->r1);
@@ -495,6 +567,10 @@ void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W)
         for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
             for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
                 double eos_quantities[PRJ_EOS_NQUANT];
+
+                if (W[VIDX(PRJ_PRIM_RHO, i, j, k)] == 0.0) {
+                    prj_eos_fail_zero_rho_in_block("prj_eos_fill_block", block, i, j, k, W);
+                }
 
                 prj_eos_rey(eos,
                     W[VIDX(PRJ_PRIM_RHO, i, j, k)],

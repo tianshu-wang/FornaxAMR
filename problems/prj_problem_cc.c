@@ -63,6 +63,41 @@ static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const 
     }
 }
 
+static void prj_problem_print_fill_neighbors(const prj_block *block, double x1, double x2, double x3)
+{
+    int n;
+    const double tol = 1.0e-12;
+    int found = 0;
+
+    if (block == 0) {
+        return;
+    }
+
+    fprintf(stderr, "candidate fill neighbors for x=(%.17e, %.17e, %.17e):\n", x1, x2, x3);
+    for (n = 0; n < 56; ++n) {
+        const prj_neighbor *slot = &block->slot[n];
+
+        if (slot->id < 0) {
+            continue;
+        }
+        if (x1 >= slot->xmin[0] - tol && x1 <= slot->xmax[0] + tol &&
+            x2 >= slot->xmin[1] - tol && x2 <= slot->xmax[1] + tol &&
+            x3 >= slot->xmin[2] - tol && x3 <= slot->xmax[2] + tol) {
+            fprintf(stderr,
+                "  slot=%d id=%d rank=%d xmin=(%.17e, %.17e, %.17e) "
+                "xmax=(%.17e, %.17e, %.17e) dx=(%.17e, %.17e, %.17e)\n",
+                n, slot->id, slot->rank,
+                slot->xmin[0], slot->xmin[1], slot->xmin[2],
+                slot->xmax[0], slot->xmax[1], slot->xmax[2],
+                slot->dx[0], slot->dx[1], slot->dx[2]);
+            found = 1;
+        }
+    }
+    if (found == 0) {
+        fprintf(stderr, "  no neighbor slot contains this cell center\n");
+    }
+}
+
 static double prj_cc_kelvin_to_mev(double temperature_kelvin)
 {
     return temperature_kelvin / PRJ_CC_KELVIN_PER_MEV;
@@ -265,6 +300,20 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
                     double U[PRJ_NVAR_CONS];
 
                     prj_cc_profile_sample(profile, r, &rho, &temp, &ye, &vr);
+                    if (rho == 0.0) {
+                        fprintf(stderr,
+                            "prj_cc_fill_mesh: rho=0 before prj_eos_rty for block id=%d rank=%d level=%d "
+                            "cell=(%d,%d,%d) x=(%.17e, %.17e, %.17e) r=%.17e temp=%.17e ye=%.17e\n",
+                            block->id, block->rank, block->level, i, j, k, x1, x2, x3, r, temp, ye);
+                        fprintf(stderr,
+                            "  block xmin=(%.17e, %.17e, %.17e) xmax=(%.17e, %.17e, %.17e) "
+                            "dx=(%.17e, %.17e, %.17e)\n",
+                            block->xmin[0], block->xmin[1], block->xmin[2],
+                            block->xmax[0], block->xmax[1], block->xmax[2],
+                            block->dx[0], block->dx[1], block->dx[2]);
+                        prj_problem_print_fill_neighbors(block, x1, x2, x3);
+                        exit(EXIT_FAILURE);
+                    }
                     prj_eos_rty(&sim->eos, rho, prj_cc_kelvin_to_mev(temp), ye, eos_q);
                     W[PRJ_PRIM_RHO] = rho;
                     if (r > 0.0) {

@@ -755,7 +755,14 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                             int v;
 
                             sample_kind = prj_mpi_sample_kind(block, x1, x2, x3);
-                            if (sample_kind >= 0 && (fill_kind == 2 || sample_kind == fill_kind)) {
+                            if (sample_kind < 0) {
+                                fprintf(stderr,
+                                    "prj_mpi_pack_ghost_values: failed to classify ghost sample "
+                                    "src_block=%d dst_block=%d i=%d j=%d k=%d x=(%.17g, %.17g, %.17g)\n",
+                                    block->id, nid, i, j, k, x1, x2, x3);
+                                exit(EXIT_FAILURE);
+                            }
+                            if (fill_kind == 2 || sample_kind == fill_kind) {
                                 prj_boundary_get_prim(block, stage, x1, x2, x3, w);
                             } else {
                                 for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
