@@ -12,6 +12,7 @@
 #include "prj_mesh.h"
 #include "prj_mpi.h"
 #include "prj_radiation.h"
+#include "prj_rad3_opac.h"
 #include "prj_reconstruct.h"
 #include "prj_riemann.h"
 #include "prj_src.h"

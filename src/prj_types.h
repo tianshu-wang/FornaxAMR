@@ -125,6 +125,33 @@ struct prj_grav_mono {
 
 struct prj_rad {
     char filename[100];
+#if PRJ_NRAD > 0
+    double emin[PRJ_NRAD];
+    double emax[PRJ_NRAD];
+    double *egroup[PRJ_NRAD];
+    double *eedge[PRJ_NRAD];
+    double *egroup_erg[PRJ_NRAD];
+    double *degroup_erg[PRJ_NRAD];
+    double *x_e[PRJ_NRAD];
+
+    char table_param_file[100];
+    char table_file[100];
+    int nromax;
+    int ntmax;
+    int nyemax;
+    int ngmax;
+    double romin;
+    double romax;
+    double tmin;
+    double tmax;
+    double yemin;
+    double yemax;
+    double *enuk;
+    double *absopac[PRJ_NRAD];
+    double *scaopac[PRJ_NRAD];
+    double *emis[PRJ_NRAD];
+    double *sdelta[PRJ_NRAD];
+#endif
 };
 
 struct prj_sim {

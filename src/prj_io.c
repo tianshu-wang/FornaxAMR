@@ -322,6 +322,36 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
             sim->eos.kind = PRJ_EOS_KIND_TABLE;
             endptr = value + strlen(value);
+#if PRJ_NRAD > 0
+        } else if (strcmp(key, "rad_table_param_file") == 0) {
+            strncpy(sim->rad.table_param_file, value, sizeof(sim->rad.table_param_file) - 1);
+            sim->rad.table_param_file[sizeof(sim->rad.table_param_file) - 1] = '\0';
+            endptr = value + strlen(value);
+        } else if (strcmp(key, "rad_table_file") == 0) {
+            strncpy(sim->rad.table_file, value, sizeof(sim->rad.table_file) - 1);
+            sim->rad.table_file[sizeof(sim->rad.table_file) - 1] = '\0';
+            endptr = value + strlen(value);
+        } else if (strncmp(key, "rad_emin_", 9) == 0) {
+            char *kend;
+            long idx = strtol(key + 9, &kend, 10);
+
+            if (*kend != '\0' || idx < 0 || idx >= PRJ_NRAD) {
+                fprintf(stderr, "prj_io_parser: bad rad_emin index '%s' in %s:%d\n", key, filename, lineno);
+                fclose(fp);
+                exit(1);
+            }
+            sim->rad.emin[idx] = strtod(value, &endptr);
+        } else if (strncmp(key, "rad_emax_", 9) == 0) {
+            char *kend;
+            long idx = strtol(key + 9, &kend, 10);
+
+            if (*kend != '\0' || idx < 0 || idx >= PRJ_NRAD) {
+                fprintf(stderr, "prj_io_parser: bad rad_emax index '%s' in %s:%d\n", key, filename, lineno);
+                fclose(fp);
+                exit(1);
+            }
+            sim->rad.emax[idx] = strtod(value, &endptr);
+#endif
         } else if (strcmp(key, "eos_type") == 0) {
             if (prj_io_parse_eos_kind(value, &sim->eos.kind) != 0) {
                 endptr = value;
