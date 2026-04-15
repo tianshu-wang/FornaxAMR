@@ -485,32 +485,18 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh)
     baryon_mass_face[0] = 0.0;
     gamma_face[0] = 1.0;
     for (idx = 0; idx < grav_mono->nbins; ++idx) {
-        double r0 = grav_mono->rf[idx];
         double r1 = grav_mono->rf[idx + 1];
-        double shell_vol = (4.0 * M_PI / 3.0) * (r1 * r1 * r1 - r0 * r0 * r0);
         double vedge = idx < grav_mono->nbins - 1 ?
             0.5 * (grav_mono->vr_avg[idx] + grav_mono->vr_avg[idx + 1]) :
             grav_mono->vr_avg[idx];
-        double gamma_avg = gamma_face[idx];
-        double mass_density = (grav_mono->rho_avg[idx] +
-            grav_mono->eint_avg[idx] / (PRJ_CLIGHT * PRJ_CLIGHT) +
-            grav_mono->erad_avg[idx]) * gamma_avg +
-            grav_mono->vdotF_avg[idx];
-        double enclosed_prev = enclosed_face[idx] + shell_vol * mass_density;
         double gamma_sq = 1.0 + (vedge / PRJ_CLIGHT) * (vedge / PRJ_CLIGHT) -
-            2.0 * PRJ_GNEWT * enclosed_prev / (r1 * PRJ_CLIGHT * PRJ_CLIGHT);
+            2.0 * PRJ_GNEWT * enclosed_face[idx + 1] / (r1 * PRJ_CLIGHT * PRJ_CLIGHT);
 
         if (gamma_sq < 1.0e-12) {
             gamma_sq = 1.0e-12;
         }
         gamma_face[idx + 1] = sqrt(gamma_sq);
-        gamma_avg = 0.5 * (gamma_face[idx] + gamma_face[idx + 1]);
-        enclosed_face[idx + 1] = enclosed_face[idx] +
-            shell_vol * ((grav_mono->rho_avg[idx] +
-                grav_mono->eint_avg[idx] / (PRJ_CLIGHT * PRJ_CLIGHT) +
-                grav_mono->erad_avg[idx]) * gamma_avg +
-                grav_mono->vdotF_avg[idx]);
-        baryon_mass_face[idx + 1] = baryon_mass_face[idx] + shell_vol * grav_mono->rho_avg[idx];
+        baryon_mass_face[idx + 1] = enclosed_face[idx + 1];
     }
     for (idx = 0; idx < grav_mono->nbins; ++idx) {
         double r = grav_mono->rf[idx + 1];
@@ -541,8 +527,8 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh)
         if (prj_gravity_abs_double(gamma_term) < 1.0e-30) {
             gamma_term = gamma_term < 0.0 ? -1.0e-30 : 1.0e-30;
         }
-        enthalpy_term = (rho_edge + (eint_edge + pgas_edge) /
-            (PRJ_CLIGHT * PRJ_CLIGHT)) / rho_edge;
+        enthalpy_term = 1.0 + (eint_edge + pgas_edge / rho_edge) /
+            (PRJ_CLIGHT * PRJ_CLIGHT);
         grav_mono->accel[idx] = numerator / (gamma_term * gamma_term) * enthalpy_term;
     }
     grav_mono->phi[grav_mono->nbins] =

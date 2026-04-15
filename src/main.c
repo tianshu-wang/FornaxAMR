@@ -184,6 +184,9 @@ int main(int argc, char *argv[])
     }
     if (param_file != 0) {
         prj_io_parser(&sim, param_file);
+    } else {
+        fprintf(stderr, "param_file is missing\n");
+        return 1;
     }
     init_fn = prj_select_problem(sim.problem_name);
     if (sim.restart_from_file != 0 && sim.restart_file_name[0] == '\0') {
