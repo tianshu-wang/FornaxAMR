@@ -117,7 +117,7 @@ struct prj_grav_mono {
     double *rho_avg;
     double *vr_avg;
     double *pgas_avg;
-    double *eint_avg;
+    double *uavg_int;
     double *erad_avg;
     double *prad_avg;
     double *vdotF_avg;

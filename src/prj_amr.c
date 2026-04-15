@@ -559,11 +559,11 @@ static double prj_pressure_jump_cell_indicator(const prj_block *b, int i, int j,
                     continue;
                 }
                 pnei = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i + di, j + dj, k + dk)];
-                denom = p0 + pnei;
                 if (pnei <= 0.0) {
                     continue;
                 }
-                jump = 2.0 * prj_abs_double(p0 - pnei) / (denom + small);
+                denom = p0 < pnei ? p0 : pnei;
+                jump = prj_abs_double(p0 - pnei) / (denom + small);
                 max_indicator = prj_max_double(max_indicator, jump);
             }
         }
