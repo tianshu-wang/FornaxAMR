@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <time.h>
+#include <sys/time.h>
 
 #include <errno.h>
 
@@ -252,8 +252,8 @@ int main(int argc, char *argv[])
         next_restart_time = sim.time + sim.restart_dt;
     }
 
-    struct timespec wall_start;
-    clock_gettime(CLOCK_MONOTONIC, &wall_start);
+    struct timeval wall_start;
+    gettimeofday(&wall_start, 0);
 
     while (sim.time < sim.t_end && sim.step < sim.max_steps) {
         int write_output = 0;
@@ -323,12 +323,12 @@ int main(int argc, char *argv[])
             prj_io_write_restart(&sim.mesh, sim.time, sim.step);
         }
         if (mpi.rank == 0) {
-            struct timespec wall_now;
+            struct timeval wall_now;
             double wall_elapsed;
 
-            clock_gettime(CLOCK_MONOTONIC, &wall_now);
+            gettimeofday(&wall_now, 0);
             wall_elapsed = (double)(wall_now.tv_sec - wall_start.tv_sec) +
-                1.0e-9 * (double)(wall_now.tv_nsec - wall_start.tv_nsec);
+                1.0e-6 * (double)(wall_now.tv_usec - wall_start.tv_usec);
             fprintf(stderr, "step=%d  t=%.6e  dt=%.6e  blocks=%d  wall=%.3fs\n",
                 sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh), wall_elapsed);
         }
