@@ -326,11 +326,23 @@ int main(int argc, char *argv[])
             struct timeval wall_now;
             double wall_elapsed;
 
+            long wall_days;
+            long wall_hours;
+            long wall_minutes;
+            double wall_seconds;
+            long total_sec;
+
             gettimeofday(&wall_now, 0);
             wall_elapsed = (double)(wall_now.tv_sec - wall_start.tv_sec) +
                 1.0e-6 * (double)(wall_now.tv_usec - wall_start.tv_usec);
-            fprintf(stderr, "step=%d  t=%.6e  dt=%.6e  blocks=%d  wall=%.3fs\n",
-                sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh), wall_elapsed);
+            total_sec = (long)wall_elapsed;
+            wall_days = total_sec / 86400;
+            wall_hours = (total_sec % 86400) / 3600;
+            wall_minutes = (total_sec % 3600) / 60;
+            wall_seconds = wall_elapsed - (double)(total_sec - total_sec % 60);
+            fprintf(stderr, "step=%d  t=%.6e  dt=%.6e  blocks=%d  wall=%ldd %ldh %ldm %.3fs\n",
+                sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh),
+                wall_days, wall_hours, wall_minutes, wall_seconds);
         }
     }
 
