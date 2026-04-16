@@ -91,8 +91,8 @@ static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
         *amr_estimator = PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT;
         return 0;
     }
-    if (strcmp(value, "pressure_jump") == 0) {
-        *amr_estimator = PRJ_AMR_ESTIMATOR_PRESSURE_JUMP;
+    if (strcmp(value, "density_jump") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_DENSITY_JUMP;
         return 0;
     }
     return 1;
