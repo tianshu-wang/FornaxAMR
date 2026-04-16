@@ -196,8 +196,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 #if PRJ_NRAD > 0
                         {
                             double T_cell;
-                            prj_rad_implicit_update(rad, eos, u1, dt,
-                                prj_timeint_cell_lapse(block, i, j, k), &T_cell);
+                            double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
+                            prj_rad_energy_update(rad, eos, u1, dt, lapse_cell, &T_cell);
+                            prj_rad_momentum_update(rad, eos, u1, dt, lapse_cell, T_cell);
                         }
 #endif
                         prj_eos_cons2prim(eos, u1, w);
@@ -263,8 +264,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 #if PRJ_NRAD > 0
                         {
                             double T_cell;
-                            prj_rad_implicit_update(rad, eos, u, dt,
-                                prj_timeint_cell_lapse(block, i, j, k), &T_cell);
+                            double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
+                            prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
+                            prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
                         }
 #endif
                         prj_eos_cons2prim(eos, u, w);

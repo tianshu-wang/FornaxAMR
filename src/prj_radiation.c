@@ -135,7 +135,7 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     *F2 = rho * Ye - rho * Ye_old + sum_dE_xe;
 }
 
-void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
+void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
 {
     double E_nu_old[PRJ_NRAD * PRJ_NEGROUP];
     double E_nu_new[PRJ_NRAD * PRJ_NEGROUP];
@@ -271,7 +271,7 @@ void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
         /* 2x2 Cramer solve. */
         det = J00 * J11 - J01 * J10;
         if (fabs(det) < 1.0e-30) {
-            fprintf(stderr, "prj_rad_implicit_update: singular Jacobian at iter=%d\n", iter);
+            fprintf(stderr, "prj_rad_energy_update: singular Jacobian at iter=%d\n", iter);
             exit(1);
         }
         s0 = (J11 * r0 - J01 * r1) / det;
@@ -362,7 +362,7 @@ void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
         res_cur = res_trial;
     }
     if (iter == rad->maxiter) {
-        fprintf(stderr, "prj_rad_implicit_update: failed to converge (res=%e)\n", res_cur);
+        fprintf(stderr, "prj_rad_energy_update: failed to converge (res=%e)\n", res_cur);
         exit(1);
     }
 
@@ -390,7 +390,7 @@ void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     }
 }
 
-void prj_rad_flux_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
+void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
 {
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
     double sigma[PRJ_NRAD * PRJ_NEGROUP];
@@ -466,7 +466,7 @@ void prj_rad_flux_update(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
     }
 }
 #else
-void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
+void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
 {
     (void)rad;
     (void)eos;
@@ -476,7 +476,7 @@ void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     (void)lapse;
 }
 
-void prj_rad_flux_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
+void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
 {
     (void)rad;
     (void)eos;
