@@ -11,6 +11,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage);
 void prj_gravity_monopole_integrate(prj_mesh *mesh);
 const prj_grav_mono *prj_gravity_active_monopole(void);
 double prj_gravity_interp_accel(const prj_grav_mono *grav_mono, double r);
+double prj_gravity_interp_lapse(const prj_grav_mono *grav_mono, double r);
 int prj_gravity_apply(void);
 
 #endif

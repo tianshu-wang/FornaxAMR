@@ -162,9 +162,10 @@ static void prj_flux_cell_state(double *W, int i, int j, int k, double *Wc)
     }
 }
 
-void prj_flux_update(prj_eos *eos, prj_rad *rad, double *W, double *eosvar, double *flux[3])
+void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_block *block, double *W, double *eosvar, double *flux[3])
 {
     int dir;
+    const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
 
     for (dir = 0; dir < 3; ++dir) {
         int i;
@@ -266,7 +267,15 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, double *W, double *eosvar, doub
                     } else {
                         prj_riemann_hllc(WL, WR, eos, Fl);
                     }
-                    prj_rad_flux(WL, WR, eos, rad, Fl);
+                    {
+                        double x_face[3];
+                        double dx_dir;
+                        x_face[0] = block->xmin[0] + ((dir == X1DIR) ? (double)i : ((double)i + 0.5)) * block->dx[0];
+                        x_face[1] = block->xmin[1] + ((dir == X2DIR) ? (double)j : ((double)j + 0.5)) * block->dx[1];
+                        x_face[2] = block->xmin[2] + ((dir == X3DIR) ? (double)k : ((double)k + 0.5)) * block->dx[2];
+                        dx_dir = block->dx[dir];
+                        prj_rad_flux(WL, WR, eos, rad, grav_mono, x_face, dx_dir, Fl);
+                    }
                     prj_flux_rotate_from_local(Fl, dir, Fg);
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                         flux[dir][VIDX(v, i, j, k)] = Fg[v];

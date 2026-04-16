@@ -52,43 +52,243 @@ void prj_rad_cons2prim(const double *U, double *W)
     }
 }
 
-void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const prj_rad *rad, double *flux)
+static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
+    double *fE, double *fF1, double *fF2, double *fF3)
+{
+    double Fmag;
+    double f;
+    double chi;
+    double n1;
+    double n2;
+    double n3;
+    double D11;
+    double D12;
+    double D13;
+    double c2;
+    double cE;
+
+    c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+
+    if (cE <= 0.0 || Fmag <= 0.0) {
+        /* isotropic: P = (E/3) I */
+        *fE = F1;
+        *fF1 = c2 * E / 3.0;
+        *fF2 = 0.0;
+        *fF3 = 0.0;
+        return;
+    }
+
+    f = Fmag / cE;
+    if (f > 1.0) {
+        f = 1.0;
+    }
+    chi = (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
+
+    n1 = F1 / Fmag;
+    n2 = F2 / Fmag;
+    n3 = F3 / Fmag;
+
+    {
+        double a = 0.5 * (1.0 - chi);
+        double b = 0.5 * (3.0 * chi - 1.0);
+        D11 = a + b * n1 * n1;
+        D12 = b * n1 * n2;
+        D13 = b * n1 * n3;
+    }
+
+    *fE = F1;
+    *fF1 = c2 * E * D11;
+    *fF2 = c2 * E * D12;
+    *fF3 = c2 * E * D13;
+}
+
+static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double *F3)
+{
+    double Fmag;
+    double cE;
+    double scale;
+
+    if (*E < 0.0) {
+        *E = 0.0;
+    }
+    Fmag = sqrt((*F1) * (*F1) + (*F2) * (*F2) + (*F3) * (*F3));
+    cE = PRJ_CLIGHT * (*E);
+    if (Fmag > cE && Fmag > 0.0) {
+        scale = cE / Fmag;
+        *F1 *= scale;
+        *F2 *= scale;
+        *F3 *= scale;
+    }
+}
+
+static void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
+    double *lam_min, double *lam_max)
+{
+    double Fmag;
+    double cE;
+    double f;
+    double mu;
+    double fsq;
+    double ffac;
+    double lterm;
+
+    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+
+    if (cE <= 0.0 || Fmag <= 0.0) {
+        *lam_min = -1.0 / sqrt(3.0);
+        *lam_max = 1.0 / sqrt(3.0);
+        return;
+    }
+
+    f = Fmag / cE;
+    if (f > 1.0) {
+        f = 1.0;
+    }
+    mu = F1 / Fmag;
+    if (mu > 1.0) {
+        mu = 1.0;
+    } else if (mu < -1.0) {
+        mu = -1.0;
+    }
+
+    fsq = f * f;
+    ffac = sqrt(4.0 - 3.0 * fsq);
+    lterm = sqrt(fabs((2.0 / 3.0) * (4.0 - 3.0 * fsq - ffac) + 2.0 * mu * mu * (2.0 - fsq - ffac)));
+    *lam_min = (mu * f - lterm) / ffac;
+    *lam_max = (mu * f + lterm) / ffac;
+    if (*lam_min < -1.0) {
+        *lam_min = -1.0;
+    }
+    if (*lam_max > 1.0) {
+        *lam_max = 1.0;
+    }
+}
+
+void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const prj_rad *rad,
+    const prj_grav_mono *grav_mono, const double *x_face, double dx_dir, double *flux)
 {
     int field;
     int group;
+    double lapse;
 
     (void)eos;
-    (void)rad;
 
     if (WL == 0 || WR == 0 || flux == 0) {
         return;
     }
 
+    if (grav_mono != 0 && x_face != 0) {
+        double r = sqrt(x_face[0] * x_face[0] + x_face[1] * x_face[1] + x_face[2] * x_face[2]);
+        lapse = prj_gravity_interp_lapse(grav_mono, r);
+    } else {
+        lapse = 1.0;
+    }
+
+#if PRJ_NRAD > 0
+    {
+        double kappa_avg[PRJ_NRAD * PRJ_NEGROUP];
+        double sigma_avg[PRJ_NRAD * PRJ_NEGROUP];
+        double delta_avg[PRJ_NRAD * PRJ_NEGROUP];
+        double eta_avg[PRJ_NRAD * PRJ_NEGROUP];
+        double rho_avg;
+        double eint_avg;
+        double ye_avg;
+        double T_avg;
+        double eos_q[PRJ_EOS_NQUANT];
+
+        rho_avg = 0.5 * (WL[PRJ_PRIM_RHO] + WR[PRJ_PRIM_RHO]);
+        eint_avg = 0.5 * (WL[PRJ_PRIM_EINT] + WR[PRJ_PRIM_EINT]);
+        ye_avg = 0.5 * (WL[PRJ_PRIM_YE] + WR[PRJ_PRIM_YE]);
+        prj_eos_rey((prj_eos *)eos, rho_avg, eint_avg, ye_avg, eos_q);
+        T_avg = eos_q[PRJ_EOS_TEMPERATURE];
+        prj_rad3_opac_lookup(rad, rho_avg, T_avg, ye_avg, kappa_avg, sigma_avg, delta_avg, eta_avg);
+
+        for (field = 0; field < PRJ_NRAD; ++field) {
+            for (group = 0; group < PRJ_NEGROUP; ++group) {
+                int idx = field * PRJ_NEGROUP + group;
+                double EL = WL[PRJ_PRIM_RAD_E(field, group)];
+                double ER = WR[PRJ_PRIM_RAD_E(field, group)];
+                double F1L = WL[PRJ_PRIM_RAD_F1(field, group)];
+                double F2L = WL[PRJ_PRIM_RAD_F2(field, group)];
+                double F3L = WL[PRJ_PRIM_RAD_F3(field, group)];
+                double F1R = WR[PRJ_PRIM_RAD_F1(field, group)];
+                double F2R = WR[PRJ_PRIM_RAD_F2(field, group)];
+                double F3R = WR[PRJ_PRIM_RAD_F3(field, group)];
+
+                prj_rad_enforce_flux_limit(&EL, &F1L, &F2L, &F3L);
+                prj_rad_enforce_flux_limit(&ER, &F1R, &F2R, &F3R);
+                double fLE;
+                double fLF1;
+                double fLF2;
+                double fLF3;
+                double fRE;
+                double fRF1;
+                double fRF2;
+                double fRF3;
+                double lamL_min;
+                double lamL_max;
+                double lamR_min;
+                double lamR_max;
+                double sL;
+                double sR;
+                double denom;
+                double chi_ext;
+                double tau;
+                double eps;
+
+                prj_rad_m1_phys_flux(EL, F1L, F2L, F3L, &fLE, &fLF1, &fLF2, &fLF3);
+                prj_rad_m1_phys_flux(ER, F1R, F2R, F3R, &fRE, &fRF1, &fRF2, &fRF3);
+
+                prj_rad_m1_wavespeeds(EL, F1L, F2L, F3L, &lamL_min, &lamL_max);
+                prj_rad_m1_wavespeeds(ER, F1R, F2R, F3R, &lamR_min, &lamR_max);
+                sL = PRJ_CLIGHT * (lamL_min < lamR_min ? lamL_min : lamR_min);
+                sR = PRJ_CLIGHT * (lamL_max > lamR_max ? lamL_max : lamR_max);
+                if (sL > 0.0) {
+                    sL = 0.0;
+                }
+                if (sR < 0.0) {
+                    sR = 0.0;
+                }
+                if (sR - sL < 1.0e-30) {
+                    sL = -PRJ_CLIGHT;
+                    sR = PRJ_CLIGHT;
+                }
+                denom = sR - sL;
+
+                chi_ext = kappa_avg[idx] + sigma_avg[idx];
+                tau = chi_ext * dx_dir;
+                eps = 3.0 / (5.0 * tau + 1.0e-10);
+                if (eps > 1.0) {
+                    eps = 1.0;
+                }
+
+                flux[PRJ_CONS_RAD_E(field, group)] = lapse *
+                    (sR * fLE - sL * fRE + eps * sL * sR * (ER - EL)) / denom;
+                flux[PRJ_CONS_RAD_F1(field, group)] = lapse *
+                    (sR * fLF1 - sL * fRF1 + sL * sR * (F1R - F1L)) / denom;
+                flux[PRJ_CONS_RAD_F2(field, group)] = lapse *
+                    (sR * fLF2 - sL * fRF2 + sL * sR * (F2R - F2L)) / denom;
+                flux[PRJ_CONS_RAD_F3(field, group)] = lapse *
+                    (sR * fLF3 - sL * fRF3 + sL * sR * (F3R - F3L)) / denom;
+            }
+        }
+    }
+#else
+    (void)rad;
+    (void)dx_dir;
+    (void)lapse;
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
-            double el = WL[PRJ_PRIM_RAD_E(field, group)];
-            double er = WR[PRJ_PRIM_RAD_E(field, group)];
-            double f1l = WL[PRJ_PRIM_RAD_F1(field, group)];
-            double f1r = WR[PRJ_PRIM_RAD_F1(field, group)];
-            double ul_e = el;
-            double ur_e = er;
-            double ul_f1 = f1l;
-            double ur_f1 = f1r;
-            double fl_e = f1l;
-            double fr_e = f1r;
-            double fl_f1 = PRJ_CLIGHT * PRJ_CLIGHT * el;
-            double fr_f1 = PRJ_CLIGHT * PRJ_CLIGHT * er;
-            double sl = -PRJ_CLIGHT;
-            double sr = PRJ_CLIGHT;
-
-            flux[PRJ_CONS_RAD_E(field, group)] =
-                (sr * fl_e - sl * fr_e + sl * sr * (ur_e - ul_e)) / (sr - sl);
-            flux[PRJ_CONS_RAD_F1(field, group)] =
-                (sr * fl_f1 - sl * fr_f1 + sl * sr * (ur_f1 - ul_f1)) / (sr - sl);
+            flux[PRJ_CONS_RAD_E(field, group)] = 0.0;
+            flux[PRJ_CONS_RAD_F1(field, group)] = 0.0;
             flux[PRJ_CONS_RAD_F2(field, group)] = 0.0;
             flux[PRJ_CONS_RAD_F3(field, group)] = 0.0;
         }
     }
+#endif
 }
 
 #if PRJ_NRAD > 0

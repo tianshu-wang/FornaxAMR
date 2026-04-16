@@ -160,7 +160,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(block)) {
-            prj_flux_update(eos, rad, block->W, block->eosvar, block->flux);
+            prj_flux_update(eos, rad, block, block->W, block->eosvar, block->flux);
         }
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -226,7 +226,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(block)) {
-            prj_flux_update(eos, rad, block->W1, block->eosvar, block->flux);
+            prj_flux_update(eos, rad, block, block->W1, block->eosvar, block->flux);
         }
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {

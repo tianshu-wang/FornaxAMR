@@ -263,6 +263,29 @@ double prj_gravity_interp_accel(const prj_grav_mono *grav_mono, double r)
     return grav_mono->accel[grav_mono->nbins - 1];
 }
 
+double prj_gravity_interp_lapse(const prj_grav_mono *grav_mono, double r)
+{
+    int idx;
+
+    if (grav_mono == 0 || grav_mono->nbins <= 0 || grav_mono->lapse == 0) {
+        return 1.0;
+    }
+    if (r <= prj_gravity_radius_center(grav_mono, 0)) {
+        return grav_mono->lapse[0];
+    }
+    for (idx = 0; idx < grav_mono->nbins - 1; ++idx) {
+        double r0 = prj_gravity_radius_center(grav_mono, idx);
+        double r1 = prj_gravity_radius_center(grav_mono, idx + 1);
+
+        if (r <= r1) {
+            double weight = (r - r0) / (r1 - r0);
+
+            return (1.0 - weight) * grav_mono->lapse[idx] + weight * grav_mono->lapse[idx + 1];
+        }
+    }
+    return grav_mono->lapse[grav_mono->nbins - 1];
+}
+
 void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
 {
     prj_grav_mono *grav_mono = prj_gravity_active;
