@@ -135,7 +135,7 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     *F2 = rho * Ye - rho * Ye_old + sum_dE_xe;
 }
 
-void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse)
+void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
 {
     double E_nu_old[PRJ_NRAD * PRJ_NEGROUP];
     double E_nu_new[PRJ_NRAD * PRJ_NEGROUP];
@@ -384,14 +384,105 @@ void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
             }
         }
     }
+
+    if (final_temperature != 0) {
+        *final_temperature = T;
+    }
+}
+
+void prj_rad_flux_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
+{
+    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double sigma[PRJ_NRAD * PRJ_NEGROUP];
+    double delta[PRJ_NRAD * PRJ_NEGROUP];
+    double eta[PRJ_NRAD * PRJ_NEGROUP];
+    double rho;
+    double Ye;
+    double v[3];
+    double inv_c2;
+    double dmom[3];
+    double detot;
+    int nu;
+    int g;
+    int d;
+
+    (void)eos;
+
+    rho = u[PRJ_CONS_RHO];
+    Ye = u[PRJ_CONS_YE] / rho;
+    v[0] = u[PRJ_CONS_MOM1] / rho;
+    v[1] = u[PRJ_CONS_MOM2] / rho;
+    v[2] = u[PRJ_CONS_MOM3] / rho;
+    inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
+
+    prj_rad3_opac_lookup(rad, rho, temperature, Ye, kappa, sigma, delta, eta);
+
+    dmom[0] = 0.0;
+    dmom[1] = 0.0;
+    dmom[2] = 0.0;
+    detot = 0.0;
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            int idx = nu * PRJ_NEGROUP + g;
+            double chi = kappa[idx] + sigma[idx] * (1.0 - delta[idx] / 3.0);
+            double factor = 1.0 / (1.0 + dt * lapse * chi) - 1.0;
+            int fi[3];
+
+            fi[0] = PRJ_CONS_RAD_F1(nu, g);
+            fi[1] = PRJ_CONS_RAD_F2(nu, g);
+            fi[2] = PRJ_CONS_RAD_F3(nu, g);
+            for (d = 0; d < 3; ++d) {
+                double F_old = u[fi[d]];
+                double dF = F_old * factor;
+                u[fi[d]] = F_old + dF;
+                dmom[d] += dF * inv_c2;
+                detot += v[d] * dF * inv_c2;
+            }
+        }
+    }
+
+    u[PRJ_CONS_MOM1] -= dmom[0];
+    u[PRJ_CONS_MOM2] -= dmom[1];
+    u[PRJ_CONS_MOM3] -= dmom[2];
+    u[PRJ_CONS_ETOT] -= detot;
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double E = u[PRJ_CONS_RAD_E(nu, g)];
+            double F1 = u[PRJ_CONS_RAD_F1(nu, g)];
+            double F2 = u[PRJ_CONS_RAD_F2(nu, g)];
+            double F3 = u[PRJ_CONS_RAD_F3(nu, g)];
+            double Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+            double cE = PRJ_CLIGHT * E;
+
+            if (E > 0.0 && Fmag > cE) {
+                double scale = 0.99999 * cE / Fmag;
+                u[PRJ_CONS_RAD_F1(nu, g)] = F1 * scale;
+                u[PRJ_CONS_RAD_F2(nu, g)] = F2 * scale;
+                u[PRJ_CONS_RAD_F3(nu, g)] = F3 * scale;
+            }
+        }
+    }
 }
 #else
-void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse)
+void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
+{
+    (void)rad;
+    (void)eos;
+    (void)u;
+    (void)dt;
+    (void)final_temperature;
+    (void)lapse;
+}
+
+void prj_rad_flux_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
 {
     (void)rad;
     (void)eos;
     (void)u;
     (void)dt;
     (void)lapse;
+    (void)temperature;
 }
 #endif

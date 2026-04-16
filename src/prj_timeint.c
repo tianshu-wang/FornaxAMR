@@ -194,8 +194,11 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                             u1[v] = u[v] + dt * block->dUdt[VIDX(v, i, j, k)];
                         }
 #if PRJ_NRAD > 0
-                        prj_rad_implicit_update(rad, eos, u1, dt,
-                            prj_timeint_cell_lapse(block, i, j, k));
+                        {
+                            double T_cell;
+                            prj_rad_implicit_update(rad, eos, u1, dt,
+                                prj_timeint_cell_lapse(block, i, j, k), &T_cell);
+                        }
 #endif
                         prj_eos_cons2prim(eos, u1, w);
                         prj_timeint_apply_eint_floor(mesh, u1, w);
@@ -258,8 +261,11 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                             u[v] = 0.5 * u[v] + 0.5 * (u1[v] + dt * block->dUdt[VIDX(v, i, j, k)]);
                         }
 #if PRJ_NRAD > 0
-                        prj_rad_implicit_update(rad, eos, u, dt,
-                            prj_timeint_cell_lapse(block, i, j, k));
+                        {
+                            double T_cell;
+                            prj_rad_implicit_update(rad, eos, u, dt,
+                                prj_timeint_cell_lapse(block, i, j, k), &T_cell);
+                        }
 #endif
                         prj_eos_cons2prim(eos, u, w);
                         prj_timeint_apply_eint_floor(mesh, u, w);
