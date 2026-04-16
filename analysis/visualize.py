@@ -9,16 +9,16 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
 
 # User settings
-VARIABLE = "pressure"
+VARIABLE = "density"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
 # Set these to None to show the full domain.
-X_RANGE = [-1e7,1e7]
-Y_RANGE = [-1e7,1e7]
+X_RANGE = [-1e8,1e8]
+Y_RANGE = [-1e8,1e8]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
-COLOR_SCALE = "normalize"
+COLOR_SCALE = "lognorm"
 COLOR_VMIN = None #1e7
 COLOR_VMAX = None #1e15
 SYMLOG_LINTHRESH = 1.0e-6

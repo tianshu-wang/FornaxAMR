@@ -587,21 +587,6 @@ static double prj_amr_cell_indicator_for_estimator(
     return prj_loehner_cell_indicator(mesh, b, eos, i, j, k);
 }
 
-static int prj_has_active_finer_neighbor_than_level(const prj_mesh *mesh, const prj_block *b, int level)
-{
-    int n;
-
-    for (n = 0; n < 56; ++n) {
-        int id = b->slot[n].id;
-
-        if (id >= 0 && id < mesh->nblocks && prj_is_active_block(&mesh->blocks[id]) &&
-            mesh->blocks[id].level > level) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
 static int prj_has_face_neighbor_coarser_than(const prj_mesh *mesh, const prj_block *b, int min_level)
 {
     int n;
@@ -1137,7 +1122,6 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
 
     parent->active = 0;
     parent->refine_flag = 0;
-    prj_amr_init_neighbors(mesh);
 }
 
 void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
@@ -1206,7 +1190,6 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
         prj_clear_neighbors(child);
         parent->children[oct] = -1;
     }
-    prj_amr_init_neighbors(mesh);
 }
 
 void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
@@ -1217,7 +1200,6 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
         return;
     }
 
-    prj_amr_init_neighbors(mesh);
     prj_eos_fill_mesh(mesh, eos, 1);
     prj_amr_tag(mesh, eos);
     prj_amr_sync_refine_flags(mesh);
@@ -1225,6 +1207,7 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     prj_amr_sync_refine_flags(mesh);
 
     prj_amr_refine_marked_blocks(mesh);
+    prj_amr_init_neighbors(mesh);
 
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *parent = &mesh->blocks[i];
@@ -1234,7 +1217,7 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
             continue;
         }
         can_coarsen = prj_can_coarsen_parent(mesh, i);
-        if (can_coarsen && !prj_has_active_finer_neighbor_than_level(mesh, parent, parent->level + 1)) {
+        if (can_coarsen) {
             prj_amr_coarsen_block(mesh, i);
         }
     }
