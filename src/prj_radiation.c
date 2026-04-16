@@ -52,6 +52,7 @@ void prj_rad_cons2prim(const double *U, double *W)
     }
 }
 
+#if PRJ_NRAD > 0
 static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
     double *fE, double *fF1, double *fF2, double *fF3)
 {
@@ -166,6 +167,7 @@ static void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
         *lam_max = 1.0;
     }
 }
+#endif
 
 void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const prj_rad *rad,
     const prj_grav_mono *grav_mono, const double *x_face, double dx_dir, double *flux)

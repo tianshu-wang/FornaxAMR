@@ -15,7 +15,7 @@
 #endif
 
 #if PRJ_USE_RADIATION
-#define PRJ_NRAD 1
+#define PRJ_NRAD 3
 #else
 #define PRJ_NRAD 0
 #endif
