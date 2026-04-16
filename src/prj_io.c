@@ -601,6 +601,16 @@ static void prj_io_read_attr_int(hid_t obj, const char *name, int *value)
     H5Aclose(attr);
 }
 
+static int prj_io_read_attr_int_optional(hid_t obj, const char *name, int default_value)
+{
+    int value = default_value;
+
+    if (H5Aexists(obj, name) > 0) {
+        prj_io_read_attr_int(obj, name, &value);
+    }
+    return value;
+}
+
 static void prj_io_read_attr_int3(hid_t obj, const char *name, int values[3])
 {
     hid_t attr = H5Aopen(obj, name, H5P_DEFAULT);
@@ -709,7 +719,7 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
     }
 }
 
-void prj_io_write_restart(const prj_mesh *mesh, double time, int step)
+void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count)
 {
     char filename[64];
     hid_t file;
@@ -733,6 +743,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step)
     file = prj_io_create_file(filename);
     prj_io_write_attr_double(file, "time", time);
     prj_io_write_attr_int(file, "step", step);
+    prj_io_write_attr_int(file, "dump_count", dump_count);
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
@@ -803,7 +814,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step)
     H5Fclose(file);
 }
 
-void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename, double *time, int *step)
+void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename, double *time, int *step, int *dump_count)
 {
     hid_t file;
     hid_t dset_data;
@@ -826,6 +837,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     file = prj_io_open_file_readonly(filename);
     prj_io_read_attr_double(file, "time", time);
     prj_io_read_attr_int(file, "step", step);
+    if (dump_count != 0) {
+        *dump_count = prj_io_read_attr_int_optional(file, "dump_count", 0);
+    }
     prj_io_read_attr_int(file, "nblocks", &nblocks);
     prj_io_read_attr_int(file, "nvar_prim", &nvar_prim);
     prj_io_read_attr_int(file, "block_size", &block_size);
@@ -931,7 +945,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     free(metadata);
 }
 
-void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
+void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_index, int step, double time)
 {
     char filename[256];
     hid_t file;
@@ -950,7 +964,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
     int active_idx = 0;
     hid_t dump_real_type = prj_io_dump_real_hdf5_type();
 
-    snprintf(filename, sizeof(filename), "%s_%05d.h5", basename, step);
+    snprintf(filename, sizeof(filename), "%s_%05d.h5", basename, dump_index);
     if (prj_io_is_root_rank()) {
         fprintf(stderr, "save dump file %s\n", filename);
     }
@@ -968,6 +982,9 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int step)
     dims_var[2] = PRJ_BLOCK_SIZE;
     dims_var[3] = PRJ_BLOCK_SIZE;
     file = prj_io_create_file(filename);
+    prj_io_write_attr_int(file, "dump_index", dump_index);
+    prj_io_write_attr_int(file, "step", step);
+    prj_io_write_attr_double(file, "time", time);
     prj_io_write_attr_int3(file, "root_nx", mesh->root_nx);
     prj_io_write_attr_double6(file, "coord", &mesh->coord);
     space_level = H5Screate_simple(1, dims_level, dims_level);

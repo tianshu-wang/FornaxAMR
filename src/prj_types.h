@@ -180,6 +180,7 @@ struct prj_sim {
     int restart_from_file;
     char restart_file_name[256];
     int amr_interval;
+    int dump_count;
 };
 
 struct prj_mpi_buffer {

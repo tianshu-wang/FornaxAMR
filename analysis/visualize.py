@@ -169,8 +169,8 @@ def main() -> None:
     dump_files = load_dump_files(output_dir)
 
     for dump_path in dump_files:
-        step = int(dump_path.stem.split("_")[-1])
         with h5py.File(dump_path, "r") as h5:
+            step = int(h5.attrs["step"]) if "step" in h5.attrs else int(dump_path.stem.split("_")[-1])
             coords = h5["coordinate"][...]
             levels = h5["level"][...]
             coord = h5.attrs["coord"]

@@ -6,6 +6,10 @@
 
 #include <errno.h>
 
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
+
 #include "prj.h"
 
 static prj_problem_init_fn prj_select_problem(const char *name)
@@ -214,6 +218,7 @@ int main(int argc, char *argv[])
     if (mpi.rank == 0) {
         mkdir("output", 0777);
     }
+    sim.dump_count = 0;
     if (sim.restart_from_file != 0) {
         for (i = 0; i < PRJ_AMR_N; ++i) {
             saved_amr_refine_thresh[i] = sim.mesh.amr_refine_thresh[i];
@@ -225,7 +230,7 @@ int main(int argc, char *argv[])
         saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
         saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
         prj_mesh_destroy(&sim.mesh);
-        prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step);
+        prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count);
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
@@ -244,7 +249,8 @@ int main(int argc, char *argv[])
  #endif
     prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
-    prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
+    prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
+    sim.dump_count += 1;
     if (sim.output_dt >= 0.0) {
         next_output_time = sim.time + sim.output_dt;
     }
@@ -317,10 +323,11 @@ int main(int argc, char *argv[])
         if (write_output) {
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
-            prj_io_write_dump(&sim.mesh, sim.output_dir, sim.step);
+            prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
+            sim.dump_count += 1;
         }
         if (write_restart) {
-            prj_io_write_restart(&sim.mesh, sim.time, sim.step);
+            prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count);
         }
         if (mpi.rank == 0) {
             struct timeval wall_now;
@@ -346,7 +353,7 @@ int main(int argc, char *argv[])
         }
     }
 
-    prj_io_write_restart(&sim.mesh, sim.time, sim.step);
+    prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count);
     if (mpi.rank == 0) {
         char final_restart[64];
 
