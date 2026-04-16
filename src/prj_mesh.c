@@ -39,6 +39,9 @@ static void prj_block_init_empty(prj_block *b)
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
+    b->v_riemann[0] = 0;
+    b->v_riemann[1] = 0;
+    b->v_riemann[2] = 0;
     b->vol = 0.0;
     b->area[0] = 0.0;
     b->area[1] = 0.0;
@@ -80,7 +83,7 @@ int prj_block_alloc_data(prj_block *b)
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    total_count = 2U * prim_count + eosvar_count + 5U * cons_count;
+    total_count = 2U * prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
 
     base = (double *)malloc(total_count * sizeof(*base));
     if (base == 0) {
@@ -102,6 +105,12 @@ int prj_block_alloc_data(prj_block *b)
     b->flux[1] = base;
     base += cons_count;
     b->flux[2] = base;
+    base += cons_count;
+    b->v_riemann[0] = base;
+    base += 3U * (size_t)PRJ_BLOCK_NCELLS;
+    b->v_riemann[1] = base;
+    base += 3U * (size_t)PRJ_BLOCK_NCELLS;
+    b->v_riemann[2] = base;
     return 0;
 }
 
@@ -120,6 +129,9 @@ void prj_block_free_data(prj_block *b)
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
+    b->v_riemann[0] = 0;
+    b->v_riemann[1] = 0;
+    b->v_riemann[2] = 0;
 }
 
 void prj_block_setup_geometry(prj_block *b, const prj_coord *coord)

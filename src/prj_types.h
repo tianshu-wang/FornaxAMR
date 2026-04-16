@@ -60,6 +60,7 @@ struct prj_block {
     double *U;
     double *dUdt;
     double *flux[3];
+    double *v_riemann[3];
     double vol;
     double area[3];
     int parent;

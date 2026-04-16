@@ -162,7 +162,7 @@ static void prj_flux_cell_state(double *W, int i, int j, int k, double *Wc)
     }
 }
 
-void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_block *block, double *W, double *eosvar, double *flux[3])
+void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, double *eosvar, double *flux[3])
 {
     int dir;
     const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
@@ -261,11 +261,32 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_block *block, double 
                      * Use HLLE only on transverse fluxes; keep HLLC on the shock-aligned direction. */
                     shock_left = prj_riemann_detect_shock(WLLg, WCLg, pLLg, pCLg);
                     shock_right = prj_riemann_detect_shock(WCRg, WRRg, pCRg, pRRg);
+                    double v_face_loc[3] = {0.0, 0.0, 0.0};
                     if ((shock_left >= 0 && shock_left != dir) ||
                         (shock_right >= 0 && shock_right != dir)) {
-                        prj_riemann_hlle(WL, WR, eos, Fl);
+                        prj_riemann_hlle(WL, WR, eos, Fl, v_face_loc);
                     } else {
-                        prj_riemann_hllc(WL, WR, eos, Fl);
+                        prj_riemann_hllc(WL, WR, eos, Fl, v_face_loc);
+                    }
+                    /* Unrotate (V1=normal, V2/V3=transverse) back to global (v1,v2,v3). */
+                    double v_face_glob[3];
+                    if (dir == X1DIR) {
+                        v_face_glob[0] = v_face_loc[0];
+                        v_face_glob[1] = v_face_loc[1];
+                        v_face_glob[2] = v_face_loc[2];
+                    } else if (dir == X2DIR) {
+                        v_face_glob[1] = v_face_loc[0];
+                        v_face_glob[2] = v_face_loc[1];
+                        v_face_glob[0] = v_face_loc[2];
+                    } else {
+                        v_face_glob[2] = v_face_loc[0];
+                        v_face_glob[0] = v_face_loc[1];
+                        v_face_glob[1] = v_face_loc[2];
+                    }
+                    if (block->v_riemann[dir] != 0) {
+                        block->v_riemann[dir][0 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[0];
+                        block->v_riemann[dir][1 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[1];
+                        block->v_riemann[dir][2 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[2];
                     }
                     {
                         double x_face[3];
@@ -274,7 +295,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_block *block, double 
                         x_face[1] = block->xmin[1] + ((dir == X2DIR) ? (double)j : ((double)j + 0.5)) * block->dx[1];
                         x_face[2] = block->xmin[2] + ((dir == X3DIR) ? (double)k : ((double)k + 0.5)) * block->dx[2];
                         dx_dir = block->dx[dir];
-                        prj_rad_flux(WL, WR, eos, rad, grav_mono, x_face, dx_dir, Fl);
+                        prj_rad_flux(WL, WR, eos, rad, grav_mono, x_face, dx_dir, v_face_loc[0], Fl);
                     }
                     prj_flux_rotate_from_local(Fl, dir, Fg);
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {

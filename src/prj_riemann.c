@@ -56,7 +56,7 @@ static void prj_riemann_state(const double *W, const prj_eos *eos, double *U, do
     F[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE] * v1;
 }
 
-void prj_riemann_hlle(const double *WL, const double *WR, const prj_eos *eos, double *flux)
+void prj_riemann_hlle(const double *WL, const double *WR, const prj_eos *eos, double *flux, double v_face[3])
 {
     double UL[PRJ_NVAR_CONS];
     double UR[PRJ_NVAR_CONS];
@@ -82,11 +82,21 @@ void prj_riemann_hlle(const double *WL, const double *WR, const prj_eos *eos, do
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
             flux[v] = FL[v];
         }
+        if (v_face != 0) {
+            v_face[0] = WL[PRJ_PRIM_V1];
+            v_face[1] = WL[PRJ_PRIM_V2];
+            v_face[2] = WL[PRJ_PRIM_V3];
+        }
         return;
     }
     if (SR <= 0.0) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
             flux[v] = FR[v];
+        }
+        if (v_face != 0) {
+            v_face[0] = WR[PRJ_PRIM_V1];
+            v_face[1] = WR[PRJ_PRIM_V2];
+            v_face[2] = WR[PRJ_PRIM_V3];
         }
         return;
     }
@@ -94,9 +104,28 @@ void prj_riemann_hlle(const double *WL, const double *WR, const prj_eos *eos, do
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         flux[v] = (SR * FL[v] - SL * FR[v] + SL * SR * (UR[v] - UL[v])) / (SR - SL);
     }
+    if (v_face != 0) {
+        double rho_hll = (SR * UR[PRJ_CONS_RHO] - SL * UL[PRJ_CONS_RHO] -
+            (FR[PRJ_CONS_RHO] - FL[PRJ_CONS_RHO])) / (SR - SL);
+        double mom1_hll = (SR * UR[PRJ_CONS_MOM1] - SL * UL[PRJ_CONS_MOM1] -
+            (FR[PRJ_CONS_MOM1] - FL[PRJ_CONS_MOM1])) / (SR - SL);
+        double mom2_hll = (SR * UR[PRJ_CONS_MOM2] - SL * UL[PRJ_CONS_MOM2] -
+            (FR[PRJ_CONS_MOM2] - FL[PRJ_CONS_MOM2])) / (SR - SL);
+        double mom3_hll = (SR * UR[PRJ_CONS_MOM3] - SL * UL[PRJ_CONS_MOM3] -
+            (FR[PRJ_CONS_MOM3] - FL[PRJ_CONS_MOM3])) / (SR - SL);
+        if (rho_hll != 0.0) {
+            v_face[0] = mom1_hll / rho_hll;
+            v_face[1] = mom2_hll / rho_hll;
+            v_face[2] = mom3_hll / rho_hll;
+        } else {
+            v_face[0] = 0.0;
+            v_face[1] = 0.0;
+            v_face[2] = 0.0;
+        }
+    }
 }
 
-void prj_riemann_hllc(const double *WL, const double *WR, const prj_eos *eos, double *flux)
+void prj_riemann_hllc(const double *WL, const double *WR, const prj_eos *eos, double *flux, double v_face[3])
 {
     double UL[PRJ_NVAR_CONS];
     double UR[PRJ_NVAR_CONS];
@@ -133,15 +162,36 @@ void prj_riemann_hllc(const double *WL, const double *WR, const prj_eos *eos, do
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
             flux[v] = FL[v];
         }
+        if (v_face != 0) {
+            v_face[0] = WL[PRJ_PRIM_V1];
+            v_face[1] = WL[PRJ_PRIM_V2];
+            v_face[2] = WL[PRJ_PRIM_V3];
+        }
         return;
     }
     if (SR <= 0.0) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
             flux[v] = FR[v];
         }
+        if (v_face != 0) {
+            v_face[0] = WR[PRJ_PRIM_V1];
+            v_face[1] = WR[PRJ_PRIM_V2];
+            v_face[2] = WR[PRJ_PRIM_V3];
+        }
         return;
     }
 
+    if (v_face != 0) {
+        /* HLLC star state: contact normal speed SM, transverse velocities preserved from upwind side. */
+        v_face[0] = SM;
+        if (0.0 <= SM) {
+            v_face[1] = WL[PRJ_PRIM_V2];
+            v_face[2] = WL[PRJ_PRIM_V3];
+        } else {
+            v_face[1] = WR[PRJ_PRIM_V2];
+            v_face[2] = WR[PRJ_PRIM_V3];
+        }
+    }
     if (0.0 <= SM) {
         /* Toro (2009), Eqs. 10.33-10.36: left star state. */
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {

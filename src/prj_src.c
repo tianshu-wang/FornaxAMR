@@ -94,14 +94,19 @@ void prj_src_monopole_gravity(prj_mesh *mesh, const prj_grav_mono *grav_mono,
                         int field;
                         int group;
 
+                        double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
                         for (field = 0; field < PRJ_NRAD; ++field) {
                             for (group = 0; group < PRJ_NEGROUP; ++group) {
-                                dUdt[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)] +=
-                                    lapse * U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] * g1;
-                                dUdt[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)] +=
-                                    lapse * U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] * g2;
-                                dUdt[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)] +=
-                                    lapse * U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] * g3;
+                                double E = U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)];
+                                double F1 = U[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)];
+                                double F2 = U[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)];
+                                double F3 = U[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)];
+
+                                dUdt[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)] += lapse * E * g1;
+                                dUdt[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)] += lapse * E * g2;
+                                dUdt[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)] += lapse * E * g3;
+                                dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] +=
+                                    lapse * (g1 * F1 + g2 * F2 + g3 * F3) * inv_c2;
                             }
                         }
                     }
@@ -112,10 +117,208 @@ void prj_src_monopole_gravity(prj_mesh *mesh, const prj_grav_mono *grav_mono,
     }
 }
 
+#if PRJ_NRAD > 0
+/* Build the M1 radiation pressure tensor P^{ij} = E * D^{ij} for a single
+ * (species, group), where D^{ij} = a δ^{ij} + b n^i n^j with the Levermore
+ * closure χ(f) and n = F/|F|, f = |F|/(c E).  Falls back to the isotropic
+ * limit P^{ij} = (E/3) δ^{ij} when |F| or E vanishes. */
+static void prj_src_rad_m1_pressure(double E, double F1, double F2, double F3,
+    double P[3][3])
+{
+    double F[3];
+    double Fmag;
+    double cE;
+    double f;
+    double chi;
+    double a_c;
+    double b_c;
+    double n[3];
+    int a;
+    int b;
+
+    F[0] = F1;
+    F[1] = F2;
+    F[2] = F3;
+    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+
+    if (cE <= 0.0 || Fmag <= 0.0) {
+        double third = (E > 0.0 ? E : 0.0) / 3.0;
+
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                P[a][b] = (a == b) ? third : 0.0;
+            }
+        }
+        return;
+    }
+
+    f = Fmag / cE;
+    if (f > 1.0) {
+        f = 1.0;
+    }
+    chi = (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
+    a_c = 0.5 * (1.0 - chi);
+    b_c = 0.5 * (3.0 * chi - 1.0);
+    n[0] = F[0] / Fmag;
+    n[1] = F[1] / Fmag;
+    n[2] = F[2] / Fmag;
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            P[a][b] = E * (a_c * (a == b ? 1.0 : 0.0) + b_c * n[a] * n[b]);
+        }
+    }
+}
+#endif
+
+/* O(v/c) "source-like" piece of the SR redshift (Eq. 12a/12b of the
+ * comoving-frame mixed-frame moment equations).  These are the bits left over
+ * once the energy-space-flux divergence has been split off, and they appear as
+ * pure cell-local sources:
+ *
+ *     ∂_t E_g   += (∂_j v_i) P^{ji}_g                          (Eq. 12a piece)
+ *     ∂_t F_{gj} += (∂_j v_i) F_{gi}                            (Eq. 12b piece)
+ *
+ * Indices: i,j ∈ {1,2,3}; sums over i (and i,j for the energy term).  ∂_j v_i is
+ * built by central differencing the face-centred Riemann velocities stored in
+ * block->v_riemann[face_dir][component, ...] during the most recent flux update,
+ * so the velocity field used here is the same one the hydro fluxes saw. */
+void prj_src_radiation_vel_grad(prj_mesh *mesh,
+    double *restrict U, double *restrict dUdt)
+{
+#if PRJ_NRAD > 0
+    int bidx;
+    const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+
+    if (mesh == 0) {
+        return;
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int i;
+        int j;
+        int k;
+
+        if (block->id < 0 || block->active != 1 || block->U != U || block->dUdt != dUdt) {
+            continue;
+        }
+        if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
+            continue;
+        }
+
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    double dvdx[3][3]; /* dvdx[jdir][icomp] = ∂_jdir v_icomp */
+                    int jdir;
+                    int icomp;
+                    int field;
+                    int group;
+                    double inv_dx[3];
+                    /* Cell-centred lapse α(r) for the GR proper-time slowdown. */
+                    double xc1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                    double xc2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                    double xc3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                    double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
+                    double lapse = (grav_mono != 0)
+                        ? prj_src_interp_lapse(grav_mono, r_cell)
+                        : 1.0;
+
+                    inv_dx[0] = 1.0 / block->dx[0];
+                    inv_dx[1] = 1.0 / block->dx[1];
+                    inv_dx[2] = 1.0 / block->dx[2];
+
+                    /* ∂_jdir v_icomp at cell centre, from the two normal-direction
+                     * faces bracketing the cell along jdir.  v_riemann[jdir] is
+                     * laid out as [icomp * NCELLS + IDX(face)] with the face index
+                     * along jdir running 0..PRJ_BLOCK_SIZE (left/right faces). */
+                    for (jdir = 0; jdir < 3; ++jdir) {
+                        for (icomp = 0; icomp < 3; ++icomp) {
+                            int il = i;
+                            int jl = j;
+                            int kl = k;
+                            int ir = i;
+                            int jr = j;
+                            int kr = k;
+                            double vL;
+                            double vR;
+
+                            if (jdir == X1DIR) {
+                                ir = i + 1;
+                            } else if (jdir == X2DIR) {
+                                jr = j + 1;
+                            } else {
+                                kr = k + 1;
+                            }
+                            vL = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(il, jl, kl)];
+                            vR = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(ir, jr, kr)];
+                            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+                        }
+                    }
+
+                    for (field = 0; field < PRJ_NRAD; ++field) {
+                        for (group = 0; group < PRJ_NEGROUP; ++group) {
+                            double E = U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)];
+                            double F[3];
+                            double P[3][3];
+                            double dE_src;
+                            int jj;
+                            int ii;
+
+                            F[0] = U[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)];
+                            F[1] = U[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)];
+                            F[2] = U[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)];
+
+                            /* Closure: P^{ij} from the cell-centred (E, F). */
+                            prj_src_rad_m1_pressure(E, F[0], F[1], F[2], P);
+
+                            /* Energy: dE/dt += sum_{ij} (∂_j v_i) P^{ji}.
+                             * P is symmetric in M1 so P^{ji} = P^{ij}. */
+                            dE_src = 0.0;
+                            for (jj = 0; jj < 3; ++jj) {
+                                for (ii = 0; ii < 3; ++ii) {
+                                    dE_src += dvdx[jj][ii] * P[jj][ii];
+                                }
+                            }
+                            /* GR lapse: same α(r) factor that multiplies the
+                             * spatial radiation flux and the gravity source. */
+                            dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] += lapse * dE_src;
+
+                            /* Flux: dF_j/dt += sum_i (∂_j v_i) F_i. */
+                            {
+                                int fi[3];
+                                double dFj;
+
+                                fi[0] = PRJ_CONS_RAD_F1(field, group);
+                                fi[1] = PRJ_CONS_RAD_F2(field, group);
+                                fi[2] = PRJ_CONS_RAD_F3(field, group);
+                                for (jj = 0; jj < 3; ++jj) {
+                                    dFj = 0.0;
+                                    for (ii = 0; ii < 3; ++ii) {
+                                        dFj += dvdx[jj][ii] * F[ii];
+                                    }
+                                    dUdt[VIDX(fi[jj], i, j, k)] += lapse * dFj;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+#else
+    (void)mesh;
+    (void)U;
+    (void)dUdt;
+#endif
+}
+
 void prj_src_update(prj_mesh *mesh, prj_eos *eos, double *restrict W,
     double *restrict U, double *restrict dUdt)
 {
     prj_src_geom(eos, W, dUdt);
     prj_src_user(eos, W, dUdt);
     prj_src_monopole_gravity(mesh, prj_gravity_active_monopole(), W, U, dUdt);
+    prj_src_radiation_vel_grad(mesh, U, dUdt);
 }

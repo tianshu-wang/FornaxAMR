@@ -52,6 +52,53 @@ void prj_rad_cons2prim(const double *U, double *W)
     }
 }
 
+/* Public M1 closure for the pressure tensor.  P^{ij} = E * D^{ij} with the
+ * Levermore Eddington tensor D^{ij} = a δ^{ij} + b n^i n^j, n = F/|F|, and
+ * χ(f) = (3 + 4f²)/(5 + 2√(4 - 3f²)), f = |F|/(c E).  Falls back to the
+ * isotropic limit P^{ij} = (E/3) δ^{ij} when |F| or E vanishes. */
+void prj_rad_m1_pressure(double E, double F1, double F2, double F3, double P[3][3])
+{
+    double Fmag;
+    double cE;
+    double f;
+    double chi;
+    double a_c;
+    double b_c;
+    double n[3];
+    int a;
+    int b;
+
+    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+
+    if (cE <= 0.0 || Fmag <= 0.0) {
+        double third = (E > 0.0 ? E : 0.0) / 3.0;
+
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                P[a][b] = (a == b) ? third : 0.0;
+            }
+        }
+        return;
+    }
+
+    f = Fmag / cE;
+    if (f > 1.0) {
+        f = 1.0;
+    }
+    chi = (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
+    a_c = 0.5 * (1.0 - chi);
+    b_c = 0.5 * (3.0 * chi - 1.0);
+    n[0] = F1 / Fmag;
+    n[1] = F2 / Fmag;
+    n[2] = F3 / Fmag;
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            P[a][b] = E * (a_c * (a == b ? 1.0 : 0.0) + b_c * n[a] * n[b]);
+        }
+    }
+}
+
 #if PRJ_NRAD > 0
 static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
     double *fE, double *fF1, double *fF2, double *fF3)
@@ -170,7 +217,7 @@ static void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
 #endif
 
 void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const prj_rad *rad,
-    const prj_grav_mono *grav_mono, const double *x_face, double dx_dir, double *flux)
+    const prj_grav_mono *grav_mono, const double *x_face, double dx_dir, double v_face, double *flux)
 {
     int field;
     int group;
@@ -275,6 +322,19 @@ void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const 
                     (sR * fLF2 - sL * fRF2 + sL * sR * (F2R - F2L)) / denom;
                 flux[PRJ_CONS_RAD_F3(field, group)] = lapse *
                     (sR * fLF3 - sL * fRF3 + sL * sR * (F3R - F3L)) / denom;
+
+                /* O(v/c) fluid advection: upwinded v_face * {E, F_i} term. */
+                {
+                    double E_up = v_face >= 0.0 ? EL : ER;
+                    double F1_up = v_face >= 0.0 ? F1L : F1R;
+                    double F2_up = v_face >= 0.0 ? F2L : F2R;
+                    double F3_up = v_face >= 0.0 ? F3L : F3R;
+
+                    flux[PRJ_CONS_RAD_E(field, group)] += lapse * v_face * E_up;
+                    flux[PRJ_CONS_RAD_F1(field, group)] += lapse * v_face * F1_up;
+                    flux[PRJ_CONS_RAD_F2(field, group)] += lapse * v_face * F2_up;
+                    flux[PRJ_CONS_RAD_F3(field, group)] += lapse * v_face * F3_up;
+                }
             }
         }
     }
@@ -628,7 +688,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             int idx = nu * PRJ_NEGROUP + g;
             double chi = kappa[idx] + sigma[idx] * (1.0 - delta[idx] / 3.0);
-            double factor = 1.0 / (1.0 + dt * lapse * chi) - 1.0;
+            double factor = 1.0 / (1.0 + dt * lapse * PRJ_CLIGHT * chi) - 1.0;
             int fi[3];
 
             fi[0] = PRJ_CONS_RAD_F1(nu, g);
@@ -667,6 +727,326 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
         }
     }
 }
+
+/* Koren slope-limiter function φ(r) = max(0, min(2r, (2+r)/3, 2)). */
+static double prj_rad_koren_phi(double r)
+{
+    double phi = 2.0 * r;
+    double t = (2.0 + r) / 3.0;
+
+    if (t < phi) {
+        phi = t;
+    }
+    if (2.0 < phi) {
+        phi = 2.0;
+    }
+    if (phi < 0.0) {
+        phi = 0.0;
+    }
+    return phi;
+}
+
+/* Reconstruct cell-value array q[] (one entry per energy group) at the right
+ * (side=+1) or left (side=-1) face of cell `gcell` using a Koren-limited linear
+ * stencil.  Energy groups are uniformly spaced in log ν, so equal-spaced
+ * samples are valid.  The two outermost cells (gcell == 0 or NEGROUP-1) fall
+ * back to piecewise constant — at those edges the outer face values are also
+ * forced to zero by the caller, so the choice has no effect on the update. */
+static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int side)
+{
+    double dqp;
+    double dqm;
+    double r;
+    double slope;
+
+    if (gcell <= 0 || gcell >= PRJ_NEGROUP - 1) {
+        return q[gcell];
+    }
+    dqp = q[gcell + 1] - q[gcell];
+    dqm = q[gcell] - q[gcell - 1];
+    if (dqp == 0.0) {
+        slope = 0.0;
+    } else {
+        r = dqm / dqp;
+        slope = prj_rad_koren_phi(r) * dqp;
+    }
+    return q[gcell] + 0.5 * (double)side * slope;
+}
+
+/* Apply the per-cell energy-space-flux part of the SR redshift terms
+ * (Eqs. 21a/21b of the comoving-frame mixed-frame moment equations):
+ *
+ *   ∂_t E_g    -= - v^i_{;j} [ (ν P^j_{νi})_{g+1/2} - (ν P^j_{νi})_{g-1/2} ]
+ *   ∂_t F_{gj} -= - v^i_{;k} [ (ν Q^k_{νji})_{g+1/2} - (ν Q^k_{νji})_{g-1/2} ]
+ *
+ * (Equivalently dE_g/dt += v^i_{;j} ΔνP^{ji} and dF_{gj}/dt += v^i_{;k} ΔνQ^{kji}.)
+ *
+ * The face values are picked by upwinding in frequency space according to
+ * Eq. 22:
+ *      pick L (right face of the lower group)  if v_{...} <  0,
+ *      pick R (left  face of the upper group)  if v_{...} >= 0.
+ *
+ * Closure choices:
+ *   - P^{ij}_g from the standard M1 Eddington tensor on cell-centred (E_g, F_g).
+ *   - Q^{kij}_g = (F^k_g / E_g) · P^{ij}_g.  Reduces to c E n^i n^j n^k in the
+ *     free-streaming limit and to 0 in equilibrium, matching the M1 hierarchy.
+ *
+ * Reconstruction: linear-in-log-ν with Koren limiter (groups are uniform in
+ * log ν → equal spacing).  Outermost group faces (g = -1/2 and g = NEGROUP-1/2)
+ * are set to zero (outflow).  The cell-centred state used for the closure comes
+ * from W_state (W in stage1, W1 in stage2), per the user-specified ordering. */
+void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
+    const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt)
+{
+#if PRJ_NRAD > 0
+    double dvdx[3][3];
+    double inv_dx[3];
+    int jdir;
+    int icomp;
+    int field;
+
+    if (rad == 0 || block == 0 || W_state == 0 || u == 0) {
+        return;
+    }
+    if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
+        return;
+    }
+
+    inv_dx[0] = 1.0 / block->dx[0];
+    inv_dx[1] = 1.0 / block->dx[1];
+    inv_dx[2] = 1.0 / block->dx[2];
+
+    /* Cell-centred ∂_jdir v_icomp from the two normal-direction Riemann faces. */
+    for (jdir = 0; jdir < 3; ++jdir) {
+        for (icomp = 0; icomp < 3; ++icomp) {
+            int il = ic;
+            int jl = jc;
+            int kl = kc;
+            int ir = ic;
+            int jr = jc;
+            int kr = kc;
+            double vL;
+            double vR;
+
+            if (jdir == X1DIR) {
+                ir = ic + 1;
+            } else if (jdir == X2DIR) {
+                jr = jc + 1;
+            } else {
+                kr = kc + 1;
+            }
+            vL = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(il, jl, kl)];
+            vR = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(ir, jr, kr)];
+            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+        }
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        double Eg[PRJ_NEGROUP];
+        double Fg[PRJ_NEGROUP][3];
+        double Pg[PRJ_NEGROUP][3][3];
+        double dE_acc[PRJ_NEGROUP];
+        double dF_acc[PRJ_NEGROUP][3];
+        const double *nu_face = rad->eedge[field];
+        int g;
+        int ii;
+        int jj;
+        int kk;
+
+        /* Per-group cell-centred state and M1 pressure tensor. */
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            Eg[g] = W_state[VIDX(PRJ_PRIM_RAD_E(field, g), ic, jc, kc)];
+            Fg[g][0] = W_state[VIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
+            Fg[g][1] = W_state[VIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
+            Fg[g][2] = W_state[VIDX(PRJ_PRIM_RAD_F3(field, g), ic, jc, kc)];
+            prj_rad_m1_pressure(Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
+            dE_acc[g] = 0.0;
+            dF_acc[g][0] = 0.0;
+            dF_acc[g][1] = 0.0;
+            dF_acc[g][2] = 0.0;
+        }
+
+        /* Energy: dE_g/dt += Σ_{i,j} v^i_{;j} · [(ν P^{ji})_{g+1/2} - (ν P^{ji})_{g-1/2}]. */
+        for (jj = 0; jj < 3; ++jj) {
+            for (ii = 0; ii < 3; ++ii) {
+                double vij = dvdx[jj][ii];
+                double q[PRJ_NEGROUP];
+                double face_val[PRJ_NEGROUP + 1];
+                int gf;
+
+                if (vij == 0.0) {
+                    continue;
+                }
+                for (g = 0; g < PRJ_NEGROUP; ++g) {
+                    q[g] = Pg[g][jj][ii];
+                }
+
+                face_val[0] = 0.0;
+                face_val[PRJ_NEGROUP] = 0.0;
+                for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                    /* Face gf sits between cells gf-1 (lower ν) and gf (upper ν). */
+                    double pick = (vij >= 0.0)
+                        ? prj_rad_recon_face(q, gf, -1)      /* R: left edge of cell gf  */
+                        : prj_rad_recon_face(q, gf - 1, +1); /* L: right edge of cell gf-1 */
+                    face_val[gf] = nu_face[gf] * pick;
+                }
+
+                for (g = 0; g < PRJ_NEGROUP; ++g) {
+                    dE_acc[g] += vij * (face_val[g + 1] - face_val[g]);
+                }
+            }
+        }
+
+        /* Flux: dF_{gj}/dt += Σ_{i,k} v^i_{;k} · [(ν Q^{kji})_{g+1/2} - (ν Q^{kji})_{g-1/2}].
+         * Closure: Q^{kji}_g = (F^k_g / E_g) · P^{ji}_g. */
+        for (jj = 0; jj < 3; ++jj) {
+            for (kk = 0; kk < 3; ++kk) {
+                for (ii = 0; ii < 3; ++ii) {
+                    double vik = dvdx[kk][ii];
+                    double q[PRJ_NEGROUP];
+                    double face_val[PRJ_NEGROUP + 1];
+                    int gf;
+
+                    if (vik == 0.0) {
+                        continue;
+                    }
+                    for (g = 0; g < PRJ_NEGROUP; ++g) {
+                        double E_safe = Eg[g] > 0.0 ? Eg[g] : 1.0e-300;
+
+                        q[g] = (Fg[g][kk] / E_safe) * Pg[g][jj][ii];
+                    }
+
+                    face_val[0] = 0.0;
+                    face_val[PRJ_NEGROUP] = 0.0;
+                    for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                        double pick = (vik >= 0.0)
+                            ? prj_rad_recon_face(q, gf, -1)
+                            : prj_rad_recon_face(q, gf - 1, +1);
+                        face_val[gf] = nu_face[gf] * pick;
+                    }
+
+                    for (g = 0; g < PRJ_NEGROUP; ++g) {
+                        dF_acc[g][jj] += vik * (face_val[g + 1] - face_val[g]);
+                    }
+                }
+            }
+        }
+
+        /* GR ε-flux pieces of G^e and G^m_j (the ∂_ε terms only):
+         *   G^e          = -F_{sε}·∇φ/c² + (∇φ/c²) · ∂_ε(ε F_{sε})
+         *   G^m_j        = -E_{sε} ∇_jφ + ∇_iφ · ∂_ε(ε P^i_{sεj})
+         * G is on the source-side (RHS) of the moment equations, so when added
+         * to ∂_t E_g / ∂_t F_{gj} it carries an overall minus sign:
+         *   ∂_t E_g    -= (∇_i φ / c²) · [(εF^i)_{g+1/2} - (εF^i)_{g-1/2}]
+         *   ∂_t F_{gj} -= (∇_i φ)      · [(εP^{ij})_{g+1/2} - (εP^{ij})_{g-1/2}]
+         * (sums over i; the −F_{sε}·∇φ/c² and −E_{sε}∇_jφ pieces are NOT done
+         * here per user request).
+         *
+         * Upwind in ε-space follows the same Eq. 22 rule, using the per-i
+         * coefficient that multiplies the ε-flux divergence as the "speed":
+         *   pick L if coef <  0,  pick R if coef >= 0.
+         *
+         * ∇_i φ at the cell centre comes from the active monopole gravity:
+         * gravitational acceleration a_i = accel(r) · x_i/r, and ∇φ = −a. */
+        {
+            const prj_grav_mono *gm = prj_gravity_active_monopole();
+            double xc1 = block->xmin[0] + ((double)ic + 0.5) * block->dx[0];
+            double xc2 = block->xmin[1] + ((double)jc + 0.5) * block->dx[1];
+            double xc3 = block->xmin[2] + ((double)kc + 0.5) * block->dx[2];
+            double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
+            double grad_phi[3];
+            double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
+
+            grad_phi[0] = 0.0;
+            grad_phi[1] = 0.0;
+            grad_phi[2] = 0.0;
+            if (gm != 0 && r_cell > 0.0) {
+                double accel = prj_gravity_interp_accel(gm, r_cell);
+
+                grad_phi[0] = -accel * xc1 / r_cell;
+                grad_phi[1] = -accel * xc2 / r_cell;
+                grad_phi[2] = -accel * xc3 / r_cell;
+            }
+
+            /* Energy: per i, scalar q[g] = F^i_g, coef = −(∇_i φ)/c². */
+            for (ii = 0; ii < 3; ++ii) {
+                double coef = -grad_phi[ii] * inv_c2;
+                double q[PRJ_NEGROUP];
+                double face_val[PRJ_NEGROUP + 1];
+                int gf;
+
+                if (coef == 0.0) {
+                    continue;
+                }
+                for (g = 0; g < PRJ_NEGROUP; ++g) {
+                    q[g] = Fg[g][ii];
+                }
+                face_val[0] = 0.0;
+                face_val[PRJ_NEGROUP] = 0.0;
+                for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                    double pick = (coef >= 0.0)
+                        ? prj_rad_recon_face(q, gf, -1)
+                        : prj_rad_recon_face(q, gf - 1, +1);
+                    face_val[gf] = nu_face[gf] * pick;
+                }
+                for (g = 0; g < PRJ_NEGROUP; ++g) {
+                    dE_acc[g] += coef * (face_val[g + 1] - face_val[g]);
+                }
+            }
+
+            /* Flux j: per (i, j), scalar q[g] = P^{ij}_g, coef = −∇_i φ. */
+            for (jj = 0; jj < 3; ++jj) {
+                for (ii = 0; ii < 3; ++ii) {
+                    double coef = -grad_phi[ii];
+                    double q[PRJ_NEGROUP];
+                    double face_val[PRJ_NEGROUP + 1];
+                    int gf;
+
+                    if (coef == 0.0) {
+                        continue;
+                    }
+                    for (g = 0; g < PRJ_NEGROUP; ++g) {
+                        q[g] = Pg[g][ii][jj];
+                    }
+                    face_val[0] = 0.0;
+                    face_val[PRJ_NEGROUP] = 0.0;
+                    for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                        double pick = (coef >= 0.0)
+                            ? prj_rad_recon_face(q, gf, -1)
+                            : prj_rad_recon_face(q, gf - 1, +1);
+                        face_val[gf] = nu_face[gf] * pick;
+                    }
+                    for (g = 0; g < PRJ_NEGROUP; ++g) {
+                        dF_acc[g][jj] += coef * (face_val[g + 1] - face_val[g]);
+                    }
+                }
+            }
+        }
+
+        /* Apply.  dt is the effective stage weight (full dt in stage1, 0.5·dt
+         * in stage2 to match the RK2-Heun mixing of dUdt).  The lapse factor
+         * α(r) accounts for the GR proper-time slowdown in the gravitational
+         * well, consistent with the lapse multipliers already on the spatial
+         * radiation flux and on the gravity source. */
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            u[PRJ_CONS_RAD_E(field, g)] += lapse * dt * dE_acc[g];
+            u[PRJ_CONS_RAD_F1(field, g)] += lapse * dt * dF_acc[g][0];
+            u[PRJ_CONS_RAD_F2(field, g)] += lapse * dt * dF_acc[g][1];
+            u[PRJ_CONS_RAD_F3(field, g)] += lapse * dt * dF_acc[g][2];
+        }
+    }
+#else
+    (void)rad;
+    (void)block;
+    (void)W_state;
+    (void)u;
+    (void)ic;
+    (void)jc;
+    (void)kc;
+    (void)dt;
+#endif
+}
+
 #else
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
 {
@@ -686,5 +1066,19 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     (void)dt;
     (void)lapse;
     (void)temperature;
+}
+
+void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
+    const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt)
+{
+    (void)rad;
+    (void)block;
+    (void)W_state;
+    (void)u;
+    (void)ic;
+    (void)jc;
+    (void)kc;
+    (void)lapse;
+    (void)dt;
 }
 #endif

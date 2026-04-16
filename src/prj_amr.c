@@ -1127,6 +1127,9 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
             child->flux[0] = 0;
             child->flux[1] = 0;
             child->flux[2] = 0;
+            child->v_riemann[0] = 0;
+            child->v_riemann[1] = 0;
+            child->v_riemann[2] = 0;
             prj_block_setup_geometry(child, &mesh->coord);
         }
         parent->children[oct] = id;

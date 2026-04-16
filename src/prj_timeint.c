@@ -197,6 +197,11 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         {
                             double T_cell;
                             double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
+                            /* Energy-space-flux part of SR redshift (Eqs. 21a/21b),
+                             * applied to u1 before the stiff matter-coupling step.
+                             * Stage1: closure built from W (cell-centred state at
+                             * the start of the step), full dt weight. */
+                            prj_rad_freq_flux_apply(rad, block, block->W, u1, i, j, k, lapse_cell, dt);
                             prj_rad_energy_update(rad, eos, u1, dt, lapse_cell, &T_cell);
                             prj_rad_momentum_update(rad, eos, u1, dt, lapse_cell, T_cell);
                         }
@@ -265,6 +270,11 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         {
                             double T_cell;
                             double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
+                            /* Energy-space-flux part of SR redshift (Eqs. 21a/21b),
+                             * applied to the post-average u before the stiff step.
+                             * Stage2: closure from W1 (post-stage1 state); the 0.5·dt
+                             * weight matches the RK2-Heun mixing of dUdt above. */
+                            prj_rad_freq_flux_apply(rad, block, block->W1, u, i, j, k, lapse_cell, 0.5 * dt);
                             prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
                             prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
                         }
