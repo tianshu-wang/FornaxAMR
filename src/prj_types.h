@@ -125,6 +125,8 @@ struct prj_grav_mono {
 
 struct prj_rad {
     char filename[100];
+    int maxiter;
+    double implicit_err_tol;
 #if PRJ_NRAD > 0
     double emin[PRJ_NRAD];
     double emax[PRJ_NRAD];

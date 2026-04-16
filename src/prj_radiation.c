@@ -1,3 +1,6 @@
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "prj.h"
@@ -87,3 +90,308 @@ void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const 
         }
     }
 }
+
+#if PRJ_NRAD > 0
+static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
+    double dt, double lapse, double rho, double Uint_old, double Ye_old,
+    const double *E_nu_old, double T, double Ye, double *F1, double *F2,
+    double *E_nu_new_out)
+{
+    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double sigma[PRJ_NRAD * PRJ_NEGROUP];
+    double delta[PRJ_NRAD * PRJ_NEGROUP];
+    double eta[PRJ_NRAD * PRJ_NEGROUP];
+    double eos_q[PRJ_EOS_NQUANT];
+    double eint_new;
+    double Uint_new;
+    double sum_dE = 0.0;
+    double sum_dE_xe = 0.0;
+    int nu;
+    int g;
+
+    (void)u;
+    prj_rad3_opac_lookup(rad, rho, T, Ye, kappa, sigma, delta, eta);
+    prj_eos_rty(eos, rho, T, Ye, eos_q);
+    eint_new = eos_q[PRJ_EOS_EINT];
+    Uint_new = rho * eint_new;
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            int idx = nu * PRJ_NEGROUP + g;
+            double num = E_nu_old[idx] + dt * lapse * eta[idx];
+            double den = 1.0 + dt * lapse * PRJ_CLIGHT * kappa[idx];
+            double Enew = num / den;
+            double dE = Enew - E_nu_old[idx];
+
+            sum_dE += dE;
+            sum_dE_xe += dE * rad->x_e[nu][g];
+            if (E_nu_new_out != 0) {
+                E_nu_new_out[idx] = Enew;
+            }
+        }
+    }
+
+    *F1 = Uint_new - Uint_old + sum_dE;
+    *F2 = rho * Ye - rho * Ye_old + sum_dE_xe;
+}
+
+void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse)
+{
+    double E_nu_old[PRJ_NRAD * PRJ_NEGROUP];
+    double E_nu_new[PRJ_NRAD * PRJ_NEGROUP];
+    double rho;
+    double KE;
+    double Uint_old;
+    double Ye_old;
+    double eint_old;
+    double eos_q[PRJ_EOS_NQUANT];
+    double T;
+    double Ye;
+    double err_scale_1;
+    double err_scale_2;
+    double res_cur;
+    int iter;
+    int nu;
+    int g;
+    const double alpha_ls = 1.0e-4;
+
+    rho = u[PRJ_CONS_RHO];
+    KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
+        u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
+        u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
+    Uint_old = u[PRJ_CONS_ETOT] - KE;
+    Ye_old = u[PRJ_CONS_YE] / rho;
+    eint_old = Uint_old / rho;
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            E_nu_old[nu * PRJ_NEGROUP + g] = u[PRJ_CONS_RAD_E(nu, g)];
+        }
+    }
+
+    prj_eos_rey(eos, rho, eint_old, Ye_old, eos_q);
+    T = eos_q[PRJ_EOS_TEMPERATURE];
+    Ye = Ye_old;
+    err_scale_1 = fabs(Uint_old) > 0.0 ? Uint_old : 1.0;
+    err_scale_2 = fabs(rho * Ye_old) > 0.0 ? rho * Ye_old : 1.0;
+    res_cur = 1.0e30;
+
+    for (iter = 0; iter < rad->maxiter; ++iter) {
+        double F1;
+        double F2;
+        double F1_p;
+        double F2_p;
+        double f1;
+        double f2;
+        double hT;
+        double hY;
+        double dFdT_1;
+        double dFdT_2;
+        double dFdY_1;
+        double dFdY_2;
+        double J00;
+        double J01;
+        double J10;
+        double J11;
+        double r0;
+        double r1;
+        double col_scale0;
+        double col_scale1;
+        double det;
+        double s0;
+        double s1;
+        double dT;
+        double dY;
+        double step_scale;
+        double gradf0;
+        double gradf1;
+        double gradfdx;
+        double lam;
+        double lamold;
+        double resold;
+        double Ttrial;
+        double Ytrial;
+        double res_trial;
+        int inner_iter;
+
+        prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+            E_nu_old, T, Ye, &F1, &F2, E_nu_new);
+        f1 = F1 / err_scale_1;
+        f2 = F2 / err_scale_2;
+        res_cur = 0.5 * (f1 * f1 + f2 * f2);
+
+        /* Jacobian via finite differences with power-of-2 step. */
+        hT = 3.0e-8 * T;
+        hT = pow(2.0, round(log(hT) / log(2.0)));
+        hY = 3.0e-8 * Ye;
+        hY = pow(2.0, round(log(hY) / log(2.0)));
+
+        prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+            E_nu_old, T + hT, Ye, &F1_p, &F2_p, 0);
+        dFdT_1 = (F1_p - F1) / hT;
+        dFdT_2 = (F2_p - F2) / hT;
+
+        prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+            E_nu_old, T, Ye + hY, &F1_p, &F2_p, 0);
+        dFdY_1 = (F1_p - F1) / hY;
+        dFdY_2 = (F2_p - F2) / hY;
+
+        /* grad(½||F||²) = J^T F  (unscaled, for line search). */
+        gradf0 = dFdT_1 * F1 / (err_scale_1 * err_scale_1) +
+            dFdT_2 * F2 / (err_scale_2 * err_scale_2);
+        gradf1 = dFdY_1 * F1 / (err_scale_1 * err_scale_1) +
+            dFdY_2 * F2 / (err_scale_2 * err_scale_2);
+
+        /* Row-max equilibration on the augmented matrix [J | -F]. */
+        J00 = dFdT_1; J01 = dFdY_1; r0 = F1;
+        J10 = dFdT_2; J11 = dFdY_2; r1 = F2;
+        {
+            double row_max;
+
+            row_max = fabs(J00) > fabs(J01) ? fabs(J00) : fabs(J01);
+            if (row_max == 0.0) row_max = 1.0e-10;
+            J00 /= row_max; J01 /= row_max; r0 /= row_max;
+
+            row_max = fabs(J10) > fabs(J11) ? fabs(J10) : fabs(J11);
+            if (row_max == 0.0) row_max = 1.0e-10;
+            J10 /= row_max; J11 /= row_max; r1 /= row_max;
+        }
+        /* Column-max equilibration. */
+        col_scale0 = fabs(J00) > fabs(J10) ? fabs(J00) : fabs(J10);
+        col_scale1 = fabs(J01) > fabs(J11) ? fabs(J01) : fabs(J11);
+        if (col_scale0 == 0.0) col_scale0 = 1.0e-16;
+        if (col_scale1 == 0.0) col_scale1 = 1.0e-16;
+        J00 /= col_scale0; J10 /= col_scale0;
+        J01 /= col_scale1; J11 /= col_scale1;
+
+        /* Negate RHS for Newton step. */
+        r0 = -r0;
+        r1 = -r1;
+
+        /* 2x2 Cramer solve. */
+        det = J00 * J11 - J01 * J10;
+        if (fabs(det) < 1.0e-30) {
+            fprintf(stderr, "prj_rad_implicit_update: singular Jacobian at iter=%d\n", iter);
+            exit(1);
+        }
+        s0 = (J11 * r0 - J01 * r1) / det;
+        s1 = (-J10 * r0 + J00 * r1) / det;
+
+        /* Undo column scaling. */
+        dT = s0 / col_scale0;
+        dY = s1 / col_scale1;
+
+        /* Step limiter: cap at 3% of current values. */
+        step_scale = 1.0;
+        if (fabs(dT) > 0.03 * T) {
+            step_scale = 0.03 * T / fabs(dT);
+        }
+        if (fabs(dY) > 0.03 * Ye && 0.03 * Ye / fabs(dY) < step_scale) {
+            step_scale = 0.03 * Ye / fabs(dY);
+        }
+        dT *= step_scale;
+        dY *= step_scale;
+
+        /* Directional derivative for Armijo check. */
+        gradfdx = gradf0 * dT + gradf1 * dY;
+
+        /* Backtracking line search with cubic/quadratic interpolation. */
+        lam = 1.0;
+        lamold = 0.0;
+        resold = 0.0;
+        for (inner_iter = 0; inner_iter < 6; ++inner_iter) {
+            double F1t;
+            double F2t;
+            double ft1;
+            double ft2;
+
+            Ttrial = T + lam * dT;
+            Ytrial = Ye + lam * dY;
+            prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+                E_nu_old, Ttrial, Ytrial, &F1t, &F2t, E_nu_new);
+            ft1 = F1t / err_scale_1;
+            ft2 = F2t / err_scale_2;
+            res_trial = 0.5 * (ft1 * ft1 + ft2 * ft2);
+
+            if (res_trial < rad->implicit_err_tol * rad->implicit_err_tol ||
+                res_trial < res_cur + alpha_ls * lam * gradfdx) {
+                break;
+            }
+
+            {
+                double templam;
+
+                if (inner_iter == 0) {
+                    templam = -gradfdx / (2.0 * (res_trial - res_cur - gradfdx));
+                } else {
+                    double rhs1 = res_trial - res_cur - lam * gradfdx;
+                    double rhs2 = resold - res_cur - lamold * gradfdx;
+                    double a_c = (rhs1 / (lam * lam) - rhs2 / (lamold * lamold)) / (lam - lamold);
+                    double b_c = (-lamold * rhs1 / (lam * lam) + lam * rhs2 / (lamold * lamold)) / (lam - lamold);
+
+                    if (a_c == 0.0) {
+                        templam = -gradfdx / (2.0 * b_c);
+                    } else {
+                        double disc = b_c * b_c - 3.0 * a_c * gradfdx;
+
+                        templam = disc >= 0.0 ? (-b_c + sqrt(disc)) / (3.0 * a_c) : 0.5 * lam;
+                    }
+                    if (templam > 0.5 * lam) {
+                        templam = 0.5 * lam;
+                    }
+                }
+                lamold = lam;
+                resold = res_trial;
+                lam = templam > 0.1 * lam ? templam : 0.1 * lam;
+            }
+        }
+
+        T = T + lam * dT;
+        Ye = Ye + lam * dY;
+        if (T <= 0.0) {
+            T = 0.5 * (T - lam * dT);
+        }
+
+        /* Convergence: residual norm AND step-size test. */
+        if (res_trial < rad->implicit_err_tol * rad->implicit_err_tol &&
+            fabs(lam * dT / T) < rad->implicit_err_tol &&
+            fabs(lam * dY / Ye) < rad->implicit_err_tol) {
+            res_cur = res_trial;
+            break;
+        }
+        res_cur = res_trial;
+    }
+    if (iter == rad->maxiter) {
+        fprintf(stderr, "prj_rad_implicit_update: failed to converge (res=%e)\n", res_cur);
+        exit(1);
+    }
+
+    /* Final pass at converged (T, Ye) to populate E_nu_new. */
+    {
+        double F1_final;
+        double F2_final;
+        double eint_new;
+
+        prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+            E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new);
+        prj_eos_rty(eos, rho, T, Ye, eos_q);
+        eint_new = eos_q[PRJ_EOS_EINT];
+        u[PRJ_CONS_ETOT] = rho * eint_new + KE;
+        u[PRJ_CONS_YE] = rho * Ye;
+        for (nu = 0; nu < PRJ_NRAD; ++nu) {
+            for (g = 0; g < PRJ_NEGROUP; ++g) {
+                u[PRJ_CONS_RAD_E(nu, g)] = E_nu_new[nu * PRJ_NEGROUP + g];
+            }
+        }
+    }
+}
+#else
+void prj_rad_implicit_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse)
+{
+    (void)rad;
+    (void)eos;
+    (void)u;
+    (void)dt;
+    (void)lapse;
+}
+#endif

@@ -178,6 +178,8 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.E_floor = -1.0;
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
+    sim->rad.maxiter = 20;
+    sim->rad.implicit_err_tol = 1.0e-6;
 }
 
 void prj_io_parser(prj_sim *sim, char *filename)
@@ -322,6 +324,10 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
             sim->eos.kind = PRJ_EOS_KIND_TABLE;
             endptr = value + strlen(value);
+        } else if (strcmp(key, "rad_maxiter") == 0) {
+            sim->rad.maxiter = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "rad_implicit_err_tol") == 0) {
+            sim->rad.implicit_err_tol = strtod(value, &endptr);
 #if PRJ_NRAD > 0
         } else if (strcmp(key, "rad_table_param_file") == 0) {
             strncpy(sim->rad.table_param_file, value, sizeof(sim->rad.table_param_file) - 1);

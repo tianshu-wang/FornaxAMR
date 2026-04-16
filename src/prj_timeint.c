@@ -2,6 +2,36 @@
 
 #include "prj.h"
 
+#if PRJ_NRAD > 0
+static double prj_timeint_cell_lapse(const prj_block *block, int i, int j, int k)
+{
+    const prj_grav_mono *gm = prj_gravity_active_monopole();
+    double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+    double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+    double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+    double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
+    int idx;
+
+    if (gm == 0 || gm->nbins <= 0 || gm->lapse == 0) {
+        return 1.0;
+    }
+    if (r <= gm->rf[0]) {
+        return gm->lapse[0];
+    }
+    for (idx = 0; idx < gm->nbins; ++idx) {
+        double r0 = gm->rf[idx];
+        double r1 = gm->rf[idx + 1];
+
+        if (r <= r1) {
+            double w = (r - r0) / (r1 - r0);
+
+            return (1.0 - w) * gm->lapse[idx] + w * gm->lapse[idx + 1];
+        }
+    }
+    return gm->lapse[gm->nbins];
+}
+#endif
+
 static int prj_timeint_local_block(const prj_block *block)
 {
     prj_mpi *mpi = prj_mpi_current();
@@ -163,6 +193,10 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u1[v] = u[v] + dt * block->dUdt[VIDX(v, i, j, k)];
                         }
+#if PRJ_NRAD > 0
+                        prj_rad_implicit_update(rad, eos, u1, dt,
+                            prj_timeint_cell_lapse(block, i, j, k));
+#endif
                         prj_eos_cons2prim(eos, u1, w);
                         prj_timeint_apply_eint_floor(mesh, u1, w);
                         prj_timeint_cell_cons_store(block->U, i, j, k, u1);
@@ -223,6 +257,10 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u[v] = 0.5 * u[v] + 0.5 * (u1[v] + dt * block->dUdt[VIDX(v, i, j, k)]);
                         }
+#if PRJ_NRAD > 0
+                        prj_rad_implicit_update(rad, eos, u, dt,
+                            prj_timeint_cell_lapse(block, i, j, k));
+#endif
                         prj_eos_cons2prim(eos, u, w);
                         prj_timeint_apply_eint_floor(mesh, u, w);
                         prj_timeint_cell_cons_store(block->U, i, j, k, u);
