@@ -29,6 +29,23 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     return prj_problem_general;
 }
 
+static void prj_prepare_restart_problem(prj_sim *sim, prj_problem_init_fn init_fn)
+{
+    static const char *cc_eos_path =
+        "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat";
+
+    if (sim == 0) {
+        return;
+    }
+    if (init_fn == prj_problem_cc &&
+        sim->eos.kind == PRJ_EOS_KIND_TABLE &&
+        sim->eos.filename[0] == '\0') {
+        strncpy(sim->eos.filename, cc_eos_path, sizeof(sim->eos.filename) - 1);
+        sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
+    }
+    prj_eos_init(&sim->eos);
+}
+
 static void prj_copy_file(const char *src, const char *dst)
 {
     FILE *fin = fopen(src, "rb");
@@ -210,10 +227,14 @@ int main(int argc, char *argv[])
     init_with_mpi = (init_fn == prj_problem_cc);
     prj_mpi_init(&argc, &argv, &mpi);
     prj_print_config(&sim, mpi.rank);
-    init_fn(&sim);
-    if (!init_with_mpi) {
-        prj_mpi_decompose(&sim.mesh);
-        prj_mpi_prepare(&sim.mesh, &mpi);
+    if (sim.restart_from_file == 0) {
+        init_fn(&sim);
+        if (!init_with_mpi) {
+            prj_mpi_decompose(&sim.mesh);
+            prj_mpi_prepare(&sim.mesh, &mpi);
+        }
+    } else {
+        prj_prepare_restart_problem(&sim, init_fn);
     }
     if (mpi.rank == 0) {
         mkdir("output", 0777);
@@ -229,8 +250,8 @@ int main(int argc, char *argv[])
         saved_amr_eps = sim.mesh.amr_eps;
         saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
         saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
-        prj_mesh_destroy(&sim.mesh);
-        prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count);
+        prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
+            &next_output_time, &next_restart_time);
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
@@ -242,20 +263,31 @@ int main(int argc, char *argv[])
         sim.mesh.amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
         prj_print_config(&sim, mpi.rank);
     }
-    prj_mesh_mark_base_blocks(&sim.mesh);
+    if (sim.restart_from_file == 0) {
+        prj_mesh_mark_base_blocks(&sim.mesh);
+    }
     prj_rad_init(&sim.rad);
  #if PRJ_USE_GRAVITY
     prj_gravity_init(&sim);
  #endif
-    prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-    prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
-    prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
-    sim.dump_count += 1;
-    if (sim.output_dt >= 0.0) {
-        next_output_time = sim.time + sim.output_dt;
-    }
-    if (sim.restart_dt >= 0.0) {
-        next_restart_time = sim.time + sim.restart_dt;
+    if (sim.restart_from_file == 0) {
+        prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+        prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+        prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
+        sim.dump_count += 1;
+        if (sim.output_dt >= 0.0) {
+            next_output_time = sim.time + sim.output_dt;
+        }
+        if (sim.restart_dt >= 0.0) {
+            next_restart_time = sim.time + sim.restart_dt;
+        }
+    } else {
+        if (sim.output_dt >= 0.0 && next_output_time < 0.0) {
+            next_output_time = sim.time + sim.output_dt;
+        }
+        if (sim.restart_dt >= 0.0 && next_restart_time < 0.0) {
+            next_restart_time = sim.time + sim.restart_dt;
+        }
     }
 
     struct timeval wall_start;
@@ -327,7 +359,8 @@ int main(int argc, char *argv[])
             sim.dump_count += 1;
         }
         if (write_restart) {
-            prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count);
+            prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
+                next_output_time, next_restart_time);
         }
         if (mpi.rank == 0) {
             struct timeval wall_now;
@@ -353,7 +386,8 @@ int main(int argc, char *argv[])
         }
     }
 
-    prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count);
+    prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
+        next_output_time, next_restart_time);
     if (mpi.rank == 0) {
         char final_restart[64];
 

@@ -611,6 +611,16 @@ static int prj_io_read_attr_int_optional(hid_t obj, const char *name, int defaul
     return value;
 }
 
+static double prj_io_read_attr_double_optional(hid_t obj, const char *name, double default_value)
+{
+    double value = default_value;
+
+    if (H5Aexists(obj, name) > 0) {
+        prj_io_read_attr_double(obj, name, &value);
+    }
+    return value;
+}
+
 static void prj_io_read_attr_int3(hid_t obj, const char *name, int values[3])
 {
     hid_t attr = H5Aopen(obj, name, H5P_DEFAULT);
@@ -719,7 +729,8 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
     }
 }
 
-void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count)
+void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count,
+    double next_output_time, double next_restart_time)
 {
     char filename[64];
     hid_t file;
@@ -744,6 +755,8 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     prj_io_write_attr_double(file, "time", time);
     prj_io_write_attr_int(file, "step", step);
     prj_io_write_attr_int(file, "dump_count", dump_count);
+    prj_io_write_attr_double(file, "next_output_time", next_output_time);
+    prj_io_write_attr_double(file, "next_restart_time", next_restart_time);
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
@@ -814,7 +827,8 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     H5Fclose(file);
 }
 
-void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename, double *time, int *step, int *dump_count)
+void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename,
+    double *time, int *step, int *dump_count, double *next_output_time, double *next_restart_time)
 {
     hid_t file;
     hid_t dset_data;
@@ -839,6 +853,12 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     prj_io_read_attr_int(file, "step", step);
     if (dump_count != 0) {
         *dump_count = prj_io_read_attr_int_optional(file, "dump_count", 0);
+    }
+    if (next_output_time != 0) {
+        *next_output_time = prj_io_read_attr_double_optional(file, "next_output_time", -1.0);
+    }
+    if (next_restart_time != 0) {
+        *next_restart_time = prj_io_read_attr_double_optional(file, "next_restart_time", -1.0);
     }
     prj_io_read_attr_int(file, "nblocks", &nblocks);
     prj_io_read_attr_int(file, "nvar_prim", &nvar_prim);
