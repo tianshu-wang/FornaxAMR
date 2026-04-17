@@ -578,6 +578,28 @@ static double prj_amr_cell_indicator_for_estimator(
     return prj_loehner_cell_indicator(mesh, b, eos, i, j, k);
 }
 
+int prj_amr_criteria_need_eosvar(const prj_mesh *mesh)
+{
+    int amr_idx;
+
+    if (mesh == 0) {
+        return 0;
+    }
+
+    for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+        int estimator;
+
+        if (mesh->amr_criterion_set[amr_idx] == 0) {
+            continue;
+        }
+        estimator = mesh->amr_estimator[amr_idx];
+        if (estimator != PRJ_AMR_ESTIMATOR_DENSITY_JUMP) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int prj_has_face_neighbor_coarser_than(const prj_mesh *mesh, const prj_block *b, int min_level)
 {
     int n;
@@ -1193,7 +1215,6 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
         return;
     }
 
-    prj_eos_fill_mesh(mesh, eos, 1);
     prj_amr_tag(mesh, eos);
     prj_amr_sync_refine_flags(mesh);
     prj_amr_enforce_two_to_one(mesh);
