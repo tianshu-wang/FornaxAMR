@@ -104,7 +104,9 @@ static void prj_problem_fill_until_amr_converged(prj_sim *sim)
 
     do {
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
+        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
         prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
+        prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
         prj_amr_adapt(&sim->mesh, &sim->eos);
         prj_problem_fill_mesh(sim, prj_problem_initial_condition);
         next_sig = prj_problem_mesh_signature(&sim->mesh);

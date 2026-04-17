@@ -271,6 +271,7 @@ int main(int argc, char *argv[])
     prj_gravity_init(&sim);
  #endif
     if (sim.restart_from_file == 0) {
+        prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
         prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
         prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
         prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
@@ -328,12 +329,16 @@ int main(int argc, char *argv[])
         sim.time += dt_step;
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
+            if (prj_amr_criteria_need_eosvar(&sim.mesh)) {
+                prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
+            }
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             if (prj_amr_criteria_need_eosvar(&sim.mesh)) {
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
             }
             prj_amr_adapt(&sim.mesh, &sim.eos);
             prj_mpi_rebalance(&sim.mesh);
+            prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
 #if PRJ_USE_GRAVITY
@@ -367,6 +372,7 @@ int main(int argc, char *argv[])
             }
         }
         if (write_output) {
+            prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
             prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);

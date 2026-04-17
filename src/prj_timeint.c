@@ -128,6 +128,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
+    prj_eos_fill_active_cells(mesh, eos, 1);
     prj_boundary_fill_ghosts(mesh, bc, 1);
     prj_eos_fill_mesh(mesh, eos, 1);
     prj_gravity_monopole_reduce(mesh, 1);
@@ -199,6 +200,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
+    prj_eos_fill_active_cells(mesh, eos, 2);
     prj_boundary_fill_ghosts(mesh, bc, 2);
     prj_eos_fill_mesh(mesh, eos, 2);
     prj_gravity_monopole_reduce(mesh, 2);
@@ -265,7 +267,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             }
         }
     }
-    prj_eos_fill_mesh(mesh, eos, 1);
+    prj_eos_fill_active_cells(mesh, eos, 1);
 }
 
 void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos, prj_rad *rad, double dt)

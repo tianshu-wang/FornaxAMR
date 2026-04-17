@@ -122,23 +122,23 @@ static int prj_boundary_sample_kind(const prj_block *block, double x1, double x2
     abort();
 }
 
-static double prj_boundary_read_prim(const double *src, int var, int i, int j, int k)
+static double prj_boundary_read_value(const double *src, int var, int i, int j, int k, int is_eosvar)
 {
     if (i < -PRJ_NGHOST || i >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
         j < -PRJ_NGHOST || j >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
         k < -PRJ_NGHOST || k >= PRJ_BLOCK_SIZE + PRJ_NGHOST) {
         fprintf(stderr,
-            "prj_boundary_read_prim: out-of-range access var=%d i=%d j=%d k=%d "
+            "prj_boundary_read_value: out-of-range access var=%d i=%d j=%d k=%d "
             "(valid [%d, %d])\n",
             var, i, j, k, -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST - 1);
         exit(EXIT_FAILURE);
     }
-    return src[VIDX(var, i, j, k)];
+    return src[is_eosvar != 0 ? EIDX(var, i, j, k) : VIDX(var, i, j, k)];
 }
 
-void prj_boundary_get_prim(const prj_block *block, int stage, double x1, double x2, double x3, double *w)
+static void prj_boundary_get_values(const prj_block *block, const double *src, int nvar, int is_eosvar,
+    const char *label, double x1, double x2, double x3, double *dst)
 {
-    const double *src = prj_boundary_stage_array_const(block, stage);
     double ox[3];
     double frac[3];
     int cases[3];
@@ -164,17 +164,17 @@ void prj_boundary_get_prim(const prj_block *block, int stage, double x1, double 
     cases[1] = prj_boundary_fraction_case(frac[1]);
     cases[2] = prj_boundary_fraction_case(frac[2]);
     if (cases[0] == 0 || cases[1] == 0 || cases[2] == 0) {
-        fprintf(stderr, "prj_boundary_get_prim: unsupported sample location (%g, %g, %g)\n", x1, x2, x3);
+        fprintf(stderr, "%s: unsupported sample location (%g, %g, %g)\n", label, x1, x2, x3);
         exit(EXIT_FAILURE);
     }
 
-    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+    for (v = 0; v < nvar; ++v) {
         if (cases[0] == 1 && cases[1] == 1 && cases[2] == 1) {
             int i = (int)(ox[0] >= 0.0 ? ox[0] + 0.5 : ox[0] - 0.5);
             int j = (int)(ox[1] >= 0.0 ? ox[1] + 0.5 : ox[1] - 0.5);
             int k = (int)(ox[2] >= 0.0 ? ox[2] + 0.5 : ox[2] - 0.5);
 
-            w[v] = prj_boundary_read_prim(src, v, i, j, k);
+            dst[v] = prj_boundary_read_value(src, v, i, j, k, is_eosvar);
         } else if (cases[0] == 2 && cases[1] == 2 && cases[2] == 2) {
             int i = prj_floor_to_int(ox[0]);
             int j = prj_floor_to_int(ox[1]);
@@ -187,11 +187,11 @@ void prj_boundary_get_prim(const prj_block *block, int stage, double x1, double 
             for (di = 0; di < 2; ++di) {
                 for (dj = 0; dj < 2; ++dj) {
                     for (dk = 0; dk < 2; ++dk) {
-                        sum += prj_boundary_read_prim(src, v, i + di, j + dj, k + dk);
+                        sum += prj_boundary_read_value(src, v, i + di, j + dj, k + dk, is_eosvar);
                     }
                 }
             }
-            w[v] = 0.125 * sum;
+            dst[v] = 0.125 * sum;
         } else if ((cases[0] == 1 || cases[0] == 3) &&
                    (cases[1] == 1 || cases[1] == 3) &&
                    (cases[2] == 1 || cases[2] == 3)) {
@@ -207,29 +207,41 @@ void prj_boundary_get_prim(const prj_block *block, int stage, double x1, double 
             double xcenter = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
             double ycenter = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
             double zcenter = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-            double base = prj_boundary_read_prim(src, v, i, j, k);
+            double base = prj_boundary_read_value(src, v, i, j, k, is_eosvar);
 
-            stx[0] = prj_boundary_read_prim(src, v, i - 1, j, k);
+            stx[0] = prj_boundary_read_value(src, v, i - 1, j, k, is_eosvar);
             stx[1] = base;
-            stx[2] = prj_boundary_read_prim(src, v, i + 1, j, k);
-            sty[0] = prj_boundary_read_prim(src, v, i, j - 1, k);
+            stx[2] = prj_boundary_read_value(src, v, i + 1, j, k, is_eosvar);
+            sty[0] = prj_boundary_read_value(src, v, i, j - 1, k, is_eosvar);
             sty[1] = base;
-            sty[2] = prj_boundary_read_prim(src, v, i, j + 1, k);
-            stz[0] = prj_boundary_read_prim(src, v, i, j, k - 1);
+            sty[2] = prj_boundary_read_value(src, v, i, j + 1, k, is_eosvar);
+            stz[0] = prj_boundary_read_value(src, v, i, j, k - 1, is_eosvar);
             stz[1] = base;
-            stz[2] = prj_boundary_read_prim(src, v, i, j, k + 1);
+            stz[2] = prj_boundary_read_value(src, v, i, j, k + 1, is_eosvar);
             sx = prj_reconstruct_slope(stx, block->dx[0]);
             sy = prj_reconstruct_slope(sty, block->dx[1]);
             sz = prj_reconstruct_slope(stz, block->dx[2]);
-            w[v] = base +
+            dst[v] = base +
                 sx * (x1 - xcenter) +
                 sy * (x2 - ycenter) +
                 sz * (x3 - zcenter);
         } else {
-            fprintf(stderr, "prj_boundary_get_prim: mixed unsupported sample location (%g, %g, %g)\n", x1, x2, x3);
+            fprintf(stderr, "%s: mixed unsupported sample location (%g, %g, %g)\n", label, x1, x2, x3);
             exit(EXIT_FAILURE);
         }
     }
+}
+
+void prj_boundary_get_prim(const prj_block *block, int stage, double x1, double x2, double x3, double *w)
+{
+    prj_boundary_get_values(block, prj_boundary_stage_array_const(block, stage),
+        PRJ_NVAR_PRIM, 0, "prj_boundary_get_prim", x1, x2, x3, w);
+}
+
+void prj_boundary_get_eosvar(const prj_block *block, double x1, double x2, double x3, double *eosv)
+{
+    prj_boundary_get_values(block, block != 0 ? block->eosvar : 0,
+        PRJ_NVAR_EOSVAR, 1, "prj_boundary_get_eosvar", x1, x2, x3, eosv);
 }
 
 void prj_boundary_send(prj_block *block, int stage, int fill_kind)
@@ -241,7 +253,6 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
 
         if (id >= 0 && prj_boundary_active_mesh != 0 && id < prj_boundary_active_mesh->nblocks) {
             prj_block *neighbor = &prj_boundary_active_mesh->blocks[id];
-            double *dst;
             int i;
             int j;
             int k;
@@ -249,7 +260,6 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
             if (!prj_boundary_active_block(neighbor)) {
                 continue;
             }
-            dst = prj_boundary_stage_array(neighbor, stage);
             for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
                 for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
                     for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
@@ -283,13 +293,24 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                             if (fill_kind != PRJ_BOUNDARY_FILL_ALL && sample_kind != fill_kind) {
                                 continue;
                             }
-                            prj_boundary_get_prim(block, stage, x1, x2, x3, w);
                             if (neighbor->rank == block->rank) {
+                                double eosv[PRJ_NVAR_EOSVAR];
+                                double *dst = prj_boundary_stage_array(neighbor, stage);
+                                int same_level = block->level == neighbor->level;
+
+                                prj_boundary_get_prim(block, stage, x1, x2, x3, w);
+                                prj_boundary_get_eosvar(block, x1, x2, x3, eosv);
                                 for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                                     dst[VIDX(v, i, j, k)] = w[v];
                                 }
-                            } else {
-                                /* MPI ghost exchange buffer path not implemented yet. */
+                                if (neighbor->eosvar != 0) {
+                                    for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+                                        neighbor->eosvar[EIDX(v, i, j, k)] = eosv[v];
+                                    }
+                                }
+                                if (neighbor->eos_done != 0) {
+                                    neighbor->eos_done[IDX(i, j, k)] = same_level ? 1 : 0;
+                                }
                             }
                         }
                     }

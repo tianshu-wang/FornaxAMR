@@ -354,11 +354,13 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
 
     do {
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
+        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
         prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
         prj_amr_adapt(&sim->mesh, &sim->eos);
         prj_mpi_rebalance(&sim->mesh);
         prj_cc_fill_mesh(sim, profile);
+        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
         prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
 #if PRJ_USE_GRAVITY

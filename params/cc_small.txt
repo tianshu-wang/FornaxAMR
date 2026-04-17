@@ -33,8 +33,8 @@ use_amr_angle_resolution = 1
 amr_angle_resolution_limit = 0.025
 
 eos_type = table
-eos_file = eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
-progenitor_file = s9.0.swbj15.fornax
+eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
+progenitor_file = ../s9.0.swbj15.fornax
 
 output_dir = output/cc_small_dump
 

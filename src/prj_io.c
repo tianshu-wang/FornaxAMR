@@ -969,6 +969,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     if (prj_io_is_root_rank()) {
         fprintf(stderr, "read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
     }
+    prj_eos_fill_active_cells(mesh, (prj_eos *)eos, 1);
     prj_boundary_fill_ghosts(mesh, &bc, 1);
     prj_eos_fill_mesh(mesh, (prj_eos *)eos, 1);
     free(metadata);

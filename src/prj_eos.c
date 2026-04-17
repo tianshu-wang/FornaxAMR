@@ -163,6 +163,30 @@ static void prj_eos_fail_zero_rho_in_block(const char *caller, const prj_block *
     exit(1);
 }
 
+static void prj_eos_fill_cell(prj_eos *eos, prj_block *block, double *W, int i, int j, int k)
+{
+    double eos_quantities[PRJ_EOS_NQUANT];
+
+    if (block == 0 || W == 0 || block->eosvar == 0) {
+        return;
+    }
+    if (W[VIDX(PRJ_PRIM_RHO, i, j, k)] == 0.0) {
+        prj_eos_fail_zero_rho_in_block("prj_eos_fill_block", block, i, j, k, W);
+    }
+
+    prj_eos_rey(eos,
+        W[VIDX(PRJ_PRIM_RHO, i, j, k)],
+        W[VIDX(PRJ_PRIM_EINT, i, j, k)],
+        W[VIDX(PRJ_PRIM_YE, i, j, k)],
+        eos_quantities);
+    block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] = eos_quantities[PRJ_EOS_PRESSURE];
+    block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)] = eos_quantities[PRJ_EOS_TEMPERATURE];
+    block->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)] = eos_quantities[PRJ_EOS_GAMMA];
+    if (block->eos_done != 0) {
+        block->eos_done[IDX(i, j, k)] = 1;
+    }
+}
+
 static void prj_eos_table_check_rty_inputs(const prj_eos *eos, double rho, double T, double ye)
 {
     if (rho < eos->rho_min || rho > eos->rho_max) {
@@ -583,20 +607,45 @@ void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W)
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
         for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
             for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                double eos_quantities[PRJ_EOS_NQUANT];
-
-                if (W[VIDX(PRJ_PRIM_RHO, i, j, k)] == 0.0) {
-                    prj_eos_fail_zero_rho_in_block("prj_eos_fill_block", block, i, j, k, W);
+                if (block->eos_done != 0 && block->eos_done[IDX(i, j, k)] != 0) {
+                    continue;
                 }
+                prj_eos_fill_cell(eos, block, W, i, j, k);
+            }
+        }
+    }
+}
 
-                prj_eos_rey(eos,
-                    W[VIDX(PRJ_PRIM_RHO, i, j, k)],
-                    W[VIDX(PRJ_PRIM_EINT, i, j, k)],
-                    W[VIDX(PRJ_PRIM_YE, i, j, k)],
-                    eos_quantities);
-                block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] = eos_quantities[PRJ_EOS_PRESSURE];
-                block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)] = eos_quantities[PRJ_EOS_TEMPERATURE];
-                block->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)] = eos_quantities[PRJ_EOS_GAMMA];
+void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, int stage)
+{
+    int bidx;
+
+    if (mesh == 0) {
+        return;
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        prj_mpi *mpi = prj_mpi_current();
+        double *W = stage == 2 ? block->W1 : block->W;
+        int i;
+        int j;
+        int k;
+
+        if (block->id < 0 || block->active != 1 || W == 0 || block->eosvar == 0) {
+            continue;
+        }
+        if (mpi != 0 && block->rank != mpi->rank) {
+            continue;
+        }
+        if (block->eos_done != 0) {
+            memset(block->eos_done, 0, (size_t)PRJ_BLOCK_NCELLS * sizeof(*block->eos_done));
+        }
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    prj_eos_fill_cell(eos, block, W, i, j, k);
+                }
             }
         }
     }

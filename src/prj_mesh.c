@@ -38,6 +38,7 @@ static void prj_block_init_empty(prj_block *b)
     b->W = 0;
     b->W1 = 0;
     b->eosvar = 0;
+    b->eos_done = 0;
     b->U = 0;
     b->dUdt = 0;
     b->flux[0] = 0;
@@ -79,6 +80,7 @@ int prj_block_alloc_data(prj_block *b)
     size_t cons_count;
     size_t total_count;
     double *base;
+    int *eos_done;
     int *ridx;
     double *fr;
 
@@ -97,11 +99,13 @@ int prj_block_alloc_data(prj_block *b)
     if (base == 0) {
         return 2;
     }
+    eos_done = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eos_done));
     ridx = (int *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
     fr = (double *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
-    if (ridx == 0 || fr == 0) {
+    if (eos_done == 0 || ridx == 0 || fr == 0) {
         free(fr);
         free(ridx);
+        free(eos_done);
         free(base);
         return 2;
     }
@@ -112,6 +116,7 @@ int prj_block_alloc_data(prj_block *b)
     base += prim_count;
     b->eosvar = base;
     base += eosvar_count;
+    b->eos_done = eos_done;
     b->U = base;
     base += cons_count;
     b->dUdt = base;
@@ -140,11 +145,13 @@ void prj_block_free_data(prj_block *b)
     }
 
     free(b->W);
+    free(b->eos_done);
     free(b->ridx);
     free(b->fr);
     b->W = 0;
     b->W1 = 0;
     b->eosvar = 0;
+    b->eos_done = 0;
     b->U = 0;
     b->dUdt = 0;
     b->flux[0] = 0;
