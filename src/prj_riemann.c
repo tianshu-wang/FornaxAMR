@@ -19,10 +19,9 @@ static double prj_abs_double(double x)
     return x < 0.0 ? -x : x;
 }
 
-static void prj_riemann_state(const double *W, const prj_eos *eos, double *U, double *F,
-    double *pressure, double *gamma, double *cs)
+static void prj_riemann_state(const double *W, double pressure, double gamma,
+    const prj_eos *eos, double *U, double *F, double *cs)
 {
-    double eos_q[PRJ_EOS_NQUANT];
     double rho;
     double v1;
     double v2;
@@ -35,7 +34,6 @@ static void prj_riemann_state(const double *W, const prj_eos *eos, double *U, do
         F[v] = 0.0;
     }
 
-    prj_eos_rey((prj_eos *)eos, W[PRJ_PRIM_RHO], W[PRJ_PRIM_EINT], W[PRJ_PRIM_YE], eos_q);
     prj_eos_prim2cons((prj_eos *)eos, (double *)W, U);
 
     rho = W[PRJ_PRIM_RHO];
@@ -44,36 +42,32 @@ static void prj_riemann_state(const double *W, const prj_eos *eos, double *U, do
     v3 = W[PRJ_PRIM_V3];
     etot = U[PRJ_CONS_ETOT];
 
-    *pressure = eos_q[PRJ_EOS_PRESSURE];
-    *gamma = eos_q[PRJ_EOS_GAMMA];
-    *cs = sqrt((*gamma) * (*pressure) / rho);
+    *cs = sqrt(gamma * pressure / rho);
 
     F[PRJ_CONS_RHO] = rho * v1;
-    F[PRJ_CONS_MOM1] = rho * v1 * v1 + *pressure;
+    F[PRJ_CONS_MOM1] = rho * v1 * v1 + pressure;
     F[PRJ_CONS_MOM2] = rho * v1 * v2;
     F[PRJ_CONS_MOM3] = rho * v1 * v3;
-    F[PRJ_CONS_ETOT] = (etot + *pressure) * v1;
+    F[PRJ_CONS_ETOT] = (etot + pressure) * v1;
     F[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE] * v1;
 }
 
-void prj_riemann_hlle(const double *WL, const double *WR, const prj_eos *eos, double *flux, double v_face[3])
+void prj_riemann_hlle(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    const prj_eos *eos, double *flux, double v_face[3])
 {
     double UL[PRJ_NVAR_CONS];
     double UR[PRJ_NVAR_CONS];
     double FL[PRJ_NVAR_CONS];
     double FR[PRJ_NVAR_CONS];
-    double pL;
-    double pR;
-    double gL;
-    double gR;
     double csL;
     double csR;
     double SL;
     double SR;
     int v;
 
-    prj_riemann_state(WL, eos, UL, FL, &pL, &gL, &csL);
-    prj_riemann_state(WR, eos, UR, FR, &pR, &gR, &csR);
+    prj_riemann_state(WL, pL, gL, eos, UL, FL, &csL);
+    prj_riemann_state(WR, pR, gR, eos, UR, FR, &csR);
 
     SL = prj_riemann_min_double(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
     SR = prj_riemann_max_double(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
@@ -125,17 +119,15 @@ void prj_riemann_hlle(const double *WL, const double *WR, const prj_eos *eos, do
     }
 }
 
-void prj_riemann_hllc(const double *WL, const double *WR, const prj_eos *eos, double *flux, double v_face[3])
+void prj_riemann_hllc(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    const prj_eos *eos, double *flux, double v_face[3])
 {
     double UL[PRJ_NVAR_CONS];
     double UR[PRJ_NVAR_CONS];
     double FL[PRJ_NVAR_CONS];
     double FR[PRJ_NVAR_CONS];
     double Ustar[PRJ_NVAR_CONS];
-    double pL;
-    double pR;
-    double gL;
-    double gR;
     double csL;
     double csR;
     double SL;
@@ -145,8 +137,8 @@ void prj_riemann_hllc(const double *WL, const double *WR, const prj_eos *eos, do
     double e_over_rho;
     int v;
 
-    prj_riemann_state(WL, eos, UL, FL, &pL, &gL, &csL);
-    prj_riemann_state(WR, eos, UR, FR, &pR, &gR, &csR);
+    prj_riemann_state(WL, pL, gL, eos, UL, FL, &csL);
+    prj_riemann_state(WR, pR, gR, eos, UR, FR, &csR);
 
     SL = prj_riemann_min_double(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
     SR = prj_riemann_max_double(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);

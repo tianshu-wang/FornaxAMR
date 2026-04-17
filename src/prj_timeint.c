@@ -5,30 +5,7 @@
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_lapse(const prj_block *block, int i, int j, int k)
 {
-    const prj_grav_mono *gm = prj_gravity_active_monopole();
-    double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-    double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-    double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-    double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
-    int idx;
-
-    if (gm == 0 || gm->nbins <= 0 || gm->lapse == 0) {
-        return 1.0;
-    }
-    if (r <= gm->rf[0]) {
-        return gm->lapse[0];
-    }
-    for (idx = 0; idx < gm->nbins; ++idx) {
-        double r0 = gm->rf[idx];
-        double r1 = gm->rf[idx + 1];
-
-        if (r <= r1) {
-            double w = (r - r0) / (r1 - r0);
-
-            return (1.0 - w) * gm->lapse[idx] + w * gm->lapse[idx + 1];
-        }
-    }
-    return gm->lapse[gm->nbins];
+    return prj_gravity_block_lapse_at(block, i, j, k);
 }
 #endif
 

@@ -61,6 +61,8 @@ struct prj_block {
     double *dUdt;
     double *flux[3];
     double *v_riemann[3];
+    int *ridx;
+    double *fr;
     double vol;
     double area[3];
     int parent;
@@ -102,6 +104,15 @@ struct prj_eos {
     double dlogrho;
     double dlogT;
     double dYe;
+    double rho_min;
+    double rho_max;
+    double temp_min;
+    double temp_max;
+    double inv_dlogrho;
+    double inv_dlogT;
+    double inv_dYe;
+    double ln10_t1;
+    double ln10_dlogT;
     size_t table_bytes;
     double *table;
 };

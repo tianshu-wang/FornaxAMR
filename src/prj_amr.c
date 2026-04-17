@@ -489,12 +489,7 @@ static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int 
 
 static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i, int j, int k)
 {
-    const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
     double rho;
-    double x1;
-    double x2;
-    double x3;
-    double radius;
     double pressure;
     double accel;
     double cell_size;
@@ -504,13 +499,9 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
         return 0.0;
     }
 
-    x1 = b->xmin[0] + ((double)i + 0.5) * b->dx[0];
-    x2 = b->xmin[1] + ((double)j + 0.5) * b->dx[1];
-    x3 = b->xmin[2] + ((double)k + 0.5) * b->dx[2];
     rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
-    radius = prj_sqrt_double(x1 * x1 + x2 * x2 + x3 * x3);
     pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
-    accel = prj_abs_double(prj_gravity_interp_accel(grav_mono, radius));
+    accel = prj_abs_double(prj_gravity_block_accel_at(b, i, j, k));
     cell_size = b->dx[0];
     if (b->dx[1] > cell_size) {
         cell_size = b->dx[1];
@@ -1115,6 +1106,8 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
             child->v_riemann[0] = 0;
             child->v_riemann[1] = 0;
             child->v_riemann[2] = 0;
+            child->ridx = 0;
+            child->fr = 0;
             prj_block_setup_geometry(child, &mesh->coord);
         }
         parent->children[oct] = id;

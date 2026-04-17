@@ -4,6 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifndef M_LN10
+#define M_LN10 2.30258509299404568402
+#endif
+
 #include "prj.h"
 
 #if defined(PRJ_ENABLE_MPI)
@@ -33,6 +37,11 @@ enum {
 static double prj_eos_gamma_value(void)
 {
     return 5.0 / 3.0;
+}
+
+static double prj_eos_exp10(double x)
+{
+    return exp(M_LN10 * x);
 }
 
 static size_t prj_eos_tab_index(const prj_eos *eos, int rec, int jy, int jr, int jt)
@@ -156,16 +165,11 @@ static void prj_eos_fail_zero_rho_in_block(const char *caller, const prj_block *
 
 static void prj_eos_table_check_rty_inputs(const prj_eos *eos, double rho, double T, double ye)
 {
-    double rho_min = pow(10.0, eos->r1);
-    double rho_max = pow(10.0, eos->r2);
-    double temp_min = pow(10.0, eos->t1);
-    double temp_max = pow(10.0, eos->t2);
-
-    if (rho < rho_min || rho > rho_max) {
-        prj_eos_table_range_fail("rho", rho, rho_min, rho_max);
+    if (rho < eos->rho_min || rho > eos->rho_max) {
+        prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max);
     }
-    if (T < temp_min || T > temp_max) {
-        prj_eos_table_range_fail("T", T, temp_min, temp_max);
+    if (T < eos->temp_min || T > eos->temp_max) {
+        prj_eos_table_range_fail("T", T, eos->temp_min, eos->temp_max);
     }
     if (ye < eos->y1c || ye > eos->y2c) {
         prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
@@ -200,6 +204,15 @@ static int prj_eos_prepare_table(prj_eos *eos)
     eos->dlogrho = (eos->r2 - eos->r1) / (double)(eos->nr - 1);
     eos->dlogT = (eos->t2 - eos->t1) / (double)(eos->nt - 1);
     eos->dYe = (eos->y2c - eos->y1c) / (double)(eos->ny - 1);
+    eos->rho_min = prj_eos_exp10(eos->r1);
+    eos->rho_max = prj_eos_exp10(eos->r2);
+    eos->temp_min = prj_eos_exp10(eos->t1);
+    eos->temp_max = prj_eos_exp10(eos->t2);
+    eos->inv_dlogrho = eos->dlogrho > 0.0 ? 1.0 / eos->dlogrho : 0.0;
+    eos->inv_dlogT = eos->dlogT > 0.0 ? 1.0 / eos->dlogT : 0.0;
+    eos->inv_dYe = eos->dYe > 0.0 ? 1.0 / eos->dYe : 0.0;
+    eos->ln10_t1 = M_LN10 * eos->t1;
+    eos->ln10_dlogT = M_LN10 * eos->dlogT;
     slab_size = (size_t)eos->nt * (size_t)eos->nr * (size_t)eos->ny;
     expected_bytes = (size_t)PRJ_EOS_NUMEL * slab_size * sizeof(*eos->table);
     mpi = prj_mpi_current();
@@ -304,6 +317,15 @@ void prj_eos_init(prj_eos *eos)
         eos->dlogrho = 0.0;
         eos->dlogT = 0.0;
         eos->dYe = 0.0;
+        eos->rho_min = 0.0;
+        eos->rho_max = 0.0;
+        eos->temp_min = 0.0;
+        eos->temp_max = 0.0;
+        eos->inv_dlogrho = 0.0;
+        eos->inv_dlogT = 0.0;
+        eos->inv_dYe = 0.0;
+        eos->ln10_t1 = 0.0;
+        eos->ln10_dlogT = 0.0;
         eos->table_bytes = 0;
         eos->table = 0;
         return;
@@ -326,18 +348,18 @@ static void prj_eos_table_interp_base(const prj_eos *eos, double rho, double T, 
     rl = log10(rho);
     tl = log10(T);
 
-    *jr = 1 + (int)((rl - eos->r1) / eos->dlogrho);
-    *jt = 1 + (int)((tl - eos->t1) / eos->dlogT);
-    *jy = 1 + (int)((ye - eos->y1c) / eos->dYe);
+    *jr = 1 + (int)((rl - eos->r1) * eos->inv_dlogrho);
+    *jt = 1 + (int)((tl - eos->t1) * eos->inv_dlogT);
+    *jy = 1 + (int)((ye - eos->y1c) * eos->inv_dYe);
     *jr = *jr < 1 ? 1 : (*jr >= eos->nr ? eos->nr - 1 : *jr);
     *jt = *jt < 1 ? 1 : (*jt >= eos->nt ? eos->nt - 1 : *jt);
     *jy = *jy < 1 ? 1 : (*jy >= eos->ny ? eos->ny - 1 : *jy);
     *jrp = *jr + 1;
     *jtp = *jt + 1;
     *jyp = *jy + 1;
-    *drho = (rl - (eos->r1 + (double)(*jr - 1) * eos->dlogrho)) / eos->dlogrho;
-    *dtemp = (tl - (eos->t1 + (double)(*jt - 1) * eos->dlogT)) / eos->dlogT;
-    *dye = (ye - (eos->y1c + (double)(*jy - 1) * eos->dYe)) / eos->dYe;
+    *drho = (rl - (eos->r1 + (double)(*jr - 1) * eos->dlogrho)) * eos->inv_dlogrho;
+    *dtemp = (tl - (eos->t1 + (double)(*jt - 1) * eos->dlogT)) * eos->inv_dlogT;
+    *dye = (ye - (eos->y1c + (double)(*jy - 1) * eos->dYe)) * eos->inv_dYe;
     *drho = prj_eos_clamp_double(*drho, 0.0, 1.0);
     *dtemp = prj_eos_clamp_double(*dtemp, 0.0, 1.0);
     *dye = prj_eos_clamp_double(*dye, 0.0, 1.0);
@@ -450,8 +472,6 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
         double e_table;
         double rl;
-        double rho_min = pow(10.0, eos->r1);
-        double rho_max = pow(10.0, eos->r2);
         double jyf;
         double jrf;
         int jy;
@@ -468,8 +488,6 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         int jtp;
         double elo;
         double ehi;
-        double tlo;
-        double thi;
         double dtemp;
         double pressure_log;
         int jt_lo;
@@ -477,23 +495,23 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         int jt_mid;
 
         e_table = eint / PRJ_EOS_ENERGY_SCALE;
-        if (rho < rho_min || rho > rho_max) {
-            prj_eos_table_range_fail("rho", rho, rho_min, rho_max);
+        if (rho < eos->rho_min || rho > eos->rho_max) {
+            prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max);
         }
         if (ye < eos->y1c || ye > eos->y2c) {
             prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
         }
         rl = log10(rho);
-        jrf = (rl - eos->r1) / eos->dlogrho;
-        jyf = (ye - eos->y1c) / eos->dYe;
+        jrf = (rl - eos->r1) * eos->inv_dlogrho;
+        jyf = (ye - eos->y1c) * eos->inv_dYe;
         jr = 1 + (int)jrf;
         jy = 1 + (int)jyf;
         jr = jr < 1 ? 1 : (jr >= eos->nr ? eos->nr - 1 : jr);
         jy = jy < 1 ? 1 : (jy >= eos->ny ? eos->ny - 1 : jy);
         jrp = jr + 1;
         jyp = jy + 1;
-        drho = prj_eos_clamp_double((rl - (eos->r1 + (double)(jr - 1) * eos->dlogrho)) / eos->dlogrho, 0.0, 1.0);
-        dye = prj_eos_clamp_double((ye - (eos->y1c + (double)(jy - 1) * eos->dYe)) / eos->dYe, 0.0, 1.0);
+        drho = prj_eos_clamp_double((rl - (eos->r1 + (double)(jr - 1) * eos->dlogrho)) * eos->inv_dlogrho, 0.0, 1.0);
+        dye = prj_eos_clamp_double((ye - (eos->y1c + (double)(jy - 1) * eos->dYe)) * eos->inv_dYe, 0.0, 1.0);
         coeff0 = (1.0 - drho) * (1.0 - dye);
         coeff1 = (1.0 - drho) * dye;
         coeff2 = drho * (1.0 - dye);
@@ -532,9 +550,7 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         } else {
             dtemp = 0.0;
         }
-        tlo = eos->t1 + (double)(jt - 1) * eos->dlogT;
-        thi = eos->t1 + (double)(jtp - 1) * eos->dlogT;
-        T = pow(10.0, tlo + (thi - tlo) * dtemp);
+        T = exp(eos->ln10_t1 + ((double)(jt - 1) + dtemp) * eos->ln10_dlogT);
         pressure_log = prj_eos_pressure_log_interp(eos,
             jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp);
         gamma = prj_eos_table_interp_trilinear(eos, PRJ_EOS_REC_GAMMA,

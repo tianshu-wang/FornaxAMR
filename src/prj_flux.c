@@ -162,10 +162,74 @@ static void prj_flux_cell_state(double *W, int i, int j, int k, double *Wc)
     }
 }
 
+static void prj_flux_face_eosvar(const double *eosvar, int var, int dir, int i, int j, int k,
+    double *left_value, double *right_value)
+{
+    int il;
+    int jl;
+    int kl;
+    int ir;
+    int jr;
+    int kr;
+    double left_stencil[3];
+    double right_stencil[3];
+    double slope_l;
+    double slope_r;
+
+    il = i;
+    jl = j;
+    kl = k;
+    ir = i;
+    jr = j;
+    kr = k;
+    if (dir == X1DIR) {
+        il = i - 1;
+        ir = i;
+    } else if (dir == X2DIR) {
+        jl = j - 1;
+        jr = j;
+    } else {
+        kl = k - 1;
+        kr = k;
+    }
+
+    if (dir == X1DIR) {
+        left_stencil[0] = eosvar[EIDX(var, il - 1, jl, kl)];
+        left_stencil[1] = eosvar[EIDX(var, il, jl, kl)];
+        left_stencil[2] = eosvar[EIDX(var, il + 1, jl, kl)];
+        right_stencil[0] = eosvar[EIDX(var, ir - 1, jr, kr)];
+        right_stencil[1] = eosvar[EIDX(var, ir, jr, kr)];
+        right_stencil[2] = eosvar[EIDX(var, ir + 1, jr, kr)];
+    } else if (dir == X2DIR) {
+        left_stencil[0] = eosvar[EIDX(var, il, jl - 1, kl)];
+        left_stencil[1] = eosvar[EIDX(var, il, jl, kl)];
+        left_stencil[2] = eosvar[EIDX(var, il, jl + 1, kl)];
+        right_stencil[0] = eosvar[EIDX(var, ir, jr - 1, kr)];
+        right_stencil[1] = eosvar[EIDX(var, ir, jr, kr)];
+        right_stencil[2] = eosvar[EIDX(var, ir, jr + 1, kr)];
+    } else {
+        left_stencil[0] = eosvar[EIDX(var, il, jl, kl - 1)];
+        left_stencil[1] = eosvar[EIDX(var, il, jl, kl)];
+        left_stencil[2] = eosvar[EIDX(var, il, jl, kl + 1)];
+        right_stencil[0] = eosvar[EIDX(var, ir, jr, kr - 1)];
+        right_stencil[1] = eosvar[EIDX(var, ir, jr, kr)];
+        right_stencil[2] = eosvar[EIDX(var, ir, jr, kr + 1)];
+    }
+
+    slope_l = prj_reconstruct_slope(left_stencil, 1.0);
+    slope_r = prj_reconstruct_slope(right_stencil, 1.0);
+    *left_value = eosvar[EIDX(var, il, jl, kl)] + 0.5 * slope_l;
+    *right_value = eosvar[EIDX(var, ir, jr, kr)] - 0.5 * slope_r;
+}
+
 void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, double *eosvar, double *flux[3])
 {
     int dir;
+#if PRJ_NRAD > 0
     const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+#else
+    (void)rad;
+#endif
 
     for (dir = 0; dir < 3; ++dir) {
         int i;
@@ -191,6 +255,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     double pCRg;
                     double pLLg;
                     double pRRg;
+                    double pL;
+                    double pR;
+                    double gL;
+                    double gR;
                     double Fl[PRJ_NVAR_CONS];
                     double Fg[PRJ_NVAR_CONS];
                     int shock_left;
@@ -245,6 +313,15 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     prj_flux_rotate_to_local(WCRg, dir, WCR);
                     prj_flux_rotate_to_local(WLLg, dir, WLL);
                     prj_flux_rotate_to_local(WRRg, dir, WRR);
+                    if (eosvar != 0) {
+                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_PRESSURE, dir, i, j, k, &pL, &pR);
+                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_GAMMA, dir, i, j, k, &gL, &gR);
+                    } else {
+                        pL = 0.0;
+                        pR = 0.0;
+                        gL = 0.0;
+                        gR = 0.0;
+                    }
                     pCLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il, jl, kl)] : 0.0;
                     pCRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir, jr, kr)] : 0.0;
                     if (dir == X1DIR) {
@@ -264,9 +341,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     double v_face_loc[3] = {0.0, 0.0, 0.0};
                     if ((shock_left >= 0 && shock_left != dir) ||
                         (shock_right >= 0 && shock_right != dir)) {
-                        prj_riemann_hlle(WL, WR, eos, Fl, v_face_loc);
+                        prj_riemann_hlle(WL, WR, pL, pR, gL, gR, eos, Fl, v_face_loc);
                     } else {
-                        prj_riemann_hllc(WL, WR, eos, Fl, v_face_loc);
+                        prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl, v_face_loc);
                     }
                     /* Unrotate (V1=normal, V2/V3=transverse) back to global (v1,v2,v3). */
                     double v_face_glob[3];
@@ -288,6 +365,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                         block->v_riemann[dir][1 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[1];
                         block->v_riemann[dir][2 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[2];
                     }
+#if PRJ_NRAD > 0
                     {
                         double x_face[3];
                         double dx_dir;
@@ -297,6 +375,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                         dx_dir = block->dx[dir];
                         prj_rad_flux(WL, WR, eos, rad, grav_mono, x_face, dx_dir, v_face_loc[0], Fl);
                     }
+#endif
                     prj_flux_rotate_from_local(Fl, dir, Fg);
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                         flux[dir][VIDX(v, i, j, k)] = Fg[v];

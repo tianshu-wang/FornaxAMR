@@ -42,6 +42,8 @@ static void prj_block_init_empty(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+    b->ridx = 0;
+    b->fr = 0;
     b->vol = 0.0;
     b->area[0] = 0.0;
     b->area[1] = 0.0;
@@ -73,6 +75,8 @@ int prj_block_alloc_data(prj_block *b)
     size_t cons_count;
     size_t total_count;
     double *base;
+    int *ridx;
+    double *fr;
 
     if (b == 0) {
         return 1;
@@ -87,6 +91,14 @@ int prj_block_alloc_data(prj_block *b)
 
     base = (double *)malloc(total_count * sizeof(*base));
     if (base == 0) {
+        return 2;
+    }
+    ridx = (int *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
+    fr = (double *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
+    if (ridx == 0 || fr == 0) {
+        free(fr);
+        free(ridx);
+        free(base);
         return 2;
     }
 
@@ -111,6 +123,9 @@ int prj_block_alloc_data(prj_block *b)
     b->v_riemann[1] = base;
     base += 3U * (size_t)PRJ_BLOCK_NCELLS;
     b->v_riemann[2] = base;
+    b->ridx = ridx;
+    b->fr = fr;
+    prj_gravity_cache_block(b);
     return 0;
 }
 
@@ -121,6 +136,8 @@ void prj_block_free_data(prj_block *b)
     }
 
     free(b->W);
+    free(b->ridx);
+    free(b->fr);
     b->W = 0;
     b->W1 = 0;
     b->eosvar = 0;
@@ -132,6 +149,8 @@ void prj_block_free_data(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+    b->ridx = 0;
+    b->fr = 0;
 }
 
 void prj_block_setup_geometry(prj_block *b, const prj_coord *coord)
@@ -146,6 +165,12 @@ void prj_block_setup_geometry(prj_block *b, const prj_coord *coord)
     b->area[0] = b->dx[1] * b->dx[2];
     b->area[1] = b->dx[0] * b->dx[2];
     b->area[2] = b->dx[0] * b->dx[1];
+    prj_gravity_cache_block(b);
+}
+
+int prj_block_cache_index(int i, int j, int k)
+{
+    return IDX(i, j, k);
 }
 
 prj_block *prj_mesh_get_block(prj_mesh *mesh, int id)

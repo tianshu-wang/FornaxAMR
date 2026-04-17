@@ -73,7 +73,7 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
                     continue;
                 }
 
-                accel = prj_gravity_interp_accel(grav_mono, r);
+                accel = prj_gravity_block_accel_at(block, i, j, k);
                 g1 = accel * x1 / r;
                 g2 = accel * x2 / r;
                 g3 = accel * x3 / r;
