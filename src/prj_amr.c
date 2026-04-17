@@ -337,15 +337,6 @@ static int prj_amr_clamp_storage_index(int idx)
     return idx;
 }
 
-static double prj_block_pressure_at(const prj_block *b, prj_eos *eos, int i, int j, int k)
-{
-    (void)eos;
-    i = prj_amr_clamp_storage_index(i);
-    j = prj_amr_clamp_storage_index(j);
-    k = prj_amr_clamp_storage_index(k);
-    return b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
-}
-
 static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, int k)
 {
     i = prj_amr_clamp_storage_index(i);
@@ -415,43 +406,44 @@ static void prj_apply_eint_floor(double E_floor, double *U, double *W)
 static double prj_loehner_cell_indicator(const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     const double small = 1.0e-14;
-    double eps = mesh != 0 ? mesh->amr_eps : 0.1;
-    double p0 = prj_block_pressure_at(b, eos, i, j, k);
-    double pxm = prj_block_pressure_at(b, eos, i - 1, j, k);
-    double pxp = prj_block_pressure_at(b, eos, i + 1, j, k);
-    double pym = prj_block_pressure_at(b, eos, i, j - 1, k);
-    double pyp = prj_block_pressure_at(b, eos, i, j + 1, k);
-    double pzm = prj_block_pressure_at(b, eos, i, j, k - 1);
-    double pzp = prj_block_pressure_at(b, eos, i, j, k + 1);
-    double pxpyp = prj_block_pressure_at(b, eos, i + 1, j + 1, k);
-    double pxmyp = prj_block_pressure_at(b, eos, i - 1, j + 1, k);
-    double pxpym = prj_block_pressure_at(b, eos, i + 1, j - 1, k);
-    double pxmym = prj_block_pressure_at(b, eos, i - 1, j - 1, k);
-    double pxpzp = prj_block_pressure_at(b, eos, i + 1, j, k + 1);
-    double pxmzp = prj_block_pressure_at(b, eos, i - 1, j, k + 1);
-    double pxpzm = prj_block_pressure_at(b, eos, i + 1, j, k - 1);
-    double pxmzm = prj_block_pressure_at(b, eos, i - 1, j, k - 1);
-    double pypzp = prj_block_pressure_at(b, eos, i, j + 1, k + 1);
-    double pymzp = prj_block_pressure_at(b, eos, i, j - 1, k + 1);
-    double pypzm = prj_block_pressure_at(b, eos, i, j + 1, k - 1);
-    double pymzm = prj_block_pressure_at(b, eos, i, j - 1, k - 1);
-    double d2xx = pxp - 2.0 * p0 + pxm;
-    double d2yy = pyp - 2.0 * p0 + pym;
-    double d2zz = pzp - 2.0 * p0 + pzm;
-    double d2xy = 0.25 * (pxpyp - pxmyp - pxpym + pxmym);
-    double d2xz = 0.25 * (pxpzp - pxmzp - pxpzm + pxmzm);
-    double d2yz = 0.25 * (pypzp - pymzp - pypzm + pymzm);
-    double grad_x = prj_abs_double(pxp - p0) + prj_abs_double(p0 - pxm);
-    double grad_y = prj_abs_double(pyp - p0) + prj_abs_double(p0 - pym);
-    double grad_z = prj_abs_double(pzp - p0) + prj_abs_double(p0 - pzm);
-    double numerator = d2xx * d2xx + d2yy * d2yy + d2zz * d2zz +
-        2.0 * (d2xy * d2xy + d2xz * d2xz + d2yz * d2yz);
-    double denominator = grad_x + grad_y + grad_z +
-        eps * (prj_abs_double(d2xx) + prj_abs_double(d2yy) + prj_abs_double(d2zz) +
-            2.0 * (prj_abs_double(d2xy) + prj_abs_double(d2xz) + prj_abs_double(d2yz))) +
-        small;
+    double alpha = mesh != 0 ? mesh->amr_eps : 0.1;
+    double p0;
+    double pxm;
+    double pxp;
+    double pym;
+    double pyp;
+    double pzm;
+    double pzp;
+    double num_x;
+    double num_y;
+    double num_z;
+    double den_x;
+    double den_y;
+    double den_z;
+    double numerator;
+    double denominator;
 
-    return prj_sqrt_double(numerator) / denominator;
+    (void)eos;
+    p0 = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    pxm = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i - 1, j, k)];
+    pxp = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i + 1, j, k)];
+    pym = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j - 1, k)];
+    pyp = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j + 1, k)];
+    pzm = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k - 1)];
+    pzp = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k + 1)];
+    num_x = pxp - 2.0 * p0 + pxm;
+    num_y = pyp - 2.0 * p0 + pym;
+    num_z = pzp - 2.0 * p0 + pzm;
+    den_x = prj_abs_double(pxp - p0) + prj_abs_double(p0 - pxm) +
+        alpha * (prj_abs_double(pxp) + 2.0 * prj_abs_double(p0) + prj_abs_double(pxm));
+    den_y = prj_abs_double(pyp - p0) + prj_abs_double(p0 - pym) +
+        alpha * (prj_abs_double(pyp) + 2.0 * prj_abs_double(p0) + prj_abs_double(pym));
+    den_z = prj_abs_double(pzp - p0) + prj_abs_double(p0 - pzm) +
+        alpha * (prj_abs_double(pzp) + 2.0 * prj_abs_double(p0) + prj_abs_double(pzm));
+    numerator = num_x * num_x + num_y * num_y + num_z * num_z;
+    denominator = den_x * den_x + den_y * den_y + den_z * den_z + small;
+
+    return prj_sqrt_double(numerator / denominator);
 }
 
 static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int i, int j, int k)
@@ -593,7 +585,9 @@ int prj_amr_criteria_need_eosvar(const prj_mesh *mesh)
             continue;
         }
         estimator = mesh->amr_estimator[amr_idx];
-        if (estimator != PRJ_AMR_ESTIMATOR_DENSITY_JUMP) {
+        if (estimator == PRJ_AMR_ESTIMATOR_LOEHNER ||
+            estimator == PRJ_AMR_ESTIMATOR_VELOCITY ||
+            estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
             return 1;
         }
     }

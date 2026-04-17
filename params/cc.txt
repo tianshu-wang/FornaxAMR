@@ -13,7 +13,7 @@ x3min = -3.0e9
 x3max = 3.0e9
 
 root_nx = 4
-max_level = 12
+max_level = 11
 
 cfl = 0.4
 t_end = 1.0e9
@@ -24,12 +24,10 @@ output_dt = 1e-3
 restart_dt = 1e-2
 
 amr_interval = 1
-amr_estimator = velocity
+amr_estimator = lohner
 amr_refine_thresh = 0.5
 amr_derefine_thresh = 0.2
-amr_estimator2 = density_jump
-amr_refine_thresh2 = 0.5
-amr_derefine_thresh2 = 0.2
+amr_eps = 0.01
 use_amr_angle_resolution = 1
 amr_angle_resolution_limit = 0.025
 

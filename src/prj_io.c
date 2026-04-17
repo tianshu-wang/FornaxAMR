@@ -298,6 +298,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             if (endptr != value) {
                 sim->mesh.amr_criterion_set[amr_slot] = 1;
             }
+        } else if (strcmp(key, "amr_eps") == 0) {
+            sim->mesh.amr_eps = strtod(value, &endptr);
         } else if (strcmp(key, "use_amr_angle_resolution") == 0) {
             sim->mesh.use_amr_angle_resolution = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_angle_resolution_limit") == 0) {
