@@ -297,6 +297,7 @@ int main(int argc, char *argv[])
         int write_output = 0;
         int write_restart = 0;
         double next_event_time = -1.0;
+        double dt_step;
 
         {
             double dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, sim.cfl);
@@ -322,8 +323,9 @@ int main(int argc, char *argv[])
         if (sim.time + sim.dt > sim.t_end) {
             sim.dt = sim.t_end - sim.time;
         }
-        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, sim.dt);
-        sim.time += sim.dt;
+        dt_step = sim.dt;
+        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, dt_step);
+        sim.time += dt_step;
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
@@ -394,7 +396,7 @@ int main(int argc, char *argv[])
             wall_seconds = wall_elapsed - (double)(total_sec - total_sec % 60);
             fprintf(stderr,
                 "step=%d  t=%.6e  dt=%.6e  blocks=%d  max_active_level=%d  wall=%ldd %ldh %ldm %.3fs\n",
-                sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh), sim.mesh.max_active_level,
+                sim.step, sim.time, dt_step, prj_mesh_count_active(&sim.mesh), sim.mesh.max_active_level,
                 wall_days, wall_hours, wall_minutes, wall_seconds);
         }
     }
