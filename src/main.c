@@ -392,8 +392,9 @@ int main(int argc, char *argv[])
             wall_hours = (total_sec % 86400) / 3600;
             wall_minutes = (total_sec % 3600) / 60;
             wall_seconds = wall_elapsed - (double)(total_sec - total_sec % 60);
-            fprintf(stderr, "step=%d  t=%.6e  dt=%.6e  blocks=%d  wall=%ldd %ldh %ldm %.3fs\n",
-                sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh),
+            fprintf(stderr,
+                "step=%d  t=%.6e  dt=%.6e  blocks=%d  max_active_level=%d  wall=%ldd %ldh %ldm %.3fs\n",
+                sim.step, sim.time, sim.dt, prj_mesh_count_active(&sim.mesh), sim.mesh.max_active_level,
                 wall_days, wall_hours, wall_minutes, wall_seconds);
         }
     }

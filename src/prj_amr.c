@@ -784,11 +784,11 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
         prj_block *b = &mesh->blocks[i];
         int refine = 0;
         int derefine = b->parent >= 0 ? 1 : 0;
-        int has_criterion = 0;
         int j;
         int k;
         int ii;
-        int amr_idx;
+        int has_refine_criterion = 0;
+        int has_derefine_criterion = 0;
 
         if (!prj_is_local_active_block(b)) {
             continue;
@@ -797,54 +797,67 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             continue;
         }
 
-        for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
-            int criterion_refine = 0;
-            int criterion_derefine = 1;
+        for (ii = 0; ii < PRJ_BLOCK_SIZE && refine == 0; ++ii) {
+            for (j = 0; j < PRJ_BLOCK_SIZE && refine == 0; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    double refine_sum = 0.0;
+                    int amr_idx;
 
-            if (mesh->amr_criterion_set[amr_idx] == 0) {
-                continue;
+                    for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+                        if (mesh->amr_criterion_set[amr_idx] == 0) {
+                            continue;
+                        }
+                        if (mesh->amr_refine_thresh[amr_idx] <= 0.0) {
+                            continue;
+                        }
+                        has_refine_criterion = 1;
+                        refine_sum += prj_amr_cell_indicator_for_estimator(
+                            mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) /
+                            mesh->amr_refine_thresh[amr_idx];
+                    }
+
+                    if (refine_sum > 1.0) {
+                        refine = 1;
+                        break;
+                    }
+                }
             }
-            has_criterion = 1;
+        }
 
-            for (ii = 0; ii < PRJ_BLOCK_SIZE && criterion_refine == 0; ++ii) {
-                for (j = 0; j < PRJ_BLOCK_SIZE && criterion_refine == 0; ++j) {
-                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                        if (prj_amr_cell_indicator_for_estimator(
-                                mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) >
-                            mesh->amr_refine_thresh[amr_idx]) {
-                            criterion_refine = 1;
+        if (derefine != 0) {
+            for (ii = -1; ii <= PRJ_BLOCK_SIZE && derefine != 0; ++ii) {
+                for (j = -1; j <= PRJ_BLOCK_SIZE && derefine != 0; ++j) {
+                    for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
+                        double derefine_sum = 0.0;
+                        int amr_idx;
+
+                        for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+                            if (mesh->amr_criterion_set[amr_idx] == 0) {
+                                continue;
+                            }
+                            if (mesh->amr_derefine_thresh[amr_idx] <= 0.0) {
+                                continue;
+                            }
+                            has_derefine_criterion = 1;
+                            derefine_sum += prj_amr_cell_indicator_for_estimator(
+                                mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) /
+                                mesh->amr_derefine_thresh[amr_idx];
+                        }
+
+                        if (derefine_sum >= 1.0) {
+                            derefine = 0;
                             break;
                         }
                     }
                 }
             }
-
-            if (criterion_refine != 0) {
-                refine = 1;
-            }
-
-            if (derefine != 0) {
-                for (ii = -1; ii <= PRJ_BLOCK_SIZE && criterion_derefine != 0; ++ii) {
-                    for (j = -1; j <= PRJ_BLOCK_SIZE && criterion_derefine != 0; ++j) {
-                        for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
-                            if (prj_amr_cell_indicator_for_estimator(
-                                    mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) >=
-                                mesh->amr_derefine_thresh[amr_idx]) {
-                                criterion_derefine = 0;
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (criterion_derefine == 0) {
-                derefine = 0;
-            }
         }
 
-        if (has_criterion == 0) {
+        if (has_refine_criterion == 0) {
             refine = 0;
+        }
+        if (has_derefine_criterion == 0) {
+            derefine = 0;
         }
 
         if (refine != 0 && b->level < mesh->max_level) {
@@ -1242,6 +1255,7 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
             mesh->blocks[i].refine_flag = 0;
         }
     }
+    prj_mesh_update_max_active_level(mesh);
     prj_amr_init_neighbors(mesh);
     prj_sync_primitive_from_conserved(mesh, eos);
 }

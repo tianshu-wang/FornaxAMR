@@ -1,6 +1,10 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
+
 #include "prj.h"
 
 static int prj_neighbor_slot_index(int ox, int oy, int oz)
@@ -200,6 +204,34 @@ int prj_mesh_count_active(const prj_mesh *mesh)
     return count;
 }
 
+void prj_mesh_update_max_active_level(prj_mesh *mesh)
+{
+    int i;
+    int local_max;
+
+    if (mesh == 0) {
+        return;
+    }
+
+    local_max = -1;
+    for (i = 0; i < mesh->nblocks; ++i) {
+        prj_block *b = &mesh->blocks[i];
+
+        if (b->active == 0) {
+            continue;
+        }
+        if (b->level > local_max) {
+            local_max = b->level;
+        }
+    }
+
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Allreduce(&local_max, &mesh->max_active_level, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+#else
+    mesh->max_active_level = local_max;
+#endif
+}
+
 void prj_mesh_mark_base_blocks(prj_mesh *mesh)
 {
     int i;
@@ -251,6 +283,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->nblocks = 0;
     mesh->nblocks_max = 0;
     mesh->max_level = max_level;
+    mesh->max_active_level = -1;
     mesh->root_nx[0] = root_nx1;
     mesh->root_nx[1] = root_nx2;
     mesh->root_nx[2] = root_nx3;
@@ -315,6 +348,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         }
     }
     mesh->nblocks = nroot;
+    prj_mesh_update_max_active_level(mesh);
 
     for (i = 0; i < root_nx1; ++i) {
         for (j = 0; j < root_nx2; ++j) {
@@ -376,4 +410,5 @@ void prj_mesh_destroy(prj_mesh *mesh)
     mesh->blocks = 0;
     mesh->nblocks = 0;
     mesh->nblocks_max = 0;
+    mesh->max_active_level = -1;
 }

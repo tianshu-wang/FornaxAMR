@@ -74,6 +74,7 @@ struct prj_mesh {
     int nblocks;
     int nblocks_max;
     int max_level;
+    int max_active_level;
     int root_nx[3];
     prj_block *blocks;
     prj_coord coord;

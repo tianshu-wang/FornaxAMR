@@ -965,6 +965,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     }
     H5Dclose(dset_data);
     H5Fclose(file);
+    prj_mesh_update_max_active_level(mesh);
     if (prj_io_is_root_rank()) {
         fprintf(stderr, "read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
     }
