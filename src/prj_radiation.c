@@ -100,6 +100,104 @@ void prj_rad_m1_pressure(double E, double F1, double F2, double F3, double P[3][
 }
 
 #if PRJ_NRAD > 0
+/* Levermore/Vaytet third-moment scalar q(f), evaluated through the equivalent
+ * boost parameter β = 3f / (2 + √(4 - 3f²)).  This form is numerically stable
+ * at moderate and large f; for very small β we switch to the series expansion
+ *
+ *   q = 4β/5 + 4β^3/21 - 4β^5/315 + O(β^7),
+ *
+ * which matches the exact boosted-isotropic closure and avoids catastrophic
+ * cancellation in the raw closed form. */
+static double prj_rad_levermore_q_factor(double f)
+{
+    double a;
+    double beta;
+    double beta2;
+    double beta4;
+    double one_minus_beta2;
+
+    if (f <= 0.0) {
+        return 0.0;
+    }
+    if (f >= 1.0) {
+        return 1.0;
+    }
+
+    a = sqrt(fmax(0.0, 4.0 - 3.0 * f * f));
+    beta = 3.0 * f / (2.0 + a);
+    if (beta < 5.0e-2) {
+        beta2 = beta * beta;
+        return 4.0 * beta * (1.0 / 5.0 + beta2 * (1.0 / 21.0 - beta2 / 315.0));
+    }
+
+    beta2 = beta * beta;
+    beta4 = beta2 * beta2;
+    one_minus_beta2 = 1.0 - beta2;
+    return (9.0 * beta - 8.0 / beta + 3.0 / (beta2 * beta) -
+        3.0 * one_minus_beta2 * one_minus_beta2 * one_minus_beta2 *
+        atanh(beta) / beta4) / (3.0 + beta2);
+}
+
+/* Levermore third moment Q^{ijk} = c E H^{ijk}, with
+ *
+ *   H^{ijk} = (5q - 3f)/2 n^i n^j n^k
+ *           + (f - q)/2 (n^i δ^{jk} + n^j δ^{ki} + n^k δ^{ij}),
+ *
+ * where f = |F|/(cE), n = F/|F|, and q = q(f) above.  The tensor is fully
+ * symmetric in its three indices. */
+static void prj_rad_m1_third_moment(double E, double F1, double F2, double F3,
+    double Q[3][3][3])
+{
+    double E_pos;
+    double Fmag;
+    double cE;
+    double f;
+    double q_fac;
+    double n[3];
+    double coef_nnn;
+    double coef_mix;
+    int a;
+    int b;
+    int c;
+
+    E_pos = E > 0.0 ? E : 0.0;
+    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+    cE = PRJ_CLIGHT * E_pos;
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            for (c = 0; c < 3; ++c) {
+                Q[a][b][c] = 0.0;
+            }
+        }
+    }
+    if (cE <= 0.0 || Fmag <= 0.0) {
+        return;
+    }
+
+    f = Fmag / cE;
+    if (f > 1.0) {
+        f = 1.0;
+    }
+    q_fac = prj_rad_levermore_q_factor(f);
+    n[0] = F1 / Fmag;
+    n[1] = F2 / Fmag;
+    n[2] = F3 / Fmag;
+    coef_nnn = 0.5 * cE * (5.0 * q_fac - 3.0 * f);
+    coef_mix = 0.5 * cE * (f - q_fac);
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            for (c = 0; c < 3; ++c) {
+                Q[a][b][c] = coef_nnn * n[a] * n[b] * n[c] +
+                    coef_mix * (n[a] * (b == c ? 1.0 : 0.0) +
+                        n[b] * (c == a ? 1.0 : 0.0) +
+                        n[c] * (a == b ? 1.0 : 0.0));
+            }
+        }
+    }
+}
+
 static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
     double *fE, double *fF1, double *fF2, double *fF3)
 {
@@ -788,8 +886,9 @@ static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int sid
  *
  * Closure choices:
  *   - P^{ij}_g from the standard M1 Eddington tensor on cell-centred (E_g, F_g).
- *   - Q^{kij}_g = (F^k_g / E_g) · P^{ij}_g.  Reduces to c E n^i n^j n^k in the
- *     free-streaming limit and to 0 in equilibrium, matching the M1 hierarchy.
+ *   - Q^{kij}_g from the Levermore/Vaytet third-moment closure
+ *       Q^{ijk} = c E H^{ijk},
+ *     with H^{ijk} built from f = |F|/(cE), n = F/|F|, and q(f).
  *
  * Reconstruction: linear-in-log-ν with Koren limiter (groups are uniform in
  * log ν → equal spacing).  Outermost group faces (g = -1/2 and g = NEGROUP-1/2)
@@ -845,6 +944,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         double Eg[PRJ_NEGROUP];
         double Fg[PRJ_NEGROUP][3];
         double Pg[PRJ_NEGROUP][3][3];
+        double Qg[PRJ_NEGROUP][3][3][3];
         double dE_acc[PRJ_NEGROUP];
         double dF_acc[PRJ_NEGROUP][3];
         const double *nu_face = rad->eedge[field];
@@ -860,6 +960,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             Fg[g][1] = W_state[VIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
             Fg[g][2] = W_state[VIDX(PRJ_PRIM_RAD_F3(field, g), ic, jc, kc)];
             prj_rad_m1_pressure(Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
+            prj_rad_m1_third_moment(Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Qg[g]);
             dE_acc[g] = 0.0;
             dF_acc[g][0] = 0.0;
             dF_acc[g][1] = 0.0;
@@ -898,7 +999,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         }
 
         /* Flux: dF_{gj}/dt += Σ_{i,k} v^i_{;k} · [(ν Q^{kji})_{g+1/2} - (ν Q^{kji})_{g-1/2}].
-         * Closure: Q^{kji}_g = (F^k_g / E_g) · P^{ji}_g. */
+         * Closure: Q^{kji}_g from the Levermore/Vaytet third moment. */
         for (jj = 0; jj < 3; ++jj) {
             for (kk = 0; kk < 3; ++kk) {
                 for (ii = 0; ii < 3; ++ii) {
@@ -911,9 +1012,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                         continue;
                     }
                     for (g = 0; g < PRJ_NEGROUP; ++g) {
-                        double E_safe = Eg[g] > 0.0 ? Eg[g] : 1.0e-300;
-
-                        q[g] = (Fg[g][kk] / E_safe) * Pg[g][jj][ii];
+                        q[g] = Qg[g][kk][jj][ii];
                     }
 
                     face_val[0] = 0.0;
