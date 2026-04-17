@@ -168,6 +168,7 @@ struct prj_sim {
     double dt;
     int step;
     double cfl;
+    double dt_factor;
     double t_end;
     double output_dt;
     double restart_dt;

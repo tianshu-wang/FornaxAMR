@@ -41,77 +41,75 @@ void prj_src_user(prj_eos *eos, double *W, double *dUdt)
     (void)dUdt;
 }
 
-void prj_src_monopole_gravity(prj_mesh *mesh, const prj_grav_mono *grav_mono,
-    double *restrict W, double *restrict U, double *restrict dUdt)
+void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_mono,
+    double *restrict W, double *restrict dUdt)
 {
-    int bidx;
+    int i;
+    int j;
+    int k;
 
-    if (mesh == 0 || grav_mono == 0) {
+    if (block == 0 || block->id < 0 || block->active != 1 ||
+        grav_mono == 0 || W == 0 || dUdt == 0) {
         return;
     }
 
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        prj_block *block = &mesh->blocks[bidx];
-        int i;
-        int j;
-        int k;
+    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
+                double accel;
+                double g1;
+                double g2;
+                double g3;
+                double rho;
+                double v1;
+                double v2;
+                double v3;
 
-        if (block->id < 0 || block->active != 1 || block->U != U || block->dUdt != dUdt) {
-            continue;
-        }
-        (void)W;
-        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-                    double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-                    double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                    double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
-                    double accel;
-                    double g1;
-                    double g2;
-                    double g3;
+                if (r <= 0.0) {
+                    continue;
+                }
 
-                    if (r <= 0.0) {
-                        continue;
-                    }
+                accel = prj_gravity_interp_accel(grav_mono, r);
+                g1 = accel * x1 / r;
+                g2 = accel * x2 / r;
+                g3 = accel * x3 / r;
+                rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+                v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
+                v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
+                v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
 
-                    accel = prj_gravity_interp_accel(grav_mono, r);
-                    g1 = accel * x1 / r;
-                    g2 = accel * x2 / r;
-                    g3 = accel * x3 / r;
-
-                    dUdt[VIDX(PRJ_CONS_MOM1, i, j, k)] += U[VIDX(PRJ_CONS_RHO, i, j, k)] * g1;
-                    dUdt[VIDX(PRJ_CONS_MOM2, i, j, k)] += U[VIDX(PRJ_CONS_RHO, i, j, k)] * g2;
-                    dUdt[VIDX(PRJ_CONS_MOM3, i, j, k)] += U[VIDX(PRJ_CONS_RHO, i, j, k)] * g3;
-                    dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
-                        U[VIDX(PRJ_CONS_MOM1, i, j, k)] * g1 +
-                        U[VIDX(PRJ_CONS_MOM2, i, j, k)] * g2 +
-                        U[VIDX(PRJ_CONS_MOM3, i, j, k)] * g3;
+                dUdt[VIDX(PRJ_CONS_MOM1, i, j, k)] += rho * g1;
+                dUdt[VIDX(PRJ_CONS_MOM2, i, j, k)] += rho * g2;
+                dUdt[VIDX(PRJ_CONS_MOM3, i, j, k)] += rho * g3;
+                dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
+                    rho * (v1 * g1 + v2 * g2 + v3 * g3);
 #if PRJ_NRAD > 0
-                    {
-                        double lapse = prj_src_interp_lapse(grav_mono, r);
-                        int field;
-                        int group;
+                {
+                    double lapse = prj_src_interp_lapse(grav_mono, r);
+                    int field;
+                    int group;
 
-                        double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
-                        for (field = 0; field < PRJ_NRAD; ++field) {
-                            for (group = 0; group < PRJ_NEGROUP; ++group) {
-                                double E = U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)];
-                                double F1 = U[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)];
-                                double F2 = U[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)];
-                                double F3 = U[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)];
+                    double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
+                    for (field = 0; field < PRJ_NRAD; ++field) {
+                        for (group = 0; group < PRJ_NEGROUP; ++group) {
+                            double E = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
+                            double F1 = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
+                            double F2 = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
+                            double F3 = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
 
-                                dUdt[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)] += lapse * E * g1;
-                                dUdt[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)] += lapse * E * g2;
-                                dUdt[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)] += lapse * E * g3;
-                                dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] +=
-                                    lapse * (g1 * F1 + g2 * F2 + g3 * F3) * inv_c2;
-                            }
+                            dUdt[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)] += lapse * E * g1;
+                            dUdt[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)] += lapse * E * g2;
+                            dUdt[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)] += lapse * E * g3;
+                            dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] +=
+                                lapse * (g1 * F1 + g2 * F2 + g3 * F3) * inv_c2;
                         }
                     }
-#endif
                 }
+#endif
             }
         }
     }
@@ -183,123 +181,114 @@ static void prj_src_rad_m1_pressure(double E, double F1, double F2, double F3,
  * built by central differencing the face-centred Riemann velocities stored in
  * block->v_riemann[face_dir][component, ...] during the most recent flux update,
  * so the velocity field used here is the same one the hydro fluxes saw. */
-void prj_src_radiation_vel_grad(prj_mesh *mesh,
-    double *restrict U, double *restrict dUdt)
+void prj_src_radiation_vel_grad(const prj_block *block,
+    double *restrict W, double *restrict dUdt)
 {
 #if PRJ_NRAD > 0
-    int bidx;
     const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+    int i;
+    int j;
+    int k;
 
-    if (mesh == 0) {
+    if (block == 0 || block->id < 0 || block->active != 1 || W == 0 || dUdt == 0) {
+        return;
+    }
+    if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
         return;
     }
 
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        prj_block *block = &mesh->blocks[bidx];
-        int i;
-        int j;
-        int k;
+    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                double dvdx[3][3]; /* dvdx[jdir][icomp] = ∂_jdir v_icomp */
+                int jdir;
+                int icomp;
+                int field;
+                int group;
+                double inv_dx[3];
+                /* Cell-centred lapse α(r) for the GR proper-time slowdown. */
+                double xc1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                double xc2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                double xc3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
+                double lapse = (grav_mono != 0)
+                    ? prj_src_interp_lapse(grav_mono, r_cell)
+                    : 1.0;
 
-        if (block->id < 0 || block->active != 1 || block->U != U || block->dUdt != dUdt) {
-            continue;
-        }
-        if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
-            continue;
-        }
+                inv_dx[0] = 1.0 / block->dx[0];
+                inv_dx[1] = 1.0 / block->dx[1];
+                inv_dx[2] = 1.0 / block->dx[2];
 
-        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    double dvdx[3][3]; /* dvdx[jdir][icomp] = ∂_jdir v_icomp */
-                    int jdir;
-                    int icomp;
-                    int field;
-                    int group;
-                    double inv_dx[3];
-                    /* Cell-centred lapse α(r) for the GR proper-time slowdown. */
-                    double xc1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-                    double xc2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-                    double xc3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                    double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
-                    double lapse = (grav_mono != 0)
-                        ? prj_src_interp_lapse(grav_mono, r_cell)
-                        : 1.0;
+                /* ∂_jdir v_icomp at cell centre, from the two normal-direction
+                 * faces bracketing the cell along jdir.  v_riemann[jdir] is
+                 * laid out as [icomp * NCELLS + IDX(face)] with the face index
+                 * along jdir running 0..PRJ_BLOCK_SIZE (left/right faces). */
+                for (jdir = 0; jdir < 3; ++jdir) {
+                    for (icomp = 0; icomp < 3; ++icomp) {
+                        int il = i;
+                        int jl = j;
+                        int kl = k;
+                        int ir = i;
+                        int jr = j;
+                        int kr = k;
+                        double vL;
+                        double vR;
 
-                    inv_dx[0] = 1.0 / block->dx[0];
-                    inv_dx[1] = 1.0 / block->dx[1];
-                    inv_dx[2] = 1.0 / block->dx[2];
-
-                    /* ∂_jdir v_icomp at cell centre, from the two normal-direction
-                     * faces bracketing the cell along jdir.  v_riemann[jdir] is
-                     * laid out as [icomp * NCELLS + IDX(face)] with the face index
-                     * along jdir running 0..PRJ_BLOCK_SIZE (left/right faces). */
-                    for (jdir = 0; jdir < 3; ++jdir) {
-                        for (icomp = 0; icomp < 3; ++icomp) {
-                            int il = i;
-                            int jl = j;
-                            int kl = k;
-                            int ir = i;
-                            int jr = j;
-                            int kr = k;
-                            double vL;
-                            double vR;
-
-                            if (jdir == X1DIR) {
-                                ir = i + 1;
-                            } else if (jdir == X2DIR) {
-                                jr = j + 1;
-                            } else {
-                                kr = k + 1;
-                            }
-                            vL = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(il, jl, kl)];
-                            vR = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(ir, jr, kr)];
-                            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+                        if (jdir == X1DIR) {
+                            ir = i + 1;
+                        } else if (jdir == X2DIR) {
+                            jr = j + 1;
+                        } else {
+                            kr = k + 1;
                         }
+                        vL = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(il, jl, kl)];
+                        vR = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(ir, jr, kr)];
+                        dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
                     }
+                }
 
-                    for (field = 0; field < PRJ_NRAD; ++field) {
-                        for (group = 0; group < PRJ_NEGROUP; ++group) {
-                            double E = U[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)];
-                            double F[3];
-                            double P[3][3];
-                            double dE_src;
-                            int jj;
-                            int ii;
+                for (field = 0; field < PRJ_NRAD; ++field) {
+                    for (group = 0; group < PRJ_NEGROUP; ++group) {
+                        double E = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
+                        double F[3];
+                        double P[3][3];
+                        double dE_src;
+                        int jj;
+                        int ii;
 
-                            F[0] = U[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)];
-                            F[1] = U[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)];
-                            F[2] = U[VIDX(PRJ_CONS_RAD_F3(field, group), i, j, k)];
+                        F[0] = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
+                        F[1] = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
+                        F[2] = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
 
-                            /* Closure: P^{ij} from the cell-centred (E, F). */
-                            prj_src_rad_m1_pressure(E, F[0], F[1], F[2], P);
+                        /* Closure: P^{ij} from the cell-centred (E, F). */
+                        prj_src_rad_m1_pressure(E, F[0], F[1], F[2], P);
 
-                            /* Energy: dE/dt += sum_{ij} (∂_j v_i) P^{ji}.
-                             * P is symmetric in M1 so P^{ji} = P^{ij}. */
-                            dE_src = 0.0;
-                            for (jj = 0; jj < 3; ++jj) {
-                                for (ii = 0; ii < 3; ++ii) {
-                                    dE_src += dvdx[jj][ii] * P[jj][ii];
-                                }
+                        /* Energy: dE/dt += sum_{ij} (∂_j v_i) P^{ji}.
+                         * P is symmetric in M1 so P^{ji} = P^{ij}. */
+                        dE_src = 0.0;
+                        for (jj = 0; jj < 3; ++jj) {
+                            for (ii = 0; ii < 3; ++ii) {
+                                dE_src += dvdx[jj][ii] * P[jj][ii];
                             }
-                            /* GR lapse: same α(r) factor that multiplies the
-                             * spatial radiation flux and the gravity source. */
-                            dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] += lapse * dE_src;
+                        }
+                        /* GR lapse: same α(r) factor that multiplies the
+                         * spatial radiation flux and the gravity source. */
+                        dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] += lapse * dE_src;
 
-                            /* Flux: dF_j/dt += sum_i (∂_j v_i) F_i. */
-                            {
-                                int fi[3];
-                                double dFj;
+                        /* Flux: dF_j/dt += sum_i (∂_j v_i) F_i. */
+                        {
+                            int fi[3];
+                            double dFj;
 
-                                fi[0] = PRJ_CONS_RAD_F1(field, group);
-                                fi[1] = PRJ_CONS_RAD_F2(field, group);
-                                fi[2] = PRJ_CONS_RAD_F3(field, group);
-                                for (jj = 0; jj < 3; ++jj) {
-                                    dFj = 0.0;
-                                    for (ii = 0; ii < 3; ++ii) {
-                                        dFj += dvdx[jj][ii] * F[ii];
-                                    }
-                                    dUdt[VIDX(fi[jj], i, j, k)] += lapse * dFj;
+                            fi[0] = PRJ_CONS_RAD_F1(field, group);
+                            fi[1] = PRJ_CONS_RAD_F2(field, group);
+                            fi[2] = PRJ_CONS_RAD_F3(field, group);
+                            for (jj = 0; jj < 3; ++jj) {
+                                dFj = 0.0;
+                                for (ii = 0; ii < 3; ++ii) {
+                                    dFj += dvdx[jj][ii] * F[ii];
                                 }
+                                dUdt[VIDX(fi[jj], i, j, k)] += lapse * dFj;
                             }
                         }
                     }
@@ -308,17 +297,17 @@ void prj_src_radiation_vel_grad(prj_mesh *mesh,
         }
     }
 #else
-    (void)mesh;
-    (void)U;
+    (void)block;
+    (void)W;
     (void)dUdt;
 #endif
 }
 
-void prj_src_update(prj_mesh *mesh, prj_eos *eos, double *restrict W,
-    double *restrict U, double *restrict dUdt)
+void prj_src_update(prj_eos *eos, const prj_block *block, double *restrict W,
+    double *restrict dUdt)
 {
     prj_src_geom(eos, W, dUdt);
     prj_src_user(eos, W, dUdt);
-    prj_src_monopole_gravity(mesh, prj_gravity_active_monopole(), W, U, dUdt);
-    prj_src_radiation_vel_grad(mesh, U, dUdt);
+    prj_src_monopole_gravity(block, prj_gravity_active_monopole(), W, dUdt);
+    prj_src_radiation_vel_grad(block, W, dUdt);
 }

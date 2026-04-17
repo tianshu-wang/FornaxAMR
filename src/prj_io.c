@@ -142,6 +142,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->bc.bc_x3_inner = PRJ_BC_OUTFLOW;
     sim->bc.bc_x3_outer = PRJ_BC_OUTFLOW;
     sim->cfl = 0.8;
+    sim->dt_factor = 1.2;
     sim->t_end = 0.1;
     sim->output_dt = -1.0;
     sim->restart_dt = -1.0;
@@ -252,6 +253,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->cfl = strtod(value, &endptr);
         } else if (strcmp(key, "t_end") == 0) {
             sim->t_end = strtod(value, &endptr);
+        } else if (strcmp(key, "dt_factor") == 0) {
+            sim->dt_factor = strtod(value, &endptr);
         } else if (strcmp(key, "output_dt") == 0) {
             sim->output_dt = strtod(value, &endptr);
         } else if (strcmp(key, "restart_dt") == 0) {
@@ -730,7 +733,7 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
 }
 
 void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count,
-    double next_output_time, double next_restart_time)
+    double next_output_time, double next_restart_time, double dt)
 {
     char filename[64];
     hid_t file;
@@ -757,6 +760,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     prj_io_write_attr_int(file, "dump_count", dump_count);
     prj_io_write_attr_double(file, "next_output_time", next_output_time);
     prj_io_write_attr_double(file, "next_restart_time", next_restart_time);
+    prj_io_write_attr_double(file, "dt", dt);
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
@@ -828,7 +832,8 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
 }
 
 void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename,
-    double *time, int *step, int *dump_count, double *next_output_time, double *next_restart_time)
+    double *time, int *step, int *dump_count, double *next_output_time, double *next_restart_time,
+    double *dt)
 {
     hid_t file;
     hid_t dset_data;
@@ -859,6 +864,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     }
     if (next_restart_time != 0) {
         *next_restart_time = prj_io_read_attr_double_optional(file, "next_restart_time", -1.0);
+    }
+    if (dt != 0) {
+        *dt = prj_io_read_attr_double_optional(file, "dt", 0.0);
     }
     prj_io_read_attr_int(file, "nblocks", &nblocks);
     prj_io_read_attr_int(file, "nvar_prim", &nvar_prim);

@@ -179,7 +179,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int k;
 
             prj_flux_div(block->flux, block->area, block->vol, block->dUdt);
-            prj_src_update(mesh, eos, block->W, block->U, block->dUdt);
+            prj_src_update(eos, block, block->W, block->dUdt);
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -250,7 +250,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int k;
 
             prj_flux_div(block->flux, block->area, block->vol, block->dUdt);
-            prj_src_update(mesh, eos, block->W1, block->U, block->dUdt);
+            prj_src_update(eos, block, block->W1, block->dUdt);
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -288,6 +288,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             }
         }
     }
+    prj_eos_fill_mesh(mesh, eos, 1);
 }
 
 void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos, prj_rad *rad, double dt)

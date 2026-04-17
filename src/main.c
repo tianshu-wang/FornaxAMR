@@ -251,7 +251,7 @@ int main(int argc, char *argv[])
         saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
         saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
         prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
-            &next_output_time, &next_restart_time);
+            &next_output_time, &next_restart_time, &sim.dt);
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
@@ -298,7 +298,17 @@ int main(int argc, char *argv[])
         int write_restart = 0;
         double next_event_time = -1.0;
 
-        sim.dt = prj_timeint_calc_dt(&sim.mesh, &sim.eos, sim.cfl);
+        {
+            double dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, sim.cfl);
+
+            if (sim.dt > 0.0) {
+                double dt_limit = sim.dt_factor * sim.dt;
+
+                sim.dt = dt_new <= dt_limit ? dt_new : dt_limit;
+            } else {
+                sim.dt = dt_new;
+            }
+        }
         if (sim.output_dt >= 0.0 && next_output_time >= 0.0) {
             next_event_time = next_output_time;
         }
@@ -360,7 +370,7 @@ int main(int argc, char *argv[])
         }
         if (write_restart) {
             prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
-                next_output_time, next_restart_time);
+                next_output_time, next_restart_time, sim.dt);
         }
         if (mpi.rank == 0) {
             struct timeval wall_now;
@@ -387,7 +397,7 @@ int main(int argc, char *argv[])
     }
 
     prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
-        next_output_time, next_restart_time);
+        next_output_time, next_restart_time, sim.dt);
     if (mpi.rank == 0) {
         char final_restart[64];
 
