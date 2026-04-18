@@ -179,6 +179,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "amr estimator: %s\n",
         prj_amr_estimator_label(sim)
     );
+    fprintf(stderr, "max_level: %d\n", sim->mesh.max_level);
     fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
 }
 
