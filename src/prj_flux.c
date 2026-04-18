@@ -369,11 +369,43 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     {
                         double x_face[3];
                         double dx_dir;
+                        double chi_face[PRJ_NRAD * PRJ_NEGROUP];
+                        double kappa_L[PRJ_NRAD * PRJ_NEGROUP];
+                        double sigma_L[PRJ_NRAD * PRJ_NEGROUP];
+                        double delta_L[PRJ_NRAD * PRJ_NEGROUP];
+                        double eta_L[PRJ_NRAD * PRJ_NEGROUP];
+                        double kappa_R[PRJ_NRAD * PRJ_NEGROUP];
+                        double sigma_R[PRJ_NRAD * PRJ_NEGROUP];
+                        double delta_R[PRJ_NRAD * PRJ_NEGROUP];
+                        double eta_R[PRJ_NRAD * PRJ_NEGROUP];
+                        double rho_L = W[VIDX(PRJ_PRIM_RHO, il, jl, kl)];
+                        double ye_L = W[VIDX(PRJ_PRIM_YE, il, jl, kl)];
+                        double rho_R = W[VIDX(PRJ_PRIM_RHO, ir, jr, kr)];
+                        double ye_R = W[VIDX(PRJ_PRIM_YE, ir, jr, kr)];
+                        double T_L = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, il, jl, kl)] : 0.0;
+                        double T_R = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ir, jr, kr)] : 0.0;
+                        int idx;
+
                         x_face[0] = block->xmin[0] + ((dir == X1DIR) ? (double)i : ((double)i + 0.5)) * block->dx[0];
                         x_face[1] = block->xmin[1] + ((dir == X2DIR) ? (double)j : ((double)j + 0.5)) * block->dx[1];
                         x_face[2] = block->xmin[2] + ((dir == X3DIR) ? (double)k : ((double)k + 0.5)) * block->dx[2];
                         dx_dir = block->dx[dir];
-                        prj_rad_flux(WL, WR, eos, rad, grav_mono, x_face, dx_dir, v_face_loc[0], Fl);
+
+                        prj_rad3_opac_lookup(rad, rho_L, T_L, ye_L, kappa_L, sigma_L, delta_L, eta_L);
+                        prj_rad3_opac_lookup(rad, rho_R, T_R, ye_R, kappa_R, sigma_R, delta_R, eta_R);
+                        for (idx = 0; idx < PRJ_NRAD * PRJ_NEGROUP; ++idx) {
+                            double kL = kappa_L[idx];
+                            double kR = kappa_R[idx];
+                            double sL_o = sigma_L[idx];
+                            double sR_o = sigma_R[idx];
+                            double k_sum = kL + kR;
+                            double s_sum = sL_o + sR_o;
+                            double k_face = (k_sum > 0.0) ? (2.0 * kL * kR / k_sum) : 0.0;
+                            double s_face = (s_sum > 0.0) ? (2.0 * sL_o * sR_o / s_sum) : 0.0;
+                            chi_face[idx] = k_face + s_face;
+                        }
+
+                        prj_rad_flux(WL, WR, grav_mono, x_face, chi_face, dx_dir, v_face_loc[0], Fl);
                     }
 #endif
                     prj_flux_rotate_from_local(Fl, dir, Fg);

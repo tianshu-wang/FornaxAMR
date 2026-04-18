@@ -314,14 +314,13 @@ static void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
 }
 #endif
 
-void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const prj_rad *rad,
-    const prj_grav_mono *grav_mono, const double *x_face, double dx_dir, double v_face, double *flux)
+void prj_rad_flux(const double *WL, const double *WR,
+    const prj_grav_mono *grav_mono, const double *x_face, const double *chi_face,
+    double dx_dir, double v_face, double *flux)
 {
     int field;
     int group;
     double lapse;
-
-    (void)eos;
 
     if (WL == 0 || WR == 0 || flux == 0) {
         return;
@@ -336,23 +335,6 @@ void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const 
 
 #if PRJ_NRAD > 0
     {
-        double kappa_avg[PRJ_NRAD * PRJ_NEGROUP];
-        double sigma_avg[PRJ_NRAD * PRJ_NEGROUP];
-        double delta_avg[PRJ_NRAD * PRJ_NEGROUP];
-        double eta_avg[PRJ_NRAD * PRJ_NEGROUP];
-        double rho_avg;
-        double eint_avg;
-        double ye_avg;
-        double T_avg;
-        double eos_q[PRJ_EOS_NQUANT];
-
-        rho_avg = 0.5 * (WL[PRJ_PRIM_RHO] + WR[PRJ_PRIM_RHO]);
-        eint_avg = 0.5 * (WL[PRJ_PRIM_EINT] + WR[PRJ_PRIM_EINT]);
-        ye_avg = 0.5 * (WL[PRJ_PRIM_YE] + WR[PRJ_PRIM_YE]);
-        prj_eos_rey((prj_eos *)eos, rho_avg, eint_avg, ye_avg, eos_q);
-        T_avg = eos_q[PRJ_EOS_TEMPERATURE];
-        prj_rad3_opac_lookup(rad, rho_avg, T_avg, ye_avg, kappa_avg, sigma_avg, delta_avg, eta_avg);
-
         for (field = 0; field < PRJ_NRAD; ++field) {
             for (group = 0; group < PRJ_NEGROUP; ++group) {
                 int idx = field * PRJ_NEGROUP + group;
@@ -405,7 +387,7 @@ void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const 
                 }
                 denom = sR - sL;
 
-                chi_ext = kappa_avg[idx] + sigma_avg[idx];
+                chi_ext = chi_face != 0 ? chi_face[idx] : 0.0;
                 tau = chi_ext * dx_dir;
                 eps = 3.0 / (5.0 * tau + 1.0e-10);
                 if (eps > 1.0) {
@@ -437,8 +419,9 @@ void prj_rad_flux(const double *WL, const double *WR, const prj_eos *eos, const 
         }
     }
 #else
-    (void)rad;
+    (void)chi_face;
     (void)dx_dir;
+    (void)v_face;
     (void)lapse;
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
