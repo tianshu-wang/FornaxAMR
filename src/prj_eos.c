@@ -674,6 +674,53 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, int stage)
     }
 }
 
+void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, int stage)
+{
+    int bidx;
+
+    if (mesh == 0) {
+        return;
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        prj_mpi *mpi = prj_mpi_current();
+        double *W = stage == 2 ? block->W1 : block->W;
+        int i;
+        int j;
+        int k;
+
+        if (block->id < 0 || block->active != 1 || W == 0 || block->U == 0) {
+            continue;
+        }
+        if (mpi != 0 && block->rank != mpi->rank) {
+            continue;
+        }
+        for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+            for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+                for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                    double Wc[PRJ_NVAR_PRIM];
+                    double Uc[PRJ_NVAR_CONS];
+                    int v;
+
+                    if (i >= 0 && i < PRJ_BLOCK_SIZE &&
+                        j >= 0 && j < PRJ_BLOCK_SIZE &&
+                        k >= 0 && k < PRJ_BLOCK_SIZE) {
+                        continue;
+                    }
+                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                        Wc[v] = W[VIDX(v, i, j, k)];
+                    }
+                    prj_eos_prim2cons(eos, Wc, Uc);
+                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                        block->U[VIDX(v, i, j, k)] = Uc[v];
+                    }
+                }
+            }
+        }
+    }
+}
+
 void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)
 {
     double rho;
