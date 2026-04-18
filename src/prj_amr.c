@@ -690,6 +690,25 @@ int prj_amr_criteria_need_eosvar(const prj_mesh *mesh)
     return 0;
 }
 
+int prj_amr_criteria_need_gravity(const prj_mesh *mesh)
+{
+    int amr_idx;
+
+    if (mesh == 0) {
+        return 0;
+    }
+
+    for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
+        if (mesh->amr_criterion_set[amr_idx] == 0) {
+            continue;
+        }
+        if (mesh->amr_estimator[amr_idx] == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int prj_has_face_neighbor_coarser_than(const prj_mesh *mesh, const prj_block *b, int min_level)
 {
     int n;

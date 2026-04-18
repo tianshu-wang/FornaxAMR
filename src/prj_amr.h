@@ -3,6 +3,7 @@
 
 void prj_amr_tag(prj_mesh *mesh, prj_eos *eos);
 int prj_amr_criteria_need_eosvar(const prj_mesh *mesh);
+int prj_amr_criteria_need_gravity(const prj_mesh *mesh);
 void prj_amr_enforce_two_to_one(prj_mesh *mesh);
 void prj_amr_refine_marked_blocks(prj_mesh *mesh);
 void prj_amr_refine_block(prj_mesh *mesh, int block_id);

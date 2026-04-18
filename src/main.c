@@ -348,6 +348,12 @@ int main(int argc, char *argv[])
             if (prj_amr_criteria_need_eosvar(&sim.mesh)) {
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
             }
+#if PRJ_USE_GRAVITY
+            if (prj_amr_criteria_need_gravity(&sim.mesh)) {
+                prj_gravity_monopole_reduce(&sim.mesh, 1);
+                prj_gravity_monopole_integrate(&sim.mesh);
+            }
+#endif
             prj_amr_adapt(&sim.mesh, &sim.eos);
             prj_mpi_rebalance(&sim.mesh);
             prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
