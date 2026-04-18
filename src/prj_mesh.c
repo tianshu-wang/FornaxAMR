@@ -211,6 +211,45 @@ int prj_mesh_count_active(const prj_mesh *mesh)
     return count;
 }
 
+static double prj_mesh_block_cell_size(const prj_block *block)
+{
+    double cell_size;
+
+    if (block == 0) {
+        return 0.0;
+    }
+    cell_size = block->dx[0];
+    if (block->dx[1] > cell_size) {
+        cell_size = block->dx[1];
+    }
+    if (block->dx[2] > cell_size) {
+        cell_size = block->dx[2];
+    }
+    return cell_size;
+}
+
+double prj_mesh_min_cell_size(const prj_mesh *mesh)
+{
+    double min_cell_size = 1.0e99;
+    int i;
+    int found = 0;
+
+    if (mesh == 0) {
+        return 0.0;
+    }
+    for (i = 0; i < mesh->nblocks; ++i) {
+        if (mesh->blocks[i].active == 1) {
+            double cell_size = prj_mesh_block_cell_size(&mesh->blocks[i]);
+
+            if (cell_size < min_cell_size) {
+                min_cell_size = cell_size;
+            }
+            found = 1;
+        }
+    }
+    return found != 0 ? min_cell_size : 0.0;
+}
+
 void prj_mesh_update_max_active_level(prj_mesh *mesh)
 {
     int i;
@@ -265,14 +304,16 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     double saved_amr_refine_thresh[PRJ_AMR_N];
     double saved_amr_derefine_thresh[PRJ_AMR_N];
     int saved_amr_estimator[PRJ_AMR_N];
+    int saved_amr_lohner_var[PRJ_AMR_N];
     int saved_amr_criterion_set[PRJ_AMR_N];
-    double saved_amr_eps;
+    double saved_amr_lohner_eps[PRJ_AMR_N];
     int saved_use_amr_angle_resolution;
     double saved_amr_angle_resolution_limit;
     double saved_E_floor;
+    double saved_min_dx;
     int amr_idx;
 
-    if (mesh == 0 || coord == 0 || root_nx1 <= 0 || root_nx2 <= 0 || root_nx3 <= 0 || max_level < 0) {
+    if (mesh == 0 || coord == 0 || root_nx1 <= 0 || root_nx2 <= 0 || root_nx3 <= 0) {
         return 1;
     }
 
@@ -280,16 +321,19 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         saved_amr_refine_thresh[amr_idx] = mesh->amr_refine_thresh[amr_idx];
         saved_amr_derefine_thresh[amr_idx] = mesh->amr_derefine_thresh[amr_idx];
         saved_amr_estimator[amr_idx] = mesh->amr_estimator[amr_idx];
+        saved_amr_lohner_var[amr_idx] = mesh->amr_lohner_var[amr_idx];
+        saved_amr_lohner_eps[amr_idx] = mesh->amr_lohner_eps[amr_idx];
         saved_amr_criterion_set[amr_idx] = mesh->amr_criterion_set[amr_idx];
     }
-    saved_amr_eps = mesh->amr_eps;
     saved_use_amr_angle_resolution = mesh->use_amr_angle_resolution;
     saved_amr_angle_resolution_limit = mesh->amr_angle_resolution_limit;
     saved_E_floor = mesh->E_floor;
+    saved_min_dx = mesh->min_dx;
 
     mesh->nblocks = 0;
     mesh->nblocks_max = 0;
     mesh->max_level = max_level;
+    mesh->min_dx = saved_min_dx;
     mesh->max_active_level = -1;
     mesh->root_nx[0] = root_nx1;
     mesh->root_nx[1] = root_nx2;
@@ -299,9 +343,10 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         mesh->amr_refine_thresh[amr_idx] = saved_amr_refine_thresh[amr_idx];
         mesh->amr_derefine_thresh[amr_idx] = saved_amr_derefine_thresh[amr_idx];
         mesh->amr_estimator[amr_idx] = saved_amr_estimator[amr_idx];
+        mesh->amr_lohner_var[amr_idx] = saved_amr_lohner_var[amr_idx];
+        mesh->amr_lohner_eps[amr_idx] = saved_amr_lohner_eps[amr_idx];
         mesh->amr_criterion_set[amr_idx] = saved_amr_criterion_set[amr_idx];
     }
-    mesh->amr_eps = saved_amr_eps;
     mesh->use_amr_angle_resolution = saved_use_amr_angle_resolution;
     mesh->amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
     mesh->E_floor = saved_E_floor;

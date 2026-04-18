@@ -98,7 +98,7 @@ static void prj_problem_fill_until_amr_converged(prj_sim *sim)
     unsigned long long next_sig;
 
     prj_problem_fill_mesh(sim, prj_problem_initial_condition);
-    if (sim->mesh.max_level <= 0) {
+    if (sim->mesh.max_level == 0) {
         return;
     }
 

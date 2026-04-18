@@ -348,7 +348,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
     prj_gravity_monopole_reduce(&sim->mesh, 1);
     prj_gravity_monopole_integrate(&sim->mesh);
 #endif
-    if (sim->mesh.max_level <= 0) {
+    if (sim->mesh.max_level == 0) {
         return;
     }
 

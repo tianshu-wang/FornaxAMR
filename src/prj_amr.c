@@ -28,6 +28,23 @@ static double prj_sqrt_double(double x)
     return sqrt(x);
 }
 
+static double prj_block_cell_size(const prj_block *block)
+{
+    double cell_size;
+
+    if (block == 0) {
+        return 0.0;
+    }
+    cell_size = block->dx[0];
+    if (block->dx[1] > cell_size) {
+        cell_size = block->dx[1];
+    }
+    if (block->dx[2] > cell_size) {
+        cell_size = block->dx[2];
+    }
+    return cell_size;
+}
+
 static int prj_clamp_storage_index(int idx)
 {
     if (idx < -PRJ_NGHOST) {
@@ -58,6 +75,55 @@ static int prj_is_local_block_owner(const prj_block *b)
     return b != 0 && b->id >= 0 && (mpi == 0 || b->rank == mpi->rank);
 }
 
+enum {
+    PRJ_AMR_BOUNDARY_XMIN = 1 << 0,
+    PRJ_AMR_BOUNDARY_XMAX = 1 << 1,
+    PRJ_AMR_BOUNDARY_YMIN = 1 << 2,
+    PRJ_AMR_BOUNDARY_YMAX = 1 << 3,
+    PRJ_AMR_BOUNDARY_ZMIN = 1 << 4,
+    PRJ_AMR_BOUNDARY_ZMAX = 1 << 5
+};
+
+static unsigned int prj_amr_refine_boundary_mask_for_cell(int i, int j, int k)
+{
+    const int boundary_buffer = 2;
+    unsigned int mask = 0U;
+
+    if (i < boundary_buffer) {
+        mask |= PRJ_AMR_BOUNDARY_XMIN;
+    }
+    if (i >= PRJ_BLOCK_SIZE - boundary_buffer) {
+        mask |= PRJ_AMR_BOUNDARY_XMAX;
+    }
+    if (j < boundary_buffer) {
+        mask |= PRJ_AMR_BOUNDARY_YMIN;
+    }
+    if (j >= PRJ_BLOCK_SIZE - boundary_buffer) {
+        mask |= PRJ_AMR_BOUNDARY_YMAX;
+    }
+    if (k < boundary_buffer) {
+        mask |= PRJ_AMR_BOUNDARY_ZMIN;
+    }
+    if (k >= PRJ_BLOCK_SIZE - boundary_buffer) {
+        mask |= PRJ_AMR_BOUNDARY_ZMAX;
+    }
+    return mask;
+}
+
+static int prj_amr_boundary_mask_has_side(unsigned int mask, int axis, int sign)
+{
+    if (sign == 0) {
+        return 1;
+    }
+    if (axis == 0) {
+        return (mask & (sign < 0 ? PRJ_AMR_BOUNDARY_XMIN : PRJ_AMR_BOUNDARY_XMAX)) != 0U;
+    }
+    if (axis == 1) {
+        return (mask & (sign < 0 ? PRJ_AMR_BOUNDARY_YMIN : PRJ_AMR_BOUNDARY_YMAX)) != 0U;
+    }
+    return (mask & (sign < 0 ? PRJ_AMR_BOUNDARY_ZMIN : PRJ_AMR_BOUNDARY_ZMAX)) != 0U;
+}
+
 static void prj_amr_sync_refine_flags(prj_mesh *mesh)
 {
 #if defined(PRJ_ENABLE_MPI)
@@ -83,12 +149,12 @@ static void prj_amr_sync_refine_flags(prj_mesh *mesh)
         return;
     }
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (!prj_is_local_active_block(&mesh->blocks[i])) {
-            continue;
-        }
         if (mesh->blocks[i].refine_flag > 0) {
-            local_pos[i] = 1;
-        } else if (mesh->blocks[i].refine_flag < 0) {
+            if (prj_is_active_block(&mesh->blocks[i])) {
+                local_pos[i] = 1;
+            }
+        } else if (mesh->blocks[i].refine_flag < 0 &&
+            prj_is_local_active_block(&mesh->blocks[i])) {
             local_neg[i] = -1;
         }
     }
@@ -403,17 +469,42 @@ static void prj_apply_eint_floor(double E_floor, double *U, double *W)
     U[PRJ_CONS_ETOT] = rho * (E_floor + kinetic);
 }
 
-static double prj_loehner_cell_indicator(const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
+static double prj_loehner_cell_value(const prj_mesh *mesh, const prj_block *b, int lohner_var, int i, int j, int k)
+{
+    (void)mesh;
+
+    if (b == 0) {
+        return 0.0;
+    }
+    if (lohner_var == PRJ_LOHNER_VAR_LOG_DENSITY) {
+        double rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
+
+        if (rho <= 0.0) {
+            return 0.0;
+        }
+        return log(rho);
+    }
+    if (lohner_var == PRJ_LOHNER_VAR_DENSITY) {
+        return prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
+    }
+    if (lohner_var == PRJ_LOHNER_VAR_TEMPERATURE) {
+        return b->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
+    }
+    return b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+}
+
+static double prj_loehner_cell_indicator(
+    const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int lohner_var, double lohner_eps, int i, int j, int k)
 {
     const double small = 1.0e-14;
-    double alpha = mesh != 0 ? mesh->amr_eps : 0.1;
-    double p0;
-    double pxm;
-    double pxp;
-    double pym;
-    double pyp;
-    double pzm;
-    double pzp;
+    double alpha = lohner_eps;
+    double u0;
+    double uxm;
+    double uxp;
+    double uym;
+    double uyp;
+    double uzm;
+    double uzp;
     double num_x;
     double num_y;
     double num_z;
@@ -424,22 +515,22 @@ static double prj_loehner_cell_indicator(const prj_mesh *mesh, const prj_block *
     double denominator;
 
     (void)eos;
-    p0 = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
-    pxm = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i - 1, j, k)];
-    pxp = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i + 1, j, k)];
-    pym = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j - 1, k)];
-    pyp = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j + 1, k)];
-    pzm = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k - 1)];
-    pzp = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k + 1)];
-    num_x = pxp - 2.0 * p0 + pxm;
-    num_y = pyp - 2.0 * p0 + pym;
-    num_z = pzp - 2.0 * p0 + pzm;
-    den_x = prj_abs_double(pxp - p0) + prj_abs_double(p0 - pxm) +
-        alpha * (prj_abs_double(pxp) + 2.0 * prj_abs_double(p0) + prj_abs_double(pxm));
-    den_y = prj_abs_double(pyp - p0) + prj_abs_double(p0 - pym) +
-        alpha * (prj_abs_double(pyp) + 2.0 * prj_abs_double(p0) + prj_abs_double(pym));
-    den_z = prj_abs_double(pzp - p0) + prj_abs_double(p0 - pzm) +
-        alpha * (prj_abs_double(pzp) + 2.0 * prj_abs_double(p0) + prj_abs_double(pzm));
+    u0 = prj_loehner_cell_value(mesh, b, lohner_var, i, j, k);
+    uxm = prj_loehner_cell_value(mesh, b, lohner_var, i - 1, j, k);
+    uxp = prj_loehner_cell_value(mesh, b, lohner_var, i + 1, j, k);
+    uym = prj_loehner_cell_value(mesh, b, lohner_var, i, j - 1, k);
+    uyp = prj_loehner_cell_value(mesh, b, lohner_var, i, j + 1, k);
+    uzm = prj_loehner_cell_value(mesh, b, lohner_var, i, j, k - 1);
+    uzp = prj_loehner_cell_value(mesh, b, lohner_var, i, j, k + 1);
+    num_x = uxp - 2.0 * u0 + uxm;
+    num_y = uyp - 2.0 * u0 + uym;
+    num_z = uzp - 2.0 * u0 + uzm;
+    den_x = prj_abs_double(uxp - u0) + prj_abs_double(u0 - uxm) +
+        alpha * (prj_abs_double(uxp) + 2.0 * prj_abs_double(u0) + prj_abs_double(uxm));
+    den_y = prj_abs_double(uyp - u0) + prj_abs_double(u0 - uym) +
+        alpha * (prj_abs_double(uyp) + 2.0 * prj_abs_double(u0) + prj_abs_double(uym));
+    den_z = prj_abs_double(uzp - u0) + prj_abs_double(u0 - uzm) +
+        alpha * (prj_abs_double(uzp) + 2.0 * prj_abs_double(u0) + prj_abs_double(uzm));
     numerator = num_x * num_x + num_y * num_y + num_z * num_z;
     denominator = den_x * den_x + den_y * den_y + den_z * den_z + small;
 
@@ -556,7 +647,7 @@ static double prj_density_jump_cell_indicator(const prj_block *b, int i, int j, 
 }
 
 static double prj_amr_cell_indicator_for_estimator(
-    const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int estimator, int i, int j, int k)
+    const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int amr_idx, int estimator, int i, int j, int k)
 {
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_DENSITY_JUMP) {
         return prj_density_jump_cell_indicator(b, i, j, k);
@@ -567,7 +658,8 @@ static double prj_amr_cell_indicator_for_estimator(
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
         return prj_velocity_cell_indicator(b, eos, i, j, k);
     }
-    return prj_loehner_cell_indicator(mesh, b, eos, i, j, k);
+    return prj_loehner_cell_indicator(
+        mesh, b, eos, mesh->amr_lohner_var[amr_idx], mesh->amr_lohner_eps[amr_idx], i, j, k);
 }
 
 int prj_amr_criteria_need_eosvar(const prj_mesh *mesh)
@@ -585,9 +677,13 @@ int prj_amr_criteria_need_eosvar(const prj_mesh *mesh)
             continue;
         }
         estimator = mesh->amr_estimator[amr_idx];
-        if (estimator == PRJ_AMR_ESTIMATOR_LOEHNER ||
-            estimator == PRJ_AMR_ESTIMATOR_VELOCITY ||
+        if (estimator == PRJ_AMR_ESTIMATOR_VELOCITY ||
             estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+            return 1;
+        }
+        if (estimator == PRJ_AMR_ESTIMATOR_LOEHNER &&
+            mesh->amr_lohner_var[amr_idx] != PRJ_LOHNER_VAR_DENSITY &&
+            mesh->amr_lohner_var[amr_idx] != PRJ_LOHNER_VAR_LOG_DENSITY) {
             return 1;
         }
     }
@@ -609,6 +705,68 @@ static int prj_has_face_neighbor_coarser_than(const prj_mesh *mesh, const prj_bl
         }
     }
     return 0;
+}
+
+static int prj_block_neighbor_touch_offset(const prj_block *block, const prj_block *neighbor, int axis)
+{
+    const double tol = 1.0e-12;
+
+    if (block == 0 || neighbor == 0 || axis < 0 || axis >= 3) {
+        return 0;
+    }
+    if (prj_abs_double(block->xmin[axis] - neighbor->xmax[axis]) < tol) {
+        return -1;
+    }
+    if (prj_abs_double(block->xmax[axis] - neighbor->xmin[axis]) < tol) {
+        return 1;
+    }
+    return 0;
+}
+
+static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *block, unsigned int boundary_mask)
+{
+    int n;
+
+    if (mesh == 0 || block == 0 || boundary_mask == 0U) {
+        return;
+    }
+
+    for (n = 0; n < 56; ++n) {
+        int id = block->slot[n].id;
+        prj_block *neighbor;
+        int axis;
+        int matches = 0;
+        int ok = 1;
+
+        if (id < 0 || id >= mesh->nblocks) {
+            continue;
+        }
+        neighbor = &mesh->blocks[id];
+        if (!prj_is_active_block(neighbor)) {
+            continue;
+        }
+        if (neighbor->level > block->level) {
+            continue;
+        }
+        if (mesh->min_dx > 0.0 && prj_block_cell_size(neighbor) < mesh->min_dx) {
+            continue;
+        }
+        for (axis = 0; axis < 3; ++axis) {
+            int offset = prj_block_neighbor_touch_offset(block, neighbor, axis);
+
+            if (offset == 0) {
+                continue;
+            }
+            matches = 1;
+            if (!prj_amr_boundary_mask_has_side(boundary_mask, axis, offset)) {
+                ok = 0;
+                break;
+            }
+        }
+        if (ok != 0 && matches != 0) {
+            neighbor->refine_flag = 1;
+        }
+    }
 }
 
 static int prj_can_coarsen_parent(const prj_mesh *mesh, int parent_id)
@@ -777,6 +935,7 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *b = &mesh->blocks[i];
         int refine = 0;
+        unsigned int boundary_refine_mask = 0U;
         int derefine = b->parent >= 0 ? 1 : 0;
         int j;
         int k;
@@ -791,12 +950,16 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             continue;
         }
 
-        for (ii = 0; ii < PRJ_BLOCK_SIZE && refine == 0; ++ii) {
-            for (j = 0; j < PRJ_BLOCK_SIZE && refine == 0; ++j) {
+        for (ii = 0; ii < PRJ_BLOCK_SIZE; ++ii) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    unsigned int cell_boundary_mask = prj_amr_refine_boundary_mask_for_cell(ii, j, k);
                     double refine_sum = 0.0;
                     int amr_idx;
 
+                    if (refine != 0 && cell_boundary_mask == 0U) {
+                        continue;
+                    }
                     for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
                         if (mesh->amr_criterion_set[amr_idx] == 0) {
                             continue;
@@ -806,13 +969,13 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
                         }
                         has_refine_criterion = 1;
                         refine_sum += prj_amr_cell_indicator_for_estimator(
-                            mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) /
+                            mesh, b, eos, amr_idx, mesh->amr_estimator[amr_idx], ii, j, k) /
                             mesh->amr_refine_thresh[amr_idx];
                     }
 
                     if (refine_sum > 1.0) {
                         refine = 1;
-                        break;
+                        boundary_refine_mask |= cell_boundary_mask;
                     }
                 }
             }
@@ -834,7 +997,7 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
                             }
                             has_derefine_criterion = 1;
                             derefine_sum += prj_amr_cell_indicator_for_estimator(
-                                mesh, b, eos, mesh->amr_estimator[amr_idx], ii, j, k) /
+                                mesh, b, eos, amr_idx, mesh->amr_estimator[amr_idx], ii, j, k) /
                                 mesh->amr_derefine_thresh[amr_idx];
                         }
 
@@ -854,12 +1017,17 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             derefine = 0;
         }
 
-        if (refine != 0 && b->level < mesh->max_level) {
+        if (refine != 0 && (mesh->max_level < 0 || b->level < mesh->max_level) &&
+            (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx)) {
             if (prj_has_face_neighbor_coarser_than(mesh, b, b->level - 1)) {
                 b->refine_flag = 0;
             } else {
                 b->refine_flag = 1;
             }
+            prj_amr_tag_boundary_neighbors(mesh, b, boundary_refine_mask);
+        } else if (refine != 0 &&
+            (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx)) {
+            prj_amr_tag_boundary_neighbors(mesh, b, boundary_refine_mask);
         } else if (derefine != 0) {
             b->refine_flag = -1;
         } else {
@@ -1019,7 +1187,6 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
 
 static int prj_amr_all_cells_meet_angle_resolution_limit(const prj_mesh *mesh, const prj_block *block)
 {
-    double cell_size;
     int i;
     int j;
     int k;
@@ -1029,13 +1196,7 @@ static int prj_amr_all_cells_meet_angle_resolution_limit(const prj_mesh *mesh, c
         return 0;
     }
 
-    cell_size = block->dx[0];
-    if (block->dx[1] > cell_size) {
-        cell_size = block->dx[1];
-    }
-    if (block->dx[2] > cell_size) {
-        cell_size = block->dx[2];
-    }
+    double cell_size = prj_block_cell_size(block);
 
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -1069,7 +1230,12 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         return;
     }
     parent = &mesh->blocks[block_id];
-    if (!prj_is_active_block(parent) || parent->level >= mesh->max_level) {
+    if (!prj_is_active_block(parent) ||
+        (mesh->max_level >= 0 && parent->level >= mesh->max_level)) {
+        return;
+    }
+    if (mesh->min_dx > 0.0 && prj_block_cell_size(parent) < mesh->min_dx) {
+        parent->refine_flag = 0;
         return;
     }
     if (prj_amr_all_cells_meet_angle_resolution_limit(mesh, parent)) {

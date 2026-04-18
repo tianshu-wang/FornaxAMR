@@ -13,7 +13,8 @@ x3min = -3.0e9
 x3max = 3.0e9
 
 root_nx = 4
-max_level = 11
+max_level = -1
+min_dx = 5e4
 
 cfl = 0.4
 t_end = 1.0e9
@@ -24,13 +25,12 @@ output_dt = 1e-3
 restart_dt = 1e-2
 
 amr_interval = 1
-amr_estimator = lohner
+amr_estimator = pressure_scale_height
 amr_refine_thresh = 0.4
-amr_derefine_thresh = 0.2
+amr_derefine_thresh = 0.1
 amr_estimator2 = velocity
 amr_refine_thresh2 = 0.4
-amr_derefine_thresh2 = 0.2
-amr_eps = 0.01
+amr_derefine_thresh2 = 0.1
 use_amr_angle_resolution = 1
 amr_angle_resolution_limit = 0.025
 

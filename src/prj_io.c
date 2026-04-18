@@ -98,6 +98,30 @@ static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
     return 1;
 }
 
+static int prj_io_parse_lohner_var(const char *value, int *lohner_var)
+{
+    if (value == 0 || lohner_var == 0) {
+        return 1;
+    }
+    if (strcmp(value, "density") == 0) {
+        *lohner_var = PRJ_LOHNER_VAR_DENSITY;
+        return 0;
+    }
+    if (strcmp(value, "log_density") == 0) {
+        *lohner_var = PRJ_LOHNER_VAR_LOG_DENSITY;
+        return 0;
+    }
+    if (strcmp(value, "pressure") == 0) {
+        *lohner_var = PRJ_LOHNER_VAR_PRESSURE;
+        return 0;
+    }
+    if (strcmp(value, "temperature") == 0) {
+        *lohner_var = PRJ_LOHNER_VAR_TEMPERATURE;
+        return 0;
+    }
+    return 1;
+}
+
 static int prj_io_parse_amr_slot_key(const char *key, const char *prefix, int *slot)
 {
     size_t prefix_len;
@@ -161,6 +185,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.root_nx[1] = 8;
     sim->mesh.root_nx[2] = 8;
     sim->mesh.max_level = 0;
+    sim->mesh.min_dx = 0.0;
     {
         int amr_idx;
 
@@ -168,12 +193,13 @@ static void prj_io_set_default_runtime(prj_sim *sim)
             sim->mesh.amr_refine_thresh[amr_idx] = 0.5;
             sim->mesh.amr_derefine_thresh[amr_idx] = 0.2;
             sim->mesh.amr_estimator[amr_idx] = PRJ_AMR_ESTIMATOR_LOEHNER;
+            sim->mesh.amr_lohner_var[amr_idx] = PRJ_LOHNER_VAR_PRESSURE;
+            sim->mesh.amr_lohner_eps[amr_idx] = 0.1;
             sim->mesh.amr_criterion_set[amr_idx] = 0;
         }
         sim->mesh.amr_estimator[0] = PRJ_AMR_ESTIMATOR_VELOCITY;
         sim->mesh.amr_criterion_set[0] = 1;
     }
-    sim->mesh.amr_eps = 0.1;
     sim->mesh.use_amr_angle_resolution = 0;
     sim->mesh.amr_angle_resolution_limit = 0.0;
     sim->mesh.E_floor = -1.0;
@@ -281,12 +307,20 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.root_nx[2] = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "max_level") == 0) {
             sim->mesh.max_level = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "min_dx") == 0) {
+            sim->mesh.min_dx = strtod(value, &endptr);
         } else if (prj_io_parse_amr_slot_key(key, "amr_estimator", &amr_slot)) {
             if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator[amr_slot]) != 0) {
                 endptr = value;
             } else {
                 endptr = value + strlen(value);
                 sim->mesh.amr_criterion_set[amr_slot] = 1;
+            }
+        } else if (prj_io_parse_amr_slot_key(key, "amr_lohner_var", &amr_slot)) {
+            if (prj_io_parse_lohner_var(value, &sim->mesh.amr_lohner_var[amr_slot]) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
             }
         } else if (prj_io_parse_amr_slot_key(key, "amr_refine_thresh", &amr_slot)) {
             sim->mesh.amr_refine_thresh[amr_slot] = strtod(value, &endptr);
@@ -298,8 +332,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             if (endptr != value) {
                 sim->mesh.amr_criterion_set[amr_slot] = 1;
             }
-        } else if (strcmp(key, "amr_eps") == 0) {
-            sim->mesh.amr_eps = strtod(value, &endptr);
+        } else if (prj_io_parse_amr_slot_key(key, "amr_lohner_eps", &amr_slot)) {
+            sim->mesh.amr_lohner_eps[amr_slot] = strtod(value, &endptr);
         } else if (strcmp(key, "use_amr_angle_resolution") == 0) {
             sim->mesh.use_amr_angle_resolution = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_angle_resolution_limit") == 0) {
@@ -767,6 +801,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
     prj_io_write_attr_int(file, "max_level", mesh->max_level);
+    prj_io_write_attr_double(file, "min_dx", mesh->min_dx);
     prj_io_write_attr_int3(file, "root_nx", mesh->root_nx);
     prj_io_write_attr_double6(file, "coord", &mesh->coord);
 
@@ -845,6 +880,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     int nvar_prim;
     int root_nx[3];
     int max_level;
+    double min_dx;
     prj_coord coord;
     double *metadata;
     int bidx;
@@ -874,6 +910,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     prj_io_read_attr_int(file, "nvar_prim", &nvar_prim);
     prj_io_read_attr_int(file, "block_size", &block_size);
     prj_io_read_attr_int(file, "max_level", &max_level);
+    min_dx = prj_io_read_attr_double_optional(file, "min_dx", 0.0);
     prj_io_read_attr_int3(file, "root_nx", root_nx);
     prj_io_read_attr_double6(file, "coord", &coord);
     if (nvar_prim != PRJ_NVAR_PRIM || block_size != PRJ_BLOCK_SIZE) {
@@ -883,6 +920,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     if (prj_mesh_init(mesh, root_nx[0], root_nx[1], root_nx[2], max_level, &coord) != 0) {
         prj_io_fail("prj_io_read_restart: mesh init failed");
     }
+    mesh->min_dx = min_dx;
     mesh->nblocks = nblocks;
 
     metadata = (double *)calloc((size_t)nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));

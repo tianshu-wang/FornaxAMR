@@ -87,7 +87,7 @@ static const char *prj_amr_label(const prj_sim *sim)
     if (sim == 0) {
         return "off";
     }
-    if (sim->mesh.max_level > 0 && sim->amr_interval > 0) {
+    if (sim->mesh.max_level != 0 && sim->amr_interval > 0) {
         return "on";
     }
     return "off";
@@ -118,7 +118,15 @@ static const char *prj_amr_estimator_label(const prj_sim *sim)
             } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_VELOCITY) {
                 name = "velocity";
             } else {
-                name = "lohner";
+                if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_LOG_DENSITY) {
+                    name = "lohner_log_density";
+                } else if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_DENSITY) {
+                    name = "lohner_density";
+                } else if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_TEMPERATURE) {
+                    name = "lohner_temperature";
+                } else {
+                    name = "lohner_pressure";
+                }
             }
             offset += snprintf(label + offset, sizeof(label) - (size_t)offset,
                 "%s%s", any ? "," : "", name);
@@ -171,6 +179,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "amr estimator: %s\n",
         prj_amr_estimator_label(sim)
     );
+    fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
 }
 
 int main(int argc, char *argv[])
@@ -182,11 +191,13 @@ int main(int argc, char *argv[])
     char *param_file = 0;
     double saved_amr_refine_thresh[PRJ_AMR_N];
     double saved_amr_derefine_thresh[PRJ_AMR_N];
-    double saved_amr_eps;
+    double saved_amr_lohner_eps[PRJ_AMR_N];
     int saved_amr_estimator[PRJ_AMR_N];
+    int saved_amr_lohner_var[PRJ_AMR_N];
     int saved_amr_criterion_set[PRJ_AMR_N];
     int saved_use_amr_angle_resolution;
     double saved_amr_angle_resolution_limit;
+    double saved_min_dx;
     int resolution = -1;
     int max_level_override = -1;
     double next_output_time = -1.0;
@@ -245,22 +256,26 @@ int main(int argc, char *argv[])
             saved_amr_refine_thresh[i] = sim.mesh.amr_refine_thresh[i];
             saved_amr_derefine_thresh[i] = sim.mesh.amr_derefine_thresh[i];
             saved_amr_estimator[i] = sim.mesh.amr_estimator[i];
+            saved_amr_lohner_var[i] = sim.mesh.amr_lohner_var[i];
+            saved_amr_lohner_eps[i] = sim.mesh.amr_lohner_eps[i];
             saved_amr_criterion_set[i] = sim.mesh.amr_criterion_set[i];
         }
-        saved_amr_eps = sim.mesh.amr_eps;
         saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
         saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
+        saved_min_dx = sim.mesh.min_dx;
         prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
             &next_output_time, &next_restart_time, &sim.dt);
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
             sim.mesh.amr_estimator[i] = saved_amr_estimator[i];
+            sim.mesh.amr_lohner_var[i] = saved_amr_lohner_var[i];
+            sim.mesh.amr_lohner_eps[i] = saved_amr_lohner_eps[i];
             sim.mesh.amr_criterion_set[i] = saved_amr_criterion_set[i];
         }
-        sim.mesh.amr_eps = saved_amr_eps;
         sim.mesh.use_amr_angle_resolution = saved_use_amr_angle_resolution;
         sim.mesh.amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
+        sim.mesh.min_dx = saved_min_dx;
         prj_print_config(&sim, mpi.rank);
     }
     if (sim.restart_from_file == 0) {
@@ -382,6 +397,7 @@ int main(int argc, char *argv[])
         if (mpi.rank == 0) {
             struct timeval wall_now;
             double wall_elapsed;
+            double min_cell_size;
 
             long wall_days;
             long wall_hours;
@@ -392,14 +408,16 @@ int main(int argc, char *argv[])
             gettimeofday(&wall_now, 0);
             wall_elapsed = (double)(wall_now.tv_sec - wall_start.tv_sec) +
                 1.0e-6 * (double)(wall_now.tv_usec - wall_start.tv_usec);
+            min_cell_size = prj_mesh_min_cell_size(&sim.mesh);
             total_sec = (long)wall_elapsed;
             wall_days = total_sec / 86400;
             wall_hours = (total_sec % 86400) / 3600;
             wall_minutes = (total_sec % 3600) / 60;
             wall_seconds = wall_elapsed - (double)(total_sec - total_sec % 60);
             fprintf(stderr,
-                "step=%d  t=%.6e  dt=%.6e  blocks=%d  max_active_level=%d  wall=%ldd %ldh %ldm %.3fs\n",
+                "step=%d  t=%.6e  dt=%.6e  blocks=%d  max_active_level=%d  min_cell_size=%.6e  wall=%ldd %ldh %ldm %.3fs\n",
                 sim.step, sim.time, dt_step, prj_mesh_count_active(&sim.mesh), sim.mesh.max_active_level,
+                min_cell_size,
                 wall_days, wall_hours, wall_minutes, wall_seconds);
         }
     }

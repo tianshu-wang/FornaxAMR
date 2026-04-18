@@ -25,7 +25,9 @@
 #define PRJ_NVAR_CONS (PRJ_NHYDRO + PRJ_NRAD_VAR)
 #define PRJ_NVAR_PRIM (PRJ_NHYDRO + PRJ_NRAD_VAR)
 #define PRJ_NVAR_EOSVAR 3
+#ifndef PRJ_BLOCK_SIZE
 #define PRJ_BLOCK_SIZE 16
+#endif
 #define PRJ_NGHOST 2
 #define PRJ_AMR_N 4
 #define PRJ_BS (PRJ_BLOCK_SIZE + 2 * PRJ_NGHOST)
@@ -86,6 +88,13 @@ enum prj_amr_estimator {
     PRJ_AMR_ESTIMATOR_VELOCITY = 1,
     PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT = 2,
     PRJ_AMR_ESTIMATOR_DENSITY_JUMP = 3
+};
+
+enum prj_lohner_var {
+    PRJ_LOHNER_VAR_DENSITY = 0,
+    PRJ_LOHNER_VAR_PRESSURE = 1,
+    PRJ_LOHNER_VAR_TEMPERATURE = 2,
+    PRJ_LOHNER_VAR_LOG_DENSITY = 3
 };
 
 enum prj_eos_kind {
