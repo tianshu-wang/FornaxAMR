@@ -25,8 +25,11 @@ restart_dt = 1e-2
 
 amr_interval = 1
 amr_estimator = lohner
-amr_refine_thresh = 0.5
+amr_refine_thresh = 0.4
 amr_derefine_thresh = 0.2
+amr_estimator2 = velocity
+amr_refine_thresh2 = 0.4
+amr_derefine_thresh2 = 0.2
 amr_eps = 0.01
 use_amr_angle_resolution = 1
 amr_angle_resolution_limit = 0.025
