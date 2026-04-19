@@ -30,6 +30,7 @@
 
 enum {
     PRJ_EOS_REC_EINT = 1,
+    /* Stored in-memory as log(pressure) after table initialization. */
     PRJ_EOS_REC_PRESSURE = 2,
     PRJ_EOS_REC_GAMMA = 12
 };
@@ -57,13 +58,6 @@ static double prj_eos_tab_elem(const prj_eos *eos, int rec, int jy, int jr, int 
     return eos->table[prj_eos_tab_index(eos, rec, jy, jr, jt)];
 }
 
-static double prj_eos_tab_pressure_log(const prj_eos *eos, int jy, int jr, int jt)
-{
-    double p = prj_eos_tab_elem(eos, PRJ_EOS_REC_PRESSURE, jy, jr, jt);
-
-    return log(p > 0.0 ? p : 1.0e-300);
-}
-
 static double prj_eos_clamp_double(double x, double lo, double hi)
 {
     if (x < lo) {
@@ -88,6 +82,22 @@ static void prj_eos_table_range_fail(const char *name, double value, double lo, 
     }
 #endif
     exit(1);
+}
+
+static void prj_eos_convert_pressure_slab_to_log(prj_eos *eos, size_t slab_size)
+{
+    size_t offset;
+    size_t idx;
+
+    if (eos == 0 || eos->table == 0 || slab_size == 0) {
+        return;
+    }
+    offset = (size_t)(PRJ_EOS_REC_PRESSURE - 1) * slab_size;
+    for (idx = 0; idx < slab_size; ++idx) {
+        double p = eos->table[offset + idx];
+
+        eos->table[offset + idx] = log(p > 0.0 ? p : 1.0e-300);
+    }
 }
 
 static void prj_eos_print_fill_neighbors(const prj_block *block, double x1, double x2, double x3)
@@ -258,6 +268,9 @@ static int prj_eos_prepare_table(prj_eos *eos)
                             break;
                         }
                     }
+                    if (status == 0) {
+                        prj_eos_convert_pressure_slab_to_log(eos, slab_size);
+                    }
                     fclose(f);
                 }
             }
@@ -312,6 +325,7 @@ static int prj_eos_prepare_table(prj_eos *eos)
         }
     }
     fclose(f);
+    prj_eos_convert_pressure_slab_to_log(eos, slab_size);
 
     eos->table_loaded = 1;
     eos->table_is_mmap = 0;
@@ -413,22 +427,8 @@ static double prj_eos_table_interp_trilinear(const prj_eos *eos, int rec,
 static double prj_eos_pressure_log_interp(const prj_eos *eos,
     int jy, int jyp, int jr, int jrp, int jt, int jtp, double dye, double drho, double dtemp)
 {
-    double c000 = prj_eos_tab_pressure_log(eos, jy, jr, jt);
-    double c100 = prj_eos_tab_pressure_log(eos, jyp, jr, jt);
-    double c010 = prj_eos_tab_pressure_log(eos, jy, jrp, jt);
-    double c110 = prj_eos_tab_pressure_log(eos, jyp, jrp, jt);
-    double c001 = prj_eos_tab_pressure_log(eos, jy, jr, jtp);
-    double c101 = prj_eos_tab_pressure_log(eos, jyp, jr, jtp);
-    double c011 = prj_eos_tab_pressure_log(eos, jy, jrp, jtp);
-    double c111 = prj_eos_tab_pressure_log(eos, jyp, jrp, jtp);
-    double c00 = (1.0 - dye) * c000 + dye * c100;
-    double c10 = (1.0 - dye) * c010 + dye * c110;
-    double c01 = (1.0 - dye) * c001 + dye * c101;
-    double c11 = (1.0 - dye) * c011 + dye * c111;
-    double c0 = (1.0 - drho) * c00 + drho * c10;
-    double c1 = (1.0 - drho) * c01 + drho * c11;
-
-    return (1.0 - dtemp) * c0 + dtemp * c1;
+    return prj_eos_table_interp_trilinear(eos, PRJ_EOS_REC_PRESSURE,
+        jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp);
 }
 
 static double prj_eos_rey_slice_eint(const prj_eos *eos, int jy, int jyp, int jr, int jrp, int jt,
