@@ -176,6 +176,15 @@ struct prj_rad {
     double yemin;
     double yemax;
     double *enuk;
+    double *log_enuk;
+    double *log_egroup[PRJ_NRAD];
+    double log_romin;
+    double log_romax;
+    double log_tmin;
+    double log_tmax;
+    double inv_logrho_span;
+    double inv_logtemp_span;
+    double inv_ye_span;
     double *absopac[PRJ_NRAD];
     double *scaopac[PRJ_NRAD];
     double *emis[PRJ_NRAD];

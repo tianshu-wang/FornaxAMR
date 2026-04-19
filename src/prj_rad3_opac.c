@@ -55,8 +55,9 @@ static void prj_rad3_build_egroups(prj_rad *rad)
         rad->egroup_erg[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
         rad->degroup_erg[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
         rad->x_e[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->log_egroup[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
         if (rad->egroup[nu] == 0 || rad->eedge[nu] == 0 || rad->egroup_erg[nu] == 0 ||
-            rad->degroup_erg[nu] == 0 || rad->x_e[nu] == 0) {
+            rad->degroup_erg[nu] == 0 || rad->x_e[nu] == 0 || rad->log_egroup[nu] == 0) {
             fprintf(stderr, "prj_rad3_opac: allocation failed for egroup field %d\n", nu);
             exit(1);
         }
@@ -74,6 +75,7 @@ static void prj_rad3_build_egroups(prj_rad *rad)
             double derg = (rad->eedge[nu][g + 1] - rad->eedge[nu][g]) * PRJ_MEV_TO_ERG;
 
             rad->egroup[nu][g] = ec;
+            rad->log_egroup[nu][g] = log(ec);
             rad->egroup_erg[nu][g] = erg;
             rad->degroup_erg[nu][g] = derg;
             if (nu == 0) {
@@ -121,7 +123,8 @@ static void prj_rad3_read_param(prj_rad *rad)
             exit(1);
         }
         rad->enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
-        if (rad->enuk == 0) {
+        rad->log_enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
+        if (rad->enuk == 0 || rad->log_enuk == 0) {
             fprintf(stderr, "prj_rad3_opac: enuk allocation failed\n");
             exit(1);
         }
@@ -130,6 +133,7 @@ static void prj_rad3_read_param(prj_rad *rad)
                 fprintf(stderr, "prj_rad3_opac: failed to read enuk[%d]\n", i);
                 exit(1);
             }
+            rad->log_enuk[i] = log(rad->enuk[i]);
         }
         fclose(fp);
     }
@@ -147,13 +151,29 @@ static void prj_rad3_read_param(prj_rad *rad)
     MPI_Bcast(&rad->yemax, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     if (rank != 0) {
         rad->enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
-        if (rad->enuk == 0) {
+        rad->log_enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
+        if (rad->enuk == 0 || rad->log_enuk == 0) {
             fprintf(stderr, "prj_rad3_opac: enuk allocation failed\n");
             exit(1);
         }
     }
     MPI_Bcast(rad->enuk, rad->ngmax, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 #endif
+
+    for (i = 0; i < rad->ngmax; ++i) {
+        rad->log_enuk[i] = log(rad->enuk[i]);
+    }
+
+    rad->log_romin = log(rad->romin);
+    rad->log_romax = log(rad->romax);
+    rad->log_tmin = log(rad->tmin);
+    rad->log_tmax = log(rad->tmax);
+    rad->inv_logrho_span = (rad->log_romax > rad->log_romin) ?
+        1.0 / (rad->log_romax - rad->log_romin) : 0.0;
+    rad->inv_logtemp_span = (rad->log_tmax > rad->log_tmin) ?
+        1.0 / (rad->log_tmax - rad->log_tmin) : 0.0;
+    rad->inv_ye_span = (rad->yemax > rad->yemin) ?
+        1.0 / (rad->yemax - rad->yemin) : 0.0;
 }
 
 static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
@@ -172,8 +192,8 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
     double dfr;
     int nu;
 
-    frmin = log(rad->enuk[0]);
-    frmax = log(rad->enuk[ngmax - 1]);
+    frmin = rad->log_enuk[0];
+    frmax = rad->log_enuk[ngmax - 1];
     dfr = (frmax - frmin) / (double)(ngmax - 1);
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
@@ -214,7 +234,7 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
                 for (j = 0; j < ntmax; ++j) {
                     for (i = 0; i < nromax; ++i) {
                         for (ng = 0; ng < PRJ_NEGROUP; ++ng) {
-                            double el = log(rad->egroup[nu_r][ng]);
+                            double el = rad->log_egroup[nu_r][ng];
                             int jf = (int)((el - frmin) / dfr);
                             double dfi;
                             float v0;
@@ -305,6 +325,7 @@ void prj_rad3_opac_free(prj_rad *rad)
         free(rad->egroup_erg[nu]);
         free(rad->degroup_erg[nu]);
         free(rad->x_e[nu]);
+        free(rad->log_egroup[nu]);
         free(rad->absopac[nu]);
         free(rad->scaopac[nu]);
         free(rad->emis[nu]);
@@ -314,13 +335,16 @@ void prj_rad3_opac_free(prj_rad *rad)
         rad->egroup_erg[nu] = 0;
         rad->degroup_erg[nu] = 0;
         rad->x_e[nu] = 0;
+        rad->log_egroup[nu] = 0;
         rad->absopac[nu] = 0;
         rad->scaopac[nu] = 0;
         rad->emis[nu] = 0;
         rad->sdelta[nu] = 0;
     }
     free(rad->enuk);
+    free(rad->log_enuk);
     rad->enuk = 0;
+    rad->log_enuk = 0;
 }
 
 void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye,
@@ -354,14 +378,12 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
 
     if (ye_c > rad->yemax) ye_c = rad->yemax;
     if (ye_c < rad->yemin) ye_c = rad->yemin;
-    if (tl_c > log(rad->tmax)) tl_c = log(rad->tmax);
-    if (tl_c < log(rad->tmin)) tl_c = log(rad->tmin);
+    if (tl_c > rad->log_tmax) tl_c = rad->log_tmax;
+    if (tl_c < rad->log_tmin) tl_c = rad->log_tmin;
 
-    deltar = (rl - log(rad->romin)) / (log(rad->romax) - log(rad->romin)) *
-        (double)(nromax - 1);
-    deltat = (tl_c - log(rad->tmin)) / (log(rad->tmax) - log(rad->tmin)) *
-        (double)(ntmax - 1);
-    deltaye = (ye_c - rad->yemin) / (rad->yemax - rad->yemin) * (double)(nyemax - 1);
+    deltar = (rl - rad->log_romin) * rad->inv_logrho_span * (double)(nromax - 1);
+    deltat = (tl_c - rad->log_tmin) * rad->inv_logtemp_span * (double)(ntmax - 1);
+    deltaye = (ye_c - rad->yemin) * rad->inv_ye_span * (double)(nyemax - 1);
 
     jr = (int)deltar;
     jt = (int)deltat;
@@ -373,13 +395,13 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     if (jye < 0) jye = 0;
     if (jye > nyemax - 2) jye = nyemax - 2;
 
-    r1i = log(rad->romin) + (log(rad->romax) - log(rad->romin)) * (double)jr / (double)(nromax - 1);
-    r2i = log(rad->romin) + (log(rad->romax) - log(rad->romin)) * (double)(jr + 1) / (double)(nromax - 1);
+    r1i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)jr / (double)(nromax - 1);
+    r2i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)(jr + 1) / (double)(nromax - 1);
     dri = (rl - r1i) / (r2i - r1i);
     if (dri < 0.0) dri = 0.0;
 
-    t1i = log(rad->tmin) + (log(rad->tmax) - log(rad->tmin)) * (double)jt / (double)(ntmax - 1);
-    t2i = log(rad->tmin) + (log(rad->tmax) - log(rad->tmin)) * (double)(jt + 1) / (double)(ntmax - 1);
+    t1i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)jt / (double)(ntmax - 1);
+    t2i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)(jt + 1) / (double)(ntmax - 1);
     dti = (tl_c - t1i) / (t2i - t1i);
     if (dti < 0.0) dti = 0.0;
 
