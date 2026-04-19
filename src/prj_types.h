@@ -27,9 +27,20 @@ struct prj_coord {
     double x3max;
 };
 
+enum prj_neighbor_type {
+    PRJ_NEIGHBOR_NONE = 0,
+    PRJ_NEIGHBOR_FACE = 1,
+    PRJ_NEIGHBOR_EDGE = 2,
+    PRJ_NEIGHBOR_CORNER = 3
+};
+
 struct prj_neighbor {
     int id;
     int rank;
+    int rel_level;
+    int type;
+    int send_loc_start[3];
+    int recv_loc_start[3];
     double xmin[3];
     double xmax[3];
     double dx[3];

@@ -940,6 +940,22 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
         prj_block_setup_geometry(block, &coord);
     }
 
+    for (bidx = 0; bidx < nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int n;
+
+        if (block->id < 0) {
+            continue;
+        }
+        for (n = 0; n < 56; ++n) {
+            int nid = block->slot[n].id;
+
+            if (nid >= 0 && nid < mesh->nblocks && mesh->blocks[nid].id >= 0) {
+                prj_neighbor_compute_geometry(block, &mesh->blocks[nid], &block->slot[n]);
+            }
+        }
+    }
+
     prj_mpi_decompose(mesh);
     if (mpi != 0) {
         prj_mpi_prepare(mesh, mpi);

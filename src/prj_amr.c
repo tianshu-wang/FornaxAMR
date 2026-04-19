@@ -271,10 +271,14 @@ static void prj_clear_neighbors(prj_block *b)
     for (n = 0; n < 56; ++n) {
         b->slot[n].id = -1;
         b->slot[n].rank = 0;
+        b->slot[n].rel_level = 0;
+        b->slot[n].type = PRJ_NEIGHBOR_NONE;
         for (d = 0; d < 3; ++d) {
             b->slot[n].xmin[d] = 0.0;
             b->slot[n].xmax[d] = 0.0;
             b->slot[n].dx[d] = 0.0;
+            b->slot[n].send_loc_start[d] = 0;
+            b->slot[n].recv_loc_start[d] = 0;
         }
     }
 }
@@ -386,6 +390,7 @@ static int prj_add_neighbor(prj_block *a, const prj_block *b)
                 a->slot[n].xmax[d] = b->xmax[d];
                 a->slot[n].dx[d] = b->dx[d];
             }
+            prj_neighbor_compute_geometry(a, b, &a->slot[n]);
             return 0;
         }
     }

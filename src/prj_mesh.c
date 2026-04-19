@@ -25,6 +25,92 @@ static int prj_neighbor_slot_index(int ox, int oy, int oz)
     return index;
 }
 
+static double prj_neighbor_abs(double x)
+{
+    return x < 0.0 ? -x : x;
+}
+
+void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_neighbor *slot)
+{
+    const double tol = 1.0e-12;
+    int axisrel[3];
+    int touching;
+    int d;
+
+    if (a == 0 || b == 0 || slot == 0) {
+        return;
+    }
+
+    touching = 0;
+    for (d = 0; d < 3; ++d) {
+        if (prj_neighbor_abs(a->xmax[d] - b->xmin[d]) < tol) {
+            axisrel[d] = 1;
+            touching += 1;
+        } else if (prj_neighbor_abs(b->xmax[d] - a->xmin[d]) < tol) {
+            axisrel[d] = -1;
+            touching += 1;
+        } else {
+            axisrel[d] = 0;
+        }
+    }
+
+    if (touching == 1) {
+        slot->type = PRJ_NEIGHBOR_FACE;
+    } else if (touching == 2) {
+        slot->type = PRJ_NEIGHBOR_EDGE;
+    } else if (touching == 3) {
+        slot->type = PRJ_NEIGHBOR_CORNER;
+    } else {
+        slot->type = PRJ_NEIGHBOR_NONE;
+    }
+
+    slot->rel_level = b->level - a->level;
+
+    for (d = 0; d < 3; ++d) {
+        int ar = axisrel[d];
+
+        if (ar == -1) {
+            slot->send_loc_start[d] = 0;
+            slot->recv_loc_start[d] = PRJ_BLOCK_SIZE - PRJ_NGHOST;
+        } else if (ar == 1) {
+            slot->send_loc_start[d] = PRJ_BLOCK_SIZE - PRJ_NGHOST;
+            slot->recv_loc_start[d] = 0;
+        } else if (slot->rel_level == 0) {
+            slot->send_loc_start[d] = 0;
+            slot->recv_loc_start[d] = 0;
+        } else if (slot->rel_level > 0) {
+            if (prj_neighbor_abs(b->xmin[d] - a->xmin[d]) < tol) {
+                slot->send_loc_start[d] = 0;
+            } else {
+                slot->send_loc_start[d] = PRJ_BLOCK_SIZE / 2;
+            }
+            slot->recv_loc_start[d] = 0;
+        } else {
+            slot->send_loc_start[d] = 0;
+            if (prj_neighbor_abs(a->xmin[d] - b->xmin[d]) < tol) {
+                slot->recv_loc_start[d] = 0;
+            } else {
+                slot->recv_loc_start[d] = PRJ_BLOCK_SIZE / 2;
+            }
+        }
+    }
+}
+
+static void prj_neighbor_clear_derived(prj_neighbor *slot)
+{
+    int d;
+
+    if (slot == 0) {
+        return;
+    }
+    slot->rel_level = 0;
+    slot->type = PRJ_NEIGHBOR_NONE;
+    for (d = 0; d < 3; ++d) {
+        slot->send_loc_start[d] = 0;
+        slot->recv_loc_start[d] = 0;
+    }
+}
+
 static void prj_block_init_empty(prj_block *b)
 {
     int n;
@@ -70,6 +156,7 @@ static void prj_block_init_empty(prj_block *b)
         b->slot[n].dx[0] = 0.0;
         b->slot[n].dx[1] = 0.0;
         b->slot[n].dx[2] = 0.0;
+        prj_neighbor_clear_derived(&b->slot[n]);
     }
 }
 
@@ -437,6 +524,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                             b->slot[slot_index].dx[0] = mesh->blocks[id].dx[0];
                             b->slot[slot_index].dx[1] = mesh->blocks[id].dx[1];
                             b->slot[slot_index].dx[2] = mesh->blocks[id].dx[2];
+                            prj_neighbor_compute_geometry(b, &mesh->blocks[id], &b->slot[slot_index]);
                         }
                     }
                 }
