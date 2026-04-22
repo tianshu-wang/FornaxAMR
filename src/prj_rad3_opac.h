@@ -11,6 +11,7 @@
 
 void prj_rad3_opac_init(prj_rad *rad);
 void prj_rad3_opac_free(prj_rad *rad);
+/* Any output pointer may be NULL; unrequested fields are skipped. */
 void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye,
     double *kappa, double *sigma, double *delta, double *eta);
 

@@ -441,8 +441,6 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     double *E_nu_new_out)
 {
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
-    double sigma[PRJ_NRAD * PRJ_NEGROUP];
-    double delta[PRJ_NRAD * PRJ_NEGROUP];
     double eta[PRJ_NRAD * PRJ_NEGROUP];
     double eos_q[PRJ_EOS_NQUANT];
     double eint_new;
@@ -453,7 +451,7 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     int g;
 
     (void)u;
-    prj_rad3_opac_lookup(rad, rho, T, Ye, kappa, sigma, delta, eta);
+    prj_rad3_opac_lookup(rad, rho, T, Ye, kappa, 0, 0, eta);
     prj_eos_rty(eos, rho, T, Ye, eos_q);
     eint_new = eos_q[PRJ_EOS_EINT];
     Uint_new = rho * eint_new;
@@ -738,7 +736,6 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
     double sigma[PRJ_NRAD * PRJ_NEGROUP];
     double delta[PRJ_NRAD * PRJ_NEGROUP];
-    double eta[PRJ_NRAD * PRJ_NEGROUP];
     double rho;
     double Ye;
     double v[3];
@@ -758,7 +755,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     v[2] = u[PRJ_CONS_MOM3] / rho;
     inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
 
-    prj_rad3_opac_lookup(rad, rho, temperature, Ye, kappa, sigma, delta, eta);
+    prj_rad3_opac_lookup(rad, rho, temperature, Ye, kappa, sigma, delta, 0);
 
     dmom[0] = 0.0;
     dmom[1] = 0.0;

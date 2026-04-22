@@ -372,12 +372,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                         double chi_face[PRJ_NRAD * PRJ_NEGROUP];
                         double kappa_L[PRJ_NRAD * PRJ_NEGROUP];
                         double sigma_L[PRJ_NRAD * PRJ_NEGROUP];
-                        double delta_L[PRJ_NRAD * PRJ_NEGROUP];
-                        double eta_L[PRJ_NRAD * PRJ_NEGROUP];
                         double kappa_R[PRJ_NRAD * PRJ_NEGROUP];
                         double sigma_R[PRJ_NRAD * PRJ_NEGROUP];
-                        double delta_R[PRJ_NRAD * PRJ_NEGROUP];
-                        double eta_R[PRJ_NRAD * PRJ_NEGROUP];
                         double rho_L = W[VIDX(PRJ_PRIM_RHO, il, jl, kl)];
                         double ye_L = W[VIDX(PRJ_PRIM_YE, il, jl, kl)];
                         double rho_R = W[VIDX(PRJ_PRIM_RHO, ir, jr, kr)];
@@ -391,8 +387,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                         x_face[2] = block->xmin[2] + ((dir == X3DIR) ? (double)k : ((double)k + 0.5)) * block->dx[2];
                         dx_dir = block->dx[dir];
 
-                        prj_rad3_opac_lookup(rad, rho_L, T_L, ye_L, kappa_L, sigma_L, delta_L, eta_L);
-                        prj_rad3_opac_lookup(rad, rho_R, T_R, ye_R, kappa_R, sigma_R, delta_R, eta_R);
+                        prj_rad3_opac_lookup(rad, rho_L, T_L, ye_L, kappa_L, sigma_L, 0, 0);
+                        prj_rad3_opac_lookup(rad, rho_R, T_R, ye_R, kappa_R, sigma_R, 0, 0);
                         for (idx = 0; idx < PRJ_NRAD * PRJ_NEGROUP; ++idx) {
                             double kL = kappa_L[idx];
                             double kR = kappa_R[idx];

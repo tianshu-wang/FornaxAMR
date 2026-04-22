@@ -445,18 +445,25 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
              coff[6] * (ARR)[OPAC_IDX(ng, jr,     jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
              coff[7] * (ARR)[OPAC_IDX(ng, jr + 1, jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax)])
 
-            k_val = SAMPLE(absopac);
-            s_val = SAMPLE(scaopac);
-            d_val = SAMPLE(sdelta);
-            j_val = SAMPLE(emis);
+            if (kappa != 0) {
+                k_val = SAMPLE(absopac);
+                kappa[base] = exp(k_val) * rho;
+            }
+            if (sigma != 0) {
+                s_val = SAMPLE(scaopac);
+                sigma[base] = exp(s_val) * rho;
+            }
+            if (delta != 0) {
+                d_val = SAMPLE(sdelta);
+                delta[base] = d_val;
+            }
+            if (eta != 0) {
+                j_val = SAMPLE(emis);
+                eta[base] = exp(j_val) * rho * 4.0 * M_PI *
+                    rad->degroup_erg[nu][ng] / PRJ_MEV_TO_ERG;
+            }
 
 #undef SAMPLE
-
-            kappa[base] = exp(k_val) * rho;
-            sigma[base] = exp(s_val) * rho;
-            delta[base] = d_val;
-            eta[base] = exp(j_val) * rho * 4.0 * M_PI *
-                rad->degroup_erg[nu][ng] / PRJ_MEV_TO_ERG;
         }
     }
 }
