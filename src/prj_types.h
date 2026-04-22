@@ -103,7 +103,7 @@ struct prj_mesh {
 };
 
 struct prj_eos {
-    char filename[100];
+    char filename[PRJ_PATH_MAX];
     int kind;
     int table_loaded;
     int table_is_mmap;
@@ -163,8 +163,8 @@ struct prj_rad {
     double *degroup_erg[PRJ_NRAD];
     double *x_e[PRJ_NRAD];
 
-    char table_param_file[100];
-    char table_file[100];
+    char table_param_file[PRJ_PATH_MAX];
+    char table_file[PRJ_PATH_MAX];
     int nromax;
     int ntmax;
     int nyemax;
