@@ -6,6 +6,10 @@
 #include "prj.h"
 #include "prj_rad3_opac.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #if PRJ_NRAD > 0
 
 #if defined(PRJ_ENABLE_MPI)
@@ -186,7 +190,7 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
     int ngmax = rad->ngmax;
     size_t field_bytes = (size_t)nromax * (size_t)ntmax * (size_t)nyemax * (size_t)ngmax;
     size_t opac_bytes = (size_t)PRJ_NEGROUP * (size_t)nromax * (size_t)ntmax * (size_t)nyemax;
-    int irecl = 4 * nromax * ntmax * nyemax * ngmax;
+    int irecl = 4 * nromax * ntmax * nyemax * ngmax + 10;
     double frmin;
     double frmax;
     double dfr;
@@ -451,7 +455,8 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
             kappa[base] = exp(k_val) * rho;
             sigma[base] = exp(s_val) * rho;
             delta[base] = d_val;
-            eta[base] = exp(j_val) * rho;
+            eta[base] = exp(j_val) * rho * 4.0 * M_PI *
+                rad->degroup_erg[nu][ng] / PRJ_MEV_TO_ERG;
         }
     }
 }

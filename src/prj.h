@@ -22,6 +22,7 @@
 void prj_problem_initial_condition(double x1, double x2, double x3, double *data);
 void prj_problem_general(prj_sim *sim);
 void prj_problem_cc(prj_sim *sim);
+void prj_problem_ccsn(prj_sim *sim);
 void prj_problem_sedov(prj_sim *sim);
 void prj_problem_sedov_offcenter(prj_sim *sim);
 void prj_problem_shock1d(prj_sim *sim);

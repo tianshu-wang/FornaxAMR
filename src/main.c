@@ -20,6 +20,9 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     if (strcmp(name, "cc") == 0) {
         return prj_problem_cc;
     }
+    if (strcmp(name, "ccsn") == 0) {
+        return prj_problem_ccsn;
+    }
     if (strcmp(name, "sedov_offcenter") == 0) {
         return prj_problem_sedov_offcenter;
     }
@@ -37,7 +40,7 @@ static void prj_prepare_restart_problem(prj_sim *sim, prj_problem_init_fn init_f
     if (sim == 0) {
         return;
     }
-    if (init_fn == prj_problem_cc &&
+    if ((init_fn == prj_problem_cc || init_fn == prj_problem_ccsn) &&
         sim->eos.kind == PRJ_EOS_KIND_TABLE &&
         sim->eos.filename[0] == '\0') {
         strncpy(sim->eos.filename, cc_eos_path, sizeof(sim->eos.filename) - 1);
@@ -236,7 +239,7 @@ int main(int argc, char *argv[])
         sim.mesh.max_level = max_level_override;
     }
 
-    init_with_mpi = (init_fn == prj_problem_cc);
+    init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn);
     prj_mpi_init(&argc, &argv, &mpi);
     prj_print_config(&sim, mpi.rank);
     if (sim.restart_from_file == 0) {

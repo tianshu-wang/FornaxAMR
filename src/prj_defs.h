@@ -15,11 +15,16 @@
 #endif
 
 #if PRJ_USE_RADIATION
+#ifndef PRJ_NRAD
 #define PRJ_NRAD 3
+#endif
 #else
+#undef PRJ_NRAD
 #define PRJ_NRAD 0
 #endif
+#ifndef PRJ_NEGROUP
 #define PRJ_NEGROUP 3
+#endif
 #define PRJ_NHYDRO 6
 #define PRJ_NRAD_VAR (PRJ_NRAD * PRJ_NEGROUP * (1 + PRJ_NDIM))
 #define PRJ_NVAR_CONS (PRJ_NHYDRO + PRJ_NRAD_VAR)
