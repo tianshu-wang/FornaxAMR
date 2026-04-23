@@ -12,6 +12,10 @@ void prj_rad_flux(const double *WL, const double *WR,
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature);
 void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature);
 void prj_rad_m1_pressure(double E, double F1, double F2, double F3, double P[3][3]);
+#if PRJ_NRAD > 0
+void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
+    double *lam_min, double *lam_max);
+#endif
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);
 

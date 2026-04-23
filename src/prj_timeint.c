@@ -65,6 +65,60 @@ static void prj_timeint_apply_eint_floor(const prj_mesh *mesh, double *u, double
     u[PRJ_CONS_ETOT] = rho * (mesh->E_floor + kinetic);
 }
 
+#if PRJ_NRAD > 0
+static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
+{
+    double cdir[3] = {0.0, 0.0, 0.0};
+    int field;
+    int group;
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            double E = w[PRJ_PRIM_RAD_E(field, group)];
+            double F1 = w[PRJ_PRIM_RAD_F1(field, group)];
+            double F2 = w[PRJ_PRIM_RAD_F2(field, group)];
+            double F3 = w[PRJ_PRIM_RAD_F3(field, group)];
+            double lam_min;
+            double lam_max;
+            double c_abs;
+
+            /* prj_rad_m1_wavespeeds treats F1 as the direction-normal flux. */
+            prj_rad_m1_wavespeeds(E, F1, F2, F3, &lam_min, &lam_max);
+            c_abs = fabs(lam_min);
+            if (fabs(lam_max) > c_abs) {
+                c_abs = fabs(lam_max);
+            }
+            c_abs *= PRJ_CLIGHT;
+            if (c_abs > cdir[0]) {
+                cdir[0] = c_abs;
+            }
+
+            prj_rad_m1_wavespeeds(E, F2, F3, F1, &lam_min, &lam_max);
+            c_abs = fabs(lam_min);
+            if (fabs(lam_max) > c_abs) {
+                c_abs = fabs(lam_max);
+            }
+            c_abs *= PRJ_CLIGHT;
+            if (c_abs > cdir[1]) {
+                cdir[1] = c_abs;
+            }
+
+            prj_rad_m1_wavespeeds(E, F3, F1, F2, &lam_min, &lam_max);
+            c_abs = fabs(lam_min);
+            if (fabs(lam_max) > c_abs) {
+                c_abs = fabs(lam_max);
+            }
+            c_abs *= PRJ_CLIGHT;
+            if (c_abs > cdir[2]) {
+                cdir[2] = c_abs;
+            }
+        }
+    }
+
+    return cdir[0] / dx[0] + cdir[1] / dx[1] + cdir[2] / dx[2];
+}
+#endif
+
 double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
 {
     double dt_min = 1.0e99;
@@ -99,19 +153,19 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
                         (fabs(w[PRJ_PRIM_V2]) + cs) / block->dx[1] +
                         (fabs(w[PRJ_PRIM_V3]) + cs) / block->dx[2];
                     dt_cell = cfl / denom;
-                    if (PRJ_NRAD_VAR > 0) {
-                        double dx_min = block->dx[0];
+#if PRJ_NRAD > 0
+                    {
+                        double rad_denom = prj_timeint_cell_rad_denom(w, block->dx);
 
-                        if (block->dx[1] < dx_min) {
-                            dx_min = block->dx[1];
-                        }
-                        if (block->dx[2] < dx_min) {
-                            dx_min = block->dx[2];
-                        }
-                        if (cfl * dx_min / PRJ_CLIGHT < dt_cell) {
-                            dt_cell = cfl * dx_min / PRJ_CLIGHT;
+                        if (rad_denom > 0.0) {
+                            double dt_rad = cfl / rad_denom;
+
+                            if (dt_rad < dt_cell) {
+                                dt_cell = dt_rad;
+                            }
                         }
                     }
+#endif
                     if (dt_cell < dt_min) {
                         dt_min = dt_cell;
                     }

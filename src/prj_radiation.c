@@ -269,7 +269,7 @@ static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double
     }
 }
 
-static void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
+void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
     double *lam_min, double *lam_max)
 {
     double Fmag;
