@@ -1,0 +1,60 @@
+# Magnetized CCSN profile with dipole field.
+
+problem = magnetized_ccsn
+restart_from_file = 0
+restart_file_name = output/final.h5
+
+x1min = -3.0e9
+x1max = 3.0e9
+x2min = -3.0e9
+x2max = 3.0e9
+x3min = -3.0e9
+x3max = 3.0e9
+
+root_nx = 2
+max_level = 0
+min_dx = 5e4
+
+cfl = 0.4
+t_end = 1.0e9
+max_steps = 10
+output_interval = -1
+restart_interval = -1
+output_dt = 1e-3
+restart_dt = 1e-2
+
+amr_interval = 1
+amr_estimator = pressure_scale_height
+amr_refine_thresh = 0.4
+amr_derefine_thresh = 0.1
+amr_estimator2 = velocity
+amr_refine_thresh2 = 0.4
+amr_derefine_thresh2 = 0.1
+use_amr_angle_resolution = 1
+amr_angle_resolution_limit = 0.025
+
+eos_type = table
+eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
+progenitor_file = ../s9.0.swbj15.fornax
+
+rad_table_param_file = ../opacbin.extendT.param
+rad_table_file = ../opacity.SFHo.juo.horo.brem1.extendedT.bin
+rad_emin_0 = 1.0
+rad_emax_0 = 300.0
+rad_emin_1 = 1.0
+rad_emax_1 = 100.0
+rad_emin_2 = 1.0
+rad_emax_2 = 100.0
+
+mhd_init = dipole
+B_norm = 1.0e8
+B_scale = 1.0e8
+
+output_dir = output/dump
+
+bc_x1_inner = outflow
+bc_x1_outer = outflow
+bc_x2_inner = outflow
+bc_x2_outer = outflow
+bc_x3_inner = outflow
+bc_x3_outer = outflow

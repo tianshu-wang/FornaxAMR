@@ -17,10 +17,19 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     if (strcmp(name, "sedov") == 0) {
         return prj_problem_sedov;
     }
+    if (strcmp(name, "magnetized_sedov") == 0) {
+        return prj_problem_sedov;
+    }
     if (strcmp(name, "cc") == 0) {
         return prj_problem_cc;
     }
+    if (strcmp(name, "magnetized_cc") == 0) {
+        return prj_problem_cc;
+    }
     if (strcmp(name, "ccsn") == 0) {
+        return prj_problem_ccsn;
+    }
+    if (strcmp(name, "magnetized_ccsn") == 0) {
         return prj_problem_ccsn;
     }
     if (strcmp(name, "sedov_offcenter") == 0) {
@@ -245,8 +254,7 @@ int main(int argc, char *argv[])
     if (sim.restart_from_file == 0) {
         init_fn(&sim);
         if (!init_with_mpi) {
-            prj_mpi_decompose(&sim.mesh);
-            prj_mpi_prepare(&sim.mesh, &mpi);
+            prj_mpi_rebalance(&sim.mesh);
         }
     } else {
         prj_prepare_restart_problem(&sim, init_fn);

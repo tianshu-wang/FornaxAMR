@@ -24,5 +24,9 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, int stage);
 void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, int stage);
 void prj_eos_prim2cons(prj_eos *eos, double *W, double *U);
 void prj_eos_cons2prim(prj_eos *eos, double *U, double *W);
+double prj_eos_kinetic_energy_density_prim(const double *W);
+double prj_eos_kinetic_energy_density_cons(const double *U);
+double prj_eos_magnetic_energy_density_prim(const double *W);
+double prj_eos_magnetic_energy_density_cons(const double *U);
 
 #endif

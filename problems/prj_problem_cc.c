@@ -300,6 +300,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
                     double W[PRJ_NVAR_PRIM];
                     double U[PRJ_NVAR_CONS];
 
+                    prj_fill(W, PRJ_NVAR_PRIM, 0.0);
                     prj_cc_profile_sample(profile, r, &rho, &temp, &ye, &vr);
                     if (rho == 0.0) {
                         fprintf(stderr,
@@ -377,9 +378,13 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
 void prj_problem_cc(prj_sim *sim)
 {
     prj_cc_profile profile;
+    int consistent_mhd_init = 0;
 
     if (sim->progenitor_file[0] == '\0') {
         return;
+    }
+    if (strcmp(sim->problem_name, "magnetized_cc") == 0) {
+        consistent_mhd_init = 1;
     }
     if (sim->eos.kind == PRJ_EOS_KIND_TABLE && sim->eos.filename[0] == '\0') {
         strncpy(sim->eos.filename, PRJ_CC_EOS_PATH, sizeof(sim->eos.filename) - 1);
@@ -397,5 +402,10 @@ void prj_problem_cc(prj_sim *sim)
         return;
     }
     prj_cc_initialize_amr(sim, &profile);
+    if (consistent_mhd_init != 0) {
+        prj_mhd_init_consistent_emf(sim);
+    } else {
+        prj_mhd_init(sim);
+    }
     prj_cc_profile_free(&profile);
 }

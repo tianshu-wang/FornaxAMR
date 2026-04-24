@@ -73,6 +73,11 @@ struct prj_block {
     double *dUdt;
     double *flux[3];
     double *v_riemann[3];
+    double *Bf[3];
+    double *Bf1[3];
+    double *vB1[3];
+    double *vB2[3];
+    double *emf[3];
     int *ridx;
     double *fr;
     double vol;
@@ -213,6 +218,9 @@ struct prj_sim {
     char output_dir[256];
     char progenitor_file[256];
     char problem_name[64];
+    int mhd_init_type;
+    double B_norm;
+    double B_scale;
     int restart_from_file;
     char restart_file_name[256];
     int amr_interval;

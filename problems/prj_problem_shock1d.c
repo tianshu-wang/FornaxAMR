@@ -47,6 +47,7 @@ void prj_problem_shock1d(prj_sim *sim)
                     double W[PRJ_NVAR_PRIM];
                     double U[PRJ_NVAR_CONS];
 
+                    prj_fill(W, PRJ_NVAR_PRIM, 0.0);
                     W[PRJ_PRIM_RHO] = 1.0;
                     W[PRJ_PRIM_V1] = 0.0;
                     W[PRJ_PRIM_V2] = 0.0;
@@ -59,4 +60,5 @@ void prj_problem_shock1d(prj_sim *sim)
             }
         }
     }
+    prj_mhd_init(sim);
 }

@@ -74,6 +74,7 @@ static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
                     double W[PRJ_NVAR_PRIM];
                     double U[PRJ_NVAR_CONS];
 
+                    prj_fill(W, PRJ_NVAR_PRIM, 0.0);
                     W[PRJ_PRIM_RHO] = rho;
                     W[PRJ_PRIM_V1] = 0.0;
                     W[PRJ_PRIM_V2] = 0.0;
@@ -223,6 +224,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
                     double W[PRJ_NVAR_PRIM];
                     int v;
 
+                    prj_fill(W, PRJ_NVAR_PRIM, 0.0);
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                         U[v] = block->U[VIDX(v, i, j, k)];
                     }
@@ -245,4 +247,5 @@ void prj_problem_sedov_offcenter(prj_sim *sim)
     }
     prj_problem_fill_ambient(sim, 1.0, 1.0e-3);
     prj_problem_inject_energy(sim, 0.2, 0.2, 0.2);
+    prj_mhd_init(sim);
 }

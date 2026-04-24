@@ -482,6 +482,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     double E_nu_new[PRJ_NRAD * PRJ_NEGROUP];
     double rho;
     double KE;
+    double ME;
     double Uint_old;
     double Ye_old;
     double eint_old;
@@ -497,10 +498,9 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     const double alpha_ls = 1.0e-4;
 
     rho = u[PRJ_CONS_RHO];
-    KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
-        u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
-        u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
-    Uint_old = u[PRJ_CONS_ETOT] - KE;
+    KE = prj_eos_kinetic_energy_density_cons(u);
+    ME = prj_eos_magnetic_energy_density_cons(u);
+    Uint_old = u[PRJ_CONS_ETOT] - KE - ME;
     Ye_old = u[PRJ_CONS_YE] / rho;
     eint_old = Uint_old / rho;
 
@@ -717,7 +717,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new);
         prj_eos_rty(eos, rho, T, Ye, eos_q);
         eint_new = eos_q[PRJ_EOS_EINT];
-        u[PRJ_CONS_ETOT] = rho * eint_new + KE;
+        u[PRJ_CONS_ETOT] = rho * eint_new + KE + ME;
         u[PRJ_CONS_YE] = rho * Ye;
         for (nu = 0; nu < PRJ_NRAD; ++nu) {
             for (g = 0; g < PRJ_NEGROUP; ++g) {

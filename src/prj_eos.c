@@ -724,9 +724,6 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, int stage)
 void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)
 {
     double rho;
-    double v1;
-    double v2;
-    double v3;
     double eint;
 
     (void)eos;
@@ -736,17 +733,21 @@ void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)
     }
 
     rho = W[PRJ_PRIM_RHO];
-    v1 = W[PRJ_PRIM_V1];
-    v2 = W[PRJ_PRIM_V2];
-    v3 = W[PRJ_PRIM_V3];
     eint = W[PRJ_PRIM_EINT];
 
     U[PRJ_CONS_RHO] = rho;
-    U[PRJ_CONS_MOM1] = rho * v1;
-    U[PRJ_CONS_MOM2] = rho * v2;
-    U[PRJ_CONS_MOM3] = rho * v3;
-    U[PRJ_CONS_ETOT] = rho * eint + 0.5 * rho * (v1 * v1 + v2 * v2 + v3 * v3);
+    U[PRJ_CONS_MOM1] = rho * W[PRJ_PRIM_V1];
+    U[PRJ_CONS_MOM2] = rho * W[PRJ_PRIM_V2];
+    U[PRJ_CONS_MOM3] = rho * W[PRJ_PRIM_V3];
+    U[PRJ_CONS_ETOT] = rho * eint +
+        prj_eos_kinetic_energy_density_prim(W) +
+        prj_eos_magnetic_energy_density_prim(W);
     U[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE];
+#if PRJ_MHD
+    U[PRJ_CONS_B1] = W[PRJ_PRIM_B1];
+    U[PRJ_CONS_B2] = W[PRJ_PRIM_B2];
+    U[PRJ_CONS_B3] = W[PRJ_PRIM_B3];
+#endif
     prj_rad_prim2cons(W, U);
 }
 
@@ -757,6 +758,7 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
     double v2;
     double v3;
     double kinetic;
+    double magnetic;
 
     (void)eos;
 
@@ -772,6 +774,11 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
         W[PRJ_PRIM_V3] = 0.0;
         W[PRJ_PRIM_EINT] = 0.0;
         W[PRJ_PRIM_YE] = 0.0;
+#if PRJ_MHD
+        W[PRJ_PRIM_B1] = U[PRJ_CONS_B1];
+        W[PRJ_PRIM_B2] = U[PRJ_CONS_B2];
+        W[PRJ_PRIM_B3] = U[PRJ_CONS_B3];
+#endif
         prj_rad_cons2prim(U, W);
         return;
     }
@@ -779,13 +786,84 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
     v1 = U[PRJ_CONS_MOM1] / rho;
     v2 = U[PRJ_CONS_MOM2] / rho;
     v3 = U[PRJ_CONS_MOM3] / rho;
-    kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
+    kinetic = prj_eos_kinetic_energy_density_cons(U) / rho;
+    magnetic = prj_eos_magnetic_energy_density_cons(U) / rho;
 
     W[PRJ_PRIM_RHO] = rho;
     W[PRJ_PRIM_V1] = v1;
     W[PRJ_PRIM_V2] = v2;
     W[PRJ_PRIM_V3] = v3;
-    W[PRJ_PRIM_EINT] = U[PRJ_CONS_ETOT] / rho - kinetic;
+    W[PRJ_PRIM_EINT] = U[PRJ_CONS_ETOT] / rho - kinetic - magnetic;
     W[PRJ_PRIM_YE] = U[PRJ_CONS_YE] / rho;
+#if PRJ_MHD
+    W[PRJ_PRIM_B1] = U[PRJ_CONS_B1];
+    W[PRJ_PRIM_B2] = U[PRJ_CONS_B2];
+    W[PRJ_PRIM_B3] = U[PRJ_CONS_B3];
+#endif
     prj_rad_cons2prim(U, W);
+}
+
+double prj_eos_kinetic_energy_density_prim(const double *W)
+{
+    if (W == 0) {
+        return 0.0;
+    }
+
+    return 0.5 * W[PRJ_PRIM_RHO] * (
+        W[PRJ_PRIM_V1] * W[PRJ_PRIM_V1] +
+        W[PRJ_PRIM_V2] * W[PRJ_PRIM_V2] +
+        W[PRJ_PRIM_V3] * W[PRJ_PRIM_V3]);
+}
+
+double prj_eos_kinetic_energy_density_cons(const double *U)
+{
+    double rho;
+
+    if (U == 0) {
+        return 0.0;
+    }
+
+    rho = U[PRJ_CONS_RHO];
+    if (rho <= 0.0) {
+        return 0.0;
+    }
+
+    return 0.5 * (
+        U[PRJ_CONS_MOM1] * U[PRJ_CONS_MOM1] +
+        U[PRJ_CONS_MOM2] * U[PRJ_CONS_MOM2] +
+        U[PRJ_CONS_MOM3] * U[PRJ_CONS_MOM3]) / rho;
+}
+
+double prj_eos_magnetic_energy_density_prim(const double *W)
+{
+#if PRJ_MHD
+    if (W == 0) {
+        return 0.0;
+    }
+
+    return 0.5 * (
+        W[PRJ_PRIM_B1] * W[PRJ_PRIM_B1] +
+        W[PRJ_PRIM_B2] * W[PRJ_PRIM_B2] +
+        W[PRJ_PRIM_B3] * W[PRJ_PRIM_B3]);
+#else
+    (void)W;
+    return 0.0;
+#endif
+}
+
+double prj_eos_magnetic_energy_density_cons(const double *U)
+{
+#if PRJ_MHD
+    if (U == 0) {
+        return 0.0;
+    }
+
+    return 0.5 * (
+        U[PRJ_CONS_B1] * U[PRJ_CONS_B1] +
+        U[PRJ_CONS_B2] * U[PRJ_CONS_B2] +
+        U[PRJ_CONS_B3] * U[PRJ_CONS_B3]);
+#else
+    (void)U;
+    return 0.0;
+#endif
 }

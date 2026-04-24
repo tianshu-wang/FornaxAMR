@@ -1,4 +1,10 @@
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
 
 #include "prj.h"
 
@@ -19,7 +25,7 @@ static double prj_abs_double(double x)
     return x < 0.0 ? -x : x;
 }
 
-static void prj_riemann_state(const double *W, double pressure, double gamma,
+static void prj_riemann_state_hydro(const double *W, double pressure, double gamma,
     const prj_eos *eos, double *U, double *F, double *cs)
 {
     double rho;
@@ -52,6 +58,116 @@ static void prj_riemann_state(const double *W, double pressure, double gamma,
     F[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE] * v1;
 }
 
+#if PRJ_MHD
+static void prj_riemann_abort(const char *message)
+{
+    prj_mpi *mpi = prj_mpi_current();
+
+    fprintf(stderr, "%s\n", message);
+#if defined(PRJ_ENABLE_MPI)
+    if (mpi != 0 && mpi->totrank > 1) {
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+#endif
+    exit(1);
+}
+
+static double prj_riemann_fast_speed_mhd(const double *W, double pressure, double gamma)
+{
+    double rho;
+    double bx;
+    double by;
+    double bz;
+    double a2;
+    double b2;
+    double disc;
+    double cf2;
+
+    rho = W[PRJ_PRIM_RHO];
+    bx = W[PRJ_PRIM_B1];
+    by = W[PRJ_PRIM_B2];
+    bz = W[PRJ_PRIM_B3];
+    if (rho <= 0.0 || pressure <= 0.0 || gamma <= 0.0) {
+        prj_riemann_abort("prj_riemann_hlld: invalid input state");
+    }
+
+    a2 = gamma * pressure / rho;
+    b2 = (bx * bx + by * by + bz * bz) / rho;
+    disc = (a2 + b2) * (a2 + b2) - 4.0 * a2 * bx * bx / rho;
+    if (disc < 0.0 && disc > -1.0e-12 * (a2 + b2) * (a2 + b2)) {
+        disc = 0.0;
+    }
+    if (disc < 0.0) {
+        prj_riemann_abort("prj_riemann_hlld: negative fast-wave discriminant");
+    }
+    cf2 = 0.5 * (a2 + b2 + sqrt(disc));
+    if (cf2 < 0.0) {
+        prj_riemann_abort("prj_riemann_hlld: negative fast-wave speed");
+    }
+    return sqrt(cf2);
+}
+
+static void prj_riemann_state_mhd(const double *W, double pressure, double gamma,
+    const prj_eos *eos, double *U, double *F, double *cf)
+{
+    double rho;
+    double v1;
+    double v2;
+    double v3;
+    double b1;
+    double b2;
+    double b3;
+    double etot;
+    double ptot;
+    double vdotb;
+    int v;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        U[v] = 0.0;
+        F[v] = 0.0;
+    }
+
+    prj_eos_prim2cons((prj_eos *)eos, (double *)W, U);
+
+    rho = W[PRJ_PRIM_RHO];
+    v1 = W[PRJ_PRIM_V1];
+    v2 = W[PRJ_PRIM_V2];
+    v3 = W[PRJ_PRIM_V3];
+    b1 = W[PRJ_PRIM_B1];
+    b2 = W[PRJ_PRIM_B2];
+    b3 = W[PRJ_PRIM_B3];
+    etot = U[PRJ_CONS_ETOT];
+    ptot = pressure + 0.5 * (b1 * b1 + b2 * b2 + b3 * b3);
+    vdotb = v1 * b1 + v2 * b2 + v3 * b3;
+
+    *cf = prj_riemann_fast_speed_mhd(W, pressure, gamma);
+
+    F[PRJ_CONS_RHO] = rho * v1;
+    F[PRJ_CONS_MOM1] = rho * v1 * v1 + ptot - b1 * b1;
+    F[PRJ_CONS_MOM2] = rho * v1 * v2 - b1 * b2;
+    F[PRJ_CONS_MOM3] = rho * v1 * v3 - b1 * b3;
+    F[PRJ_CONS_ETOT] = (etot + ptot) * v1 - b1 * vdotb;
+    F[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE] * v1;
+    F[PRJ_CONS_B1] = 0.0;
+    F[PRJ_CONS_B2] = b2 * v1 - v2 * b1;
+    F[PRJ_CONS_B3] = b3 * v1 - v3 * b1;
+}
+
+static void prj_riemann_store_face_state(double v1, double v2, double v3,
+    double b1, double b2, double b3, double v_face[3], double emf_face[2])
+{
+    if (v_face != 0) {
+        v_face[0] = v1;
+        v_face[1] = v2;
+        v_face[2] = v3;
+    }
+    if (emf_face != 0) {
+        emf_face[0] = v3 * b1 - v1 * b3;
+        emf_face[1] = v1 * b2 - v2 * b1;
+    }
+}
+#endif
+
 void prj_riemann_hlle(const double *WL, const double *WR,
     double pL, double pR, double gL, double gR,
     const prj_eos *eos, double *flux, double v_face[3])
@@ -66,8 +182,8 @@ void prj_riemann_hlle(const double *WL, const double *WR,
     double SR;
     int v;
 
-    prj_riemann_state(WL, pL, gL, eos, UL, FL, &csL);
-    prj_riemann_state(WR, pR, gR, eos, UR, FR, &csR);
+    prj_riemann_state_hydro(WL, pL, gL, eos, UL, FL, &csL);
+    prj_riemann_state_hydro(WR, pR, gR, eos, UR, FR, &csR);
 
     SL = prj_riemann_min_double(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
     SR = prj_riemann_max_double(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
@@ -137,8 +253,8 @@ void prj_riemann_hllc(const double *WL, const double *WR,
     double e_over_rho;
     int v;
 
-    prj_riemann_state(WL, pL, gL, eos, UL, FL, &csL);
-    prj_riemann_state(WR, pR, gR, eos, UR, FR, &csR);
+    prj_riemann_state_hydro(WL, pL, gL, eos, UL, FL, &csL);
+    prj_riemann_state_hydro(WR, pR, gR, eos, UR, FR, &csR);
 
     SL = prj_riemann_min_double(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
     SR = prj_riemann_max_double(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
@@ -220,6 +336,291 @@ void prj_riemann_hllc(const double *WL, const double *WR,
         }
     }
 }
+
+#if PRJ_MHD
+void prj_riemann_hlld(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    const prj_eos *eos, double *flux, double v_face[3], double emf_face[2])
+{
+    const double tiny = 1.0e-12;
+    double UL[PRJ_NVAR_CONS];
+    double UR[PRJ_NVAR_CONS];
+    double FL[PRJ_NVAR_CONS];
+    double FR[PRJ_NVAR_CONS];
+    double UstarL[PRJ_NVAR_CONS];
+    double UstarR[PRJ_NVAR_CONS];
+    double FStarL[PRJ_NVAR_CONS];
+    double FStarR[PRJ_NVAR_CONS];
+    double UssL[PRJ_NVAR_CONS];
+    double UssR[PRJ_NVAR_CONS];
+    double FssL[PRJ_NVAR_CONS];
+    double FssR[PRJ_NVAR_CONS];
+    double rhoL;
+    double rhoR;
+    double vxL;
+    double vxR;
+    double vyL;
+    double vyR;
+    double vzL;
+    double vzR;
+    double yeL;
+    double yeR;
+    double bx;
+    double byL;
+    double byR;
+    double bzL;
+    double bzR;
+    double ptotL;
+    double ptotR;
+    double cfL;
+    double cfR;
+    double SL;
+    double SR;
+    double denom_sm;
+    double SM;
+    double ptotStarL;
+    double ptotStarR;
+    double ptotStar;
+    double rhoStarL;
+    double rhoStarR;
+    double denL;
+    double denR;
+    double vyStarL;
+    double vyStarR;
+    double vzStarL;
+    double vzStarR;
+    double byStarL;
+    double byStarR;
+    double bzStarL;
+    double bzStarR;
+    double vdotbL;
+    double vdotbR;
+    double vdotbStarL;
+    double vdotbStarR;
+    double EstarL;
+    double EstarR;
+    double bxabs;
+    int use_rotational;
+    int v;
+
+    prj_riemann_state_mhd(WL, pL, gL, eos, UL, FL, &cfL);
+    prj_riemann_state_mhd(WR, pR, gR, eos, UR, FR, &cfR);
+
+    rhoL = WL[PRJ_PRIM_RHO];
+    rhoR = WR[PRJ_PRIM_RHO];
+    vxL = WL[PRJ_PRIM_V1];
+    vxR = WR[PRJ_PRIM_V1];
+    vyL = WL[PRJ_PRIM_V2];
+    vyR = WR[PRJ_PRIM_V2];
+    vzL = WL[PRJ_PRIM_V3];
+    vzR = WR[PRJ_PRIM_V3];
+    yeL = WL[PRJ_PRIM_YE];
+    yeR = WR[PRJ_PRIM_YE];
+    bx = WL[PRJ_PRIM_B1];
+    if (prj_abs_double(WR[PRJ_PRIM_B1] - bx) > 1.0e-10 *
+            prj_riemann_max_double(1.0, prj_abs_double(bx))) {
+        prj_riemann_abort("prj_riemann_hlld: left/right normal magnetic field mismatch");
+    }
+    byL = WL[PRJ_PRIM_B2];
+    byR = WR[PRJ_PRIM_B2];
+    bzL = WL[PRJ_PRIM_B3];
+    bzR = WR[PRJ_PRIM_B3];
+    ptotL = pL + 0.5 * (bx * bx + byL * byL + bzL * bzL);
+    ptotR = pR + 0.5 * (bx * bx + byR * byR + bzR * bzR);
+    SL = prj_riemann_min_double(vxL - cfL, vxR - cfR);
+    SR = prj_riemann_max_double(vxL + cfL, vxR + cfR);
+
+    if (0.0 <= SL) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            flux[v] = FL[v];
+        }
+        prj_riemann_store_face_state(vxL, vyL, vzL, bx, byL, bzL, v_face, emf_face);
+        return;
+    }
+    if (SR <= 0.0) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            flux[v] = FR[v];
+        }
+        prj_riemann_store_face_state(vxR, vyR, vzR, bx, byR, bzR, v_face, emf_face);
+        return;
+    }
+
+    denom_sm = rhoR * (SR - vxR) - rhoL * (SL - vxL);
+    if (prj_abs_double(denom_sm) < tiny) {
+        prj_riemann_abort("prj_riemann_hlld: singular contact-wave denominator");
+    }
+    SM = (rhoR * vxR * (SR - vxR) - rhoL * vxL * (SL - vxL) - ptotR + ptotL) / denom_sm;
+    ptotStarL = ptotL + rhoL * (SL - vxL) * (SM - vxL);
+    ptotStarR = ptotR + rhoR * (SR - vxR) * (SM - vxR);
+    ptotStar = 0.5 * (ptotStarL + ptotStarR);
+    rhoStarL = rhoL * (SL - vxL) / (SL - SM);
+    rhoStarR = rhoR * (SR - vxR) / (SR - SM);
+    if (rhoStarL <= 0.0 || rhoStarR <= 0.0) {
+        prj_riemann_abort("prj_riemann_hlld: non-positive star density");
+    }
+
+    denL = rhoL * (SL - vxL) * (SL - SM) - bx * bx;
+    denR = rhoR * (SR - vxR) * (SR - SM) - bx * bx;
+    if (prj_abs_double(denL) > tiny) {
+        vyStarL = vyL - bx * byL * (SM - vxL) / denL;
+        vzStarL = vzL - bx * bzL * (SM - vxL) / denL;
+        byStarL = byL * (rhoL * (SL - vxL) * (SL - vxL) - bx * bx) / denL;
+        bzStarL = bzL * (rhoL * (SL - vxL) * (SL - vxL) - bx * bx) / denL;
+    } else {
+        vyStarL = vyL;
+        vzStarL = vzL;
+        byStarL = byL;
+        bzStarL = bzL;
+    }
+    if (prj_abs_double(denR) > tiny) {
+        vyStarR = vyR - bx * byR * (SM - vxR) / denR;
+        vzStarR = vzR - bx * bzR * (SM - vxR) / denR;
+        byStarR = byR * (rhoR * (SR - vxR) * (SR - vxR) - bx * bx) / denR;
+        bzStarR = bzR * (rhoR * (SR - vxR) * (SR - vxR) - bx * bx) / denR;
+    } else {
+        vyStarR = vyR;
+        vzStarR = vzR;
+        byStarR = byR;
+        bzStarR = bzR;
+    }
+
+    vdotbL = vxL * bx + vyL * byL + vzL * bzL;
+    vdotbR = vxR * bx + vyR * byR + vzR * bzR;
+    vdotbStarL = SM * bx + vyStarL * byStarL + vzStarL * bzStarL;
+    vdotbStarR = SM * bx + vyStarR * byStarR + vzStarR * bzStarR;
+    EstarL = ((SL - vxL) * UL[PRJ_CONS_ETOT] - ptotL * vxL +
+        ptotStar * SM + bx * (vdotbL - vdotbStarL)) / (SL - SM);
+    EstarR = ((SR - vxR) * UR[PRJ_CONS_ETOT] - ptotR * vxR +
+        ptotStar * SM + bx * (vdotbR - vdotbStarR)) / (SR - SM);
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        UstarL[v] = 0.0;
+        UstarR[v] = 0.0;
+    }
+    UstarL[PRJ_CONS_RHO] = rhoStarL;
+    UstarL[PRJ_CONS_MOM1] = rhoStarL * SM;
+    UstarL[PRJ_CONS_MOM2] = rhoStarL * vyStarL;
+    UstarL[PRJ_CONS_MOM3] = rhoStarL * vzStarL;
+    UstarL[PRJ_CONS_ETOT] = EstarL;
+    UstarL[PRJ_CONS_YE] = rhoStarL * yeL;
+    UstarL[PRJ_CONS_B1] = bx;
+    UstarL[PRJ_CONS_B2] = byStarL;
+    UstarL[PRJ_CONS_B3] = bzStarL;
+
+    UstarR[PRJ_CONS_RHO] = rhoStarR;
+    UstarR[PRJ_CONS_MOM1] = rhoStarR * SM;
+    UstarR[PRJ_CONS_MOM2] = rhoStarR * vyStarR;
+    UstarR[PRJ_CONS_MOM3] = rhoStarR * vzStarR;
+    UstarR[PRJ_CONS_ETOT] = EstarR;
+    UstarR[PRJ_CONS_YE] = rhoStarR * yeR;
+    UstarR[PRJ_CONS_B1] = bx;
+    UstarR[PRJ_CONS_B2] = byStarR;
+    UstarR[PRJ_CONS_B3] = bzStarR;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        FStarL[v] = FL[v] + SL * (UstarL[v] - UL[v]);
+        FStarR[v] = FR[v] + SR * (UstarR[v] - UR[v]);
+    }
+
+    bxabs = prj_abs_double(bx);
+    use_rotational = bxabs > tiny;
+    if (!use_rotational) {
+        if (SM >= 0.0) {
+            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                flux[v] = FStarL[v];
+            }
+            prj_riemann_store_face_state(SM, vyStarL, vzStarL, bx, byStarL, bzStarL, v_face, emf_face);
+        } else {
+            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                flux[v] = FStarR[v];
+            }
+            prj_riemann_store_face_state(SM, vyStarR, vzStarR, bx, byStarR, bzStarR, v_face, emf_face);
+        }
+        return;
+    }
+
+    {
+        double sqrtRhoL = sqrt(rhoStarL);
+        double sqrtRhoR = sqrt(rhoStarR);
+        double signBx = bx >= 0.0 ? 1.0 : -1.0;
+        double vySS;
+        double vzSS;
+        double bySS;
+        double bzSS;
+        double vdotbSS;
+        double EssL;
+        double EssR;
+        double SAL;
+        double SAR;
+        double inv_sum = 1.0 / (sqrtRhoL + sqrtRhoR);
+
+        vySS = (sqrtRhoL * vyStarL + sqrtRhoR * vyStarR +
+            (byStarR - byStarL) * signBx) * inv_sum;
+        vzSS = (sqrtRhoL * vzStarL + sqrtRhoR * vzStarR +
+            (bzStarR - bzStarL) * signBx) * inv_sum;
+        bySS = (sqrtRhoL * byStarR + sqrtRhoR * byStarL +
+            sqrtRhoL * sqrtRhoR * (vyStarR - vyStarL) * signBx) * inv_sum;
+        bzSS = (sqrtRhoL * bzStarR + sqrtRhoR * bzStarL +
+            sqrtRhoL * sqrtRhoR * (vzStarR - vzStarL) * signBx) * inv_sum;
+        vdotbSS = SM * bx + vySS * bySS + vzSS * bzSS;
+        EssL = EstarL - sqrtRhoL * (vdotbStarL - vdotbSS) * signBx;
+        EssR = EstarR + sqrtRhoR * (vdotbStarR - vdotbSS) * signBx;
+        SAL = SM - bxabs / sqrtRhoL;
+        SAR = SM + bxabs / sqrtRhoR;
+
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            UssL[v] = 0.0;
+            UssR[v] = 0.0;
+        }
+        UssL[PRJ_CONS_RHO] = rhoStarL;
+        UssL[PRJ_CONS_MOM1] = rhoStarL * SM;
+        UssL[PRJ_CONS_MOM2] = rhoStarL * vySS;
+        UssL[PRJ_CONS_MOM3] = rhoStarL * vzSS;
+        UssL[PRJ_CONS_ETOT] = EssL;
+        UssL[PRJ_CONS_YE] = rhoStarL * yeL;
+        UssL[PRJ_CONS_B1] = bx;
+        UssL[PRJ_CONS_B2] = bySS;
+        UssL[PRJ_CONS_B3] = bzSS;
+
+        UssR[PRJ_CONS_RHO] = rhoStarR;
+        UssR[PRJ_CONS_MOM1] = rhoStarR * SM;
+        UssR[PRJ_CONS_MOM2] = rhoStarR * vySS;
+        UssR[PRJ_CONS_MOM3] = rhoStarR * vzSS;
+        UssR[PRJ_CONS_ETOT] = EssR;
+        UssR[PRJ_CONS_YE] = rhoStarR * yeR;
+        UssR[PRJ_CONS_B1] = bx;
+        UssR[PRJ_CONS_B2] = bySS;
+        UssR[PRJ_CONS_B3] = bzSS;
+
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            FssL[v] = FStarL[v] + SAL * (UssL[v] - UstarL[v]);
+            FssR[v] = FStarR[v] + SAR * (UssR[v] - UstarR[v]);
+        }
+
+        if (SAL >= 0.0) {
+            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                flux[v] = FStarL[v];
+            }
+            prj_riemann_store_face_state(SM, vyStarL, vzStarL, bx, byStarL, bzStarL, v_face, emf_face);
+        } else if (SM >= 0.0) {
+            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                flux[v] = FssL[v];
+            }
+            prj_riemann_store_face_state(SM, vySS, vzSS, bx, bySS, bzSS, v_face, emf_face);
+        } else if (SAR > 0.0) {
+            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                flux[v] = FssR[v];
+            }
+            prj_riemann_store_face_state(SM, vySS, vzSS, bx, bySS, bzSS, v_face, emf_face);
+        } else {
+            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                flux[v] = FStarR[v];
+            }
+            prj_riemann_store_face_state(SM, vyStarR, vzStarR, bx, byStarR, bzStarR, v_face, emf_face);
+        }
+    }
+}
+#endif
 
 static int prj_blocks_overlap_open(double amin, double amax, double bmin, double bmax)
 {

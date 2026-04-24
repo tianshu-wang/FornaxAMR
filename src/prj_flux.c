@@ -1,3 +1,5 @@
+#include <stdio.h>
+
 #include "prj.h"
 
 static void prj_flux_rotate_to_local(const double *Wg, int dir, double *Wl)
@@ -22,6 +24,22 @@ static void prj_flux_rotate_to_local(const double *Wg, int dir, double *Wl)
         Wl[PRJ_PRIM_V2] = Wg[PRJ_PRIM_V1];
         Wl[PRJ_PRIM_V3] = Wg[PRJ_PRIM_V2];
     }
+
+#if PRJ_MHD
+    if (dir == X1DIR) {
+        Wl[PRJ_PRIM_B1] = Wg[PRJ_PRIM_B1];
+        Wl[PRJ_PRIM_B2] = Wg[PRJ_PRIM_B2];
+        Wl[PRJ_PRIM_B3] = Wg[PRJ_PRIM_B3];
+    } else if (dir == X2DIR) {
+        Wl[PRJ_PRIM_B1] = Wg[PRJ_PRIM_B2];
+        Wl[PRJ_PRIM_B2] = Wg[PRJ_PRIM_B3];
+        Wl[PRJ_PRIM_B3] = Wg[PRJ_PRIM_B1];
+    } else {
+        Wl[PRJ_PRIM_B1] = Wg[PRJ_PRIM_B3];
+        Wl[PRJ_PRIM_B2] = Wg[PRJ_PRIM_B1];
+        Wl[PRJ_PRIM_B3] = Wg[PRJ_PRIM_B2];
+    }
+#endif
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -65,6 +83,22 @@ static void prj_flux_rotate_from_local(const double *Fl, int dir, double *Fg)
         Fg[PRJ_CONS_MOM1] = Fl[PRJ_CONS_MOM2];
         Fg[PRJ_CONS_MOM2] = Fl[PRJ_CONS_MOM3];
     }
+
+#if PRJ_MHD
+    if (dir == X1DIR) {
+        Fg[PRJ_CONS_B1] = Fl[PRJ_CONS_B1];
+        Fg[PRJ_CONS_B2] = Fl[PRJ_CONS_B2];
+        Fg[PRJ_CONS_B3] = Fl[PRJ_CONS_B3];
+    } else if (dir == X2DIR) {
+        Fg[PRJ_CONS_B2] = Fl[PRJ_CONS_B1];
+        Fg[PRJ_CONS_B3] = Fl[PRJ_CONS_B2];
+        Fg[PRJ_CONS_B1] = Fl[PRJ_CONS_B3];
+    } else {
+        Fg[PRJ_CONS_B3] = Fl[PRJ_CONS_B1];
+        Fg[PRJ_CONS_B1] = Fl[PRJ_CONS_B2];
+        Fg[PRJ_CONS_B2] = Fl[PRJ_CONS_B3];
+    }
+#endif
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -153,6 +187,7 @@ static void prj_flux_face_states(double *W, int dir, int i, int j, int k, double
     }
 }
 
+#if !PRJ_MHD
 static void prj_flux_cell_state(double *W, int i, int j, int k, double *Wc)
 {
     int v;
@@ -161,6 +196,7 @@ static void prj_flux_cell_state(double *W, int i, int j, int k, double *Wc)
         Wc[v] = W[VIDX(v, i, j, k)];
     }
 }
+#endif
 
 static void prj_flux_face_eosvar(const double *eosvar, int var, int dir, int i, int j, int k,
     double *left_value, double *right_value)
@@ -232,51 +268,100 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
 #endif
 
     for (dir = 0; dir < 3; ++dir) {
+        int i_min;
+        int i_max;
+        int j_min;
+        int j_max;
+        int k_min;
+        int k_max;
         int i;
         int j;
         int k;
 
-        for (i = 0; i <= PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j <= PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k <= PRJ_BLOCK_SIZE; ++k) {
+        if (dir == X1DIR) {
+            i_min = 0;
+            i_max = PRJ_BLOCK_SIZE;
+#if PRJ_MHD
+            j_min = -1;
+            j_max = PRJ_BLOCK_SIZE;
+            k_min = -1;
+            k_max = PRJ_BLOCK_SIZE;
+#else
+            j_min = 0;
+            j_max = PRJ_BLOCK_SIZE - 1;
+            k_min = 0;
+            k_max = PRJ_BLOCK_SIZE - 1;
+#endif
+        } else if (dir == X2DIR) {
+#if PRJ_MHD
+            i_min = -1;
+            i_max = PRJ_BLOCK_SIZE;
+#else
+            i_min = 0;
+            i_max = PRJ_BLOCK_SIZE - 1;
+#endif
+            j_min = 0;
+            j_max = PRJ_BLOCK_SIZE;
+#if PRJ_MHD
+            k_min = -1;
+            k_max = PRJ_BLOCK_SIZE;
+#else
+            k_min = 0;
+            k_max = PRJ_BLOCK_SIZE - 1;
+#endif
+        } else {
+#if PRJ_MHD
+            i_min = -1;
+            i_max = PRJ_BLOCK_SIZE;
+            j_min = -1;
+            j_max = PRJ_BLOCK_SIZE;
+#else
+            i_min = 0;
+            i_max = PRJ_BLOCK_SIZE - 1;
+            j_min = 0;
+            j_max = PRJ_BLOCK_SIZE - 1;
+#endif
+            k_min = 0;
+            k_max = PRJ_BLOCK_SIZE;
+        }
+
+        for (i = i_min; i <= i_max; ++i) {
+            for (j = j_min; j <= j_max; ++j) {
+                for (k = k_min; k <= k_max; ++k) {
                     double WLg[PRJ_NVAR_PRIM];
                     double WRg[PRJ_NVAR_PRIM];
                     double WL[PRJ_NVAR_PRIM];
                     double WR[PRJ_NVAR_PRIM];
-                    double WCLg[PRJ_NVAR_PRIM];
-                    double WCRg[PRJ_NVAR_PRIM];
-                    double WLLg[PRJ_NVAR_PRIM];
-                    double WRRg[PRJ_NVAR_PRIM];
-                    double WCL[PRJ_NVAR_PRIM];
-                    double WCR[PRJ_NVAR_PRIM];
-                    double WLL[PRJ_NVAR_PRIM];
-                    double WRR[PRJ_NVAR_PRIM];
-                    double pCLg;
-                    double pCRg;
-                    double pLLg;
-                    double pRRg;
                     double pL;
                     double pR;
                     double gL;
                     double gR;
                     double Fl[PRJ_NVAR_CONS];
                     double Fg[PRJ_NVAR_CONS];
-                    int shock_left;
-                    int shock_right;
+                    double v_face_loc[3] = {0.0, 0.0, 0.0};
                     int v;
+#if !PRJ_MHD || PRJ_NRAD > 0
                     int il;
                     int jl;
                     int kl;
                     int ir;
                     int jr;
                     int kr;
+#endif
+#if !PRJ_MHD
+                    double WCLg[PRJ_NVAR_PRIM];
+                    double WCRg[PRJ_NVAR_PRIM];
+                    double WLLg[PRJ_NVAR_PRIM];
+                    double WRRg[PRJ_NVAR_PRIM];
+                    double pCLg;
+                    double pCRg;
+                    double pLLg;
+                    double pRRg;
+                    int shock_left;
+                    int shock_right;
+#endif
 
-                    if ((dir == X1DIR && (j >= PRJ_BLOCK_SIZE || k >= PRJ_BLOCK_SIZE)) ||
-                        (dir == X2DIR && (i >= PRJ_BLOCK_SIZE || k >= PRJ_BLOCK_SIZE)) ||
-                        (dir == X3DIR && (i >= PRJ_BLOCK_SIZE || j >= PRJ_BLOCK_SIZE))) {
-                        continue;
-                    }
-
+#if !PRJ_MHD || PRJ_NRAD > 0
                     il = i;
                     jl = j;
                     kl = k;
@@ -293,10 +378,81 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                         kl = k - 1;
                         kr = k;
                     }
+#endif
 
                     prj_flux_face_states(W, dir, i, j, k, WLg, WRg);
                     prj_flux_rotate_to_local(WLg, dir, WL);
                     prj_flux_rotate_to_local(WRg, dir, WR);
+                    if (eosvar != 0) {
+                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_PRESSURE, dir, i, j, k, &pL, &pR);
+                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_GAMMA, dir, i, j, k, &gL, &gR);
+                    } else {
+                        pL = 0.0;
+                        pR = 0.0;
+                        gL = 0.0;
+                        gR = 0.0;
+                    }
+#if PRJ_MHD
+                    {
+                        double b_face = block->Bf[dir] != 0 ? block->Bf[dir][IDX(i, j, k)] : 0.0;
+                        double emf_face_loc[2] = {0.0, 0.0};
+
+                        WL[PRJ_PRIM_B1] = b_face;
+                        WR[PRJ_PRIM_B1] = b_face;
+                        prj_riemann_hlld(WL, WR, pL, pR, gL, gR, eos, Fl, v_face_loc, emf_face_loc);
+#if PRJ_MHD_DEBUG
+                        if (dir == X1DIR &&
+                            ((block->id == 1 && i == 15 && j == PRJ_BLOCK_SIZE) ||
+                                (block->id == 5 && i == 15 && j == 0))) {
+                            int wr_i = i;
+                            int wr_j = j;
+                            int wr_k = k;
+                            double wr_b2_stencil[3] = {
+                                W[VIDX(PRJ_PRIM_B2, wr_i - 1, wr_j, wr_k)],
+                                W[VIDX(PRJ_PRIM_B2, wr_i, wr_j, wr_k)],
+                                W[VIDX(PRJ_PRIM_B2, wr_i + 1, wr_j, wr_k)]
+                            };
+                            double wr_cell16_b2_faces[2] = {
+                                block->Bf[X2DIR][IDX(wr_i + 1, wr_j, wr_k)],
+                                block->Bf[X2DIR][IDX(wr_i + 1, wr_j + 1, wr_k)]
+                            };
+                            double wr_cell16_b3_faces[2] = {
+                                block->Bf[X3DIR][IDX(wr_i + 1, wr_j, wr_k)],
+                                block->Bf[X3DIR][IDX(wr_i + 1, wr_j, wr_k + 1)]
+                            };
+
+                            fprintf(stderr,
+                                "[mhd-face-debug] block=%d dir=%d face=(%d,%d,%d) "
+                                "b=% .17g p=(% .17g,% .17g) g=(% .17g,% .17g) "
+                                "WL=(rho=% .17g eint=% .17g v=% .17g,% .17g,% .17g B=% .17g,% .17g,% .17g) "
+                                "WR=(rho=% .17g eint=% .17g v=% .17g,% .17g,% .17g B=% .17g,% .17g,% .17g) "
+                                "WR_B2_stencil=(% .17g,% .17g,% .17g) "
+                                "WR_cell16_B2_faces=(% .17g,% .17g) "
+                                "WR_cell16_B3_faces=(% .17g,% .17g) "
+                                "vface=(% .17g,% .17g,% .17g) emf=(% .17g,% .17g)\n",
+                                block->id, dir, i, j, k,
+                                b_face, pL, pR, gL, gR,
+                                WL[PRJ_PRIM_RHO], WL[PRJ_PRIM_EINT],
+                                WL[PRJ_PRIM_V1], WL[PRJ_PRIM_V2], WL[PRJ_PRIM_V3],
+                                WL[PRJ_PRIM_B1], WL[PRJ_PRIM_B2], WL[PRJ_PRIM_B3],
+                                WR[PRJ_PRIM_RHO], WR[PRJ_PRIM_EINT],
+                                WR[PRJ_PRIM_V1], WR[PRJ_PRIM_V2], WR[PRJ_PRIM_V3],
+                                WR[PRJ_PRIM_B1], WR[PRJ_PRIM_B2], WR[PRJ_PRIM_B3],
+                                wr_b2_stencil[0], wr_b2_stencil[1], wr_b2_stencil[2],
+                                wr_cell16_b2_faces[0], wr_cell16_b2_faces[1],
+                                wr_cell16_b3_faces[0], wr_cell16_b3_faces[1],
+                                v_face_loc[0], v_face_loc[1], v_face_loc[2],
+                                emf_face_loc[0], emf_face_loc[1]);
+                        }
+#endif
+                        if (block->vB1[dir] != 0) {
+                            block->vB1[dir][IDX(i, j, k)] = emf_face_loc[0];
+                        }
+                        if (block->vB2[dir] != 0) {
+                            block->vB2[dir][IDX(i, j, k)] = emf_face_loc[1];
+                        }
+                    }
+#else
                     prj_flux_cell_state(W, il, jl, kl, WCLg);
                     prj_flux_cell_state(W, ir, jr, kr, WCRg);
                     if (dir == X1DIR) {
@@ -308,19 +464,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     } else {
                         prj_flux_cell_state(W, il, jl, kl - 1, WLLg);
                         prj_flux_cell_state(W, ir, jr, kr + 1, WRRg);
-                    }
-                    prj_flux_rotate_to_local(WCLg, dir, WCL);
-                    prj_flux_rotate_to_local(WCRg, dir, WCR);
-                    prj_flux_rotate_to_local(WLLg, dir, WLL);
-                    prj_flux_rotate_to_local(WRRg, dir, WRR);
-                    if (eosvar != 0) {
-                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_PRESSURE, dir, i, j, k, &pL, &pR);
-                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_GAMMA, dir, i, j, k, &gL, &gR);
-                    } else {
-                        pL = 0.0;
-                        pR = 0.0;
-                        gL = 0.0;
-                        gR = 0.0;
                     }
                     pCLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il, jl, kl)] : 0.0;
                     pCRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir, jr, kr)] : 0.0;
@@ -334,36 +477,36 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                         pLLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il, jl, kl - 1)] : 0.0;
                         pRRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir, jr, kr + 1)] : 0.0;
                     }
-                    /* Detect the dominant shock direction in global coordinates.
-                     * Use HLLE only on transverse fluxes; keep HLLC on the shock-aligned direction. */
                     shock_left = prj_riemann_detect_shock(WLLg, WCLg, pLLg, pCLg);
                     shock_right = prj_riemann_detect_shock(WCRg, WRRg, pCRg, pRRg);
-                    double v_face_loc[3] = {0.0, 0.0, 0.0};
                     if ((shock_left >= 0 && shock_left != dir) ||
                         (shock_right >= 0 && shock_right != dir)) {
                         prj_riemann_hlle(WL, WR, pL, pR, gL, gR, eos, Fl, v_face_loc);
                     } else {
                         prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl, v_face_loc);
                     }
-                    /* Unrotate (V1=normal, V2/V3=transverse) back to global (v1,v2,v3). */
-                    double v_face_glob[3];
-                    if (dir == X1DIR) {
-                        v_face_glob[0] = v_face_loc[0];
-                        v_face_glob[1] = v_face_loc[1];
-                        v_face_glob[2] = v_face_loc[2];
-                    } else if (dir == X2DIR) {
-                        v_face_glob[1] = v_face_loc[0];
-                        v_face_glob[2] = v_face_loc[1];
-                        v_face_glob[0] = v_face_loc[2];
-                    } else {
-                        v_face_glob[2] = v_face_loc[0];
-                        v_face_glob[0] = v_face_loc[1];
-                        v_face_glob[1] = v_face_loc[2];
-                    }
-                    if (block->v_riemann[dir] != 0) {
-                        block->v_riemann[dir][0 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[0];
-                        block->v_riemann[dir][1 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[1];
-                        block->v_riemann[dir][2 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[2];
+#endif
+                    {
+                        double v_face_glob[3];
+
+                        if (dir == X1DIR) {
+                            v_face_glob[0] = v_face_loc[0];
+                            v_face_glob[1] = v_face_loc[1];
+                            v_face_glob[2] = v_face_loc[2];
+                        } else if (dir == X2DIR) {
+                            v_face_glob[1] = v_face_loc[0];
+                            v_face_glob[2] = v_face_loc[1];
+                            v_face_glob[0] = v_face_loc[2];
+                        } else {
+                            v_face_glob[2] = v_face_loc[0];
+                            v_face_glob[0] = v_face_loc[1];
+                            v_face_glob[1] = v_face_loc[2];
+                        }
+                        if (block->v_riemann[dir] != 0) {
+                            block->v_riemann[dir][0 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[0];
+                            block->v_riemann[dir][1 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[1];
+                            block->v_riemann[dir][2 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_glob[2];
+                        }
                     }
 #if PRJ_NRAD > 0
                     {

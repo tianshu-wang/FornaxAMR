@@ -133,6 +133,21 @@ static void prj_block_init_empty(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+    b->Bf[0] = 0;
+    b->Bf[1] = 0;
+    b->Bf[2] = 0;
+    b->Bf1[0] = 0;
+    b->Bf1[1] = 0;
+    b->Bf1[2] = 0;
+    b->vB1[0] = 0;
+    b->vB1[1] = 0;
+    b->vB1[2] = 0;
+    b->vB2[0] = 0;
+    b->vB2[1] = 0;
+    b->vB2[2] = 0;
+    b->emf[0] = 0;
+    b->emf[1] = 0;
+    b->emf[2] = 0;
     b->ridx = 0;
     b->fr = 0;
     b->vol = 0.0;
@@ -165,8 +180,10 @@ int prj_block_alloc_data(prj_block *b)
     size_t prim_count;
     size_t eosvar_count;
     size_t cons_count;
+    size_t face_scalar_count;
     size_t total_count;
     double *base;
+    double *storage;
     int *eos_done;
     int *ridx;
     double *fr;
@@ -180,12 +197,18 @@ int prj_block_alloc_data(prj_block *b)
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    total_count = 2U * prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
+    face_scalar_count = 9U * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_MHD
+    face_scalar_count += 15U * (size_t)PRJ_BLOCK_NCELLS;
+#endif
+    total_count = 2U * prim_count + eosvar_count + 5U * cons_count + face_scalar_count;
 
     base = (double *)malloc(total_count * sizeof(*base));
     if (base == 0) {
         return 2;
     }
+    storage = base;
+    prj_fill(storage, total_count, 0.0);
     eos_done = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eos_done));
     ridx = (int *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
     fr = (double *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
@@ -219,6 +242,38 @@ int prj_block_alloc_data(prj_block *b)
     b->v_riemann[1] = base;
     base += 3U * (size_t)PRJ_BLOCK_NCELLS;
     b->v_riemann[2] = base;
+    base += 3U * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_MHD
+    b->Bf[0] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->Bf[1] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->Bf[2] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->Bf1[0] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->Bf1[1] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->Bf1[2] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->vB1[0] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->vB1[1] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->vB1[2] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->vB2[0] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->vB2[1] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->vB2[2] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->emf[0] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->emf[1] = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
+    b->emf[2] = base;
+#endif
     b->ridx = ridx;
     b->fr = fr;
     prj_gravity_cache_block(b);
@@ -247,6 +302,21 @@ void prj_block_free_data(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+    b->Bf[0] = 0;
+    b->Bf[1] = 0;
+    b->Bf[2] = 0;
+    b->Bf1[0] = 0;
+    b->Bf1[1] = 0;
+    b->Bf1[2] = 0;
+    b->vB1[0] = 0;
+    b->vB1[1] = 0;
+    b->vB1[2] = 0;
+    b->vB2[0] = 0;
+    b->vB2[1] = 0;
+    b->vB2[2] = 0;
+    b->emf[0] = 0;
+    b->emf[1] = 0;
+    b->emf[2] = 0;
     b->ridx = 0;
     b->fr = 0;
 }

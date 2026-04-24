@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 
 #include <hdf5.h>
@@ -13,8 +14,11 @@
 #include "prj.h"
 
 #define PRJ_IO_METADATA_SIZE 639
+#define PRJ_IO_MHD_FOUR_PI 12.56637061435917295385
 
 static void prj_io_fail(const char *message);
+static hid_t prj_io_data_xfer_plist(void);
+static void prj_io_close_dxpl(hid_t dxpl);
 
 static void prj_io_trim(char *text)
 {
@@ -69,6 +73,22 @@ static int prj_io_parse_eos_kind(const char *value, int *eos_kind)
     }
     if (strcmp(value, "table") == 0 || strcmp(value, "tabulated") == 0) {
         *eos_kind = PRJ_EOS_KIND_TABLE;
+        return 0;
+    }
+    return 1;
+}
+
+static int prj_io_parse_mhd_init_type(const char *value, int *mhd_init_type)
+{
+    if (value == 0 || mhd_init_type == 0) {
+        return 1;
+    }
+    if (strcmp(value, "uniform") == 0) {
+        *mhd_init_type = PRJ_MHD_INIT_UNIFORM;
+        return 0;
+    }
+    if (strcmp(value, "dipole") == 0) {
+        *mhd_init_type = PRJ_MHD_INIT_DIPOLE;
         return 0;
     }
     return 1;
@@ -179,6 +199,9 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->progenitor_file[0] = '\0';
     strncpy(sim->problem_name, "general", sizeof(sim->problem_name) - 1);
     sim->problem_name[sizeof(sim->problem_name) - 1] = '\0';
+    sim->mhd_init_type = PRJ_MHD_INIT_UNIFORM;
+    sim->B_norm = 0.0;
+    sim->B_scale = 1.0;
     sim->restart_from_file = 0;
     sim->restart_file_name[0] = '\0';
     sim->mesh.root_nx[0] = 8;
@@ -352,6 +375,16 @@ void prj_io_parser(prj_sim *sim, char *filename)
             strncpy(sim->problem_name, value, sizeof(sim->problem_name) - 1);
             sim->problem_name[sizeof(sim->problem_name) - 1] = '\0';
             endptr = value + strlen(value);
+        } else if (strcmp(key, "mhd_init_type") == 0 || strcmp(key, "mhd_init") == 0) {
+            if (prj_io_parse_mhd_init_type(value, &sim->mhd_init_type) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (strcmp(key, "B_norm") == 0) {
+            sim->B_norm = strtod(value, &endptr);
+        } else if (strcmp(key, "B_scale") == 0) {
+            sim->B_scale = strtod(value, &endptr);
         } else if (strcmp(key, "restart_from_file") == 0) {
             sim->restart_from_file = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "restart_file_name") == 0) {
@@ -471,6 +504,14 @@ static void prj_io_dataset_name(int var, char *name, size_t size)
         snprintf(name, size, "eint");
     } else if (var == PRJ_PRIM_YE) {
         snprintf(name, size, "ye");
+#if PRJ_MHD
+    } else if (var == PRJ_PRIM_B1) {
+        snprintf(name, size, "B1");
+    } else if (var == PRJ_PRIM_B2) {
+        snprintf(name, size, "B2");
+    } else if (var == PRJ_PRIM_B3) {
+        snprintf(name, size, "B3");
+#endif
     } else {
         int rad_idx = var - PRJ_NHYDRO;
         int field = rad_idx / (PRJ_NEGROUP * PRJ_RAD_GROUP_STRIDE);
@@ -485,6 +526,235 @@ static void prj_io_dataset_name(int var, char *name, size_t size)
         }
     }
 }
+
+#if PRJ_MHD
+static double prj_io_mhd_cgs_scale(void)
+{
+    return sqrt(PRJ_IO_MHD_FOUR_PI);
+}
+
+static void prj_io_face_dataset_name(int dir, char *name, size_t size)
+{
+    if (dir == X1DIR) {
+        snprintf(name, size, "Bf1");
+    } else if (dir == X2DIR) {
+        snprintf(name, size, "Bf2");
+    } else if (dir == X3DIR) {
+        snprintf(name, size, "Bf3");
+    } else {
+        prj_io_fail("prj_io_face_dataset_name: invalid direction");
+    }
+}
+
+static void prj_io_face_dataset_dims(hsize_t dims[4], int nblocks, int dir)
+{
+    dims[0] = (hsize_t)nblocks;
+    dims[1] = (hsize_t)(dir == X1DIR ? PRJ_BLOCK_SIZE + 1 : PRJ_BLOCK_SIZE);
+    dims[2] = (hsize_t)(dir == X2DIR ? PRJ_BLOCK_SIZE + 1 : PRJ_BLOCK_SIZE);
+    dims[3] = (hsize_t)(dir == X3DIR ? PRJ_BLOCK_SIZE + 1 : PRJ_BLOCK_SIZE);
+}
+
+static void prj_io_write_restart_face_block(hid_t dset, int bidx, const prj_block *block, int dir)
+{
+    hsize_t dims[4];
+    hsize_t start[4];
+    hsize_t count[4];
+    hid_t mem_space;
+    hid_t file_space;
+    hid_t dxpl;
+    double *buffer;
+    double scale = prj_io_mhd_cgs_scale();
+    size_t idx = 0;
+    int ni;
+    int nj;
+    int nk;
+    int i;
+    int j;
+    int k;
+
+    prj_io_face_dataset_dims(dims, 1, dir);
+    ni = (int)dims[1];
+    nj = (int)dims[2];
+    nk = (int)dims[3];
+    start[0] = (hsize_t)bidx;
+    start[1] = 0;
+    start[2] = 0;
+    start[3] = 0;
+    count[0] = 1;
+    count[1] = dims[1];
+    count[2] = dims[2];
+    count[3] = dims[3];
+    mem_space = H5Screate_simple(4, count, count);
+    file_space = H5Dget_space(dset);
+    buffer = (double *)calloc((size_t)ni * (size_t)nj * (size_t)nk, sizeof(*buffer));
+    dxpl = prj_io_data_xfer_plist();
+    if (buffer == 0) {
+        prj_io_fail("prj_io_write_restart_face_block: allocation failed");
+    }
+    for (i = 0; i < ni; ++i) {
+        for (j = 0; j < nj; ++j) {
+            for (k = 0; k < nk; ++k) {
+                buffer[idx++] = block->Bf[dir][IDX(i, j, k)] * scale;
+            }
+        }
+    }
+    H5Sselect_hyperslab(file_space, H5S_SELECT_SET, start, 0, count, 0);
+    H5Dwrite(dset, H5T_NATIVE_DOUBLE, mem_space, file_space, dxpl, buffer);
+    prj_io_close_dxpl(dxpl);
+    free(buffer);
+    H5Sclose(file_space);
+    H5Sclose(mem_space);
+}
+
+static void prj_io_read_restart_face_block(hid_t dset, int bidx, prj_block *block, int dir)
+{
+    hsize_t dims[4];
+    hsize_t start[4];
+    hsize_t count[4];
+    hid_t mem_space;
+    hid_t file_space;
+    hid_t dxpl;
+    double *buffer;
+    double scale = prj_io_mhd_cgs_scale();
+    size_t idx = 0;
+    int ni;
+    int nj;
+    int nk;
+    int i;
+    int j;
+    int k;
+
+    prj_io_face_dataset_dims(dims, 1, dir);
+    ni = (int)dims[1];
+    nj = (int)dims[2];
+    nk = (int)dims[3];
+    start[0] = (hsize_t)bidx;
+    start[1] = 0;
+    start[2] = 0;
+    start[3] = 0;
+    count[0] = 1;
+    count[1] = dims[1];
+    count[2] = dims[2];
+    count[3] = dims[3];
+    mem_space = H5Screate_simple(4, count, count);
+    file_space = H5Dget_space(dset);
+    buffer = (double *)calloc((size_t)ni * (size_t)nj * (size_t)nk, sizeof(*buffer));
+    dxpl = prj_io_data_xfer_plist();
+    if (buffer == 0) {
+        prj_io_fail("prj_io_read_restart_face_block: allocation failed");
+    }
+    H5Sselect_hyperslab(file_space, H5S_SELECT_SET, start, 0, count, 0);
+    H5Dread(dset, H5T_NATIVE_DOUBLE, mem_space, file_space, dxpl, buffer);
+    prj_io_close_dxpl(dxpl);
+    for (i = 0; i < ni; ++i) {
+        for (j = 0; j < nj; ++j) {
+            for (k = 0; k < nk; ++k) {
+                block->Bf[dir][IDX(i, j, k)] = buffer[idx++] / scale;
+            }
+        }
+    }
+    free(buffer);
+    H5Sclose(file_space);
+    H5Sclose(mem_space);
+}
+
+static void prj_io_write_dump_face_block(hid_t dset, int active_idx, const prj_block *block, int dir)
+{
+    hsize_t dims[4];
+    hsize_t start[4];
+    hsize_t count[4];
+    hid_t mem_space;
+    hid_t file_space;
+    hid_t dxpl;
+    double scale = prj_io_mhd_cgs_scale();
+    int ni;
+    int nj;
+    int nk;
+    int i;
+    int j;
+    int k;
+    size_t ncells;
+
+    prj_io_face_dataset_dims(dims, 1, dir);
+    ni = (int)dims[1];
+    nj = (int)dims[2];
+    nk = (int)dims[3];
+    ncells = (size_t)ni * (size_t)nj * (size_t)nk;
+    start[0] = (hsize_t)active_idx;
+    start[1] = 0;
+    start[2] = 0;
+    start[3] = 0;
+    count[0] = 1;
+    count[1] = dims[1];
+    count[2] = dims[2];
+    count[3] = dims[3];
+    mem_space = H5Screate_simple(4, count, count);
+    file_space = H5Dget_space(dset);
+    dxpl = prj_io_data_xfer_plist();
+
+#if PRJ_DUMP_SINGLE_PRECISION
+    {
+        float *buffer = (float *)calloc(ncells, sizeof(*buffer));
+        size_t idx = 0;
+
+        if (buffer == 0) {
+            prj_io_fail("prj_io_write_dump_face_block: allocation failed");
+        }
+        for (i = 0; i < ni; ++i) {
+            for (j = 0; j < nj; ++j) {
+                for (k = 0; k < nk; ++k) {
+                    buffer[idx++] = (float)(block->Bf[dir][IDX(i, j, k)] * scale);
+                }
+            }
+        }
+        H5Sselect_hyperslab(file_space, H5S_SELECT_SET, start, 0, count, 0);
+        H5Dwrite(dset, H5T_NATIVE_FLOAT, mem_space, file_space, dxpl, buffer);
+        free(buffer);
+    }
+#else
+    {
+        double *buffer = (double *)calloc(ncells, sizeof(*buffer));
+        size_t idx = 0;
+
+        if (buffer == 0) {
+            prj_io_fail("prj_io_write_dump_face_block: allocation failed");
+        }
+        for (i = 0; i < ni; ++i) {
+            for (j = 0; j < nj; ++j) {
+                for (k = 0; k < nk; ++k) {
+                    buffer[idx++] = block->Bf[dir][IDX(i, j, k)] * scale;
+                }
+            }
+        }
+        H5Sselect_hyperslab(file_space, H5S_SELECT_SET, start, 0, count, 0);
+        H5Dwrite(dset, H5T_NATIVE_DOUBLE, mem_space, file_space, dxpl, buffer);
+        free(buffer);
+    }
+#endif
+
+    prj_io_close_dxpl(dxpl);
+    H5Sclose(file_space);
+    H5Sclose(mem_space);
+}
+
+static void prj_io_copy_bf_to_bf1(prj_block *block)
+{
+    int dir;
+    int idx;
+
+    if (block == 0) {
+        prj_io_fail("prj_io_copy_bf_to_bf1: block is null");
+    }
+    for (dir = 0; dir < 3; ++dir) {
+        if (block->Bf[dir] == 0 || block->Bf1[dir] == 0) {
+            prj_io_fail("prj_io_copy_bf_to_bf1: face storage is not allocated");
+        }
+        for (idx = 0; idx < PRJ_BLOCK_NCELLS; ++idx) {
+            block->Bf1[dir][idx] = block->Bf[dir][idx];
+        }
+    }
+}
+#endif
 
 static void prj_io_fail(const char *message)
 {
@@ -777,6 +1047,10 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     hid_t space_meta;
     hid_t dset_data;
     hid_t dset_meta;
+#if PRJ_MHD
+    hid_t space_bf[3];
+    hid_t dset_bf[3];
+#endif
     hsize_t dims_data[3];
     hsize_t dims_meta[2];
     int bidx;
@@ -810,6 +1084,18 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
 
     space_meta = H5Screate_simple(2, dims_meta, dims_meta);
     dset_meta = H5Dcreate2(file, "MetaData", H5T_NATIVE_DOUBLE, space_meta, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+#if PRJ_MHD
+    for (bidx = 0; bidx < 3; ++bidx) {
+        char name[16];
+        hsize_t dims_bf[4];
+
+        prj_io_face_dataset_name(bidx, name, sizeof(name));
+        prj_io_face_dataset_dims(dims_bf, mesh->nblocks, bidx);
+        space_bf[bidx] = H5Screate_simple(4, dims_bf, dims_bf);
+        dset_bf[bidx] = H5Dcreate2(file, name, H5T_NATIVE_DOUBLE, space_bf[bidx],
+            H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    }
+#endif
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
 
@@ -860,11 +1146,26 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
             H5Sclose(file_data);
             H5Sclose(mem_data);
         }
+#if PRJ_MHD
+        if (block->active == 1 && block->W != 0) {
+            int dir;
+
+            for (dir = 0; dir < 3; ++dir) {
+                prj_io_write_restart_face_block(dset_bf[dir], bidx, block, dir);
+            }
+        }
+#endif
     }
     H5Dclose(dset_data);
     H5Sclose(space_data);
     H5Dclose(dset_meta);
     H5Sclose(space_meta);
+#if PRJ_MHD
+    for (bidx = 0; bidx < 3; ++bidx) {
+        H5Dclose(dset_bf[bidx]);
+        H5Sclose(space_bf[bidx]);
+    }
+#endif
     H5Fclose(file);
 }
 
@@ -875,6 +1176,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     hid_t file;
     hid_t dset_data;
     hid_t dset_meta;
+#if PRJ_MHD
+    hid_t dset_bf[3];
+#endif
     int nblocks;
     int block_size;
     int nvar_prim;
@@ -962,6 +1266,17 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     }
 
     dset_data = H5Dopen2(file, "Data", H5P_DEFAULT);
+#if PRJ_MHD
+    for (bidx = 0; bidx < 3; ++bidx) {
+        char name[16];
+
+        prj_io_face_dataset_name(bidx, name, sizeof(name));
+        if (H5Lexists(file, name, H5P_DEFAULT) <= 0) {
+            prj_io_fail("prj_io_read_restart: missing Bf dataset");
+        }
+        dset_bf[bidx] = H5Dopen2(file, name, H5P_DEFAULT);
+    }
+#endif
     for (bidx = 0; bidx < nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -1015,11 +1330,22 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
                     }
                 }
             }
+#if PRJ_MHD
+            for (v = 0; v < 3; ++v) {
+                prj_io_read_restart_face_block(dset_bf[v], bidx, block, v);
+            }
+            prj_io_copy_bf_to_bf1(block);
+#endif
             free(buffer);
             H5Sclose(mem_data);
         }
     }
     H5Dclose(dset_data);
+#if PRJ_MHD
+    for (bidx = 0; bidx < 3; ++bidx) {
+        H5Dclose(dset_bf[bidx]);
+    }
+#endif
     H5Fclose(file);
     prj_mesh_update_max_active_level(mesh);
     if (prj_io_is_root_rank()) {
@@ -1027,6 +1353,17 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     }
     prj_eos_fill_active_cells(mesh, (prj_eos *)eos, 1);
     prj_boundary_fill_ghosts(mesh, &bc, 1);
+#if PRJ_MHD
+    prj_boundary_fill_ghosts_bf(mesh, &bc, 1);
+    for (bidx = 0; bidx < nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
+        if (block->id >= 0 && block->active == 1 && prj_io_is_local_owner(block) && block->W != 0) {
+            prj_io_copy_bf_to_bf1(block);
+            prj_mhd_bf2bc(block, 2);
+        }
+    }
+#endif
     prj_eos_fill_mesh(mesh, (prj_eos *)eos, 1);
     free(metadata);
 }
@@ -1038,9 +1375,15 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
     hid_t dset_level;
     hid_t dset_coord;
     hid_t dset_var[PRJ_NVAR_PRIM];
+#if PRJ_MHD
+    hid_t dset_bf[3];
+#endif
     hid_t space_level;
     hid_t space_coord;
     hid_t space_var;
+#if PRJ_MHD
+    hid_t space_bf[3];
+#endif
     hsize_t dims_level[1];
     hsize_t dims_coord[2];
     hsize_t dims_var[4];
@@ -1086,6 +1429,18 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
         prj_io_dataset_name(bidx, name, sizeof(name));
         dset_var[bidx] = H5Dcreate2(file, name, dump_real_type, space_var, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
     }
+#if PRJ_MHD
+    for (bidx = 0; bidx < 3; ++bidx) {
+        char name[16];
+        hsize_t dims_bf[4];
+
+        prj_io_face_dataset_name(bidx, name, sizeof(name));
+        prj_io_face_dataset_dims(dims_bf, nactive, bidx);
+        space_bf[bidx] = H5Screate_simple(4, dims_bf, dims_bf);
+        dset_bf[bidx] = H5Dcreate2(file, name, dump_real_type, space_bf[bidx],
+            H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    }
+#endif
     {
         int offset = 0;
 #if defined(PRJ_ENABLE_MPI)
@@ -1159,7 +1514,14 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                         size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
-                        buffer[cell] = (float)block->W[VIDX(var, i, j, k)];
+                        double value = block->W[VIDX(var, i, j, k)];
+
+#if PRJ_MHD
+                        if (var == PRJ_PRIM_B1 || var == PRJ_PRIM_B2 || var == PRJ_PRIM_B3) {
+                            value *= prj_io_mhd_cgs_scale();
+                        }
+#endif
+                        buffer[cell] = (float)value;
                     }
                 }
             }
@@ -1175,7 +1537,14 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                         size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
-                        buffer[cell] = block->W[VIDX(var, i, j, k)];
+                        double value = block->W[VIDX(var, i, j, k)];
+
+#if PRJ_MHD
+                        if (var == PRJ_PRIM_B1 || var == PRJ_PRIM_B2 || var == PRJ_PRIM_B3) {
+                            value *= prj_io_mhd_cgs_scale();
+                        }
+#endif
+                        buffer[cell] = value;
                     }
                 }
             }
@@ -1187,6 +1556,11 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
             H5Sclose(file_var);
             H5Sclose(mem_var);
         }
+#if PRJ_MHD
+        for (var = 0; var < 3; ++var) {
+            prj_io_write_dump_face_block(dset_bf[var], active_idx, block, var);
+        }
+#endif
         active_idx += 1;
     }
     H5Dclose(dset_level);
@@ -1197,6 +1571,12 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
         H5Dclose(dset_var[bidx]);
     }
     H5Sclose(space_var);
+#if PRJ_MHD
+    for (bidx = 0; bidx < 3; ++bidx) {
+        H5Dclose(dset_bf[bidx]);
+        H5Sclose(space_bf[bidx]);
+    }
+#endif
     {
         const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
 

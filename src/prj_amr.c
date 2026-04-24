@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "prj.h"
@@ -195,7 +196,12 @@ static void prj_zero_block_arrays(prj_block *b)
 
     total = (size_t)2U * (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS +
         (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
-        (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+        (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS +
+        9U * (size_t)PRJ_BLOCK_NCELLS
+#if PRJ_MHD
+        + 15U * (size_t)PRJ_BLOCK_NCELLS
+#endif
+        ;
     for (n = 0; n < total; ++n) {
         b->W[n] = 0.0;
     }
@@ -208,8 +214,199 @@ static size_t prj_block_data_count(void)
 
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return 2U * prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS + 5U * cons_count;
+    return 2U * prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
+        5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS
+#if PRJ_MHD
+        + 15U * (size_t)PRJ_BLOCK_NCELLS
+#endif
+        ;
 }
+
+#if PRJ_MHD
+static void prj_amr_patch_face_position(const prj_block *coarse, int dir, int i, int j, int k,
+    int nidx, int aidx, int bidx, double x[3])
+{
+    if (coarse == 0 || x == 0) {
+        fprintf(stderr, "prj_amr_patch_face_position: invalid input\n");
+        abort();
+    }
+    if (dir == X1DIR) {
+        x[0] = coarse->xmin[0] + ((double)i + 0.5 * (double)nidx) * coarse->dx[0];
+        x[1] = coarse->xmin[1] + ((double)j + 0.25 + 0.5 * (double)aidx) * coarse->dx[1];
+        x[2] = coarse->xmin[2] + ((double)k + 0.25 + 0.5 * (double)bidx) * coarse->dx[2];
+    } else if (dir == X2DIR) {
+        x[0] = coarse->xmin[0] + ((double)i + 0.25 + 0.5 * (double)aidx) * coarse->dx[0];
+        x[1] = coarse->xmin[1] + ((double)j + 0.5 * (double)nidx) * coarse->dx[1];
+        x[2] = coarse->xmin[2] + ((double)k + 0.25 + 0.5 * (double)bidx) * coarse->dx[2];
+    } else if (dir == X3DIR) {
+        x[0] = coarse->xmin[0] + ((double)i + 0.25 + 0.5 * (double)aidx) * coarse->dx[0];
+        x[1] = coarse->xmin[1] + ((double)j + 0.25 + 0.5 * (double)bidx) * coarse->dx[1];
+        x[2] = coarse->xmin[2] + ((double)k + 0.5 * (double)nidx) * coarse->dx[2];
+    } else {
+        fprintf(stderr, "prj_amr_patch_face_position: invalid direction %d\n", dir);
+        abort();
+    }
+}
+
+static void prj_amr_face_subface_position(const prj_block *coarse, int dir, int i, int j, int k,
+    int aidx, int bidx, double x[3])
+{
+    if (coarse == 0 || x == 0) {
+        fprintf(stderr, "prj_amr_face_subface_position: invalid input\n");
+        abort();
+    }
+    if (dir == X1DIR) {
+        x[0] = coarse->xmin[0] + (double)i * coarse->dx[0];
+        x[1] = coarse->xmin[1] + ((double)j + 0.25 + 0.5 * (double)aidx) * coarse->dx[1];
+        x[2] = coarse->xmin[2] + ((double)k + 0.25 + 0.5 * (double)bidx) * coarse->dx[2];
+    } else if (dir == X2DIR) {
+        x[0] = coarse->xmin[0] + ((double)i + 0.25 + 0.5 * (double)aidx) * coarse->dx[0];
+        x[1] = coarse->xmin[1] + (double)j * coarse->dx[1];
+        x[2] = coarse->xmin[2] + ((double)k + 0.25 + 0.5 * (double)bidx) * coarse->dx[2];
+    } else if (dir == X3DIR) {
+        x[0] = coarse->xmin[0] + ((double)i + 0.25 + 0.5 * (double)aidx) * coarse->dx[0];
+        x[1] = coarse->xmin[1] + ((double)j + 0.25 + 0.5 * (double)bidx) * coarse->dx[1];
+        x[2] = coarse->xmin[2] + (double)k * coarse->dx[2];
+    } else {
+        fprintf(stderr, "prj_amr_face_subface_position: invalid direction %d\n", dir);
+        abort();
+    }
+}
+
+static void prj_amr_prolongate_face_stage(const prj_block *parent, prj_block *child, int child_oct, int stage)
+{
+    const double *srcface[3];
+    double *dstface[3];
+    int xoct = child_oct & 1;
+    int yoct = (child_oct >> 1) & 1;
+    int zoct = (child_oct >> 2) & 1;
+    int half = PRJ_BLOCK_SIZE / 2;
+    int i0 = xoct * half;
+    int j0 = yoct * half;
+    int k0 = zoct * half;
+    int i;
+    int j;
+    int k;
+
+    srcface[0] = prj_mhd_bface_stage_const(parent, stage, X1DIR);
+    srcface[1] = prj_mhd_bface_stage_const(parent, stage, X2DIR);
+    srcface[2] = prj_mhd_bface_stage_const(parent, stage, X3DIR);
+    dstface[0] = prj_mhd_bface_stage(child, stage, X1DIR);
+    dstface[1] = prj_mhd_bface_stage(child, stage, X2DIR);
+    dstface[2] = prj_mhd_bface_stage(child, stage, X3DIR);
+    if (srcface[0] == 0 || srcface[1] == 0 || srcface[2] == 0 ||
+        dstface[0] == 0 || dstface[1] == 0 || dstface[2] == 0) {
+        fprintf(stderr, "prj_amr_prolongate_face_stage: face storage is not allocated\n");
+        abort();
+    }
+
+    for (i = i0; i < i0 + half; ++i) {
+        for (j = j0; j < j0 + half; ++j) {
+            for (k = k0; k < k0 + half; ++k) {
+                prj_mhd_face_patch patch;
+                int dir;
+                int nidx;
+                int aidx;
+                int bidx;
+
+                prj_mhd_face_patch_clear(&patch);
+                prj_mhd_bf_prolong(parent, srcface, i, j, k, &patch);
+                for (dir = 0; dir < 3; ++dir) {
+                    for (nidx = 0; nidx < 3; ++nidx) {
+                        for (aidx = 0; aidx < 2; ++aidx) {
+                            for (bidx = 0; bidx < 2; ++bidx) {
+                                double x[3];
+                                int ii;
+                                int jj;
+                                int kk;
+
+                                prj_amr_patch_face_position(parent, dir, i, j, k, nidx, aidx, bidx, x);
+                                if (!prj_mhd_face_index_from_position(child, dir, x, &ii, &jj, &kk)) {
+                                    continue;
+                                }
+                                if (!prj_mhd_face_is_owned(dir, ii, jj, kk)) {
+                                    continue;
+                                }
+                                dstface[dir][IDX(ii, jj, kk)] = patch.value[dir][nidx][aidx][bidx];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void prj_amr_restrict_face_stage(const prj_block *children[8], prj_block *parent, int stage)
+{
+    double *dstface[3];
+    int dir;
+
+    dstface[0] = prj_mhd_bface_stage(parent, stage, X1DIR);
+    dstface[1] = prj_mhd_bface_stage(parent, stage, X2DIR);
+    dstface[2] = prj_mhd_bface_stage(parent, stage, X3DIR);
+    if (dstface[0] == 0 || dstface[1] == 0 || dstface[2] == 0) {
+        fprintf(stderr, "prj_amr_restrict_face_stage: parent face storage is not allocated\n");
+        abort();
+    }
+
+    for (dir = 0; dir < 3; ++dir) {
+        int i_min = 0;
+        int j_min = 0;
+        int k_min = 0;
+        int i_max = dir == X1DIR ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE - 1;
+        int j_max = dir == X2DIR ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE - 1;
+        int k_max = dir == X3DIR ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE - 1;
+        int i;
+        int j;
+        int k;
+
+        for (i = i_min; i <= i_max; ++i) {
+            for (j = j_min; j <= j_max; ++j) {
+                for (k = k_min; k <= k_max; ++k) {
+                    double sum = 0.0;
+                    int count = 0;
+                    int aidx;
+                    int bidx;
+
+                    for (aidx = 0; aidx < 2; ++aidx) {
+                        for (bidx = 0; bidx < 2; ++bidx) {
+                            double x[3];
+                            int oct;
+
+                            prj_amr_face_subface_position(parent, dir, i, j, k, aidx, bidx, x);
+                            for (oct = 0; oct < 8; ++oct) {
+                                const prj_block *child = children[oct];
+                                const double *src = prj_mhd_bface_stage_const(child, stage, dir);
+                                int ii;
+                                int jj;
+                                int kk;
+
+                                if (src == 0) {
+                                    fprintf(stderr, "prj_amr_restrict_face_stage: child face storage is not allocated\n");
+                                    abort();
+                                }
+                                if (!prj_mhd_block_owns_face_position(child, dir, x, &ii, &jj, &kk)) {
+                                    continue;
+                                }
+                                sum += src[IDX(ii, jj, kk)];
+                                count += 1;
+                            }
+                        }
+                    }
+                    if (count <= 0 || (count % 4) != 0) {
+                        fprintf(stderr,
+                            "prj_amr_restrict_face_stage: invalid restriction coverage dir=%d face=(%d,%d,%d) count=%d\n",
+                            dir, i, j, k, count);
+                        abort();
+                    }
+                    dstface[dir][IDX(i, j, k)] = sum / (double)count;
+                }
+            }
+        }
+    }
+}
+#endif
 
 static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, prj_block *parent)
 {
@@ -448,10 +645,8 @@ static double prj_block_conserved_at(const prj_block *b, int v, int i, int j, in
 static void prj_apply_eint_floor(double E_floor, double *U, double *W)
 {
     double rho;
-    double v1;
-    double v2;
-    double v3;
     double kinetic;
+    double magnetic;
 
     if (E_floor <= 0.0 || U == 0 || W == 0) {
         return;
@@ -466,12 +661,10 @@ static void prj_apply_eint_floor(double E_floor, double *U, double *W)
         return;
     }
 
-    v1 = W[PRJ_PRIM_V1];
-    v2 = W[PRJ_PRIM_V2];
-    v3 = W[PRJ_PRIM_V3];
-    kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
+    kinetic = prj_eos_kinetic_energy_density_prim(W);
+    magnetic = prj_eos_magnetic_energy_density_prim(W);
     W[PRJ_PRIM_EINT] = E_floor;
-    U[PRJ_CONS_ETOT] = rho * (E_floor + kinetic);
+    U[PRJ_CONS_ETOT] = rho * E_floor + kinetic + magnetic;
 }
 
 static double prj_loehner_cell_value(const prj_mesh *mesh, const prj_block *b, int lohner_var, int i, int j, int k)
@@ -1123,6 +1316,7 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
                 double mom2 = child->U[VIDX(PRJ_CONS_MOM2, i, j, k)];
                 double mom3 = child->U[VIDX(PRJ_CONS_MOM3, i, j, k)];
                 double kinetic;
+                double magnetic = 0.0;
                 double min_etot;
 
                 if (rho <= 0.0) {
@@ -1130,9 +1324,15 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
                     child->U[VIDX(PRJ_CONS_RHO, i, j, k)] = rho;
                 }
                 kinetic = 0.5 * (mom1 * mom1 + mom2 * mom2 + mom3 * mom3) / rho;
+#if PRJ_MHD
+                magnetic = 0.5 * (
+                    child->U[VIDX(PRJ_CONS_B1, i, j, k)] * child->U[VIDX(PRJ_CONS_B1, i, j, k)] +
+                    child->U[VIDX(PRJ_CONS_B2, i, j, k)] * child->U[VIDX(PRJ_CONS_B2, i, j, k)] +
+                    child->U[VIDX(PRJ_CONS_B3, i, j, k)] * child->U[VIDX(PRJ_CONS_B3, i, j, k)]);
+#endif
                 min_etot = child->U[VIDX(PRJ_CONS_ETOT, i, j, k)];
                 if (E_floor > 0.0) {
-                    min_etot = kinetic + rho * E_floor;
+                    min_etot = kinetic + magnetic + rho * E_floor;
                 }
                 if (child->U[VIDX(PRJ_CONS_ETOT, i, j, k)] < min_etot) {
                     child->U[VIDX(PRJ_CONS_ETOT, i, j, k)] = min_etot;
@@ -1140,6 +1340,11 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
             }
         }
     }
+#if PRJ_MHD
+    prj_amr_prolongate_face_stage(parent, child, child_oct, 1);
+    prj_amr_prolongate_face_stage(parent, child, child_oct, 2);
+    prj_mhd_bf2bc(child, 1);
+#endif
 }
 
 void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
@@ -1207,6 +1412,11 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
             }
         }
     }
+#if PRJ_MHD
+    prj_amr_restrict_face_stage(children, parent, 1);
+    prj_amr_restrict_face_stage(children, parent, 2);
+    prj_mhd_bf2bc(parent, 1);
+#endif
 }
 
 static int prj_amr_all_cells_meet_angle_resolution_limit(const prj_mesh *mesh, const prj_block *block)
