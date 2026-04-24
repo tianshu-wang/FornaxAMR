@@ -405,10 +405,34 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
                     q[PRJ_EOS_PRESSURE] = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
                     q[PRJ_EOS_GAMMA] = block->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)];
                     cs = sqrt(q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / w[PRJ_PRIM_RHO]);
+#if PRJ_MHD
+                    {
+                        double rho = w[PRJ_PRIM_RHO];
+                        double a2 = q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / rho;
+                        double b2 = (w[PRJ_PRIM_B1] * w[PRJ_PRIM_B1] +
+                                     w[PRJ_PRIM_B2] * w[PRJ_PRIM_B2] +
+                                     w[PRJ_PRIM_B3] * w[PRJ_PRIM_B3]) / rho;
+                        double ab2 = a2 + b2;
+                        double bn2_1 = w[PRJ_PRIM_B1] * w[PRJ_PRIM_B1] / rho;
+                        double bn2_2 = w[PRJ_PRIM_B2] * w[PRJ_PRIM_B2] / rho;
+                        double bn2_3 = w[PRJ_PRIM_B3] * w[PRJ_PRIM_B3] / rho;
+                        double disc1 = ab2 * ab2 - 4.0 * a2 * bn2_1;
+                        double disc2 = ab2 * ab2 - 4.0 * a2 * bn2_2;
+                        double disc3 = ab2 * ab2 - 4.0 * a2 * bn2_3;
+                        double cf1 = sqrt(0.5 * (ab2 + sqrt(disc1 > 0.0 ? disc1 : 0.0)));
+                        double cf2 = sqrt(0.5 * (ab2 + sqrt(disc2 > 0.0 ? disc2 : 0.0)));
+                        double cf3 = sqrt(0.5 * (ab2 + sqrt(disc3 > 0.0 ? disc3 : 0.0)));
+                        denom =
+                            (fabs(w[PRJ_PRIM_V1]) + cf1) / block->dx[0] +
+                            (fabs(w[PRJ_PRIM_V2]) + cf2) / block->dx[1] +
+                            (fabs(w[PRJ_PRIM_V3]) + cf3) / block->dx[2];
+                    }
+#else
                     denom =
                         (fabs(w[PRJ_PRIM_V1]) + cs) / block->dx[0] +
                         (fabs(w[PRJ_PRIM_V2]) + cs) / block->dx[1] +
                         (fabs(w[PRJ_PRIM_V3]) + cs) / block->dx[2];
+#endif
                     dt_cell = cfl / denom;
 #if PRJ_NRAD > 0
                     {

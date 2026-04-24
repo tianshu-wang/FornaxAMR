@@ -342,13 +342,9 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
 void prj_problem_ccsn(prj_sim *sim)
 {
     prj_ccsn_profile profile;
-    int consistent_mhd_init = 0;
 
     if (sim->progenitor_file[0] == '\0') {
         return;
-    }
-    if (strcmp(sim->problem_name, "magnetized_ccsn") == 0) {
-        consistent_mhd_init = 1;
     }
     if (sim->eos.kind == PRJ_EOS_KIND_TABLE && sim->eos.filename[0] == '\0') {
         strncpy(sim->eos.filename, PRJ_CCSN_EOS_PATH, sizeof(sim->eos.filename) - 1);
@@ -366,10 +362,6 @@ void prj_problem_ccsn(prj_sim *sim)
         return;
     }
     prj_ccsn_initialize_amr(sim, &profile);
-    if (consistent_mhd_init != 0) {
-        prj_mhd_init_consistent_emf(sim);
-    } else {
-        prj_mhd_init(sim);
-    }
+    prj_mhd_init(sim);
     prj_ccsn_profile_free(&profile);
 }

@@ -1599,15 +1599,6 @@ void prj_mhd_bf_prolong(const prj_block *coarse, const double *Bface[3],
 void prj_mhd_init(prj_sim *sim)
 {
 #if PRJ_MHD
-    prj_mhd_init_impl(sim, 0);
-#else
-    (void)sim;
-#endif
-}
-
-void prj_mhd_init_consistent_emf(prj_sim *sim)
-{
-#if PRJ_MHD
     prj_mhd_init_impl(sim, 1);
 #else
     (void)sim;

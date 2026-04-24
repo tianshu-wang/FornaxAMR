@@ -26,7 +26,6 @@ int prj_mhd_block_owns_edge_position(const prj_block *block, int dir, const doub
 void prj_mhd_apply_bf_patch(prj_mesh *mesh, prj_block *fine, int stage,
     const prj_block *coarse, const double *Bface[3], int i, int j, int k);
 void prj_mhd_init(prj_sim *sim);
-void prj_mhd_init_consistent_emf(prj_sim *sim);
 void prj_mhd_bf2bc(prj_block *block, int stage);
 double prj_mhd_emf_upwind(const double emf_face[4], const double emf_cell[4], const double face_velocity[4]);
 void prj_mhd_emf_send(prj_mesh *mesh);
