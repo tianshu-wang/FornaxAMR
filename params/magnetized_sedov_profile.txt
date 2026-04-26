@@ -1,8 +1,5 @@
-# Magnetized Sedov blast for MHD validation.
-
 problem = magnetized_sedov
-restart_from_file = 1
-restart_file_name = output/restart_00000100.h5
+restart_from_file = 0
 
 x1min = -2.0
 x1max = 2.0
@@ -11,21 +8,20 @@ x2max = 2.0
 x3min = -2.0
 x3max = 2.0
 
-root_nx = 4
+root_nx = 2
 max_level = 2
 
 cfl = 0.8
-t_end = 10.0
+t_end = 1000.0
 max_steps = 1000
 output_interval = 10
-restart_interval = 100
-amr_interval = 1
-amr_estimator = density_jump
+restart_interval = 9999
+amr_interval = 4
+amr_estimator = velocity
 amr_refine_thresh = 0.4
 amr_derefine_thresh = 0.1
 
 eos_type = ideal
-
 E_floor = 1e-10
 
 mhd_init = uniform

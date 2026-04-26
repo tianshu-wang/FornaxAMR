@@ -398,13 +398,11 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
                     double q[PRJ_EOS_NQUANT];
                     double w[PRJ_NVAR_PRIM];
                     double denom;
-                    double cs;
                     double dt_cell;
 
                     prj_timeint_cell_prim(block->W, i, j, k, w);
                     q[PRJ_EOS_PRESSURE] = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
                     q[PRJ_EOS_GAMMA] = block->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)];
-                    cs = sqrt(q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / w[PRJ_PRIM_RHO]);
 #if PRJ_MHD
                     {
                         double rho = w[PRJ_PRIM_RHO];
@@ -428,6 +426,7 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
                             (fabs(w[PRJ_PRIM_V3]) + cf3) / block->dx[2];
                     }
 #else
+                    double cs = sqrt(q[PRJ_EOS_GAMMA] * q[PRJ_EOS_PRESSURE] / w[PRJ_PRIM_RHO]);
                     denom =
                         (fabs(w[PRJ_PRIM_V1]) + cs) / block->dx[0] +
                         (fabs(w[PRJ_PRIM_V2]) + cs) / block->dx[1] +

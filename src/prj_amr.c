@@ -310,7 +310,7 @@ static void prj_amr_prolongate_face_stage(const prj_block *parent, prj_block *ch
                 int bidx;
 
                 prj_mhd_face_patch_clear(&patch);
-                prj_mhd_bf_prolong(parent, srcface, i, j, k, &patch);
+                prj_mhd_bf_prolong_direct(parent, srcface, i, j, k, &patch);
                 for (dir = 0; dir < 3; ++dir) {
                     for (nidx = 0; nidx < 3; ++nidx) {
                         for (aidx = 0; aidx < 2; ++aidx) {
@@ -1241,9 +1241,6 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             } else {
                 b->refine_flag = 1;
             }
-            prj_amr_tag_boundary_neighbors(mesh, b, boundary_refine_mask);
-        } else if (refine != 0 &&
-            (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx)) {
             prj_amr_tag_boundary_neighbors(mesh, b, boundary_refine_mask);
         } else if (derefine != 0) {
             b->refine_flag = -1;

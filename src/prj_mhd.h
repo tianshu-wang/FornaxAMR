@@ -9,7 +9,7 @@ typedef struct prj_mhd_face_patch {
 } prj_mhd_face_patch;
 
 void prj_mhd_face_patch_clear(prj_mhd_face_patch *patch);
-void prj_mhd_bf_prolong(const prj_block *coarse, const double *Bface[3],
+void prj_mhd_bf_prolong_direct(const prj_block *coarse, const double *Bface[3],
     int i, int j, int k, prj_mhd_face_patch *patch);
 double *prj_mhd_bface_stage(prj_block *block, int stage, int dir);
 const double *prj_mhd_bface_stage_const(const prj_block *block, int stage, int dir);

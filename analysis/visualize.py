@@ -14,8 +14,8 @@ OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
 # Set these to None to show the full domain.
-X_RANGE = [-1e8,1e8]
-Y_RANGE = [-1e8,1e8]
+X_RANGE = [-2e0,2e0]
+Y_RANGE = [-2e0,2e0]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
 COLOR_SCALE = "lognorm"

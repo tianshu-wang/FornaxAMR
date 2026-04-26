@@ -91,7 +91,7 @@ static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
 
 static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double cz)
 {
-    const double injection_radius = 0.05;
+    const double injection_radius = 0.15;
     int bidx;
     int selected = 0;
     double best_dist[8];

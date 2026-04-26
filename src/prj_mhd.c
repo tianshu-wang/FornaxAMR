@@ -10,19 +10,6 @@
 #include "prj.h"
 
 #define PRJ_MHD_FOUR_PI 12.56637061435917295385
-#define PRJ_MHD_PROLONG_NROW 14
-#define PRJ_MHD_PROLONG_NCOL 12
-
-static struct {
-    int valid;
-    int fine_id;
-    int coarse_id;
-    int stage;
-    int i;
-    int j;
-    int k;
-    int fixed_count;
-} prj_mhd_prolong_ctx = {0, -1, -1, -1, 0, 0, 0, 0};
 
 static void prj_mhd_abort(const char *message)
 {
@@ -1027,50 +1014,6 @@ static int prj_mhd_index_to_sign(int idx)
     return idx == 0 ? -1 : 1;
 }
 
-static int prj_mhd_u_col(int j_sign, int k_sign)
-{
-    return (prj_mhd_sign_to_index(j_sign) << 1) + prj_mhd_sign_to_index(k_sign);
-}
-
-static int prj_mhd_v_col(int i_sign, int k_sign)
-{
-    return 4 + (prj_mhd_sign_to_index(i_sign) << 1) + prj_mhd_sign_to_index(k_sign);
-}
-
-static int prj_mhd_w_col(int i_sign, int j_sign)
-{
-    return 8 + (prj_mhd_sign_to_index(i_sign) << 1) + prj_mhd_sign_to_index(j_sign);
-}
-
-static double prj_mhd_fine_face_area(const double dx[3], int dir)
-{
-    if (dx == 0) {
-        prj_mhd_abort("prj_mhd_fine_face_area: dx is null");
-    }
-    if (dir == X1DIR) {
-        return 0.25 * dx[1] * dx[2];
-    }
-    if (dir == X2DIR) {
-        return 0.25 * dx[0] * dx[2];
-    }
-    if (dir == X3DIR) {
-        return 0.25 * dx[0] * dx[1];
-    }
-    prj_mhd_abort("prj_mhd_fine_face_area: invalid direction");
-    return 0.0;
-}
-
-static double prj_mhd_patch_flux(const prj_mhd_face_patch *patch, const double dx[3],
-    int dir, int nidx, int aidx, int bidx)
-{
-    if (patch == 0) {
-        prj_mhd_abort("prj_mhd_patch_flux: patch is null");
-    }
-    if (dir < 0 || dir >= 3 || nidx < 0 || nidx >= 3 || aidx < 0 || aidx >= 2 || bidx < 0 || bidx >= 2) {
-        prj_mhd_abort("prj_mhd_patch_flux: invalid face index");
-    }
-    return patch->value[dir][nidx][aidx][bidx] * prj_mhd_fine_face_area(dx, dir);
-}
 
 static double prj_mhd_interpolate_outer_face(const prj_block *coarse, const double *Bface[3],
     int dir, int side_idx, int i, int j, int k, int a_sign, int b_sign)
@@ -1169,294 +1112,129 @@ static void prj_mhd_fill_outer_patch(const prj_block *coarse, const double *Bfac
     }
 }
 
-static void prj_mhd_add_prolong_equation(double system[PRJ_MHD_PROLONG_NROW][PRJ_MHD_PROLONG_NCOL + 1],
-    int row, int col, double coeff)
-{
-    if (row < 0 || row >= PRJ_MHD_PROLONG_NROW || col < 0 || col >= PRJ_MHD_PROLONG_NCOL) {
-        prj_mhd_abort("prj_mhd_add_prolong_equation: invalid matrix index");
-    }
-    system[row][col] += coeff;
-}
 
-static void prj_mhd_build_prolong_system(const prj_mhd_face_patch *patch, const double dx[3],
-    double system[PRJ_MHD_PROLONG_NROW][PRJ_MHD_PROLONG_NCOL + 1])
+
+/* Directly compute the 12 inner face B values from the outer patch values using the
+ * analytic formulas (8)-(12) from Balsara (2001).  The outer faces in patch->value
+ * (nidx 0 and 2) must already be filled before calling this function.
+ *
+ * The notation follows the paper: u,v,w are Bx,By,Bz face-centered fields; indices
+ * ±1 label the four transverse sub-faces, and ±2 labels the two outer (coarse-side)
+ * faces in the face-normal direction.  The inner faces (at the midplane of the coarse
+ * cell, index 0 in the paper) are written to patch->value[dir][1][...].
+ */
+static void prj_mhd_compute_inner_faces(prj_mhd_face_patch *patch, const double dx[3])
 {
-    double target_div_flux = 0.0;
     double dx2;
     double dy2;
     double dz2;
-    int j_sign;
-    int k_sign;
-    int i_sign;
-    int row;
+    double U_xx;
+    double V_yy;
+    double W_zz;
+    double U_xyz;
+    double V_xyz;
+    double W_xyz;
+    int i;
+    int j;
+    int k;
 
     if (patch == 0 || dx == 0) {
-        prj_mhd_abort("prj_mhd_build_prolong_system: null input");
+        prj_mhd_abort("prj_mhd_compute_inner_faces: null input");
     }
 
-    memset(system, 0, (size_t)PRJ_MHD_PROLONG_NROW * (size_t)(PRJ_MHD_PROLONG_NCOL + 1) * sizeof(system[0][0]));
     dx2 = dx[0] * dx[0];
     dy2 = dx[1] * dx[1];
     dz2 = dx[2] * dx[2];
+    U_xx  = 0.0;
+    V_yy  = 0.0;
+    W_zz  = 0.0;
+    U_xyz = 0.0;
+    V_xyz = 0.0;
+    W_xyz = 0.0;
 
-    for (j_sign = -1; j_sign <= 1; j_sign += 2) {
-        for (k_sign = -1; k_sign <= 1; k_sign += 2) {
-            int jidx = prj_mhd_sign_to_index(j_sign);
-            int kidx = prj_mhd_sign_to_index(k_sign);
+    for (i = -1; i <= 1; i += 2) {
+        for (j = -1; j <= 1; j += 2) {
+            for (k = -1; k <= 1; k += 2) {
+                int ii = prj_mhd_sign_to_index(i);
+                int jj = prj_mhd_sign_to_index(j);
+                int kk = prj_mhd_sign_to_index(k);
+                /* u^{2i,j,k}: outer x-face on the i-side */
+                double u_o = patch->value[X1DIR][i > 0 ? 2 : 0][jj][kk];
+                /* v^{i,2j,k}: outer y-face on the j-side */
+                double v_o = patch->value[X2DIR][j > 0 ? 2 : 0][ii][kk];
+                /* w^{i,j,2k}: outer z-face on the k-side */
+                double w_o = patch->value[X3DIR][k > 0 ? 2 : 0][ii][jj];
 
-            target_div_flux += prj_mhd_patch_flux(patch, dx, X1DIR, 2, jidx, kidx);
-            target_div_flux -= prj_mhd_patch_flux(patch, dx, X1DIR, 0, jidx, kidx);
-        }
-    }
-    for (i_sign = -1; i_sign <= 1; i_sign += 2) {
-        for (k_sign = -1; k_sign <= 1; k_sign += 2) {
-            int iidx = prj_mhd_sign_to_index(i_sign);
-            int kidx = prj_mhd_sign_to_index(k_sign);
+                /* Eq. (11) and cyclic permutations */
+                U_xx += (double)(i * j) * v_o + (double)(i * k) * w_o;
+                V_yy += (double)(j * k) * w_o + (double)(j * i) * u_o;
+                W_zz += (double)(k * i) * u_o + (double)(k * j) * v_o;
 
-            target_div_flux += prj_mhd_patch_flux(patch, dx, X2DIR, 2, iidx, kidx);
-            target_div_flux -= prj_mhd_patch_flux(patch, dx, X2DIR, 0, iidx, kidx);
-        }
-    }
-    for (i_sign = -1; i_sign <= 1; i_sign += 2) {
-        for (j_sign = -1; j_sign <= 1; j_sign += 2) {
-            int iidx = prj_mhd_sign_to_index(i_sign);
-            int jidx = prj_mhd_sign_to_index(j_sign);
-
-            target_div_flux += prj_mhd_patch_flux(patch, dx, X3DIR, 2, iidx, jidx);
-            target_div_flux -= prj_mhd_patch_flux(patch, dx, X3DIR, 0, iidx, jidx);
-        }
-    }
-    target_div_flux *= 0.125;
-
-    row = 0;
-    for (i_sign = -1; i_sign <= 1; i_sign += 2) {
-        for (j_sign = -1; j_sign <= 1; j_sign += 2) {
-            for (k_sign = -1; k_sign <= 1; k_sign += 2) {
-                int jidx = prj_mhd_sign_to_index(j_sign);
-                int kidx = prj_mhd_sign_to_index(k_sign);
-                int iidx = prj_mhd_sign_to_index(i_sign);
-                double rhs = target_div_flux;
-
-                prj_mhd_add_prolong_equation(system, row, prj_mhd_u_col(j_sign, k_sign), i_sign < 0 ? 1.0 : -1.0);
-                prj_mhd_add_prolong_equation(system, row, prj_mhd_v_col(i_sign, k_sign), j_sign < 0 ? 1.0 : -1.0);
-                prj_mhd_add_prolong_equation(system, row, prj_mhd_w_col(i_sign, j_sign), k_sign < 0 ? 1.0 : -1.0);
-                rhs += i_sign < 0 ?
-                    prj_mhd_patch_flux(patch, dx, X1DIR, 0, jidx, kidx) :
-                    -prj_mhd_patch_flux(patch, dx, X1DIR, 2, jidx, kidx);
-                rhs += j_sign < 0 ?
-                    prj_mhd_patch_flux(patch, dx, X2DIR, 0, iidx, kidx) :
-                    -prj_mhd_patch_flux(patch, dx, X2DIR, 2, iidx, kidx);
-                rhs += k_sign < 0 ?
-                    prj_mhd_patch_flux(patch, dx, X3DIR, 0, iidx, jidx) :
-                    -prj_mhd_patch_flux(patch, dx, X3DIR, 2, iidx, jidx);
-                system[row][PRJ_MHD_PROLONG_NCOL] = rhs;
-                row += 1;
+                /* Eq. (12) and cyclic permutations */
+                U_xyz += (double)(i * j * k) * u_o;
+                V_xyz += (double)(i * j * k) * v_o;
+                W_xyz += (double)(i * j * k) * w_o;
             }
         }
     }
+    U_xx  *= 0.125;
+    V_yy  *= 0.125;
+    W_zz  *= 0.125;
+    U_xyz /= 8.0 * (dy2 + dz2);
+    V_xyz /= 8.0 * (dx2 + dz2);
+    W_xyz /= 8.0 * (dx2 + dy2);
 
-    for (i_sign = -1; i_sign <= 1; i_sign += 2) {
-        double rhs = 0.0;
-        int t_sign;
+    /* Eq. (8): u^{0,j,k} for j,k = +-1 */
+    for (j = -1; j <= 1; j += 2) {
+        for (k = -1; k <= 1; k += 2) {
+            int jj = prj_mhd_sign_to_index(j);
+            int kk = prj_mhd_sign_to_index(k);
 
-        for (t_sign = -1; t_sign <= 1; t_sign += 2) {
-            prj_mhd_add_prolong_equation(system, row, prj_mhd_w_col(i_sign, t_sign), (double)t_sign * dz2);
-            prj_mhd_add_prolong_equation(system, row, prj_mhd_v_col(i_sign, t_sign), -(double)t_sign * dy2);
-            rhs += 0.5 * (double)t_sign * (
-                dz2 * (prj_mhd_patch_flux(patch, dx, X3DIR, 0, prj_mhd_sign_to_index(i_sign), prj_mhd_sign_to_index(t_sign)) +
-                    prj_mhd_patch_flux(patch, dx, X3DIR, 2, prj_mhd_sign_to_index(i_sign), prj_mhd_sign_to_index(t_sign))) -
-                dy2 * (prj_mhd_patch_flux(patch, dx, X2DIR, 0, prj_mhd_sign_to_index(i_sign), prj_mhd_sign_to_index(t_sign)) +
-                    prj_mhd_patch_flux(patch, dx, X2DIR, 2, prj_mhd_sign_to_index(i_sign), prj_mhd_sign_to_index(t_sign))));
+            patch->value[X1DIR][1][jj][kk] =
+                0.5 * (patch->value[X1DIR][2][jj][kk] + patch->value[X1DIR][0][jj][kk])
+                + U_xx + (double)k * dz2 * V_xyz + (double)j * dy2 * W_xyz;
         }
-        system[row][PRJ_MHD_PROLONG_NCOL] = rhs;
-        row += 1;
     }
+    /* Eq. (9): v^{i,0,k} for i,k = +-1 */
+    for (i = -1; i <= 1; i += 2) {
+        for (k = -1; k <= 1; k += 2) {
+            int ii = prj_mhd_sign_to_index(i);
+            int kk = prj_mhd_sign_to_index(k);
 
-    for (j_sign = -1; j_sign <= 1; j_sign += 2) {
-        double rhs = 0.0;
-        int t_sign;
-
-        for (t_sign = -1; t_sign <= 1; t_sign += 2) {
-            prj_mhd_add_prolong_equation(system, row, prj_mhd_u_col(j_sign, t_sign), (double)t_sign * dx2);
-            prj_mhd_add_prolong_equation(system, row, prj_mhd_w_col(t_sign, j_sign), -(double)t_sign * dz2);
-            rhs += 0.5 * (double)t_sign * (
-                dx2 * (prj_mhd_patch_flux(patch, dx, X1DIR, 0, prj_mhd_sign_to_index(j_sign), prj_mhd_sign_to_index(t_sign)) +
-                    prj_mhd_patch_flux(patch, dx, X1DIR, 2, prj_mhd_sign_to_index(j_sign), prj_mhd_sign_to_index(t_sign))) -
-                dz2 * (prj_mhd_patch_flux(patch, dx, X3DIR, 0, prj_mhd_sign_to_index(t_sign), prj_mhd_sign_to_index(j_sign)) +
-                    prj_mhd_patch_flux(patch, dx, X3DIR, 2, prj_mhd_sign_to_index(t_sign), prj_mhd_sign_to_index(j_sign))));
+            patch->value[X2DIR][1][ii][kk] =
+                0.5 * (patch->value[X2DIR][2][ii][kk] + patch->value[X2DIR][0][ii][kk])
+                + V_yy + (double)i * dx2 * W_xyz + (double)k * dz2 * U_xyz;
         }
-        system[row][PRJ_MHD_PROLONG_NCOL] = rhs;
-        row += 1;
     }
+    /* Eq. (10): w^{i,j,0} for i,j = +-1 */
+    for (i = -1; i <= 1; i += 2) {
+        for (j = -1; j <= 1; j += 2) {
+            int ii = prj_mhd_sign_to_index(i);
+            int jj = prj_mhd_sign_to_index(j);
 
-    for (k_sign = -1; k_sign <= 1; k_sign += 2) {
-        double rhs = 0.0;
-        int t_sign;
-
-        for (t_sign = -1; t_sign <= 1; t_sign += 2) {
-            prj_mhd_add_prolong_equation(system, row, prj_mhd_v_col(t_sign, k_sign), (double)t_sign * dy2);
-            prj_mhd_add_prolong_equation(system, row, prj_mhd_u_col(t_sign, k_sign), -(double)t_sign * dx2);
-            rhs += 0.5 * (double)t_sign * (
-                dy2 * (prj_mhd_patch_flux(patch, dx, X2DIR, 0, prj_mhd_sign_to_index(t_sign), prj_mhd_sign_to_index(k_sign)) +
-                    prj_mhd_patch_flux(patch, dx, X2DIR, 2, prj_mhd_sign_to_index(t_sign), prj_mhd_sign_to_index(k_sign))) -
-                dx2 * (prj_mhd_patch_flux(patch, dx, X1DIR, 0, prj_mhd_sign_to_index(t_sign), prj_mhd_sign_to_index(k_sign)) +
-                    prj_mhd_patch_flux(patch, dx, X1DIR, 2, prj_mhd_sign_to_index(t_sign), prj_mhd_sign_to_index(k_sign))));
+            patch->value[X3DIR][1][ii][jj] =
+                0.5 * (patch->value[X3DIR][2][ii][jj] + patch->value[X3DIR][0][ii][jj])
+                + W_zz + (double)j * dy2 * U_xyz + (double)i * dx2 * V_xyz;
         }
-        system[row][PRJ_MHD_PROLONG_NCOL] = rhs;
-        row += 1;
     }
 }
 
-static void prj_mhd_solve_prolong_system(
-    double system[PRJ_MHD_PROLONG_NROW][PRJ_MHD_PROLONG_NCOL + 1], double solution[PRJ_MHD_PROLONG_NCOL])
-{
-    int pivot_row[PRJ_MHD_PROLONG_NCOL];
-    double system_scale = 1.0;
-    int row;
-    int col;
-
-    for (row = 0; row < PRJ_MHD_PROLONG_NROW; ++row) {
-        for (col = 0; col <= PRJ_MHD_PROLONG_NCOL; ++col) {
-            double mag = fabs(system[row][col]);
-
-            if (mag > system_scale) {
-                system_scale = mag;
-            }
-        }
-    }
-    for (col = 0; col < PRJ_MHD_PROLONG_NCOL; ++col) {
-        pivot_row[col] = -1;
-    }
-
-    row = 0;
-    for (col = 0; col < PRJ_MHD_PROLONG_NCOL; ++col) {
-        int best = -1;
-        double best_abs = 0.0;
-        int r;
-
-        for (r = row; r < PRJ_MHD_PROLONG_NROW; ++r) {
-            double mag = fabs(system[r][col]);
-
-            if (mag > best_abs) {
-                best_abs = mag;
-                best = r;
-            }
-        }
-        if (best < 0 || best_abs <= 1.0e-14) {
-            prj_mhd_abort("prj_mhd_solve_prolong_system: singular prolongation matrix");
-        }
-        if (best != row) {
-            int c;
-
-            for (c = col; c <= PRJ_MHD_PROLONG_NCOL; ++c) {
-                double tmp = system[row][c];
-
-                system[row][c] = system[best][c];
-                system[best][c] = tmp;
-            }
-        }
-        {
-            double piv = system[row][col];
-            int c;
-
-            for (c = col; c <= PRJ_MHD_PROLONG_NCOL; ++c) {
-                system[row][c] /= piv;
-            }
-        }
-        for (r = 0; r < PRJ_MHD_PROLONG_NROW; ++r) {
-            double factor;
-            int c;
-
-            if (r == row) {
-                continue;
-            }
-            factor = system[r][col];
-            if (fabs(factor) <= 1.0e-14) {
-                continue;
-            }
-            for (c = col; c <= PRJ_MHD_PROLONG_NCOL; ++c) {
-                system[r][c] -= factor * system[row][c];
-            }
-        }
-        pivot_row[col] = row;
-        row += 1;
-    }
-
-    if (row != PRJ_MHD_PROLONG_NCOL) {
-        prj_mhd_abort("prj_mhd_solve_prolong_system: incomplete prolongation solve");
-    }
-    /* Only check redundant rows (row >= PRJ_MHD_PROLONG_NCOL). Pivot rows 0..NCOL-1
-       have lhs_norm==1 after normalization, which could exceed zero_tol for large
-       field magnitudes, causing a false inconsistency error. */
-    for (row = PRJ_MHD_PROLONG_NCOL; row < PRJ_MHD_PROLONG_NROW; ++row) {
-        double lhs_norm = 0.0;
-        double zero_tol = 1.0e-10 * system_scale;
-        int c;
-
-        for (c = 0; c < PRJ_MHD_PROLONG_NCOL; ++c) {
-            lhs_norm += fabs(system[row][c]);
-        }
-        if (lhs_norm <= zero_tol && fabs(system[row][PRJ_MHD_PROLONG_NCOL]) > zero_tol) {
-            if (prj_mhd_prolong_ctx.valid != 0) {
-                fprintf(stderr,
-                    "prj_mhd_prolong_ctx: fine=%d coarse=%d stage=%d coarse_cell=(%d,%d,%d) fixed=%d row=%d scale=%g rhs=%g\n",
-                    prj_mhd_prolong_ctx.fine_id, prj_mhd_prolong_ctx.coarse_id,
-                    prj_mhd_prolong_ctx.stage, prj_mhd_prolong_ctx.i,
-                    prj_mhd_prolong_ctx.j, prj_mhd_prolong_ctx.k,
-                    prj_mhd_prolong_ctx.fixed_count, row, system_scale,
-                    system[row][PRJ_MHD_PROLONG_NCOL]);
-            }
-            prj_mhd_abort("prj_mhd_solve_prolong_system: inconsistent prolongation constraints");
-        }
-    }
-    for (col = 0; col < PRJ_MHD_PROLONG_NCOL; ++col) {
-        if (pivot_row[col] < 0) {
-            prj_mhd_abort("prj_mhd_solve_prolong_system: missing prolongation pivot");
-        }
-        solution[col] = system[pivot_row[col]][PRJ_MHD_PROLONG_NCOL];
-    }
-}
-
-void prj_mhd_bf_prolong(const prj_block *coarse, const double *Bface[3],
+void prj_mhd_bf_prolong_direct(const prj_block *coarse, const double *Bface[3],
     int i, int j, int k, prj_mhd_face_patch *patch)
 {
-    double system[PRJ_MHD_PROLONG_NROW][PRJ_MHD_PROLONG_NCOL + 1];
-    double solution[PRJ_MHD_PROLONG_NCOL];
-    double area_x;
-    double area_y;
-    double area_z;
-    int aidx;
-    int bidx;
-
     if (coarse == 0 || Bface == 0 || patch == 0) {
-        prj_mhd_abort("prj_mhd_bf_prolong: null input");
+        prj_mhd_abort("prj_mhd_bf_prolong_direct: null input");
     }
     if (Bface[0] == 0 || Bface[1] == 0 || Bface[2] == 0) {
-        prj_mhd_abort("prj_mhd_bf_prolong: face-centered field is not allocated");
+        prj_mhd_abort("prj_mhd_bf_prolong_direct: face-centered field is not allocated");
     }
     if (i < -PRJ_NGHOST + 1 || i > PRJ_BLOCK_SIZE + PRJ_NGHOST - 2 ||
         j < -PRJ_NGHOST + 1 || j > PRJ_BLOCK_SIZE + PRJ_NGHOST - 2 ||
         k < -PRJ_NGHOST + 1 || k > PRJ_BLOCK_SIZE + PRJ_NGHOST - 2) {
-        prj_mhd_abort("prj_mhd_bf_prolong: coarse-cell index out of range");
+        prj_mhd_abort("prj_mhd_bf_prolong_direct: coarse-cell index out of range");
     }
-
     prj_mhd_fill_outer_patch(coarse, Bface, i, j, k, patch);
-    prj_mhd_build_prolong_system(patch, coarse->dx, system);
-    prj_mhd_solve_prolong_system(system, solution);
-
-    area_x = prj_mhd_fine_face_area(coarse->dx, X1DIR);
-    area_y = prj_mhd_fine_face_area(coarse->dx, X2DIR);
-    area_z = prj_mhd_fine_face_area(coarse->dx, X3DIR);
-    for (aidx = 0; aidx < 2; ++aidx) {
-        for (bidx = 0; bidx < 2; ++bidx) {
-            int sign_a = prj_mhd_index_to_sign(aidx);
-            int sign_b = prj_mhd_index_to_sign(bidx);
-
-            patch->value[X1DIR][1][aidx][bidx] = solution[prj_mhd_u_col(sign_a, sign_b)] / area_x;
-            patch->value[X2DIR][1][aidx][bidx] = solution[prj_mhd_v_col(sign_a, sign_b)] / area_y;
-            patch->value[X3DIR][1][aidx][bidx] = solution[prj_mhd_w_col(sign_a, sign_b)] / area_z;
-        }
-    }
+    prj_mhd_compute_inner_faces(patch, coarse->dx);
 }
 
 void prj_mhd_apply_bf_patch(prj_mesh *mesh, prj_block *fine, int stage,
@@ -1513,27 +1291,7 @@ void prj_mhd_apply_bf_patch(prj_mesh *mesh, prj_block *fine, int stage,
         return;
     }
 
-    prj_mhd_prolong_ctx.valid = 1;
-    prj_mhd_prolong_ctx.fine_id = fine->id;
-    prj_mhd_prolong_ctx.coarse_id = coarse->id;
-    prj_mhd_prolong_ctx.stage = stage;
-    prj_mhd_prolong_ctx.i = i;
-    prj_mhd_prolong_ctx.j = j;
-    prj_mhd_prolong_ctx.k = k;
-    prj_mhd_prolong_ctx.fixed_count = 0;
-    for (dir = 0; dir < 3; ++dir) {
-        for (nidx = 0; nidx < 3; nidx += 2) {
-            for (aidx = 0; aidx < 2; ++aidx) {
-                for (bidx = 0; bidx < 2; ++bidx) {
-                    if (patch.fixed[dir][nidx][aidx][bidx] != 0) {
-                        prj_mhd_prolong_ctx.fixed_count += 1;
-                    }
-                }
-            }
-        }
-    }
-    prj_mhd_bf_prolong(coarse, Bface, i, j, k, &patch);
-    prj_mhd_prolong_ctx.valid = 0;
+    prj_mhd_bf_prolong_direct(coarse, Bface, i, j, k, &patch);
     for (dir = 0; dir < 3; ++dir) {
         for (nidx = 0; nidx < 3; ++nidx) {
             for (aidx = 0; aidx < 2; ++aidx) {
@@ -1583,7 +1341,7 @@ void prj_mhd_apply_bf_patch(prj_mesh *mesh, prj_block *fine, int stage,
 #endif
 
 #if !PRJ_MHD
-void prj_mhd_bf_prolong(const prj_block *coarse, const double *Bface[3],
+void prj_mhd_bf_prolong_direct(const prj_block *coarse, const double *Bface[3],
     int i, int j, int k, prj_mhd_face_patch *patch)
 {
     (void)coarse;
@@ -1592,7 +1350,7 @@ void prj_mhd_bf_prolong(const prj_block *coarse, const double *Bface[3],
     (void)j;
     (void)k;
     (void)patch;
-    prj_mhd_abort("prj_mhd_bf_prolong: called with PRJ_MHD disabled");
+    prj_mhd_abort("prj_mhd_bf_prolong_direct: called with PRJ_MHD disabled");
 }
 #endif
 
