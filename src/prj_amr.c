@@ -1049,9 +1049,6 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
                 b->refine_flag = 1;
             }
             prj_amr_tag_boundary_neighbors(mesh, b, boundary_refine_mask);
-        } else if (refine != 0 &&
-            (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx)) {
-            prj_amr_tag_boundary_neighbors(mesh, b, boundary_refine_mask);
         } else if (derefine != 0) {
             b->refine_flag = -1;
         } else {
