@@ -212,7 +212,7 @@ static void prj_gravity_build_rf(prj_grav_mono *grav_mono, const prj_mesh *mesh)
         return;
     }
     min_cell = prj_gravity_min_cell_size(mesh);
-    grav_mono->dr_min = 4.0 * min_cell;
+    grav_mono->dr_min = 0.5 * min_cell;
     if (grav_mono->dr_min <= 0.0 || prj_gravity_rmax <= grav_mono->dr_min) {
         grav_mono->dr_min = prj_gravity_rmax / (double)grav_mono->nbins;
     }
