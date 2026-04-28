@@ -85,24 +85,23 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
                 dUdt[VIDX(PRJ_CONS_MOM2, i, j, k)] += rho * g2;
                 dUdt[VIDX(PRJ_CONS_MOM3, i, j, k)] += rho * g3;
                 {
-                    double v_avg[3];
+                    double v_avg1;
+                    double v_avg2;
+                    double v_avg3;
                     int idx000 = IDX(i, j, k);
                     int idx100 = IDX(i + 1, j, k);
                     int idx010 = IDX(i, j + 1, k);
                     int idx001 = IDX(i, j, k + 1);
-                    int n;
 
-                    for (n = 0; n < 3; ++n) {
-                        v_avg[n] = (block->v_riemann[X1DIR][n * PRJ_BLOCK_NCELLS + idx000] +
-                                  block->v_riemann[X1DIR][n * PRJ_BLOCK_NCELLS + idx100] +
-                                  block->v_riemann[X2DIR][n * PRJ_BLOCK_NCELLS + idx000] +
-                                  block->v_riemann[X2DIR][n * PRJ_BLOCK_NCELLS + idx010] +
-                                  block->v_riemann[X3DIR][n * PRJ_BLOCK_NCELLS + idx000] +
-                                  block->v_riemann[X3DIR][n * PRJ_BLOCK_NCELLS + idx001]) / 6.0;
-                    }
+                    v_avg1 = (block->v_riemann[X1DIR][idx000] +
+                              block->v_riemann[X1DIR][idx100]) * 0.5;
+                    v_avg2 = (block->v_riemann[X2DIR][idx000] +
+                              block->v_riemann[X2DIR][idx010]) * 0.5;
+                    v_avg3 = (block->v_riemann[X3DIR][idx000] +
+                              block->v_riemann[X3DIR][idx001]) * 0.5;
 
                     dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
-                        rho * (v_avg[0] * g1 + v_avg[1] * g2 + v_avg[2] * g3);
+                        rho * (v_avg1 * g1 + v_avg2 * g2 + v_avg3 * g3);
                 }
 #if PRJ_NRAD > 0
                 {
