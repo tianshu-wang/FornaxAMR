@@ -52,6 +52,9 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
         grav_mono == 0 || W == 0 || dUdt == 0) {
         return;
     }
+    if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
+        return;
+    }
 
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -78,15 +81,29 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
                 g2 = accel * x2 / r;
                 g3 = accel * x3 / r;
                 rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
-                v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
-                v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
-                v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
-
                 dUdt[VIDX(PRJ_CONS_MOM1, i, j, k)] += rho * g1;
                 dUdt[VIDX(PRJ_CONS_MOM2, i, j, k)] += rho * g2;
                 dUdt[VIDX(PRJ_CONS_MOM3, i, j, k)] += rho * g3;
-                dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
-                    rho * (v1 * g1 + v2 * g2 + v3 * g3);
+                {
+                    double v_avg[3];
+                    int idx000 = IDX(i, j, k);
+                    int idx100 = IDX(i + 1, j, k);
+                    int idx010 = IDX(i, j + 1, k);
+                    int idx001 = IDX(i, j, k + 1);
+                    int n;
+
+                    for (n = 0; n < 3; ++n) {
+                        v_avg[n] = (block->v_riemann[X1DIR][n * PRJ_BLOCK_NCELLS + idx000] +
+                                  block->v_riemann[X1DIR][n * PRJ_BLOCK_NCELLS + idx100] +
+                                  block->v_riemann[X2DIR][n * PRJ_BLOCK_NCELLS + idx000] +
+                                  block->v_riemann[X2DIR][n * PRJ_BLOCK_NCELLS + idx010] +
+                                  block->v_riemann[X3DIR][n * PRJ_BLOCK_NCELLS + idx000] +
+                                  block->v_riemann[X3DIR][n * PRJ_BLOCK_NCELLS + idx001]) / 6.0;
+                    }
+
+                    dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
+                        rho * (v_avg[0] * g1 + v_avg[1] * g2 + v_avg[2] * g3);
+                }
 #if PRJ_NRAD > 0
                 {
                     double lapse = prj_src_interp_lapse(grav_mono, r);
