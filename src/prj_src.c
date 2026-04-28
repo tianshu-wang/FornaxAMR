@@ -95,10 +95,10 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
 
                     v_avg1 = (block->v_riemann[X1DIR][idx000] +
                               block->v_riemann[X1DIR][idx100]) * 0.5;
-                    v_avg2 = (block->v_riemann[X2DIR][idx000] +
-                              block->v_riemann[X2DIR][idx010]) * 0.5;
-                    v_avg3 = (block->v_riemann[X3DIR][idx000] +
-                              block->v_riemann[X3DIR][idx001]) * 0.5;
+                    v_avg2 = (block->v_riemann[X2DIR][1*PRJ_BLOCK_NCELLS+idx000] +
+                              block->v_riemann[X2DIR][1*PRJ_BLOCK_NCELLS+idx010]) * 0.5;
+                    v_avg3 = (block->v_riemann[X3DIR][2*PRJ_BLOCK_NCELLS+idx000] +
+                              block->v_riemann[X3DIR][2*PRJ_BLOCK_NCELLS+idx001]) * 0.5;
 
                     dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
                         rho * (v_avg1 * g1 + v_avg2 * g2 + v_avg3 * g3);
