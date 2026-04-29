@@ -6,6 +6,8 @@
 #if PRJ_MHD
 void prj_mhd_init(prj_sim *sim);
 void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1);
+void prj_mhd_bf_prolongate(const prj_block *coarse, prj_block *fine,
+    int ci, int cj, int ck, int fi, int fj, int fk, int use_bf1);
 double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
     const double emf_face[4], const double emf_cell[4], const double v_norm[4]);
 #else
@@ -18,6 +20,20 @@ static inline void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1)
 {
     (void)eos;
     (void)block;
+    (void)use_bf1;
+}
+
+static inline void prj_mhd_bf_prolongate(const prj_block *coarse, prj_block *fine,
+    int ci, int cj, int ck, int fi, int fj, int fk, int use_bf1)
+{
+    (void)coarse;
+    (void)fine;
+    (void)ci;
+    (void)cj;
+    (void)ck;
+    (void)fi;
+    (void)fj;
+    (void)fk;
     (void)use_bf1;
 }
 
