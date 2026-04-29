@@ -73,7 +73,7 @@ static void prj_timeint_update_dt_src(const prj_block *block, const double *u, i
         return;
     }
 
-    dt_src_local = 0.01 * u[PRJ_CONS_ETOT] /
+    dt_src_local = 0.02 * u[PRJ_CONS_ETOT] /
         (fabs(block->dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)]) + 1.0e-50);
     if (dt_src_local < *dt_src) {
         *dt_src = dt_src_local;
