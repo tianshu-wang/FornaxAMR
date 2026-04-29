@@ -65,6 +65,21 @@ static void prj_timeint_apply_eint_floor(const prj_mesh *mesh, double *u, double
     u[PRJ_CONS_ETOT] = rho * (mesh->E_floor + kinetic);
 }
 
+static void prj_timeint_update_dt_src(const prj_block *block, const double *u, int i, int j, int k, double *dt_src)
+{
+    double dt_src_local;
+
+    if (dt_src == 0) {
+        return;
+    }
+
+    dt_src_local = 0.01 * u[PRJ_CONS_ETOT] /
+        (fabs(block->dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)]) + 1.0e-50);
+    if (dt_src_local < *dt_src) {
+        *dt_src = dt_src_local;
+    }
+}
+
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
 {
@@ -177,7 +192,8 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
     return prj_mpi_min_dt(dt_min);
 }
 
-void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos, prj_rad *rad, double dt)
+void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
+    prj_rad *rad, double dt, double *dt_src)
 {
     int bidx;
 
@@ -222,6 +238,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
                         prj_timeint_cell_prim(block->W, i, j, k, w);
                         prj_eos_prim2cons(eos, w, u);
+                        prj_timeint_update_dt_src(block, u, i, j, k, dt_src);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u1[v] = u[v] + dt * block->dUdt[VIDX(v, i, j, k)];
                         }
@@ -249,7 +266,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     }
 }
 
-void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos, prj_rad *rad, double dt)
+void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
+    prj_rad *rad, double dt, double *dt_src)
 {
     int bidx;
 
@@ -296,6 +314,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         prj_eos_prim2cons(eos, w, u);
                         prj_timeint_cell_prim(block->W1, i, j, k, w);
                         prj_eos_prim2cons(eos, w, u1);
+                        prj_timeint_update_dt_src(block, u, i, j, k, dt_src);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u[v] = 0.5 * u[v] + 0.5 * (u1[v] + dt * block->dUdt[VIDX(v, i, j, k)]);
                         }
@@ -324,8 +343,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     prj_eos_fill_active_cells(mesh, eos, 1);
 }
 
-void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos, prj_rad *rad, double dt)
+void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
+    prj_rad *rad, double dt, double *dt_src)
 {
-    prj_timeint_stage1(mesh, coord, bc, eos, rad, dt);
-    prj_timeint_stage2(mesh, coord, bc, eos, rad, dt);
+    prj_timeint_stage1(mesh, coord, bc, eos, rad, dt, dt_src);
+    prj_timeint_stage2(mesh, coord, bc, eos, rad, dt, dt_src);
 }

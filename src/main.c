@@ -351,6 +351,7 @@ int main(int argc, char *argv[])
         int write_restart = 0;
         double next_event_time = -1.0;
         double dt_step;
+        double dt_src = 1.0e100;
 
         {
             double dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, sim.cfl);
@@ -377,7 +378,11 @@ int main(int argc, char *argv[])
             sim.dt = sim.t_end - sim.time;
         }
         dt_step = sim.dt;
-        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, dt_step);
+        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, dt_step, &dt_src);
+        dt_src = prj_mpi_min_dt(dt_src);
+        if (sim.cfl * dt_src < sim.dt) {
+            sim.dt = sim.cfl * dt_src;
+        }
         sim.time += dt_step;
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
