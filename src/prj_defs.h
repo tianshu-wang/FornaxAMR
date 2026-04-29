@@ -121,6 +121,13 @@ enum prj_mhd_init_type {
     PRJ_MHD_INIT_UNIFORM = 0,
     PRJ_MHD_INIT_DIPOLE_CORE = 1
 };
+
+enum prj_mhd_fidelity {
+    PRJ_MHD_FIDELITY_NONE = 0,
+    PRJ_MHD_FIDELITY_COARSER = 1,
+    PRJ_MHD_FIDELITY_SAME = 2,
+    PRJ_MHD_FIDELITY_FINER = 3
+};
 #endif
 
 enum prj_lohner_var {

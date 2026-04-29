@@ -811,6 +811,567 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
     (void)occ;
 }
 
+#if PRJ_MHD
+static int prj_mpi_append_unique_int(int **array, int *count, int *capacity, int value)
+{
+    int i;
+
+    for (i = 0; i < *count; ++i) {
+        if ((*array)[i] == value) {
+            return 0;
+        }
+    }
+    return prj_mpi_append_int(array, count, capacity, value);
+}
+
+static int prj_mpi_collect_bf_source_blocks(const prj_mesh *mesh, const prj_mpi *mpi,
+    int receiver_rank, int **ids, int *count)
+{
+    int capacity = 0;
+    int bidx;
+
+    *ids = 0;
+    *count = 0;
+    if (mesh == 0 || mpi == 0) {
+        return 1;
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        const prj_block *block = &mesh->blocks[bidx];
+        int n;
+
+        if (!prj_mpi_block_is_local(block)) {
+            continue;
+        }
+        for (n = 0; n < 56; ++n) {
+            int nid = block->slot[n].id;
+
+            if (nid >= 0 && nid < mesh->nblocks &&
+                mesh->blocks[nid].rank == receiver_rank) {
+                if (prj_mpi_append_unique_int(ids, count, &capacity, bidx) != 0) {
+                    free(*ids);
+                    *ids = 0;
+                    *count = 0;
+                    return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static double *prj_mpi_bf_array(prj_block *block, int dir, int use_bf1)
+{
+    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+}
+
+static const double *prj_mpi_bf_array_const(const prj_block *block, int dir, int use_bf1)
+{
+    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+}
+
+static int prj_mpi_pack_bf_blocks(const prj_mesh *mesh, const int *ids, int count,
+    int use_bf1, double **values)
+{
+    int b;
+    int pos = 0;
+    size_t nvalue;
+
+    *values = 0;
+    if (count <= 0) {
+        return 0;
+    }
+    nvalue = (size_t)count * 3U * (size_t)PRJ_BLOCK_NCELLS;
+    *values = (double *)malloc(nvalue * sizeof(**values));
+    if (*values == 0) {
+        return 1;
+    }
+    for (b = 0; b < count; ++b) {
+        const prj_block *block;
+        int dir;
+
+        if (ids[b] < 0 || ids[b] >= mesh->nblocks) {
+            free(*values);
+            *values = 0;
+            return 1;
+        }
+        block = &mesh->blocks[ids[b]];
+        for (dir = 0; dir < 3; ++dir) {
+            const double *src = prj_mpi_bf_array_const(block, dir, use_bf1);
+            int n;
+
+            if (src == 0) {
+                free(*values);
+                *values = 0;
+                return 1;
+            }
+            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+                double value = src[n];
+
+                if (!isfinite(value)) {
+                    free(*values);
+                    *values = 0;
+                    return 1;
+                }
+                (*values)[pos++] = value;
+            }
+        }
+    }
+    return 0;
+}
+
+static int prj_mpi_install_remote_bf_blocks(prj_mesh *mesh, const int *ids, int count,
+    const double *values, int use_bf1, int *old_ranks)
+{
+    int b;
+    int pos = 0;
+
+    if (count <= 0) {
+        return 0;
+    }
+    if (ids == 0 || values == 0 || old_ranks == 0) {
+        return 1;
+    }
+    for (b = 0; b < count; ++b) {
+        prj_block *block;
+        double *base;
+        int dir;
+        int n;
+
+        if (ids[b] < 0 || ids[b] >= mesh->nblocks) {
+            return 1;
+        }
+        block = &mesh->blocks[ids[b]];
+        if (block->rank == prj_mpi_active->rank || block->Bf[0] != 0 ||
+            block->Bf1[0] != 0 || block->face_fidelity != 0) {
+            return 1;
+        }
+        base = (double *)calloc(6U * (size_t)PRJ_BLOCK_NCELLS, sizeof(*base));
+        block->face_fidelity = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*block->face_fidelity));
+        if (base == 0 || block->face_fidelity == 0) {
+            free(base);
+            free(block->face_fidelity);
+            block->face_fidelity = 0;
+            return 1;
+        }
+        for (dir = 0; dir < 3; ++dir) {
+            block->Bf[dir] = base + (size_t)dir * (size_t)PRJ_BLOCK_NCELLS;
+            block->Bf1[dir] = base + (size_t)(dir + 3) * (size_t)PRJ_BLOCK_NCELLS;
+        }
+        for (dir = 0; dir < 3; ++dir) {
+            double *dst = prj_mpi_bf_array(block, dir, use_bf1);
+
+            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+                dst[n] = values[pos++];
+            }
+        }
+        for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+            block->face_fidelity[n] = PRJ_MHD_FIDELITY_SAME;
+        }
+        old_ranks[b] = block->rank;
+        block->rank = prj_mpi_active->rank;
+    }
+    return 0;
+}
+
+static void prj_mpi_uninstall_remote_bf_blocks(prj_mesh *mesh, const int *ids, int count,
+    const int *old_ranks)
+{
+    int b;
+
+    if (mesh == 0 || ids == 0 || old_ranks == 0) {
+        return;
+    }
+    for (b = 0; b < count; ++b) {
+        prj_block *block;
+        int dir;
+
+        if (ids[b] < 0 || ids[b] >= mesh->nblocks) {
+            continue;
+        }
+        block = &mesh->blocks[ids[b]];
+        free(block->Bf[0]);
+        free(block->face_fidelity);
+        block->face_fidelity = 0;
+        for (dir = 0; dir < 3; ++dir) {
+            block->Bf[dir] = 0;
+            block->Bf1[dir] = 0;
+        }
+        block->rank = old_ranks[b];
+    }
+}
+
+void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kind)
+{
+#if defined(PRJ_ENABLE_MPI)
+    int nb;
+
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
+        return;
+    }
+    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+        int *send_ids = 0;
+        int *recv_ids = 0;
+        int send_count = 0;
+        int recv_count = 0;
+        double *send_values = 0;
+        double *recv_values = 0;
+        int *old_ranks = 0;
+        int b;
+        int send_value_count;
+        int recv_value_count;
+
+        if (prj_mpi_collect_bf_source_blocks(mesh, mpi, buffer->receiver_rank,
+                &send_ids, &send_count) != 0 ||
+            prj_mpi_pack_bf_blocks(mesh, send_ids, send_count, use_bf1, &send_values) != 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to pack local Bf blocks\n");
+            free(send_ids);
+            free(send_values);
+            exit(EXIT_FAILURE);
+        }
+        MPI_Sendrecv(&send_count, 1, MPI_INT, buffer->receiver_rank, 300,
+            &recv_count, 1, MPI_INT, buffer->receiver_rank, 300,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        recv_ids = recv_count > 0 ? (int *)calloc((size_t)recv_count, sizeof(*recv_ids)) : 0;
+        if (recv_count > 0 && recv_ids == 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to allocate received block ids\n");
+            free(send_ids);
+            free(send_values);
+            exit(EXIT_FAILURE);
+        }
+        MPI_Sendrecv(send_ids, send_count, MPI_INT, buffer->receiver_rank, 301,
+            recv_ids, recv_count, MPI_INT, buffer->receiver_rank, 301,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        send_value_count = send_count * 3 * PRJ_BLOCK_NCELLS;
+        recv_value_count = recv_count * 3 * PRJ_BLOCK_NCELLS;
+        recv_values = recv_value_count > 0 ?
+            (double *)malloc((size_t)recv_value_count * sizeof(*recv_values)) : 0;
+        if (recv_value_count > 0 && recv_values == 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to allocate received Bf values\n");
+            free(recv_ids);
+            free(send_ids);
+            free(send_values);
+            exit(EXIT_FAILURE);
+        }
+        MPI_Sendrecv(send_values, send_value_count, MPI_DOUBLE, buffer->receiver_rank, 302,
+            recv_values, recv_value_count, MPI_DOUBLE, buffer->receiver_rank, 302,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        old_ranks = recv_count > 0 ? (int *)calloc((size_t)recv_count, sizeof(*old_ranks)) : 0;
+        if (recv_count > 0 && old_ranks == 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to allocate rank scratch\n");
+            free(recv_values);
+            free(recv_ids);
+            free(send_ids);
+            free(send_values);
+            exit(EXIT_FAILURE);
+        }
+        if (prj_mpi_install_remote_bf_blocks(mesh, recv_ids, recv_count,
+                recv_values, use_bf1, old_ranks) != 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to install remote Bf scratch blocks\n");
+            prj_mpi_uninstall_remote_bf_blocks(mesh, recv_ids, recv_count, old_ranks);
+            free(old_ranks);
+            free(recv_values);
+            free(recv_ids);
+            free(send_ids);
+            free(send_values);
+            exit(EXIT_FAILURE);
+        }
+        for (b = 0; b < recv_count; ++b) {
+            prj_boundary_send_bf(&mesh->blocks[recv_ids[b]], use_bf1, fill_kind);
+        }
+        prj_mpi_uninstall_remote_bf_blocks(mesh, recv_ids, recv_count, old_ranks);
+        free(old_ranks);
+        free(recv_values);
+        free(recv_ids);
+        free(send_values);
+        free(send_ids);
+    }
+#else
+    (void)mesh;
+    (void)mpi;
+    (void)use_bf1;
+    (void)fill_kind;
+#endif
+}
+#endif
+
+#if PRJ_MHD
+static int prj_mpi_edge_axis_active_max(int dir, int axis)
+{
+    return dir == axis ? PRJ_BLOCK_SIZE - 1 : PRJ_BLOCK_SIZE;
+}
+
+static double prj_mpi_edge_coord(const prj_block *block, int axis, int dir, int idx)
+{
+    double offset = axis == dir ? 0.5 : 0.0;
+
+    return block->xmin[axis] + ((double)idx + offset) * block->dx[axis];
+}
+
+static int prj_mpi_edge_point_inside(const prj_block *block, const double x[3])
+{
+    const double tol = 1.0e-12;
+    int d;
+
+    if (block == 0) {
+        return 0;
+    }
+    for (d = 0; d < 3; ++d) {
+        if (x[d] < block->xmin[d] - tol || x[d] > block->xmax[d] + tol) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int prj_mpi_storage_index_ok(int i, int j, int k)
+{
+    return i >= -PRJ_NGHOST && i < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
+        j >= -PRJ_NGHOST && j < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
+        k >= -PRJ_NGHOST && k < PRJ_BLOCK_SIZE + PRJ_NGHOST;
+}
+
+static int prj_mpi_nearest_int(double x)
+{
+    return x >= 0.0 ? (int)(x + 0.5) : (int)(x - 0.5);
+}
+
+static double prj_mpi_restrict_emf_value(const prj_block *fine, int dir,
+    const double x[3])
+{
+    const double tol = 1.0e-8;
+    int idx[3] = {0, 0, 0};
+    int edge_base = 0;
+    double sum = 0.0;
+    int n;
+    int d;
+
+    if (fine == 0 || dir < 0 || dir >= 3 || fine->emf[dir] == 0) {
+        fprintf(stderr, "prj_mpi_restrict_emf_value: invalid fine emf block\n");
+        exit(EXIT_FAILURE);
+    }
+    for (d = 0; d < 3; ++d) {
+        double q;
+
+        if (fine->dx[d] <= 0.0) {
+            fprintf(stderr, "prj_mpi_restrict_emf_value: invalid fine cell size\n");
+            exit(EXIT_FAILURE);
+        }
+        q = (x[d] - fine->xmin[d]) / fine->dx[d];
+        if (d == dir) {
+            double r = q - 0.5;
+
+            edge_base = prj_mpi_nearest_int(r - 0.5);
+            if (fabs(r - ((double)edge_base + 0.5)) > tol) {
+                fprintf(stderr, "prj_mpi_restrict_emf_value: coarse edge is not centered on two fine edges\n");
+                exit(EXIT_FAILURE);
+            }
+            idx[d] = edge_base;
+        } else {
+            int edge_idx = prj_mpi_nearest_int(q);
+
+            if (fabs(q - (double)edge_idx) > tol) {
+                fprintf(stderr, "prj_mpi_restrict_emf_value: coarse edge is not fine-aligned\n");
+                exit(EXIT_FAILURE);
+            }
+            idx[d] = edge_idx;
+        }
+    }
+    for (n = 0; n < 2; ++n) {
+        int eidx[3];
+        double value;
+
+        eidx[0] = idx[0];
+        eidx[1] = idx[1];
+        eidx[2] = idx[2];
+        eidx[dir] = edge_base + n;
+        if (!prj_mpi_storage_index_ok(eidx[0], eidx[1], eidx[2])) {
+            fprintf(stderr, "prj_mpi_restrict_emf_value: fine edge index out of storage\n");
+            exit(EXIT_FAILURE);
+        }
+        value = fine->emf[dir][IDX(eidx[0], eidx[1], eidx[2])];
+        if (!isfinite(value)) {
+            fprintf(stderr, "prj_mpi_restrict_emf_value: non-finite emf\n");
+            exit(EXIT_FAILURE);
+        }
+        sum += value;
+    }
+    return 0.5 * sum;
+}
+
+static int prj_mpi_pack_emf_records(prj_mesh *mesh, prj_mpi *mpi,
+    int receiver_rank, int **idx_send, double **value_send, int *count)
+{
+    int idx_capacity = 0;
+    int value_capacity = 0;
+    int value_count = 0;
+    int bidx;
+
+    idx_send[0] = 0;
+    idx_send[1] = 0;
+    idx_send[2] = 0;
+    *value_send = 0;
+    *count = 0;
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int slot;
+
+        if (!prj_mpi_block_is_local(block)) {
+            continue;
+        }
+        for (slot = 0; slot < 56; ++slot) {
+            int nid = block->slot[slot].id;
+            const prj_block *coarse;
+            int dir;
+
+            if (nid < 0 || nid >= mesh->nblocks || block->slot[slot].rel_level >= 0 ||
+                mesh->blocks[nid].rank != receiver_rank) {
+                continue;
+            }
+            coarse = &mesh->blocks[nid];
+            for (dir = 0; dir < 3; ++dir) {
+                int i;
+                int j;
+                int k;
+
+                for (i = 0; i <= prj_mpi_edge_axis_active_max(dir, 0); ++i) {
+                    for (j = 0; j <= prj_mpi_edge_axis_active_max(dir, 1); ++j) {
+                        for (k = 0; k <= prj_mpi_edge_axis_active_max(dir, 2); ++k) {
+                            double x[3];
+                            double value;
+
+                            x[0] = prj_mpi_edge_coord(coarse, 0, dir, i);
+                            x[1] = prj_mpi_edge_coord(coarse, 1, dir, j);
+                            x[2] = prj_mpi_edge_coord(coarse, 2, dir, k);
+                            if (!prj_mpi_edge_point_inside(block, x)) {
+                                continue;
+                            }
+                            value = prj_mpi_restrict_emf_value(block, dir, x);
+                            if (prj_mpi_append_triplet(idx_send, count, &idx_capacity,
+                                    nid, prj_mpi_encode_cell_index(i, j, k), dir) != 0 ||
+                                prj_mpi_append_double(value_send, &value_count, &value_capacity, value) != 0) {
+                                free(idx_send[0]);
+                                free(idx_send[1]);
+                                free(idx_send[2]);
+                                free(*value_send);
+                                idx_send[0] = 0;
+                                idx_send[1] = 0;
+                                idx_send[2] = 0;
+                                *value_send = 0;
+                                *count = 0;
+                                return 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    (void)mpi;
+    return 0;
+}
+
+void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
+{
+#if defined(PRJ_ENABLE_MPI)
+    int nb;
+
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
+        return;
+    }
+    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+        int *idx_send[3];
+        int *idx_recv[3];
+        double *value_send = 0;
+        double *value_recv = 0;
+        int send_count = 0;
+        int recv_count = 0;
+        int axis;
+        int i;
+
+        if (prj_mpi_pack_emf_records(mesh, mpi, buffer->receiver_rank,
+                idx_send, &value_send, &send_count) != 0) {
+            fprintf(stderr, "prj_mpi_exchange_emf: failed to pack emf records\n");
+            exit(EXIT_FAILURE);
+        }
+        MPI_Sendrecv(&send_count, 1, MPI_INT, buffer->receiver_rank, 400,
+            &recv_count, 1, MPI_INT, buffer->receiver_rank, 400,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        for (axis = 0; axis < 3; ++axis) {
+            idx_recv[axis] = recv_count > 0 ?
+                (int *)calloc((size_t)recv_count, sizeof(*idx_recv[axis])) : 0;
+            if (recv_count > 0 && idx_recv[axis] == 0) {
+                fprintf(stderr, "prj_mpi_exchange_emf: failed to allocate received indices\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+        value_recv = recv_count > 0 ?
+            (double *)malloc((size_t)recv_count * sizeof(*value_recv)) : 0;
+        if (recv_count > 0 && value_recv == 0) {
+            fprintf(stderr, "prj_mpi_exchange_emf: failed to allocate received values\n");
+            exit(EXIT_FAILURE);
+        }
+        for (axis = 0; axis < 3; ++axis) {
+            MPI_Sendrecv(idx_send[axis], send_count, MPI_INT, buffer->receiver_rank, 401 + axis,
+                idx_recv[axis], recv_count, MPI_INT, buffer->receiver_rank, 401 + axis,
+                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+        MPI_Sendrecv(value_send, send_count, MPI_DOUBLE, buffer->receiver_rank, 404,
+            value_recv, recv_count, MPI_DOUBLE, buffer->receiver_rank, 404,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        for (i = 0; i < recv_count; ++i) {
+            int block_id = idx_recv[0][i];
+            int code = idx_recv[1][i];
+            int dir = idx_recv[2][i];
+            int ii;
+            int jj;
+            int kk;
+            prj_block *block;
+            int flat;
+
+            if (block_id < 0 || block_id >= mesh->nblocks || dir < 0 || dir >= 3) {
+                continue;
+            }
+            block = &mesh->blocks[block_id];
+            if (!prj_mpi_block_is_local(block) || block->edge_fidelity == 0 ||
+                block->emf[dir] == 0) {
+                continue;
+            }
+            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
+            if (!prj_mpi_storage_index_ok(ii, jj, kk)) {
+                fprintf(stderr, "prj_mpi_exchange_emf: received edge index out of storage\n");
+                exit(EXIT_FAILURE);
+            }
+            flat = IDX(ii, jj, kk);
+            if (PRJ_MHD_FIDELITY_FINER < block->edge_fidelity[flat]) {
+                continue;
+            }
+            if (!isfinite(value_recv[i])) {
+                fprintf(stderr, "prj_mpi_exchange_emf: received non-finite emf\n");
+                exit(EXIT_FAILURE);
+            }
+            block->emf[dir][flat] = value_recv[i];
+            block->edge_fidelity[flat] = PRJ_MHD_FIDELITY_FINER;
+        }
+
+        for (axis = 0; axis < 3; ++axis) {
+            free(idx_send[axis]);
+            free(idx_recv[axis]);
+        }
+        free(value_send);
+        free(value_recv);
+    }
+#else
+    (void)mesh;
+    (void)mpi;
+#endif
+}
+#endif
+
 prj_mpi *prj_mpi_current(void)
 {
     return prj_mpi_active;
