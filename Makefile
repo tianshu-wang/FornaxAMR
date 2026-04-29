@@ -45,6 +45,7 @@ SRCS := \
 	$(SRC_DIR)/prj_gravity.c \
 	$(SRC_DIR)/prj_io.c \
 	$(SRC_DIR)/prj_mesh.c \
+	$(SRC_DIR)/prj_mhd.c \
 	$(SRC_DIR)/prj_mpi.c \
 	$(SRC_DIR)/prj_radiation.c \
 	$(SRC_DIR)/prj_rad3_opac.c \

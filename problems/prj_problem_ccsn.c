@@ -261,8 +261,8 @@ static void prj_ccsn_fill_mesh(prj_sim *sim, const prj_ccsn_profile *profile)
                     double ye;
                     double vr;
                     double eos_q[PRJ_EOS_NQUANT];
-                    double W[PRJ_NVAR_PRIM];
-                    double U[PRJ_NVAR_CONS];
+                    double W[PRJ_NVAR_PRIM] = {0.0};
+                    double U[PRJ_NVAR_CONS] = {0.0};
                     int v;
 
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
@@ -362,5 +362,6 @@ void prj_problem_ccsn(prj_sim *sim)
         return;
     }
     prj_ccsn_initialize_amr(sim, &profile);
+    prj_mhd_init(sim);
     prj_ccsn_profile_free(&profile);
 }

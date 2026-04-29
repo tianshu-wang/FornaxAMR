@@ -44,8 +44,8 @@ void prj_problem_shock1d(prj_sim *sim)
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
             for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
                 for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                    double W[PRJ_NVAR_PRIM];
-                    double U[PRJ_NVAR_CONS];
+                    double W[PRJ_NVAR_PRIM] = {0.0};
+                    double U[PRJ_NVAR_CONS] = {0.0};
 
                     W[PRJ_PRIM_RHO] = 1.0;
                     W[PRJ_PRIM_V1] = 0.0;
@@ -59,4 +59,5 @@ void prj_problem_shock1d(prj_sim *sim)
             }
         }
     }
+    prj_mhd_init(sim);
 }

@@ -226,6 +226,11 @@ struct prj_sim {
     char restart_file_name[256];
     int amr_interval;
     int dump_count;
+#if PRJ_MHD
+    int mhd_init_type;
+    double mhd_B_norm;
+    double mhd_B_scale;
+#endif
 };
 
 struct prj_mpi_buffer {

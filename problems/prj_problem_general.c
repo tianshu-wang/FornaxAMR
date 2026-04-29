@@ -46,6 +46,11 @@ void prj_problem_initial_condition(double x1, double x2, double x3, double *data
     data[PRJ_PRIM_V3] = 0.0;
     data[PRJ_PRIM_EINT] = 1.0;
     data[PRJ_PRIM_YE] = 0.1;
+#if PRJ_MHD
+    data[PRJ_PRIM_B1] = 0.0;
+    data[PRJ_PRIM_B2] = 0.0;
+    data[PRJ_PRIM_B3] = 0.0;
+#endif
 }
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)
@@ -80,8 +85,8 @@ static void prj_problem_fill_mesh(prj_sim *sim, void (*init_fn)(double, double, 
                     double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                     double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                     double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                    double W[PRJ_NVAR_PRIM];
-                    double U[PRJ_NVAR_CONS];
+                    double W[PRJ_NVAR_PRIM] = {0.0};
+                    double U[PRJ_NVAR_CONS] = {0.0};
 
                     init_fn(x1, x2, x3, W);
                     prj_eos_prim2cons(&sim->eos, W, U);
@@ -120,4 +125,5 @@ void prj_problem_general(prj_sim *sim)
         return;
     }
     prj_problem_fill_until_amr_converged(sim);
+    prj_mhd_init(sim);
 }

@@ -297,8 +297,8 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
                     double ye;
                     double vr;
                     double eos_q[PRJ_EOS_NQUANT];
-                    double W[PRJ_NVAR_PRIM];
-                    double U[PRJ_NVAR_CONS];
+                    double W[PRJ_NVAR_PRIM] = {0.0};
+                    double U[PRJ_NVAR_CONS] = {0.0};
 
                     prj_cc_profile_sample(profile, r, &rho, &temp, &ye, &vr);
                     if (rho == 0.0) {
@@ -397,5 +397,6 @@ void prj_problem_cc(prj_sim *sim)
         return;
     }
     prj_cc_initialize_amr(sim, &profile);
+    prj_mhd_init(sim);
     prj_cc_profile_free(&profile);
 }

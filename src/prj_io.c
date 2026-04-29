@@ -122,6 +122,26 @@ static int prj_io_parse_lohner_var(const char *value, int *lohner_var)
     return 1;
 }
 
+#if PRJ_MHD
+static int prj_io_parse_mhd_init_type(const char *value, int *mhd_init_type)
+{
+    if (value == 0 || mhd_init_type == 0) {
+        return 1;
+    }
+    if (strcmp(value, "uniform") == 0) {
+        *mhd_init_type = PRJ_MHD_INIT_UNIFORM;
+        return 0;
+    }
+    if (strcmp(value, "dipole") == 0 ||
+        strcmp(value, "dipole_core") == 0 ||
+        strcmp(value, "dipole_uniform_core") == 0) {
+        *mhd_init_type = PRJ_MHD_INIT_DIPOLE_CORE;
+        return 0;
+    }
+    return 1;
+}
+#endif
+
 static int prj_io_parse_amr_slot_key(const char *key, const char *prefix, int *slot)
 {
     size_t prefix_len;
@@ -207,6 +227,11 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->eos.filename[0] = '\0';
     sim->rad.maxiter = 20;
     sim->rad.implicit_err_tol = 1.0e-6;
+#if PRJ_MHD
+    sim->mhd_init_type = PRJ_MHD_INIT_UNIFORM;
+    sim->mhd_B_norm = 0.0;
+    sim->mhd_B_scale = 1.0;
+#endif
 }
 
 void prj_io_parser(prj_sim *sim, char *filename)
@@ -340,6 +365,20 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.amr_angle_resolution_limit = strtod(value, &endptr);
         } else if (strcmp(key, "E_floor") == 0) {
             sim->mesh.E_floor = strtod(value, &endptr);
+#if PRJ_MHD
+        } else if (strcmp(key, "B_norm") == 0 || strcmp(key, "mhd_B_norm") == 0) {
+            sim->mhd_B_norm = strtod(value, &endptr);
+        } else if (strcmp(key, "B_scale") == 0 || strcmp(key, "mhd_B_scale") == 0) {
+            sim->mhd_B_scale = strtod(value, &endptr);
+        } else if (strcmp(key, "B_init") == 0 ||
+            strcmp(key, "mhd_init") == 0 ||
+            strcmp(key, "mhd_init_type") == 0) {
+            if (prj_io_parse_mhd_init_type(value, &sim->mhd_init_type) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+#endif
         } else if (strcmp(key, "output_dir") == 0) {
             strncpy(sim->output_dir, value, sizeof(sim->output_dir) - 1);
             sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';

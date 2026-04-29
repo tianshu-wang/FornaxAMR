@@ -10,6 +10,7 @@
 #include "prj_gravity.h"
 #include "prj_io.h"
 #include "prj_mesh.h"
+#include "prj_mhd.h"
 #include "prj_mpi.h"
 #include "prj_radiation.h"
 #include "prj_rad3_opac.h"

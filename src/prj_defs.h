@@ -116,6 +116,13 @@ enum prj_amr_estimator {
     PRJ_AMR_ESTIMATOR_DENSITY_JUMP = 3
 };
 
+#if PRJ_MHD
+enum prj_mhd_init_type {
+    PRJ_MHD_INIT_UNIFORM = 0,
+    PRJ_MHD_INIT_DIPOLE_CORE = 1
+};
+#endif
+
 enum prj_lohner_var {
     PRJ_LOHNER_VAR_DENSITY = 0,
     PRJ_LOHNER_VAR_PRESSURE = 1,
