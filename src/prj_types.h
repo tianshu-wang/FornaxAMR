@@ -73,6 +73,15 @@ struct prj_block {
     double *dUdt;
     double *flux[3];
     double *v_riemann[3];
+#if PRJ_MHD
+    int *face_fidelity;
+    int *edge_fidelity;
+    double *Bf[3];
+    double *Bf1[3];
+    double *Bv1[3];
+    double *Bv2[3];
+    double *emf[3];
+#endif
     int *ridx;
     double *fr;
     double vol;

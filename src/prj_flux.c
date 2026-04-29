@@ -1,3 +1,6 @@
+#include <stdio.h>
+#include <stdlib.h>
+
 #include "prj.h"
 
 static void prj_flux_rotate_to_local(const double *Wg, int dir, double *Wl)
@@ -22,6 +25,22 @@ static void prj_flux_rotate_to_local(const double *Wg, int dir, double *Wl)
         Wl[PRJ_PRIM_V2] = Wg[PRJ_PRIM_V1];
         Wl[PRJ_PRIM_V3] = Wg[PRJ_PRIM_V2];
     }
+
+#if PRJ_MHD
+    if (dir == X1DIR) {
+        Wl[PRJ_PRIM_B1] = Wg[PRJ_PRIM_B1];
+        Wl[PRJ_PRIM_B2] = Wg[PRJ_PRIM_B2];
+        Wl[PRJ_PRIM_B3] = Wg[PRJ_PRIM_B3];
+    } else if (dir == X2DIR) {
+        Wl[PRJ_PRIM_B1] = Wg[PRJ_PRIM_B2];
+        Wl[PRJ_PRIM_B2] = Wg[PRJ_PRIM_B3];
+        Wl[PRJ_PRIM_B3] = Wg[PRJ_PRIM_B1];
+    } else {
+        Wl[PRJ_PRIM_B1] = Wg[PRJ_PRIM_B3];
+        Wl[PRJ_PRIM_B2] = Wg[PRJ_PRIM_B1];
+        Wl[PRJ_PRIM_B3] = Wg[PRJ_PRIM_B2];
+    }
+#endif
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -65,6 +84,22 @@ static void prj_flux_rotate_from_local(const double *Fl, int dir, double *Fg)
         Fg[PRJ_CONS_MOM1] = Fl[PRJ_CONS_MOM2];
         Fg[PRJ_CONS_MOM2] = Fl[PRJ_CONS_MOM3];
     }
+
+#if PRJ_MHD
+    if (dir == X1DIR) {
+        Fg[PRJ_CONS_B1] = Fl[PRJ_CONS_B1];
+        Fg[PRJ_CONS_B2] = Fl[PRJ_CONS_B2];
+        Fg[PRJ_CONS_B3] = Fl[PRJ_CONS_B3];
+    } else if (dir == X2DIR) {
+        Fg[PRJ_CONS_B2] = Fl[PRJ_CONS_B1];
+        Fg[PRJ_CONS_B3] = Fl[PRJ_CONS_B2];
+        Fg[PRJ_CONS_B1] = Fl[PRJ_CONS_B3];
+    } else {
+        Fg[PRJ_CONS_B3] = Fl[PRJ_CONS_B1];
+        Fg[PRJ_CONS_B1] = Fl[PRJ_CONS_B2];
+        Fg[PRJ_CONS_B2] = Fl[PRJ_CONS_B3];
+    }
+#endif
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -235,10 +270,28 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
         int i;
         int j;
         int k;
+        int istart = 0;
+        int iend = PRJ_BLOCK_SIZE;
+        int jstart = 0;
+        int jend = PRJ_BLOCK_SIZE;
+        int kstart = 0;
+        int kend = PRJ_BLOCK_SIZE;
 
-        for (i = 0; i <= PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j <= PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k <= PRJ_BLOCK_SIZE; ++k) {
+#if PRJ_MHD
+        if (dir != X1DIR) {
+            istart = -1;
+        }
+        if (dir != X2DIR) {
+            jstart = -1;
+        }
+        if (dir != X3DIR) {
+            kstart = -1;
+        }
+#endif
+
+        for (i = istart; i <= iend; ++i) {
+            for (j = jstart; j <= jend; ++j) {
+                for (k = kstart; k <= kend; ++k) {
                     double WLg[PRJ_NVAR_PRIM];
                     double WRg[PRJ_NVAR_PRIM];
                     double WL[PRJ_NVAR_PRIM];
@@ -261,8 +314,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     double gR;
                     double Fl[PRJ_NVAR_CONS];
                     double Fg[PRJ_NVAR_CONS];
+#if !PRJ_MHD
                     int shock_left;
                     int shock_right;
+#endif
                     int v;
                     int il;
                     int jl;
@@ -271,11 +326,13 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     int jr;
                     int kr;
 
+#if !PRJ_MHD
                     if ((dir == X1DIR && (j >= PRJ_BLOCK_SIZE || k >= PRJ_BLOCK_SIZE)) ||
                         (dir == X2DIR && (i >= PRJ_BLOCK_SIZE || k >= PRJ_BLOCK_SIZE)) ||
                         (dir == X3DIR && (i >= PRJ_BLOCK_SIZE || j >= PRJ_BLOCK_SIZE))) {
                         continue;
                     }
+#endif
 
                     il = i;
                     jl = j;
@@ -334,17 +391,42 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                         pLLg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, il, jl, kl - 1)] : 0.0;
                         pRRg = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_PRESSURE, ir, jr, kr + 1)] : 0.0;
                     }
+#if PRJ_MHD
+                    (void)pCLg;
+                    (void)pCRg;
+                    (void)pLLg;
+                    (void)pRRg;
+#endif
                     /* Detect the dominant shock direction in global coordinates.
                      * Use HLLE only on transverse fluxes; keep HLLC on the shock-aligned direction. */
+                    double v_face_loc[3] = {0.0, 0.0, 0.0};
+#if PRJ_MHD
+                    {
+                        double bv1 = 0.0;
+                        double bv2 = 0.0;
+                        double bn;
+
+                        if (block->Bf[dir] == 0 || block->Bv1[dir] == 0 || block->Bv2[dir] == 0) {
+                            fprintf(stderr, "prj_flux_update: missing MHD face storage for dir=%d\n", dir);
+                            exit(1);
+                        }
+                        bn = block->Bf[dir][IDX(i, j, k)];
+                        WL[PRJ_PRIM_B1] = bn;
+                        WR[PRJ_PRIM_B1] = bn;
+                        prj_riemann_hlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl, v_face_loc, &bv1, &bv2);
+                        block->Bv1[dir][IDX(i, j, k)] = bv1;
+                        block->Bv2[dir][IDX(i, j, k)] = bv2;
+                    }
+#else
                     shock_left = prj_riemann_detect_shock(WLLg, WCLg, pLLg, pCLg);
                     shock_right = prj_riemann_detect_shock(WCRg, WRRg, pCRg, pRRg);
-                    double v_face_loc[3] = {0.0, 0.0, 0.0};
                     if ((shock_left >= 0 && shock_left != dir) ||
                         (shock_right >= 0 && shock_right != dir)) {
                         prj_riemann_hlle(WL, WR, pL, pR, gL, gR, eos, Fl, v_face_loc);
                     } else {
                         prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl, v_face_loc);
                     }
+#endif
                     /* Unrotate (V1=normal, V2/V3=transverse) back to global (v1,v2,v3). */
                     double v_face_glob[3];
                     if (dir == X1DIR) {

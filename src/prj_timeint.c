@@ -48,6 +48,9 @@ static void prj_timeint_apply_eint_floor(const prj_mesh *mesh, double *u, double
 {
     double rho;
     double kinetic;
+#if PRJ_MHD
+    double magnetic;
+#endif
 
     if (mesh == 0 || u == 0 || w == 0 || mesh->E_floor <= 0.0) {
         return;
@@ -61,8 +64,17 @@ static void prj_timeint_apply_eint_floor(const prj_mesh *mesh, double *u, double
     kinetic = 0.5 * (w[PRJ_PRIM_V1] * w[PRJ_PRIM_V1] +
         w[PRJ_PRIM_V2] * w[PRJ_PRIM_V2] +
         w[PRJ_PRIM_V3] * w[PRJ_PRIM_V3]);
+#if PRJ_MHD
+    magnetic = 0.5 * (w[PRJ_PRIM_B1] * w[PRJ_PRIM_B1] +
+        w[PRJ_PRIM_B2] * w[PRJ_PRIM_B2] +
+        w[PRJ_PRIM_B3] * w[PRJ_PRIM_B3]);
+#endif
     w[PRJ_PRIM_EINT] = mesh->E_floor;
-    u[PRJ_CONS_ETOT] = rho * (mesh->E_floor + kinetic);
+    u[PRJ_CONS_ETOT] = rho * (mesh->E_floor + kinetic)
+#if PRJ_MHD
+        + magnetic
+#endif
+        ;
 }
 
 static void prj_timeint_update_dt_src(const prj_block *block, const double *u, int i, int j, int k, double *dt_src)

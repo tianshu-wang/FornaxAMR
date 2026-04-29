@@ -452,6 +452,9 @@ static void prj_apply_eint_floor(double E_floor, double *U, double *W)
     double v2;
     double v3;
     double kinetic;
+#if PRJ_MHD
+    double magnetic;
+#endif
 
     if (E_floor <= 0.0 || U == 0 || W == 0) {
         return;
@@ -470,8 +473,17 @@ static void prj_apply_eint_floor(double E_floor, double *U, double *W)
     v2 = W[PRJ_PRIM_V2];
     v3 = W[PRJ_PRIM_V3];
     kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
+#if PRJ_MHD
+    magnetic = 0.5 * (W[PRJ_PRIM_B1] * W[PRJ_PRIM_B1] +
+        W[PRJ_PRIM_B2] * W[PRJ_PRIM_B2] +
+        W[PRJ_PRIM_B3] * W[PRJ_PRIM_B3]);
+#endif
     W[PRJ_PRIM_EINT] = E_floor;
-    U[PRJ_CONS_ETOT] = rho * (E_floor + kinetic);
+    U[PRJ_CONS_ETOT] = rho * (E_floor + kinetic)
+#if PRJ_MHD
+        + magnetic
+#endif
+        ;
 }
 
 static double prj_loehner_cell_value(const prj_mesh *mesh, const prj_block *b, int lohner_var, int i, int j, int k)
@@ -1120,6 +1132,7 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
                 double mom2 = child->U[VIDX(PRJ_CONS_MOM2, i, j, k)];
                 double mom3 = child->U[VIDX(PRJ_CONS_MOM3, i, j, k)];
                 double kinetic;
+                double magnetic = 0.0;
                 double min_etot;
 
                 if (rho <= 0.0) {
@@ -1127,9 +1140,17 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
                     child->U[VIDX(PRJ_CONS_RHO, i, j, k)] = rho;
                 }
                 kinetic = 0.5 * (mom1 * mom1 + mom2 * mom2 + mom3 * mom3) / rho;
+#if PRJ_MHD
+                magnetic = 0.5 * (child->U[VIDX(PRJ_CONS_B1, i, j, k)] *
+                    child->U[VIDX(PRJ_CONS_B1, i, j, k)] +
+                    child->U[VIDX(PRJ_CONS_B2, i, j, k)] *
+                    child->U[VIDX(PRJ_CONS_B2, i, j, k)] +
+                    child->U[VIDX(PRJ_CONS_B3, i, j, k)] *
+                    child->U[VIDX(PRJ_CONS_B3, i, j, k)]);
+#endif
                 min_etot = child->U[VIDX(PRJ_CONS_ETOT, i, j, k)];
                 if (E_floor > 0.0) {
-                    min_etot = kinetic + rho * E_floor;
+                    min_etot = kinetic + rho * E_floor + magnetic;
                 }
                 if (child->U[VIDX(PRJ_CONS_ETOT, i, j, k)] < min_etot) {
                     child->U[VIDX(PRJ_CONS_ETOT, i, j, k)] = min_etot;

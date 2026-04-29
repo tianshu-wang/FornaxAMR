@@ -14,6 +14,10 @@
 #define PRJ_DUMP_SINGLE_PRECISION 1
 #endif
 
+#ifndef PRJ_MHD
+#define PRJ_MHD 0
+#endif
+
 #if PRJ_USE_RADIATION
 #ifndef PRJ_NRAD
 #define PRJ_NRAD 3
@@ -25,7 +29,11 @@
 #ifndef PRJ_NEGROUP
 #define PRJ_NEGROUP 3
 #endif
+#if PRJ_MHD
+#define PRJ_NHYDRO 9
+#else
 #define PRJ_NHYDRO 6
+#endif
 #define PRJ_NRAD_VAR (PRJ_NRAD * PRJ_NEGROUP * (1 + PRJ_NDIM))
 #define PRJ_NVAR_CONS (PRJ_NHYDRO + PRJ_NRAD_VAR)
 #define PRJ_NVAR_PRIM (PRJ_NHYDRO + PRJ_NRAD_VAR)
@@ -51,6 +59,12 @@ enum prj_cons_var {
     PRJ_CONS_MOM3 = 3,
     PRJ_CONS_ETOT = 4,
     PRJ_CONS_YE = 5
+#if PRJ_MHD
+    ,
+    PRJ_CONS_B1 = 6,
+    PRJ_CONS_B2 = 7,
+    PRJ_CONS_B3 = 8
+#endif
 };
 
 enum prj_prim_var {
@@ -60,6 +74,12 @@ enum prj_prim_var {
     PRJ_PRIM_V3 = 3,
     PRJ_PRIM_EINT = 4,
     PRJ_PRIM_YE = 5
+#if PRJ_MHD
+    ,
+    PRJ_PRIM_B1 = 6,
+    PRJ_PRIM_B2 = 7,
+    PRJ_PRIM_B3 = 8
+#endif
 };
 
 #define PRJ_RAD_GROUP_STRIDE (1 + PRJ_NDIM)

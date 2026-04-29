@@ -728,6 +728,11 @@ void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)
     double v2;
     double v3;
     double eint;
+#if PRJ_MHD
+    double b1;
+    double b2;
+    double b3;
+#endif
 
     (void)eos;
 
@@ -740,13 +745,27 @@ void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)
     v2 = W[PRJ_PRIM_V2];
     v3 = W[PRJ_PRIM_V3];
     eint = W[PRJ_PRIM_EINT];
+#if PRJ_MHD
+    b1 = W[PRJ_PRIM_B1];
+    b2 = W[PRJ_PRIM_B2];
+    b3 = W[PRJ_PRIM_B3];
+#endif
 
     U[PRJ_CONS_RHO] = rho;
     U[PRJ_CONS_MOM1] = rho * v1;
     U[PRJ_CONS_MOM2] = rho * v2;
     U[PRJ_CONS_MOM3] = rho * v3;
-    U[PRJ_CONS_ETOT] = rho * eint + 0.5 * rho * (v1 * v1 + v2 * v2 + v3 * v3);
+    U[PRJ_CONS_ETOT] = rho * eint + 0.5 * rho * (v1 * v1 + v2 * v2 + v3 * v3)
+#if PRJ_MHD
+        + 0.5 * (b1 * b1 + b2 * b2 + b3 * b3)
+#endif
+        ;
     U[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE];
+#if PRJ_MHD
+    U[PRJ_CONS_B1] = b1;
+    U[PRJ_CONS_B2] = b2;
+    U[PRJ_CONS_B3] = b3;
+#endif
     prj_rad_prim2cons(W, U);
 }
 
@@ -757,6 +776,9 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
     double v2;
     double v3;
     double kinetic;
+#if PRJ_MHD
+    double magnetic;
+#endif
 
     (void)eos;
 
@@ -772,6 +794,11 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
         W[PRJ_PRIM_V3] = 0.0;
         W[PRJ_PRIM_EINT] = 0.0;
         W[PRJ_PRIM_YE] = 0.0;
+#if PRJ_MHD
+        W[PRJ_PRIM_B1] = 0.0;
+        W[PRJ_PRIM_B2] = 0.0;
+        W[PRJ_PRIM_B3] = 0.0;
+#endif
         prj_rad_cons2prim(U, W);
         return;
     }
@@ -780,12 +807,26 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
     v2 = U[PRJ_CONS_MOM2] / rho;
     v3 = U[PRJ_CONS_MOM3] / rho;
     kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
+#if PRJ_MHD
+    magnetic = 0.5 * (U[PRJ_CONS_B1] * U[PRJ_CONS_B1] +
+        U[PRJ_CONS_B2] * U[PRJ_CONS_B2] +
+        U[PRJ_CONS_B3] * U[PRJ_CONS_B3]) / rho;
+#endif
 
     W[PRJ_PRIM_RHO] = rho;
     W[PRJ_PRIM_V1] = v1;
     W[PRJ_PRIM_V2] = v2;
     W[PRJ_PRIM_V3] = v3;
-    W[PRJ_PRIM_EINT] = U[PRJ_CONS_ETOT] / rho - kinetic;
+    W[PRJ_PRIM_EINT] = U[PRJ_CONS_ETOT] / rho - kinetic
+#if PRJ_MHD
+        - magnetic
+#endif
+        ;
     W[PRJ_PRIM_YE] = U[PRJ_CONS_YE] / rho;
+#if PRJ_MHD
+    W[PRJ_PRIM_B1] = U[PRJ_CONS_B1];
+    W[PRJ_PRIM_B2] = U[PRJ_CONS_B2];
+    W[PRJ_PRIM_B3] = U[PRJ_CONS_B3];
+#endif
     prj_rad_cons2prim(U, W);
 }

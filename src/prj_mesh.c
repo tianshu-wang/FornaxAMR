@@ -133,6 +133,17 @@ static void prj_block_init_empty(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+#if PRJ_MHD
+    b->face_fidelity = 0;
+    b->edge_fidelity = 0;
+    for (n = 0; n < 3; ++n) {
+        b->Bf[n] = 0;
+        b->Bf1[n] = 0;
+        b->Bv1[n] = 0;
+        b->Bv2[n] = 0;
+        b->emf[n] = 0;
+    }
+#endif
     b->ridx = 0;
     b->fr = 0;
     b->vol = 0.0;
@@ -168,6 +179,10 @@ int prj_block_alloc_data(prj_block *b)
     size_t total_count;
     double *base;
     int *eos_done;
+#if PRJ_MHD
+    int *face_fidelity;
+    int *edge_fidelity;
+#endif
     int *ridx;
     double *fr;
 
@@ -181,17 +196,32 @@ int prj_block_alloc_data(prj_block *b)
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     total_count = 2U * prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_MHD
+    total_count += 15U * (size_t)PRJ_BLOCK_NCELLS;
+#endif
 
     base = (double *)malloc(total_count * sizeof(*base));
     if (base == 0) {
         return 2;
     }
     eos_done = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eos_done));
+#if PRJ_MHD
+    face_fidelity = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*face_fidelity));
+    edge_fidelity = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*edge_fidelity));
+#endif
     ridx = (int *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
     fr = (double *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
-    if (eos_done == 0 || ridx == 0 || fr == 0) {
+    if (eos_done == 0 ||
+#if PRJ_MHD
+        face_fidelity == 0 || edge_fidelity == 0 ||
+#endif
+        ridx == 0 || fr == 0) {
         free(fr);
         free(ridx);
+#if PRJ_MHD
+        free(edge_fidelity);
+        free(face_fidelity);
+#endif
         free(eos_done);
         free(base);
         return 2;
@@ -219,6 +249,31 @@ int prj_block_alloc_data(prj_block *b)
     b->v_riemann[1] = base;
     base += 3U * (size_t)PRJ_BLOCK_NCELLS;
     b->v_riemann[2] = base;
+#if PRJ_MHD
+    base += 3U * (size_t)PRJ_BLOCK_NCELLS;
+    b->face_fidelity = face_fidelity;
+    b->edge_fidelity = edge_fidelity;
+    for (int d = 0; d < 3; ++d) {
+        b->Bf[d] = base;
+        base += (size_t)PRJ_BLOCK_NCELLS;
+    }
+    for (int d = 0; d < 3; ++d) {
+        b->Bf1[d] = base;
+        base += (size_t)PRJ_BLOCK_NCELLS;
+    }
+    for (int d = 0; d < 3; ++d) {
+        b->Bv1[d] = base;
+        base += (size_t)PRJ_BLOCK_NCELLS;
+    }
+    for (int d = 0; d < 3; ++d) {
+        b->Bv2[d] = base;
+        base += (size_t)PRJ_BLOCK_NCELLS;
+    }
+    for (int d = 0; d < 3; ++d) {
+        b->emf[d] = base;
+        base += (size_t)PRJ_BLOCK_NCELLS;
+    }
+#endif
     b->ridx = ridx;
     b->fr = fr;
     prj_gravity_cache_block(b);
@@ -233,6 +288,10 @@ void prj_block_free_data(prj_block *b)
 
     free(b->W);
     free(b->eos_done);
+#if PRJ_MHD
+    free(b->face_fidelity);
+    free(b->edge_fidelity);
+#endif
     free(b->ridx);
     free(b->fr);
     b->W = 0;
@@ -247,6 +306,17 @@ void prj_block_free_data(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+#if PRJ_MHD
+    b->face_fidelity = 0;
+    b->edge_fidelity = 0;
+    for (int d = 0; d < 3; ++d) {
+        b->Bf[d] = 0;
+        b->Bf1[d] = 0;
+        b->Bv1[d] = 0;
+        b->Bv2[d] = 0;
+        b->emf[d] = 0;
+    }
+#endif
     b->ridx = 0;
     b->fr = 0;
 }
