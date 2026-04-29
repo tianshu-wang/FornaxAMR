@@ -400,9 +400,9 @@ int main(int argc, char *argv[])
             prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, 1);
             prj_amr_adapt(&sim.mesh, &sim.eos);
             prj_mpi_rebalance(&sim.mesh);
-            prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
-            prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-            prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+            //prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
+            //prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+            //prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
 #if PRJ_USE_GRAVITY
             prj_gravity_rebuild_grid(&sim);
 #endif
