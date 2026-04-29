@@ -340,7 +340,6 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             }
         }
     }
-    prj_eos_fill_active_cells(mesh, eos, 1);
 }
 
 void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,

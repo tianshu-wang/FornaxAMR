@@ -386,6 +386,7 @@ int main(int argc, char *argv[])
         sim.time += dt_step;
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
+            prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
             prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
             if (prj_amr_criteria_need_eosvar(&sim.mesh)) {
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
