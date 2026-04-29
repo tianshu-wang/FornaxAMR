@@ -1,5 +1,6 @@
 #include <math.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "prj.h"
@@ -195,7 +196,12 @@ static void prj_zero_block_arrays(prj_block *b)
 
     total = (size_t)2U * (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS +
         (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
-        (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+        (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS +
+        9U * (size_t)PRJ_BLOCK_NCELLS
+#if PRJ_MHD
+        + 15U * (size_t)PRJ_BLOCK_NCELLS
+#endif
+        ;
     for (n = 0; n < total; ++n) {
         b->W[n] = 0.0;
     }
@@ -208,7 +214,12 @@ static size_t prj_block_data_count(void)
 
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return 2U * prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS + 5U * cons_count;
+    return 2U * prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
+        5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS
+#if PRJ_MHD
+        + 15U * (size_t)PRJ_BLOCK_NCELLS
+#endif
+        ;
 }
 
 static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, prj_block *parent)
@@ -1070,6 +1081,256 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
     prj_amr_sync_refine_flags(mesh);
 }
 
+#if PRJ_MHD
+static void prj_amr_mhd_fail(const char *message)
+{
+    fprintf(stderr, "%s\n", message);
+    exit(EXIT_FAILURE);
+}
+
+static void prj_amr_mhd_check_block(const prj_block *block, const char *caller)
+{
+    int d;
+
+    if (block == 0 || block->face_fidelity == 0 || block->U == 0 || block->W == 0 || block->W1 == 0) {
+        prj_amr_mhd_fail(caller);
+    }
+    for (d = 0; d < 3; ++d) {
+        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+            prj_amr_mhd_fail(caller);
+        }
+    }
+}
+
+static int prj_amr_mhd_face_axis_max(int dir, int axis)
+{
+    return dir == axis ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE - 1;
+}
+
+static void prj_amr_mhd_clear_faces(prj_block *block, int use_bf1)
+{
+    double **bf;
+    int d;
+
+    prj_amr_mhd_check_block(block, "prj_amr_mhd_clear_faces: missing MHD storage");
+    bf = use_bf1 != 0 ? block->Bf1 : block->Bf;
+    for (d = 0; d < 3; ++d) {
+        prj_fill(bf[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    }
+    for (d = 0; d < PRJ_BLOCK_NCELLS; ++d) {
+        block->face_fidelity[d] = PRJ_MHD_FIDELITY_NONE;
+    }
+}
+
+static void prj_amr_mhd_mark_active_faces(prj_block *block, int fidelity)
+{
+    int dir;
+
+    prj_amr_mhd_check_block(block, "prj_amr_mhd_mark_active_faces: missing MHD storage");
+    for (dir = 0; dir < 3; ++dir) {
+        int i;
+        int j;
+        int k;
+
+        for (i = 0; i <= prj_amr_mhd_face_axis_max(dir, 0); ++i) {
+            for (j = 0; j <= prj_amr_mhd_face_axis_max(dir, 1); ++j) {
+                for (k = 0; k <= prj_amr_mhd_face_axis_max(dir, 2); ++k) {
+                    block->face_fidelity[IDX(i, j, k)] = fidelity;
+                }
+            }
+        }
+    }
+}
+
+static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
+{
+    double **bf;
+    int i;
+    int j;
+    int k;
+
+    prj_amr_mhd_check_block(block, "prj_amr_mhd_set_cons_b_from_bf: missing MHD storage");
+    bf = use_bf1 != 0 ? block->Bf1 : block->Bf;
+    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                double b1 = 0.5 * (bf[X1DIR][IDX(i, j, k)] + bf[X1DIR][IDX(i + 1, j, k)]);
+                double b2 = 0.5 * (bf[X2DIR][IDX(i, j, k)] + bf[X2DIR][IDX(i, j + 1, k)]);
+                double b3 = 0.5 * (bf[X3DIR][IDX(i, j, k)] + bf[X3DIR][IDX(i, j, k + 1)]);
+
+                if (!isfinite(b1) || !isfinite(b2) || !isfinite(b3)) {
+                    prj_amr_mhd_fail("prj_amr_mhd_set_cons_b_from_bf: non-finite magnetic field");
+                }
+                block->U[VIDX(PRJ_CONS_B1, i, j, k)] = b1;
+                block->U[VIDX(PRJ_CONS_B2, i, j, k)] = b2;
+                block->U[VIDX(PRJ_CONS_B3, i, j, k)] = b3;
+                block->W[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                block->W[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                block->W[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                block->W1[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                block->W1[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                block->W1[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+            }
+        }
+    }
+}
+
+static void prj_amr_mhd_prolongate_bf_one(const prj_block *parent, prj_block *child,
+    int child_oct, int use_bf1)
+{
+    int xoct = child_oct & 1;
+    int yoct = (child_oct >> 1) & 1;
+    int zoct = (child_oct >> 2) & 1;
+    int ci0 = xoct * (PRJ_BLOCK_SIZE / 2);
+    int cj0 = yoct * (PRJ_BLOCK_SIZE / 2);
+    int ck0 = zoct * (PRJ_BLOCK_SIZE / 2);
+    int ci;
+    int cj;
+    int ck;
+
+    prj_amr_mhd_check_block(parent, "prj_amr_mhd_prolongate_bf_one: missing parent MHD storage");
+    prj_amr_mhd_clear_faces(child, use_bf1);
+    for (ci = ci0; ci < ci0 + PRJ_BLOCK_SIZE / 2; ++ci) {
+        for (cj = cj0; cj < cj0 + PRJ_BLOCK_SIZE / 2; ++cj) {
+            for (ck = ck0; ck < ck0 + PRJ_BLOCK_SIZE / 2; ++ck) {
+                int fi = 2 * (ci - ci0);
+                int fj = 2 * (cj - cj0);
+                int fk = 2 * (ck - ck0);
+
+                prj_mhd_bf_prolongate(parent, child, ci, cj, ck, fi, fj, fk, use_bf1);
+            }
+        }
+    }
+}
+
+static void prj_amr_mhd_prolongate_bf(const prj_block *parent, prj_block *child, int child_oct)
+{
+    prj_amr_mhd_prolongate_bf_one(parent, child, child_oct, 0);
+    prj_amr_mhd_prolongate_bf_one(parent, child, child_oct, 1);
+    prj_amr_mhd_mark_active_faces(child, PRJ_MHD_FIDELITY_COARSER);
+    prj_amr_mhd_set_cons_b_from_bf(child, 0);
+}
+
+static const prj_block *prj_amr_mhd_child_for_face(const prj_block *children[8],
+    int bit[3])
+{
+    int oct = bit[0] + 2 * bit[1] + 4 * bit[2];
+
+    if (oct < 0 || oct >= 8 || children[oct] == 0) {
+        prj_amr_mhd_fail("prj_amr_mhd_child_for_face: missing child block");
+    }
+    return children[oct];
+}
+
+static int prj_amr_mhd_face_bit(int global_face_index)
+{
+    if (global_face_index < PRJ_BLOCK_SIZE) {
+        return 0;
+    }
+    if (global_face_index == PRJ_BLOCK_SIZE) {
+        return 0;
+    }
+    return 1;
+}
+
+static int prj_amr_mhd_face_local_index(int global_face_index)
+{
+    if (global_face_index < PRJ_BLOCK_SIZE) {
+        return global_face_index;
+    }
+    if (global_face_index == PRJ_BLOCK_SIZE) {
+        return PRJ_BLOCK_SIZE;
+    }
+    return global_face_index - PRJ_BLOCK_SIZE;
+}
+
+static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
+    int dir, int i, int j, int k, int use_bf1)
+{
+    int tan0 = (dir + 1) % 3;
+    int tan1 = (dir + 2) % 3;
+    int coarse_idx[3];
+    double sum = 0.0;
+    int a;
+    int b;
+
+    coarse_idx[0] = i;
+    coarse_idx[1] = j;
+    coarse_idx[2] = k;
+    for (a = 0; a < 2; ++a) {
+        for (b = 0; b < 2; ++b) {
+            int global[3];
+            int local[3];
+            int bit[3];
+            const prj_block *child;
+            double *src;
+            double value;
+
+            global[0] = 2 * coarse_idx[0];
+            global[1] = 2 * coarse_idx[1];
+            global[2] = 2 * coarse_idx[2];
+            global[tan0] += a;
+            global[tan1] += b;
+            bit[dir] = prj_amr_mhd_face_bit(global[dir]);
+            local[dir] = prj_amr_mhd_face_local_index(global[dir]);
+            bit[tan0] = global[tan0] / PRJ_BLOCK_SIZE;
+            bit[tan1] = global[tan1] / PRJ_BLOCK_SIZE;
+            local[tan0] = global[tan0] - bit[tan0] * PRJ_BLOCK_SIZE;
+            local[tan1] = global[tan1] - bit[tan1] * PRJ_BLOCK_SIZE;
+            child = prj_amr_mhd_child_for_face(children, bit);
+            src = use_bf1 != 0 ? child->Bf1[dir] : child->Bf[dir];
+            if (src == 0) {
+                prj_amr_mhd_fail("prj_amr_mhd_restrict_face_value: missing child Bf storage");
+            }
+            value = src[IDX(local[0], local[1], local[2])];
+            if (!isfinite(value)) {
+                prj_amr_mhd_fail("prj_amr_mhd_restrict_face_value: non-finite child Bf");
+            }
+            sum += value;
+        }
+    }
+    return 0.25 * sum;
+}
+
+static void prj_amr_mhd_restrict_bf_one(const prj_block *children[8],
+    prj_block *parent, int use_bf1)
+{
+    double **dst;
+    int dir;
+
+    prj_amr_mhd_clear_faces(parent, use_bf1);
+    dst = use_bf1 != 0 ? parent->Bf1 : parent->Bf;
+    for (dir = 0; dir < 3; ++dir) {
+        int i;
+        int j;
+        int k;
+
+        for (i = 0; i <= prj_amr_mhd_face_axis_max(dir, 0); ++i) {
+            for (j = 0; j <= prj_amr_mhd_face_axis_max(dir, 1); ++j) {
+                for (k = 0; k <= prj_amr_mhd_face_axis_max(dir, 2); ++k) {
+                    dst[dir][IDX(i, j, k)] = prj_amr_mhd_restrict_face_value(
+                        children, dir, i, j, k, use_bf1);
+                }
+            }
+        }
+    }
+}
+
+static void prj_amr_mhd_restrict_bf(const prj_block *children[8], prj_block *parent)
+{
+    int oct;
+
+    prj_amr_mhd_check_block(parent, "prj_amr_mhd_restrict_bf: missing parent MHD storage");
+    for (oct = 0; oct < 8; ++oct) {
+        prj_amr_mhd_check_block(children[oct], "prj_amr_mhd_restrict_bf: missing child MHD storage");
+    }
+    prj_amr_mhd_restrict_bf_one(children, parent, 0);
+    prj_amr_mhd_restrict_bf_one(children, parent, 1);
+    prj_amr_mhd_mark_active_faces(parent, PRJ_MHD_FIDELITY_FINER);
+    prj_amr_mhd_set_cons_b_from_bf(parent, 0);
+}
+#endif
+
 void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct, double E_floor)
 {
     int i;
@@ -1158,6 +1419,9 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
             }
         }
     }
+#if PRJ_MHD
+    prj_amr_mhd_prolongate_bf(parent, child, child_oct);
+#endif
 }
 
 void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
@@ -1225,6 +1489,9 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
             }
         }
     }
+#if PRJ_MHD
+    prj_amr_mhd_restrict_bf(children, parent);
+#endif
 }
 
 static int prj_amr_all_cells_meet_angle_resolution_limit(const prj_mesh *mesh, const prj_block *block)

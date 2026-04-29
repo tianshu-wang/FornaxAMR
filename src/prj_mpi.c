@@ -324,11 +324,18 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh)
 static size_t prj_mpi_block_data_count(void)
 {
     size_t prim_count;
+    size_t eosvar_count;
     size_t cons_count;
 
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
+    eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return 2U * prim_count + 5U * cons_count;
+    return 2U * prim_count + eosvar_count + 5U * cons_count +
+        9U * (size_t)PRJ_BLOCK_NCELLS
+#if PRJ_MHD
+        + 15U * (size_t)PRJ_BLOCK_NCELLS
+#endif
+        ;
 }
 
 static void prj_mpi_sync_slot_ranks(prj_mesh *mesh)

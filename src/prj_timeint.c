@@ -1,4 +1,6 @@
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "prj.h"
 
@@ -76,6 +78,292 @@ static void prj_timeint_apply_eint_floor(const prj_mesh *mesh, double *u, double
 #endif
         ;
 }
+
+#if PRJ_MHD
+static void prj_timeint_mhd_fail(const char *message)
+{
+    fprintf(stderr, "%s\n", message);
+    exit(EXIT_FAILURE);
+}
+
+static int prj_timeint_mhd_face_axis_max(int dir, int axis)
+{
+    return dir == axis ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE - 1;
+}
+
+static int prj_timeint_mhd_edge_axis_max(int dir, int axis)
+{
+    return dir == axis ? PRJ_BLOCK_SIZE - 1 : PRJ_BLOCK_SIZE;
+}
+
+static double prj_timeint_mhd_cell_emf(const double *W, int dir, int i, int j, int k)
+{
+    double b1;
+    double b2;
+    double b3;
+    double v1;
+    double v2;
+    double v3;
+    double emf;
+
+    if (W == 0 || dir < 0 || dir >= 3) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf: invalid input");
+    }
+    b1 = W[VIDX(PRJ_PRIM_B1, i, j, k)];
+    b2 = W[VIDX(PRJ_PRIM_B2, i, j, k)];
+    b3 = W[VIDX(PRJ_PRIM_B3, i, j, k)];
+    v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
+    v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
+    v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
+    if (dir == X1DIR) {
+        emf = b2 * v3 - b3 * v2;
+    } else if (dir == X2DIR) {
+        emf = b3 * v1 - b1 * v3;
+    } else {
+        emf = b1 * v2 - b2 * v1;
+    }
+    if (!isfinite(emf)) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf: non-finite cell emf");
+    }
+    return emf;
+}
+
+static double prj_timeint_mhd_face_emf(const prj_block *block, int face_dir, int emf_dir,
+    int i, int j, int k)
+{
+    double value = 0.0;
+
+    if (block == 0 || face_dir < 0 || face_dir >= 3 || emf_dir < 0 || emf_dir >= 3 ||
+        block->Bv1[face_dir] == 0 || block->Bv2[face_dir] == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_face_emf: invalid input");
+    }
+    if (emf_dir == (face_dir + 1) % 3) {
+        value = block->Bv1[face_dir][IDX(i, j, k)];
+    } else if (emf_dir == (face_dir + 2) % 3) {
+        value = block->Bv2[face_dir][IDX(i, j, k)];
+    } else {
+        prj_timeint_mhd_fail("prj_timeint_mhd_face_emf: requested emf is normal to face");
+    }
+    if (!isfinite(value)) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_face_emf: non-finite face emf");
+    }
+    return value;
+}
+
+static double prj_timeint_mhd_face_vnorm(const prj_block *block, int face_dir,
+    int i, int j, int k)
+{
+    double value;
+
+    if (block == 0 || face_dir < 0 || face_dir >= 3 || block->v_riemann[face_dir] == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_face_vnorm: invalid input");
+    }
+    value = block->v_riemann[face_dir][face_dir * PRJ_BLOCK_NCELLS + IDX(i, j, k)];
+    if (!isfinite(value)) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_face_vnorm: non-finite face velocity");
+    }
+    return value;
+}
+
+static void prj_timeint_mhd_update_emf(prj_block *block, double *W)
+{
+    int dir;
+
+    if (block == 0 || W == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_update_emf: invalid input");
+    }
+    for (dir = 0; dir < 3; ++dir) {
+        int up = (dir + 1) % 3;
+        int right = (dir + 2) % 3;
+        int e[3];
+
+        for (e[0] = 0; e[0] <= prj_timeint_mhd_edge_axis_max(dir, 0); ++e[0]) {
+            for (e[1] = 0; e[1] <= prj_timeint_mhd_edge_axis_max(dir, 1); ++e[1]) {
+                for (e[2] = 0; e[2] <= prj_timeint_mhd_edge_axis_max(dir, 2); ++e[2]) {
+                    int cell0[3];
+                    int cell1[3];
+                    int cell2[3];
+                    int cell3[3];
+                    int face0[3];
+                    int face1[3];
+                    int face2[3];
+                    int face3[3];
+                    double emf_face[4];
+                    double emf_cell[4];
+                    double v_norm[4];
+                    int d;
+
+                    for (d = 0; d < 3; ++d) {
+                        cell2[d] = e[d];
+                        face0[d] = e[d];
+                        face1[d] = e[d];
+                        face2[d] = e[d];
+                        face3[d] = e[d];
+                    }
+                    cell2[up] -= 1;
+                    cell2[right] -= 1;
+                    for (d = 0; d < 3; ++d) {
+                        cell1[d] = cell2[d];
+                        cell3[d] = cell2[d];
+                        cell0[d] = cell2[d];
+                    }
+                    cell1[right] += 1;
+                    cell3[up] += 1;
+                    cell0[up] += 1;
+                    cell0[right] += 1;
+
+                    face2[up] -= 1;
+                    face3[right] -= 1;
+
+                    emf_face[0] = prj_timeint_mhd_face_emf(block, right, dir,
+                        face0[0], face0[1], face0[2]);
+                    emf_face[1] = prj_timeint_mhd_face_emf(block, up, dir,
+                        face1[0], face1[1], face1[2]);
+                    emf_face[2] = prj_timeint_mhd_face_emf(block, right, dir,
+                        face2[0], face2[1], face2[2]);
+                    emf_face[3] = prj_timeint_mhd_face_emf(block, up, dir,
+                        face3[0], face3[1], face3[2]);
+                    emf_cell[0] = prj_timeint_mhd_cell_emf(W, dir,
+                        cell0[0], cell0[1], cell0[2]);
+                    emf_cell[1] = prj_timeint_mhd_cell_emf(W, dir,
+                        cell1[0], cell1[1], cell1[2]);
+                    emf_cell[2] = prj_timeint_mhd_cell_emf(W, dir,
+                        cell2[0], cell2[1], cell2[2]);
+                    emf_cell[3] = prj_timeint_mhd_cell_emf(W, dir,
+                        cell3[0], cell3[1], cell3[2]);
+                    v_norm[0] = prj_timeint_mhd_face_vnorm(block, right,
+                        face0[0], face0[1], face0[2]);
+                    v_norm[1] = prj_timeint_mhd_face_vnorm(block, up,
+                        face1[0], face1[1], face1[2]);
+                    v_norm[2] = prj_timeint_mhd_face_vnorm(block, right,
+                        face2[0], face2[1], face2[2]);
+                    v_norm[3] = prj_timeint_mhd_face_vnorm(block, up,
+                        face3[0], face3[1], face3[2]);
+                    prj_mhd_emf_upwind(block, dir, e[0], e[1], e[2],
+                        emf_face, emf_cell, v_norm);
+                }
+            }
+        }
+    }
+}
+
+static double prj_timeint_mhd_ct_value(const prj_block *block, double *src[3],
+    int dir, int i, int j, int k, double dt)
+{
+    double value;
+
+    if (block == 0 || src == 0 || src[dir] == 0 || block->emf[0] == 0 ||
+        block->emf[1] == 0 || block->emf[2] == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_ct_value: invalid input");
+    }
+    value = src[dir][IDX(i, j, k)];
+    if (dir == X1DIR) {
+        value += -dt * (block->emf[X3DIR][IDX(i, j + 1, k)] -
+            block->emf[X3DIR][IDX(i, j, k)]) / block->dx[1];
+        value += dt * (block->emf[X2DIR][IDX(i, j, k + 1)] -
+            block->emf[X2DIR][IDX(i, j, k)]) / block->dx[2];
+    } else if (dir == X2DIR) {
+        value += -dt * (block->emf[X1DIR][IDX(i, j, k + 1)] -
+            block->emf[X1DIR][IDX(i, j, k)]) / block->dx[2];
+        value += dt * (block->emf[X3DIR][IDX(i + 1, j, k)] -
+            block->emf[X3DIR][IDX(i, j, k)]) / block->dx[0];
+    } else {
+        value += -dt * (block->emf[X2DIR][IDX(i + 1, j, k)] -
+            block->emf[X2DIR][IDX(i, j, k)]) / block->dx[0];
+        value += dt * (block->emf[X1DIR][IDX(i, j + 1, k)] -
+            block->emf[X1DIR][IDX(i, j, k)]) / block->dx[1];
+    }
+    if (!isfinite(value)) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_ct_value: non-finite updated magnetic field");
+    }
+    return value;
+}
+
+static void prj_timeint_mhd_update_bf(prj_block *block, int stage, double dt)
+{
+    double *src[3];
+    double *dst[3];
+    double *old[3];
+    int dir;
+
+    if (block == 0 || (stage != 1 && stage != 2)) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_update_bf: invalid input");
+    }
+    for (dir = 0; dir < 3; ++dir) {
+        if (block->Bf[dir] == 0 || block->Bf1[dir] == 0) {
+            prj_timeint_mhd_fail("prj_timeint_mhd_update_bf: missing Bf storage");
+        }
+        old[dir] = block->Bf[dir];
+        if (stage == 1) {
+            src[dir] = block->Bf[dir];
+            dst[dir] = block->Bf1[dir];
+        } else {
+            src[dir] = block->Bf1[dir];
+            dst[dir] = block->Bf[dir];
+        }
+    }
+    for (dir = 0; dir < 3; ++dir) {
+        int i;
+        int j;
+        int k;
+
+        for (i = 0; i <= prj_timeint_mhd_face_axis_max(dir, 0); ++i) {
+            for (j = 0; j <= prj_timeint_mhd_face_axis_max(dir, 1); ++j) {
+                for (k = 0; k <= prj_timeint_mhd_face_axis_max(dir, 2); ++k) {
+                    double value = prj_timeint_mhd_ct_value(block, src, dir, i, j, k, dt);
+
+                    if (stage == 2) {
+                        value = 0.5 * old[dir][IDX(i, j, k)] + 0.5 * value;
+                    }
+                    dst[dir][IDX(i, j, k)] = value;
+                }
+            }
+        }
+    }
+}
+
+static void prj_timeint_mhd_set_cons_b_from_bf(const prj_block *block,
+    double *bf[3], int i, int j, int k, double *u)
+{
+    if (block == 0 || bf == 0 || u == 0 || bf[0] == 0 || bf[1] == 0 || bf[2] == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_set_cons_b_from_bf: invalid input");
+    }
+    u[PRJ_CONS_B1] = 0.5 * (bf[X1DIR][IDX(i, j, k)] + bf[X1DIR][IDX(i + 1, j, k)]);
+    u[PRJ_CONS_B2] = 0.5 * (bf[X2DIR][IDX(i, j, k)] + bf[X2DIR][IDX(i, j + 1, k)]);
+    u[PRJ_CONS_B3] = 0.5 * (bf[X3DIR][IDX(i, j, k)] + bf[X3DIR][IDX(i, j, k + 1)]);
+    if (!isfinite(u[PRJ_CONS_B1]) || !isfinite(u[PRJ_CONS_B2]) || !isfinite(u[PRJ_CONS_B3])) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_set_cons_b_from_bf: non-finite cell-centered magnetic field");
+    }
+}
+
+static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_array)(prj_block *))
+{
+    int bidx;
+
+    if (mesh == 0 || stage_array == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_update_mesh_emf: invalid input");
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
+        if (prj_timeint_local_block(block)) {
+            prj_timeint_mhd_update_emf(block, stage_array(block));
+        }
+    }
+    prj_mhd_emf_send(mesh);
+    prj_mpi_exchange_emf(mesh, prj_mpi_current());
+}
+
+static double *prj_timeint_stage1_array(prj_block *block)
+{
+    return block != 0 ? block->W : 0;
+}
+
+static double *prj_timeint_stage2_array(prj_block *block)
+{
+    return block != 0 ? block->W1 : 0;
+}
+#endif
 
 static void prj_timeint_update_dt_src(const prj_block *block, const double *u, int i, int j, int k, double *dt_src)
 {
@@ -212,6 +500,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     (void)coord;
     prj_eos_fill_active_cells(mesh, eos, 1);
     prj_boundary_fill_ghosts(mesh, bc, 1);
+#if PRJ_MHD
+    prj_boundary_fill_bf(mesh, bc, 0);
+#endif
     prj_eos_fill_mesh(mesh, eos, 1);
     prj_gravity_monopole_reduce(mesh, 1);
     prj_gravity_monopole_integrate(mesh);
@@ -230,6 +521,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             prj_riemann_flux_send(block);
         }
     }
+#if PRJ_MHD
+    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage1_array);
+#endif
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -240,6 +534,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
             prj_flux_div(block->flux, block->area, block->vol, block->dUdt);
             prj_src_update(eos, block, block->W, block->dUdt);
+#if PRJ_MHD
+            prj_timeint_mhd_update_bf(block, 1, dt);
+#endif
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -254,6 +551,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u1[v] = u[v] + dt * block->dUdt[VIDX(v, i, j, k)];
                         }
+#if PRJ_MHD
+                        prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf1, i, j, k, u1);
+#endif
 #if PRJ_NRAD > 0
                         {
                             double T_cell;
@@ -286,6 +586,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     (void)coord;
     prj_eos_fill_active_cells(mesh, eos, 2);
     prj_boundary_fill_ghosts(mesh, bc, 2);
+#if PRJ_MHD
+    prj_boundary_fill_bf(mesh, bc, 1);
+#endif
     prj_eos_fill_mesh(mesh, eos, 2);
     prj_gravity_monopole_reduce(mesh, 2);
     prj_gravity_monopole_integrate(mesh);
@@ -304,6 +607,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             prj_riemann_flux_send(block);
         }
     }
+#if PRJ_MHD
+    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage2_array);
+#endif
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -314,6 +620,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
             prj_flux_div(block->flux, block->area, block->vol, block->dUdt);
             prj_src_update(eos, block, block->W1, block->dUdt);
+#if PRJ_MHD
+            prj_timeint_mhd_update_bf(block, 2, dt);
+#endif
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -330,6 +639,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u[v] = 0.5 * u[v] + 0.5 * (u1[v] + dt * block->dUdt[VIDX(v, i, j, k)]);
                         }
+#if PRJ_MHD
+                        prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
+#endif
 #if PRJ_NRAD > 0
                         {
                             double T_cell;
