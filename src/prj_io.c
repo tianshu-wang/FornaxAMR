@@ -769,7 +769,7 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
 }
 
 void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count,
-    double next_output_time, double next_restart_time, double dt)
+    double last_output_time, double last_restart_time, double dt)
 {
     char filename[64];
     hid_t file;
@@ -794,8 +794,8 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     prj_io_write_attr_double(file, "time", time);
     prj_io_write_attr_int(file, "step", step);
     prj_io_write_attr_int(file, "dump_count", dump_count);
-    prj_io_write_attr_double(file, "next_output_time", next_output_time);
-    prj_io_write_attr_double(file, "next_restart_time", next_restart_time);
+    prj_io_write_attr_double(file, "last_output_time", last_output_time);
+    prj_io_write_attr_double(file, "last_restart_time", last_restart_time);
     prj_io_write_attr_double(file, "dt", dt);
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
@@ -869,7 +869,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
 }
 
 void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename,
-    double *time, int *step, int *dump_count, double *next_output_time, double *next_restart_time,
+    double *time, int *step, int *dump_count, double *last_output_time, double *last_restart_time,
     double *dt)
 {
     hid_t file;
@@ -897,11 +897,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     if (dump_count != 0) {
         *dump_count = prj_io_read_attr_int_optional(file, "dump_count", 0);
     }
-    if (next_output_time != 0) {
-        *next_output_time = prj_io_read_attr_double_optional(file, "next_output_time", -1.0);
+    if (last_output_time != 0) {
+        *last_output_time = prj_io_read_attr_double_optional(file, "last_output_time", -1.0);
     }
-    if (next_restart_time != 0) {
-        *next_restart_time = prj_io_read_attr_double_optional(file, "next_restart_time", -1.0);
+    if (last_restart_time != 0) {
+        *last_restart_time = prj_io_read_attr_double_optional(file, "last_restart_time", -1.0);
     }
     if (dt != 0) {
         *dt = prj_io_read_attr_double_optional(file, "dt", 0.0);
