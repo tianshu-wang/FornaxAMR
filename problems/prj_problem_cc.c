@@ -352,21 +352,33 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
         return;
     }
 
+    prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
+    prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
+    prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
+#if PRJ_MHD
+    prj_boundary_fill_bf(&sim->mesh, &sim->bc, 0);
+#endif
+#if PRJ_USE_GRAVITY
+    prj_gravity_monopole_reduce(&sim->mesh, 1);
+    prj_gravity_monopole_integrate(&sim->mesh);
+#endif
     do {
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
-        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
-        prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
-        prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
         prj_amr_adapt(&sim->mesh, &sim->eos);
         prj_mpi_rebalance(&sim->mesh);
         prj_cc_fill_mesh(sim, profile);
+
         prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
         prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
-#if PRJ_USE_GRAVITY
+    #if PRJ_MHD
+        prj_boundary_fill_bf(&sim->mesh, &sim->bc, 0);
+    #endif
+    #if PRJ_USE_GRAVITY
         prj_gravity_monopole_reduce(&sim->mesh, 1);
         prj_gravity_monopole_integrate(&sim->mesh);
-#endif
+    #endif
+
         next_sig = prj_problem_mesh_signature(&sim->mesh);
     } while ((int)prj_mpi_global_sum((double)(next_sig != prev_sig ? 1 : 0)) != 0);
 

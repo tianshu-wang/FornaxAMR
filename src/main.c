@@ -365,8 +365,10 @@ int main(int argc, char *argv[])
 #if PRJ_MHD
     prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
 #endif
+#if PRJ_USE_GRAVITY
     prj_gravity_monopole_reduce(&sim.mesh, 1);
     prj_gravity_monopole_integrate(&sim.mesh);
+#endif
 
     if (sim.restart_from_file == 0) {
         prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
@@ -461,8 +463,10 @@ int main(int argc, char *argv[])
                 prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
             #endif
                 PRJ_TIMER_STOP(&timer, "ghost_fill_post_amr");
+            #if PRJ_USE_GRAVITY
                 prj_gravity_monopole_reduce(&sim.mesh, 1);
                 prj_gravity_monopole_integrate(&sim.mesh);
+            #endif
             }
         }
 #if PRJ_MHD && PRJ_MHD_DEBUG

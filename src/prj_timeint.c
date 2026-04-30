@@ -613,8 +613,10 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     prj_boundary_fill_bf(mesh, bc, 1);
 #endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage1");
+#if PRJ_USE_GRAVITY
     prj_gravity_monopole_reduce(mesh, 2);
     prj_gravity_monopole_integrate(mesh);
+#endif
     PRJ_TIMER_STOP(timer, "stage1");
 }
 
@@ -711,8 +713,10 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     prj_boundary_fill_bf(mesh, bc, 0);
 #endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage2");
+#if PRJ_USE_GRAVITY
     prj_gravity_monopole_reduce(mesh, 1);
     prj_gravity_monopole_integrate(mesh);
+#endif
     PRJ_TIMER_STOP(timer, "stage2");
 }
 
