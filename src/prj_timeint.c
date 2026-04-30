@@ -387,7 +387,10 @@ static void prj_timeint_update_dt_src(const prj_block *block, const double *u, i
     dt_src_local = 0.02 * u[PRJ_CONS_ETOT] /
         (fabs(block->dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)]) + 1.0e-50);
     if (dt_src_local < *dt_src) {
+        *dt_src = dt_src_local;
+    }
 #if PRJ_GRAV_DEBUG
+    if (dt_src_local<1e-7) {
         prj_mpi *mpi = prj_mpi_current();
         int rank = mpi != 0 ? mpi->rank : 0;
         double rho = u[PRJ_CONS_RHO];
@@ -404,9 +407,8 @@ static void prj_timeint_update_dt_src(const prj_block *block, const double *u, i
             rank, block->id, i, j, k, x1, x2, x3, rho, u[PRJ_CONS_ETOT],
             u[PRJ_CONS_MOM1] * inv_rho, u[PRJ_CONS_MOM2] * inv_rho,
             u[PRJ_CONS_MOM3] * inv_rho, accel, dt_src_local);
-#endif
-        *dt_src = dt_src_local;
     }
+#endif
 }
 
 #if PRJ_NRAD > 0
