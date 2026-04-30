@@ -1,0 +1,1 @@
+machines/stellar-intel.mk
