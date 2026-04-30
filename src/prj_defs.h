@@ -18,6 +18,10 @@
 #define PRJ_MHD 0
 #endif
 
+#ifndef PRJ_MHD_DEBUG
+#define PRJ_MHD_DEBUG 0
+#endif
+
 #if PRJ_USE_RADIATION
 #ifndef PRJ_NRAD
 #define PRJ_NRAD 3

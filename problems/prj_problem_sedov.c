@@ -5,10 +5,8 @@
 
 static int prj_problem_local_block(const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        (mpi == 0 || block->rank == mpi->rank);
+        block->W != 0 && block->W1 != 0 && block->U != 0;
 }
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)

@@ -23,6 +23,13 @@ static inline int prj_mhd_local_block(const prj_block *block)
         (mpi == 0 || block->rank == mpi->rank);
 }
 
+static inline int prj_mhd_initialized_storage_block(const prj_block *block)
+{
+    return block != 0 && block->id >= 0 && block->active == 1 &&
+        block->W != 0 && block->W1 != 0 && block->U != 0 &&
+        block->Bf[0] != 0 && block->Bf1[0] != 0 && block->emf[0] != 0;
+}
+
 static inline void prj_mhd_check_block_storage(const prj_block *block)
 {
     int d;
@@ -1089,13 +1096,28 @@ void prj_mhd_init(prj_sim *sim)
 
     for (bidx = 0; bidx < sim->mesh.nblocks; ++bidx) {
         prj_block *block = &sim->mesh.blocks[bidx];
-        int d;
 
-        if (!prj_mhd_local_block(block)) {
+        if (!prj_mhd_initialized_storage_block(block)) {
             continue;
         }
         prj_mhd_check_block_storage(block);
         prj_mhd_store_vector_potential(block, sim->mhd_init_type, sim->mhd_B_norm, sim->mhd_B_scale);
+    }
+
+    prj_mhd_emf_send(&sim->mesh);
+    prj_mpi_exchange_emf(&sim->mesh, prj_mpi_current());
+#if PRJ_MHD_DEBUG
+    prj_mhd_debug_check_emf(&sim->mesh);
+#endif
+
+    for (bidx = 0; bidx < sim->mesh.nblocks; ++bidx) {
+        prj_block *block = &sim->mesh.blocks[bidx];
+        int d;
+
+        if (!prj_mhd_initialized_storage_block(block)) {
+            continue;
+        }
+        prj_mhd_check_block_storage(block);
         prj_mhd_curl_a_to_bf(block);
         prj_mhd_copy_bf_to_bf1(block);
         for (d = 0; d < 3; ++d) {
@@ -1104,5 +1126,8 @@ void prj_mhd_init(prj_sim *sim)
         prj_mhd_bf2bc(&sim->eos, block, 0);
         prj_mhd_bf2bc(&sim->eos, block, 1);
     }
+#if PRJ_MHD_DEBUG
+    prj_mhd_debug_check_divb(&sim->mesh, 0);
+#endif
 }
 #endif

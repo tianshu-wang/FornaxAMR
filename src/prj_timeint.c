@@ -352,6 +352,9 @@ static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_arra
     }
     prj_mhd_emf_send(mesh);
     prj_mpi_exchange_emf(mesh, prj_mpi_current());
+#if PRJ_MHD_DEBUG
+    prj_mhd_debug_check_emf(mesh);
+#endif
 }
 
 static double *prj_timeint_stage1_array(prj_block *block)

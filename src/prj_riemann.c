@@ -22,6 +22,8 @@ static double prj_abs_double(double x)
 }
 
 #if PRJ_MHD
+#define PRJ_HLLD_SMALL_NUMBER 1.0e-8
+
 typedef struct prj_hlld_state {
     double rho;
     double vx;
@@ -188,7 +190,6 @@ static void prj_hlld_outer_star(const prj_hlld_state *s, double S, double SM,
     double alpha;
     double smdiff;
     double denom;
-    double denom_scale;
     double vdotb;
     double vstar_dotbstar;
 
@@ -207,15 +208,17 @@ static void prj_hlld_outer_star(const prj_hlld_state *s, double S, double SM,
     star->ye = s->ye;
 
     denom = s->rho * alpha * smdiff - s->bx * s->bx;
-    denom_scale = prj_abs_double(s->rho * alpha * smdiff) + s->bx * s->bx + 1.0;
-    if (prj_abs_double(denom) <= 1.0e-14 * denom_scale) {
-        prj_riemann_hlld_fail("degenerate HLLD transverse-state denominator");
+    if (prj_abs_double(denom) < PRJ_HLLD_SMALL_NUMBER * pt_star) {
+        star->vy = s->vy;
+        star->vz = s->vz;
+        star->by = s->by;
+        star->bz = s->bz;
+    } else {
+        star->vy = s->vy - s->bx * s->by * (SM - s->vx) / denom;
+        star->vz = s->vz - s->bx * s->bz * (SM - s->vx) / denom;
+        star->by = s->by * (s->rho * alpha * alpha - s->bx * s->bx) / denom;
+        star->bz = s->bz * (s->rho * alpha * alpha - s->bx * s->bx) / denom;
     }
-
-    star->vy = s->vy - s->bx * s->by * (SM - s->vx) / denom;
-    star->vz = s->vz - s->bx * s->bz * (SM - s->vx) / denom;
-    star->by = s->by * (s->rho * alpha * alpha - s->bx * s->bx) / denom;
-    star->bz = s->bz * (s->rho * alpha * alpha - s->bx * s->bx) / denom;
 
     vdotb = s->vx * s->bx + s->vy * s->by + s->vz * s->bz;
     vstar_dotbstar = star->vx * star->bx + star->vy * star->by + star->vz * star->bz;
@@ -342,7 +345,6 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     double pt_star_l;
     double pt_star_r;
     double pt_star;
-    double speed_tol;
     int v;
 
     (void)eos;
@@ -383,13 +385,11 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     SRs = SM + prj_abs_double(bn) / sqrt(Rs.rho);
     prj_hlld_require_finite(SLs, "left Alfven speed");
     prj_hlld_require_finite(SRs, "right Alfven speed");
-    prj_hlld_double_star(&Ls, &Rs, bn, &Lss, &Rss);
-
-    speed_tol = 1.0e-12 * (prj_abs_double(SL) + prj_abs_double(SR) +
-        prj_abs_double(SM) + prj_abs_double(SLs) + prj_abs_double(SRs) + 1.0);
-    if (SL - SLs > speed_tol || SLs - SM > speed_tol ||
-        SM - SRs > speed_tol || SRs - SR > speed_tol) {
-        prj_riemann_hlld_fail("invalid HLLD wave-speed ordering");
+    if (0.5 * bn * bn < PRJ_HLLD_SMALL_NUMBER * pt_star) {
+        Lss = Ls;
+        Rss = Rs;
+    } else {
+        prj_hlld_double_star(&Ls, &Rs, bn, &Lss, &Rss);
     }
 
     if (0.0 <= SL) {

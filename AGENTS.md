@@ -23,8 +23,11 @@ make DEBUG=1
 ## Problems
 
 - `sedov` - Sedov-Taylor explosion
+- `magnetized_sedov` - Sedov-Taylor explosion with uniform MHD field
 - `cc` - Core collapse (requires EOS table at `../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat`)
+- `magnetized_cc` - Core collapse with dipole MHD field
 - `ccsn` - Core-collapse supernova
+- `magnetized_ccsn` - Core-collapse supernova with dipole MHD field
 - `shock1d` - 1D shock tube
 - `general` - Generic problem
 

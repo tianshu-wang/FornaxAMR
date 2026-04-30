@@ -17,10 +17,19 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     if (strcmp(name, "sedov") == 0) {
         return prj_problem_sedov;
     }
+    if (strcmp(name, "magnetized_sedov") == 0) {
+        return prj_problem_sedov;
+    }
     if (strcmp(name, "cc") == 0) {
         return prj_problem_cc;
     }
+    if (strcmp(name, "magnetized_cc") == 0) {
+        return prj_problem_cc;
+    }
     if (strcmp(name, "ccsn") == 0) {
+        return prj_problem_ccsn;
+    }
+    if (strcmp(name, "magnetized_ccsn") == 0) {
         return prj_problem_ccsn;
     }
     if (strcmp(name, "sedov_offcenter") == 0) {
@@ -415,6 +424,9 @@ int main(int argc, char *argv[])
         prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
         prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
         prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+#if PRJ_MHD && PRJ_MHD_DEBUG
+        prj_mhd_debug_check_divb(&sim.mesh, 0);
+#endif
         if (sim.output_interval > 0 && sim.step % sim.output_interval == 0) {
             write_output = 1;
         }
