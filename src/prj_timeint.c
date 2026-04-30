@@ -527,17 +527,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     int bidx;
 
     (void)coord;
+    (void)bc;
     PRJ_TIMER_START(timer, "stage1");
-    PRJ_TIMER_START(timer, "ghost_eos_stage1");
-    prj_eos_fill_active_cells(mesh, eos, 1);
-    prj_boundary_fill_ghosts(mesh, bc, 1);
-#if PRJ_MHD
-    prj_boundary_fill_bf(mesh, bc, 0);
-#endif
-    prj_eos_fill_mesh(mesh, eos, 1);
-    PRJ_TIMER_STOP(timer, "ghost_eos_stage1");
-    prj_gravity_monopole_reduce(mesh, 1);
-    prj_gravity_monopole_integrate(mesh);
     PRJ_TIMER_START(timer, "flux_stage1");
     prj_riemann_set_mesh(mesh);
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -614,6 +605,16 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         }
     }
     PRJ_TIMER_STOP(timer, "flux_stage1");
+    PRJ_TIMER_START(timer, "ghost_fill_stage1");
+    prj_eos_fill_active_cells(mesh, eos, 2);
+    prj_boundary_fill_ghosts(mesh, bc, 2);
+    prj_eos_fill_mesh(mesh, eos, 2);
+#if PRJ_MHD
+    prj_boundary_fill_bf(mesh, bc, 1);
+#endif
+    PRJ_TIMER_STOP(timer, "ghost_fill_stage1");
+    prj_gravity_monopole_reduce(mesh, 2);
+    prj_gravity_monopole_integrate(mesh);
     PRJ_TIMER_STOP(timer, "stage1");
 }
 
@@ -624,16 +625,6 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
     (void)coord;
     PRJ_TIMER_START(timer, "stage2");
-    PRJ_TIMER_START(timer, "ghost_eos_stage2");
-    prj_eos_fill_active_cells(mesh, eos, 2);
-    prj_boundary_fill_ghosts(mesh, bc, 2);
-#if PRJ_MHD
-    prj_boundary_fill_bf(mesh, bc, 1);
-#endif
-    prj_eos_fill_mesh(mesh, eos, 2);
-    PRJ_TIMER_STOP(timer, "ghost_eos_stage2");
-    prj_gravity_monopole_reduce(mesh, 2);
-    prj_gravity_monopole_integrate(mesh);
     PRJ_TIMER_START(timer, "flux_stage2");
     prj_riemann_set_mesh(mesh);
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -712,6 +703,16 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         }
     }
     PRJ_TIMER_STOP(timer, "flux_stage2");
+    PRJ_TIMER_START(timer, "ghost_fill_stage2");
+    prj_eos_fill_active_cells(mesh, eos, 1);
+    prj_boundary_fill_ghosts(mesh, bc, 1);
+    prj_eos_fill_mesh(mesh, eos, 1);
+#if PRJ_MHD
+    prj_boundary_fill_bf(mesh, bc, 0);
+#endif
+    PRJ_TIMER_STOP(timer, "ghost_fill_stage2");
+    prj_gravity_monopole_reduce(mesh, 1);
+    prj_gravity_monopole_integrate(mesh);
     PRJ_TIMER_STOP(timer, "stage2");
 }
 

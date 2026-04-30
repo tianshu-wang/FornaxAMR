@@ -1697,14 +1697,14 @@ int prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
     return 1;
 }
 
-void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
+int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
 {
     int i;
     int refined = 0;
     int coarsened = 0;
 
     if (mesh == 0) {
-        return;
+        return 0;
     }
 
     prj_amr_tag(mesh, eos);
@@ -1741,7 +1741,7 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
                 mesh->blocks[i].refine_flag = 0;
             }
         }
-        return;
+        return 0;
     }
 
     for (i = 0; i < mesh->nblocks; ++i) {
@@ -1752,4 +1752,5 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     }
     prj_mesh_update_max_active_level(mesh);
     prj_sync_primitive_from_conserved(mesh, eos);
+    return 1;
 }

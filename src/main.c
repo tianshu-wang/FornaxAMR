@@ -358,10 +358,17 @@ int main(int argc, char *argv[])
  #if PRJ_USE_GRAVITY
     prj_gravity_init(&sim);
  #endif
+
+    prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
+    prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+    prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+#if PRJ_MHD
+    prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
+#endif
+    prj_gravity_monopole_reduce(&sim.mesh, 1);
+    prj_gravity_monopole_integrate(&sim.mesh);
+
     if (sim.restart_from_file == 0) {
-        prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
-        prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-        prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
         prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
         sim.dump_count += 1;
         if (sim.output_dt >= 0.0) {
@@ -430,23 +437,6 @@ int main(int argc, char *argv[])
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
             PRJ_TIMER_START(&timer, "amr");
-            if (prj_amr_criteria_need_eosvar(&sim.mesh)) {
-                PRJ_TIMER_START(&timer, "ghost_eos_amr");
-                prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
-                prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-#if PRJ_MHD
-                prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
-#endif
-                prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
-                PRJ_TIMER_STOP(&timer, "ghost_eos_amr");
-            } else {
-                PRJ_TIMER_START(&timer, "ghost_eos_amr");
-                prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-#if PRJ_MHD
-                prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
-#endif
-                PRJ_TIMER_STOP(&timer, "ghost_eos_amr");
-            }
 #if PRJ_USE_GRAVITY
             if (prj_amr_criteria_need_gravity(&sim.mesh)) {
                 prj_gravity_monopole_reduce(&sim.mesh, 1);
@@ -454,18 +444,25 @@ int main(int argc, char *argv[])
             }
 #endif
             prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, 1);
-            prj_amr_adapt(&sim.mesh, &sim.eos);
+            int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos);
             prj_mpi_rebalance(&sim.mesh);
 #if PRJ_USE_GRAVITY
             prj_gravity_rebuild_grid(&sim);
 #endif
             PRJ_TIMER_STOP(&timer, "amr");
+            if (block_changed) {
+                PRJ_TIMER_START(&timer, "ghost_fill_post_amr");
+                prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
+                prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
+                prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+            #if PRJ_MHD
+                prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
+            #endif
+                PRJ_TIMER_STOP(&timer, "ghost_fill_post_amr");
+                prj_gravity_monopole_reduce(&sim.mesh, 1);
+                prj_gravity_monopole_integrate(&sim.mesh);
+            }
         }
-        PRJ_TIMER_START(&timer, "ghost_eos_post_amr");
-        prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
-        prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-        prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
-        PRJ_TIMER_STOP(&timer, "ghost_eos_post_amr");
 #if PRJ_MHD && PRJ_MHD_DEBUG
         prj_mhd_debug_check_divb(&sim.mesh, 0);
 #endif
