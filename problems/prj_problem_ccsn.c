@@ -321,9 +321,6 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
     prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
     prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
-#if PRJ_MHD
-    prj_boundary_fill_bf(&sim->mesh, &sim->bc, 0);
-#endif
 #if PRJ_USE_GRAVITY
     prj_gravity_monopole_reduce(&sim->mesh, 1);
     prj_gravity_monopole_integrate(&sim->mesh);
@@ -338,9 +335,6 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
         prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
         prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
-    #if PRJ_MHD
-        prj_boundary_fill_bf(&sim->mesh, &sim->bc, 0);
-    #endif
     #if PRJ_USE_GRAVITY
         prj_gravity_monopole_reduce(&sim->mesh, 1);
         prj_gravity_monopole_integrate(&sim->mesh);
