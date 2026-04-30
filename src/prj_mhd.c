@@ -171,10 +171,10 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
     if (block == 0) {
         prj_mhd_fail("prj_mhd_bf_prolongate: block is null");
     }
-    if (block->face_fidelity == 0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: missing face fidelity storage");
-    }
     for (d = 0; d < 3; ++d) {
+        if (block->face_fidelity[d] == 0) {
+            prj_mhd_fail("prj_mhd_bf_prolongate: missing face fidelity storage");
+        }
         if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
             prj_mhd_fail("prj_mhd_bf_prolongate: missing face-centered magnetic field storage");
         }
@@ -345,7 +345,7 @@ static inline void prj_mhd_outer_or_prolongated_flux(prj_block *fine,
     }
     prj_mhd_check_storage_index("prj_mhd_bf_prolongate: fine outer face", i, j, k);
     idx = IDX(i, j, k);
-    if (fine->face_fidelity[idx] > PRJ_MHD_FACE_FROM_COARSER) {
+    if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
         value = dst[dir][idx];
         if (!isfinite(value)) {
             prj_mhd_fail("prj_mhd_bf_prolongate: non-finite existing fine face");
@@ -355,7 +355,7 @@ static inline void prj_mhd_outer_or_prolongated_flux(prj_block *fine,
     }
     *flux = prolongated_flux;
     dst[dir][idx] = prolongated_flux / area;
-    fine->face_fidelity[idx] = PRJ_MHD_FACE_FROM_COARSER;
+    fine->face_fidelity[dir][idx] = PRJ_MHD_FACE_FROM_COARSER;
 }
 
 static inline void prj_mhd_write_inner_flux(prj_block *fine, double *dst[3],
@@ -371,14 +371,14 @@ static inline void prj_mhd_write_inner_flux(prj_block *fine, double *dst[3],
     }
     prj_mhd_check_storage_index("prj_mhd_bf_prolongate: fine inner face", i, j, k);
     idx = IDX(i, j, k);
-    if (fine->face_fidelity[idx] > PRJ_MHD_FACE_FROM_COARSER) {
+    if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
         if (!isfinite(dst[dir][idx])) {
             prj_mhd_fail("prj_mhd_bf_prolongate: non-finite existing fine inner face");
         }
         return;
     }
     dst[dir][idx] = flux / area;
-    fine->face_fidelity[idx] = PRJ_MHD_FACE_FROM_COARSER;
+    fine->face_fidelity[dir][idx] = PRJ_MHD_FACE_FROM_COARSER;
 }
 
 static inline void prj_mhd_check_prolongation_geometry(const prj_block *coarse,
@@ -728,10 +728,13 @@ static inline void prj_mhd_check_emf_storage(const prj_block *block)
 {
     int d;
 
-    if (block == 0 || block->edge_fidelity == 0) {
+    if (block == 0) {
         prj_mhd_fail("prj_mhd_emf_send: missing edge fidelity storage");
     }
     for (d = 0; d < 3; ++d) {
+        if (block->edge_fidelity[d] == 0) {
+            prj_mhd_fail("prj_mhd_emf_send: missing edge fidelity storage");
+        }
         if (block->emf[d] == 0) {
             prj_mhd_fail("prj_mhd_emf_send: missing emf storage");
         }
@@ -824,12 +827,12 @@ static inline void prj_mhd_write_emf_edge(prj_block *block, int dir,
     }
     prj_mhd_check_storage_index("prj_mhd_emf_send: destination edge", i, j, k);
     idx = IDX(i, j, k);
-    if (fidelity < block->edge_fidelity[idx]) {
+    if (fidelity < block->edge_fidelity[dir][idx]) {
         return;
     }
     block->emf[dir][idx] = value;
-    if (fidelity > block->edge_fidelity[idx]) {
-        block->edge_fidelity[idx] = fidelity;
+    if (fidelity > block->edge_fidelity[dir][idx]) {
+        block->edge_fidelity[dir][idx] = fidelity;
     }
 }
 
@@ -876,24 +879,25 @@ static inline void prj_mhd_init_edge_fidelity(prj_mesh *mesh)
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
         int dir;
-        int n;
 
         if (!prj_mhd_local_block(block)) {
             continue;
         }
         prj_mhd_check_emf_storage(block);
-        for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
-            block->edge_fidelity[n] = PRJ_MHD_FIDELITY_NONE;
-        }
         for (dir = 0; dir < 3; ++dir) {
             int i;
             int j;
             int k;
+            int n;
+
+            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+                block->edge_fidelity[dir][n] = PRJ_MHD_FIDELITY_NONE;
+            }
 
             for (i = 0; i <= prj_mhd_edge_axis_active_max(dir, 0); ++i) {
                 for (j = 0; j <= prj_mhd_edge_axis_active_max(dir, 1); ++j) {
                     for (k = 0; k <= prj_mhd_edge_axis_active_max(dir, 2); ++k) {
-                        block->edge_fidelity[IDX(i, j, k)] = PRJ_MHD_FIDELITY_SAME;
+                        block->edge_fidelity[dir][IDX(i, j, k)] = PRJ_MHD_FIDELITY_SAME;
                     }
                 }
             }

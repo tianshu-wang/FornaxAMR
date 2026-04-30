@@ -1099,11 +1099,11 @@ static void prj_amr_mhd_check_block(const prj_block *block, const char *caller)
 {
     int d;
 
-    if (block == 0 || block->face_fidelity == 0 || block->U == 0 || block->W == 0 || block->W1 == 0) {
+    if (block == 0 || block->U == 0 || block->W == 0 || block->W1 == 0) {
         prj_amr_mhd_fail(caller);
     }
     for (d = 0; d < 3; ++d) {
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->face_fidelity[d] == 0 || block->Bf[d] == 0 || block->Bf1[d] == 0) {
             prj_amr_mhd_fail(caller);
         }
     }
@@ -1124,8 +1124,12 @@ static void prj_amr_mhd_clear_faces(prj_block *block, int use_bf1)
     for (d = 0; d < 3; ++d) {
         prj_fill(bf[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
     }
-    for (d = 0; d < PRJ_BLOCK_NCELLS; ++d) {
-        block->face_fidelity[d] = PRJ_MHD_FIDELITY_NONE;
+    for (d = 0; d < 3; ++d) {
+        int n;
+
+        for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+            block->face_fidelity[d][n] = PRJ_MHD_FIDELITY_NONE;
+        }
     }
 }
 
@@ -1142,7 +1146,7 @@ static void prj_amr_mhd_mark_active_faces(prj_block *block, int fidelity)
         for (i = 0; i <= prj_amr_mhd_face_axis_max(dir, 0); ++i) {
             for (j = 0; j <= prj_amr_mhd_face_axis_max(dir, 1); ++j) {
                 for (k = 0; k <= prj_amr_mhd_face_axis_max(dir, 2); ++k) {
-                    block->face_fidelity[IDX(i, j, k)] = fidelity;
+                    block->face_fidelity[dir][IDX(i, j, k)] = fidelity;
                 }
             }
         }

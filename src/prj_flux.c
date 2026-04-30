@@ -257,13 +257,17 @@ static void prj_flux_face_eosvar(const double *eosvar, int var, int dir, int i, 
     *right_value = eosvar[EIDX(var, ir, jr, kr)] - 0.5 * slope_r;
 }
 
-void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, double *eosvar, double *flux[3])
+void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
+    double *eosvar, double *flux[3], int use_bf1)
 {
     int dir;
 #if PRJ_NRAD > 0
     const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
 #else
     (void)rad;
+#endif
+#if !PRJ_MHD
+    (void)use_bf1;
 #endif
 
     for (dir = 0; dir < 3; ++dir) {
@@ -402,15 +406,16 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W, do
                     double v_face_loc[3] = {0.0, 0.0, 0.0};
 #if PRJ_MHD
                     {
+                        double *bf_dir = use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
                         double bv1 = 0.0;
                         double bv2 = 0.0;
                         double bn;
 
-                        if (block->Bf[dir] == 0 || block->Bv1[dir] == 0 || block->Bv2[dir] == 0) {
+                        if (bf_dir == 0 || block->Bv1[dir] == 0 || block->Bv2[dir] == 0) {
                             fprintf(stderr, "prj_flux_update: missing MHD face storage for dir=%d\n", dir);
                             exit(1);
                         }
-                        bn = block->Bf[dir][IDX(i, j, k)];
+                        bn = bf_dir[IDX(i, j, k)];
                         WL[PRJ_PRIM_B1] = bn;
                         WR[PRJ_PRIM_B1] = bn;
                         prj_riemann_hlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl, v_face_loc, &bv1, &bv2);

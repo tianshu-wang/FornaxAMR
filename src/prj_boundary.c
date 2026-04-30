@@ -426,11 +426,15 @@ static void prj_boundary_check_bf_storage(const prj_block *block, const char *la
 {
     int d;
 
-    if (block == 0 || block->face_fidelity == 0) {
+    if (block == 0) {
         fprintf(stderr, "%s: missing face fidelity storage\n", label);
         exit(EXIT_FAILURE);
     }
     for (d = 0; d < 3; ++d) {
+        if (block->face_fidelity[d] == 0) {
+            fprintf(stderr, "%s: missing face fidelity storage\n", label);
+            exit(EXIT_FAILURE);
+        }
         if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
             fprintf(stderr, "%s: missing face-centered magnetic field storage\n", label);
             exit(EXIT_FAILURE);
@@ -556,13 +560,13 @@ static void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
         exit(EXIT_FAILURE);
     }
     idx = IDX(i, j, k);
-    if (fidelity < block->face_fidelity[idx]) {
+    if (fidelity < block->face_fidelity[dir][idx]) {
         return;
     }
     dst = prj_boundary_bf_array(block, dir, use_bf1);
     dst[idx] = value;
-    if (fidelity > block->face_fidelity[idx]) {
-        block->face_fidelity[idx] = fidelity;
+    if (fidelity > block->face_fidelity[dir][idx]) {
+        block->face_fidelity[dir][idx] = fidelity;
     }
 }
 
@@ -778,18 +782,20 @@ static void prj_boundary_init_face_fidelity(prj_mesh *mesh)
             continue;
         }
         prj_boundary_check_bf_storage(block, "prj_boundary_init_face_fidelity");
-        for (int n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
-            block->face_fidelity[n] = PRJ_MHD_FIDELITY_NONE;
-        }
         for (dir = 0; dir < 3; ++dir) {
             int i;
             int j;
             int k;
+            int n;
+
+            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+                block->face_fidelity[dir][n] = PRJ_MHD_FIDELITY_NONE;
+            }
 
             for (i = 0; i <= prj_boundary_bf_axis_active_max(dir, 0); ++i) {
                 for (j = 0; j <= prj_boundary_bf_axis_active_max(dir, 1); ++j) {
                     for (k = 0; k <= prj_boundary_bf_axis_active_max(dir, 2); ++k) {
-                        block->face_fidelity[IDX(i, j, k)] = PRJ_MHD_FIDELITY_SAME;
+                        block->face_fidelity[dir][IDX(i, j, k)] = PRJ_MHD_FIDELITY_SAME;
                     }
                 }
             }
@@ -848,7 +854,7 @@ static void prj_boundary_apply_bf_axis(prj_block *block, int use_bf1,
                         continue;
                     }
                     src_flat = IDX(src_idx[0], src_idx[1], src_idx[2]);
-                    fidelity = block->face_fidelity[src_flat];
+                    fidelity = block->face_fidelity[dir][src_flat];
                     if (fidelity == PRJ_MHD_FIDELITY_NONE) {
                         continue;
                     }

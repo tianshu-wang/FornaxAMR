@@ -949,15 +949,22 @@ static int prj_mpi_install_remote_bf_blocks(prj_mesh *mesh, const int *ids, int 
         }
         block = &mesh->blocks[ids[b]];
         if (block->rank == prj_mpi_active->rank || block->Bf[0] != 0 ||
-            block->Bf1[0] != 0 || block->face_fidelity != 0) {
+            block->Bf1[0] != 0 || block->face_fidelity[0] != 0 ||
+            block->face_fidelity[1] != 0 || block->face_fidelity[2] != 0) {
             return 1;
         }
         base = (double *)calloc(6U * (size_t)PRJ_BLOCK_NCELLS, sizeof(*base));
-        block->face_fidelity = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*block->face_fidelity));
-        if (base == 0 || block->face_fidelity == 0) {
+        for (dir = 0; dir < 3; ++dir) {
+            block->face_fidelity[dir] = (int *)calloc((size_t)PRJ_BLOCK_NCELLS,
+                sizeof(*block->face_fidelity[dir]));
+        }
+        if (base == 0 || block->face_fidelity[0] == 0 ||
+            block->face_fidelity[1] == 0 || block->face_fidelity[2] == 0) {
             free(base);
-            free(block->face_fidelity);
-            block->face_fidelity = 0;
+            for (dir = 0; dir < 3; ++dir) {
+                free(block->face_fidelity[dir]);
+                block->face_fidelity[dir] = 0;
+            }
             return 1;
         }
         for (dir = 0; dir < 3; ++dir) {
@@ -971,8 +978,10 @@ static int prj_mpi_install_remote_bf_blocks(prj_mesh *mesh, const int *ids, int 
                 dst[n] = values[pos++];
             }
         }
-        for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
-            block->face_fidelity[n] = PRJ_MHD_FIDELITY_SAME;
+        for (dir = 0; dir < 3; ++dir) {
+            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+                block->face_fidelity[dir][n] = PRJ_MHD_FIDELITY_SAME;
+            }
         }
         old_ranks[b] = block->rank;
         block->rank = prj_mpi_active->rank;
@@ -997,9 +1006,9 @@ static void prj_mpi_uninstall_remote_bf_blocks(prj_mesh *mesh, const int *ids, i
         }
         block = &mesh->blocks[ids[b]];
         free(block->Bf[0]);
-        free(block->face_fidelity);
-        block->face_fidelity = 0;
         for (dir = 0; dir < 3; ++dir) {
+            free(block->face_fidelity[dir]);
+            block->face_fidelity[dir] = 0;
             block->Bf[dir] = 0;
             block->Bf1[dir] = 0;
         }
@@ -1344,7 +1353,7 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
                 continue;
             }
             block = &mesh->blocks[block_id];
-            if (!prj_mpi_block_is_local(block) || block->edge_fidelity == 0 ||
+            if (!prj_mpi_block_is_local(block) || block->edge_fidelity[dir] == 0 ||
                 block->emf[dir] == 0) {
                 continue;
             }
@@ -1354,7 +1363,7 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
                 exit(EXIT_FAILURE);
             }
             flat = IDX(ii, jj, kk);
-            if (PRJ_MHD_FIDELITY_FINER < block->edge_fidelity[flat]) {
+            if (PRJ_MHD_FIDELITY_FINER < block->edge_fidelity[dir][flat]) {
                 continue;
             }
             if (!isfinite(value_recv[i])) {
@@ -1362,7 +1371,7 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
                 exit(EXIT_FAILURE);
             }
             block->emf[dir][flat] = value_recv[i];
-            block->edge_fidelity[flat] = PRJ_MHD_FIDELITY_FINER;
+            block->edge_fidelity[dir][flat] = PRJ_MHD_FIDELITY_FINER;
         }
 
         for (axis = 0; axis < 3; ++axis) {

@@ -446,9 +446,11 @@ int main(int argc, char *argv[])
             prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, 1);
             int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos);
             prj_mpi_rebalance(&sim.mesh);
+            if (block_changed) {
 #if PRJ_USE_GRAVITY
-            prj_gravity_rebuild_grid(&sim);
+                prj_gravity_rebuild_grid(&sim);
 #endif
+            }
             PRJ_TIMER_STOP(&timer, "amr");
             if (block_changed) {
                 PRJ_TIMER_START(&timer, "ghost_fill_post_amr");
