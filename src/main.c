@@ -12,6 +12,31 @@
 
 #include "prj.h"
 
+#if PRJ_TIMER
+static void prj_write_timer_report(const prj_timer *timer, int rank)
+{
+    char filename[64];
+    FILE *fp;
+
+    snprintf(filename, sizeof(filename), "timer-rank%d.txt", rank);
+    fp = fopen(filename, "w");
+    if (fp == 0) {
+        fprintf(stderr, "failed to open %s for timer report: %s\n", filename, strerror(errno));
+        return;
+    }
+    prj_timer_report(timer, fp, rank);
+    fclose(fp);
+}
+#endif
+
+#if PRJ_TIMER
+#define PRJ_TIMER_START(timer, name) prj_timer_start((timer), (name))
+#define PRJ_TIMER_STOP(timer, name) prj_timer_stop((timer), (name))
+#else
+#define PRJ_TIMER_START(timer, name) ((void)(timer), (void)(name))
+#define PRJ_TIMER_STOP(timer, name) ((void)(timer), (void)(name))
+#endif
+
 static prj_problem_init_fn prj_select_problem(const char *name)
 {
     if (strcmp(name, "sedov") == 0) {
@@ -228,6 +253,7 @@ int main(int argc, char *argv[])
 {
     prj_sim sim;
     prj_mpi mpi;
+    prj_timer timer;
     prj_problem_init_fn init_fn;
     int init_with_mpi = 0;
     char *param_file = 0;
@@ -249,6 +275,7 @@ int main(int argc, char *argv[])
     int i;
 
     memset(&sim, 0, sizeof(sim));
+    prj_timer_init(&timer);
     prj_io_parser(&sim, 0);
     for (i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--param") == 0 && i + 1 < argc) {
@@ -362,6 +389,7 @@ int main(int argc, char *argv[])
         double dt_step;
         double dt_src = 1.0e100;
 
+        PRJ_TIMER_START(&timer, "main_loop");
         {
             double dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, sim.cfl);
 
@@ -387,7 +415,13 @@ int main(int argc, char *argv[])
             sim.dt = sim.t_end - sim.time;
         }
         dt_step = sim.dt;
-        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, dt_step, &dt_src);
+        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, dt_step, &dt_src,
+#if PRJ_TIMER
+            &timer
+#else
+            0
+#endif
+        );
         dt_src = prj_mpi_min_dt(dt_src);
         if (sim.cfl * dt_src < sim.dt) {
             sim.dt = sim.cfl * dt_src;
@@ -395,18 +429,23 @@ int main(int argc, char *argv[])
         sim.time += dt_step;
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
+            PRJ_TIMER_START(&timer, "amr");
             if (prj_amr_criteria_need_eosvar(&sim.mesh)) {
+                PRJ_TIMER_START(&timer, "ghost_eos_amr");
                 prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
                 prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
 #if PRJ_MHD
                 prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
 #endif
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+                PRJ_TIMER_STOP(&timer, "ghost_eos_amr");
             } else {
+                PRJ_TIMER_START(&timer, "ghost_eos_amr");
                 prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
 #if PRJ_MHD
                 prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
 #endif
+                PRJ_TIMER_STOP(&timer, "ghost_eos_amr");
             }
 #if PRJ_USE_GRAVITY
             if (prj_amr_criteria_need_gravity(&sim.mesh)) {
@@ -420,10 +459,13 @@ int main(int argc, char *argv[])
 #if PRJ_USE_GRAVITY
             prj_gravity_rebuild_grid(&sim);
 #endif
+            PRJ_TIMER_STOP(&timer, "amr");
         }
+        PRJ_TIMER_START(&timer, "ghost_eos_post_amr");
         prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
         prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
         prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+        PRJ_TIMER_STOP(&timer, "ghost_eos_post_amr");
 #if PRJ_MHD && PRJ_MHD_DEBUG
         prj_mhd_debug_check_divb(&sim.mesh, 0);
 #endif
@@ -488,7 +530,12 @@ int main(int argc, char *argv[])
                 min_cell_size,
                 wall_days, wall_hours, wall_minutes, wall_seconds);
         }
+        PRJ_TIMER_STOP(&timer, "main_loop");
     }
+
+#if PRJ_TIMER
+    prj_write_timer_report(&timer, mpi.rank);
+#endif
 
     prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
         prj_last_event_time(next_output_time, sim.output_dt),

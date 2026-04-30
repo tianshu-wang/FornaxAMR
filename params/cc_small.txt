@@ -16,7 +16,7 @@ max_level = 2
 
 cfl = 0.4
 t_end = 1.0e9
-max_steps = 3
+max_steps = 20
 output_interval = -1
 restart_interval = -1
 output_dt = -1

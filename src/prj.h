@@ -17,6 +17,7 @@
 #include "prj_reconstruct.h"
 #include "prj_riemann.h"
 #include "prj_src.h"
+#include "prj_timer.h"
 #include "prj_timeint.h"
 #include "prj_utils.h"
 
