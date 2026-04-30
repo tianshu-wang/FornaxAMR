@@ -928,20 +928,27 @@ void prj_amr_enforce_two_to_one(prj_mesh *mesh)
     } while (changed != 0);
 }
 
-void prj_amr_refine_marked_blocks(prj_mesh *mesh)
+int prj_amr_refine_marked_blocks(prj_mesh *mesh)
 {
     int i;
+    int changed = 0;
 
     if (mesh == 0) {
-        return;
+        return 0;
     }
 
     for (i = 0; i < mesh->nblocks; ++i) {
         if (i < mesh->nblocks && prj_is_active_block(&mesh->blocks[i]) &&
             mesh->blocks[i].refine_flag > 0) {
+            int was_active = mesh->blocks[i].active;
+
             prj_amr_refine_block(mesh, i);
+            if (was_active != mesh->blocks[i].active) {
+                changed = 1;
+            }
         }
     }
+    return changed;
 }
 
 void prj_amr_init_neighbors(prj_mesh *mesh)
@@ -1621,7 +1628,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
     parent->refine_flag = 0;
 }
 
-void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
+int prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
 {
     prj_block *parent;
     const prj_block *children[8];
@@ -1631,14 +1638,14 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
     int owner_local;
 
     if (mesh == 0 || parent_id < 0 || parent_id >= mesh->nblocks) {
-        return;
+        return 0;
     }
     parent = &mesh->blocks[parent_id];
     for (oct = 0; oct < 8; ++oct) {
         int id = parent->children[oct];
 
         if (id < 0 || id >= mesh->nblocks || !prj_is_active_block(&mesh->blocks[id])) {
-            return;
+            return 0;
         }
         children[oct] = &mesh->blocks[id];
         child_ranks[oct] = mesh->blocks[id].rank;
@@ -1687,11 +1694,14 @@ void prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
         prj_clear_neighbors(child);
         parent->children[oct] = -1;
     }
+    return 1;
 }
 
 void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
 {
     int i;
+    int refined = 0;
+    int coarsened = 0;
 
     if (mesh == 0) {
         return;
@@ -1702,8 +1712,10 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     prj_amr_enforce_two_to_one(mesh);
     prj_amr_sync_refine_flags(mesh);
 
-    prj_amr_refine_marked_blocks(mesh);
-    prj_amr_init_neighbors(mesh);
+    refined = prj_amr_refine_marked_blocks(mesh);
+    if (refined) {
+        prj_amr_init_neighbors(mesh);
+    }
 
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *parent = &mesh->blocks[i];
@@ -1714,8 +1726,22 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
         }
         can_coarsen = prj_can_coarsen_parent(mesh, i);
         if (can_coarsen) {
-            prj_amr_coarsen_block(mesh, i);
+            if (prj_amr_coarsen_block(mesh, i)) {
+                coarsened = 1;
+            }
         }
+    }
+    if (coarsened) {
+        prj_amr_init_neighbors(mesh);
+    }
+
+    if (!refined && !coarsened) {
+        for (i = 0; i < mesh->nblocks; ++i) {
+            if (mesh->blocks[i].id >= 0) {
+                mesh->blocks[i].refine_flag = 0;
+            }
+        }
+        return;
     }
 
     for (i = 0; i < mesh->nblocks; ++i) {
@@ -1725,6 +1751,5 @@ void prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
         }
     }
     prj_mesh_update_max_active_level(mesh);
-    prj_amr_init_neighbors(mesh);
     prj_sync_primitive_from_conserved(mesh, eos);
 }
