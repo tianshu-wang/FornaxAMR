@@ -6,6 +6,10 @@
 #define PRJ_USE_GRAVITY 1
 #endif
 
+#ifndef PRJ_GRAV_DEBUG
+#define PRJ_GRAV_DEBUG 0
+#endif
+
 #ifndef PRJ_USE_RADIATION
 #define PRJ_USE_RADIATION 0
 #endif
