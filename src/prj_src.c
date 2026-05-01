@@ -322,6 +322,20 @@ void prj_src_radiation_vel_grad(const prj_block *block,
 void prj_src_update(prj_eos *eos, const prj_block *block, double *restrict W,
     double *restrict dUdt)
 {
+    int v;
+    int i;
+    int j;
+    int k;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    dUdt[VIDX(v, i, j, k)] = 0.0;
+                }
+            }
+        }
+    }
     prj_src_geom(eos, W, dUdt);
     prj_src_user(eos, W, dUdt);
     prj_src_monopole_gravity(block, prj_gravity_active_monopole(), W, dUdt);

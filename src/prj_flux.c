@@ -501,23 +501,14 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     }
 }
 
-void prj_flux_div(double *flux[3], double area[3], double vol, double *dUdt)
+void prj_flux_div(double *flux[3], double area[3], double vol, int i, int j, int k, double *fluxdiv)
 {
     int v;
-    int i;
-    int j;
-    int k;
 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    dUdt[VIDX(v, i, j, k)] =
-                        -(area[X1DIR] * (flux[X1DIR][VIDX(v, i + 1, j, k)] - flux[X1DIR][VIDX(v, i, j, k)]) +
-                            area[X2DIR] * (flux[X2DIR][VIDX(v, i, j + 1, k)] - flux[X2DIR][VIDX(v, i, j, k)]) +
-                            area[X3DIR] * (flux[X3DIR][VIDX(v, i, j, k + 1)] - flux[X3DIR][VIDX(v, i, j, k)])) / vol;
-                }
-            }
-        }
+        fluxdiv[v] =
+            -(area[X1DIR] * (flux[X1DIR][VIDX(v, i + 1, j, k)] - flux[X1DIR][VIDX(v, i, j, k)]) +
+                area[X2DIR] * (flux[X2DIR][VIDX(v, i, j + 1, k)] - flux[X2DIR][VIDX(v, i, j, k)]) +
+                area[X3DIR] * (flux[X3DIR][VIDX(v, i, j, k + 1)] - flux[X3DIR][VIDX(v, i, j, k)])) / vol;
     }
 }
