@@ -410,6 +410,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         double bv1 = 0.0;
                         double bv2 = 0.0;
                         double bn;
+                        double deltau,deltav,deltaw;
 
                         if (bf_dir == 0 || block->Bv1[dir] == 0 || block->Bv2[dir] == 0) {
                             fprintf(stderr, "prj_flux_update: missing MHD face storage for dir=%d\n", dir);
@@ -418,7 +419,53 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         bn = bf_dir[IDX(i, j, k)];
                         WL[PRJ_PRIM_B1] = bn;
                         WR[PRJ_PRIM_B1] = bn;
-                        prj_riemann_hlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl, v_face_loc, &bv1, &bv2);
+
+                        if(dir==X1DIR){
+                            deltau = W[VIDX(PRJ_PRIM_V1, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V1, il, jl, kl)];
+                            deltav = PRJ_MIN(
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V2, il, jl, kl)]-W[VIDX(PRJ_PRIM_V2, il, jl-1, kl)],
+                                             W[VIDX(PRJ_PRIM_V2, il, jl+1, kl)]-W[VIDX(PRJ_PRIM_V2, il, jl, kl)]),
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V2, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V2, ir, jr-1, kr)],
+                                             W[VIDX(PRJ_PRIM_V2, ir, jr+1, kr)]-W[VIDX(PRJ_PRIM_V2, ir, jr, kr)])
+                                     );
+                            deltaw = PRJ_MIN(
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V3, il, jl, kl)]-W[VIDX(PRJ_PRIM_V3, il, jl, kl-1)],
+                                             W[VIDX(PRJ_PRIM_V3, il, jl, kl+1)]-W[VIDX(PRJ_PRIM_V3, il, jl, kl)]),
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V3, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V3, ir, jr, kr-1)],
+                                             W[VIDX(PRJ_PRIM_V3, ir, jr, kr+1)]-W[VIDX(PRJ_PRIM_V3, ir, jr, kr)])
+                                     );
+                        } else if (dir==X2DIR){
+                            deltau = W[VIDX(PRJ_PRIM_V2, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V2, il, jl, kl)];
+                            deltav = PRJ_MIN(
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V3, il, jl, kl)]-W[VIDX(PRJ_PRIM_V3, il, jl, kl-1)],
+                                             W[VIDX(PRJ_PRIM_V3, il, jl, kl+1)]-W[VIDX(PRJ_PRIM_V3, il, jl, kl)]),
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V3, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V3, ir, jr, kr-1)],
+                                             W[VIDX(PRJ_PRIM_V3, ir, jr, kr+1)]-W[VIDX(PRJ_PRIM_V3, ir, jr, kr)])
+                                     );
+                            deltaw = PRJ_MIN(
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V1, il, jl, kl)]-W[VIDX(PRJ_PRIM_V1, il-1, jl, kl)],
+                                             W[VIDX(PRJ_PRIM_V1, il+1, jl, kl)]-W[VIDX(PRJ_PRIM_V1, il, jl, kl)]),
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V1, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V1, ir-1, jr, kr)],
+                                             W[VIDX(PRJ_PRIM_V1, ir+1, jr, kr)]-W[VIDX(PRJ_PRIM_V1, ir, jr, kr)])
+                                     );
+                        } else {
+                            deltau = W[VIDX(PRJ_PRIM_V3, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V3, il, jl, kl)];
+                            deltav = PRJ_MIN(
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V1, il, jl, kl)]-W[VIDX(PRJ_PRIM_V1, il-1, jl, kl)],
+                                             W[VIDX(PRJ_PRIM_V1, il+1, jl, kl)]-W[VIDX(PRJ_PRIM_V1, il, jl, kl)]),
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V1, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V1, ir-1, jr, kr)],
+                                             W[VIDX(PRJ_PRIM_V1, ir+1, jr, kr)]-W[VIDX(PRJ_PRIM_V1, ir, jr, kr)])
+                                     );
+                            deltaw = PRJ_MIN(
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V2, il, jl, kl)]-W[VIDX(PRJ_PRIM_V2, il, jl-1, kl)],
+                                             W[VIDX(PRJ_PRIM_V2, il, jl+1, kl)]-W[VIDX(PRJ_PRIM_V2, il, jl, kl)]),
+                                     PRJ_MIN(W[VIDX(PRJ_PRIM_V2, ir, jr, kr)]-W[VIDX(PRJ_PRIM_V2, ir, jr-1, kr)],
+                                             W[VIDX(PRJ_PRIM_V2, ir, jr+1, kr)]-W[VIDX(PRJ_PRIM_V2, ir, jr, kr)])
+                                     );
+                        }
+
+
+                        prj_riemann_hlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl, v_face_loc, &bv1, &bv2, deltau, deltav, deltaw);
                         block->Bv1[dir][IDX(i, j, k)] = bv1;
                         block->Bv2[dir][IDX(i, j, k)] = bv2;
                     }

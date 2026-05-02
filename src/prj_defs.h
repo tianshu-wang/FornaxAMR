@@ -154,4 +154,7 @@ enum prj_eos_kind {
     PRJ_EOS_KIND_TABLE = 1
 };
 
+#define PRJ_MAX(a,b) (((a) > (b)) ? (a) : (b))
+#define PRJ_MIN(a,b) (((a) < (b)) ? (a) : (b))
+
 #endif

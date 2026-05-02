@@ -6,21 +6,6 @@
 
 static prj_mesh *prj_riemann_flux_mesh = 0;
 
-double prj_riemann_min_double(double a, double b)
-{
-    return a < b ? a : b;
-}
-
-double prj_riemann_max_double(double a, double b)
-{
-    return a > b ? a : b;
-}
-
-static double prj_abs_double(double x)
-{
-    return x < 0.0 ? -x : x;
-}
-
 #if PRJ_MHD
 #define PRJ_HLLD_SMALL_NUMBER 1.0e-8
 
@@ -195,7 +180,7 @@ static void prj_hlld_outer_star(const prj_hlld_state *s, double S, double SM,
 
     alpha = S - s->vx;
     smdiff = S - SM;
-    if (prj_abs_double(smdiff) <= 1.0e-14 * (prj_abs_double(S) + prj_abs_double(SM) + 1.0)) {
+    if (fabs(smdiff) <= 1.0e-14 * (fabs(S) + fabs(SM) + 1.0)) {
         prj_riemann_hlld_fail("outer wave coincides with contact wave");
     }
 
@@ -208,7 +193,7 @@ static void prj_hlld_outer_star(const prj_hlld_state *s, double S, double SM,
     star->ye = s->ye;
 
     denom = s->rho * alpha * smdiff - s->bx * s->bx;
-    if (prj_abs_double(denom) < PRJ_HLLD_SMALL_NUMBER * pt_star) {
+    if (fabs(denom) < PRJ_HLLD_SMALL_NUMBER * pt_star) {
         star->vy = s->vy;
         star->vz = s->vz;
         star->by = s->by;
@@ -326,7 +311,7 @@ static void prj_hlld_face_outputs(double vx, double vy, double vz,
 void prj_riemann_hlld(const double *WL, const double *WR,
     double pL, double pR, double gL, double gR,
     const prj_eos *eos, double bn, double *flux, double v_face[3],
-    double *Bv1, double *Bv2)
+    double *Bv1, double *Bv2, double deltau, double deltav, double deltaw)
 {
     prj_hlld_state L;
     prj_hlld_state R;
@@ -357,19 +342,21 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     prj_hlld_state_from_prim(WR, pR, gR, bn, &R);
     cfL = prj_hlld_fast_speed(&L);
     cfR = prj_hlld_fast_speed(&R);
-    SL = prj_riemann_min_double(L.vx - cfL, R.vx - cfR);
-    SR = prj_riemann_max_double(L.vx + cfL, R.vx + cfR);
+    SL = PRJ_MIN(L.vx - cfL, R.vx - cfR);
+    SR = PRJ_MAX(L.vx + cfL, R.vx + cfR);
     if (!(SL < SR)) {
         prj_riemann_hlld_fail("invalid fast-wave ordering");
     }
 
     denom = R.rho * (SR - R.vx) - L.rho * (SL - L.vx);
-    if (prj_abs_double(denom) <= 1.0e-14 *
-        (prj_abs_double(R.rho * (SR - R.vx)) + prj_abs_double(L.rho * (SL - L.vx)) + 1.0)) {
+    if (fabs(denom) <= 1.0e-14 *
+        (fabs(R.rho * (SR - R.vx)) + fabs(L.rho * (SL - L.vx)) + 1.0)) {
         prj_riemann_hlld_fail("degenerate contact-speed denominator");
     }
+    double cfmax = PRJ_MAX(cfL,cfR);
+    double theta = PRJ_MIN(1.0, pow((-PRJ_MIN(deltau,0)+cfmax)/(-PRJ_MIN(PRJ_MIN(deltav,deltaw),0)+cfmax),4.0));
     SM = (R.rho * R.vx * (SR - R.vx) -
-        L.rho * L.vx * (SL - L.vx) + L.pt - R.pt) / denom;
+        L.rho * L.vx * (SL - L.vx) + theta*(L.pt - R.pt)) / denom;
     prj_hlld_require_finite(SM, "contact speed");
 
     pt_star_l = L.pt + L.rho * (SL - L.vx) * (SM - L.vx);
@@ -381,8 +368,8 @@ void prj_riemann_hlld(const double *WL, const double *WR,
 
     prj_hlld_outer_star(&L, SL, SM, pt_star, &Ls);
     prj_hlld_outer_star(&R, SR, SM, pt_star, &Rs);
-    SLs = SM - prj_abs_double(bn) / sqrt(Ls.rho);
-    SRs = SM + prj_abs_double(bn) / sqrt(Rs.rho);
+    SLs = SM - fabs(bn) / sqrt(Ls.rho);
+    SRs = SM + fabs(bn) / sqrt(Rs.rho);
     prj_hlld_require_finite(SLs, "left Alfven speed");
     prj_hlld_require_finite(SRs, "right Alfven speed");
     if (0.5 * bn * bn < PRJ_HLLD_SMALL_NUMBER * pt_star) {
@@ -468,8 +455,8 @@ void prj_riemann_hlle(const double *WL, const double *WR,
     prj_riemann_state(WL, pL, gL, eos, UL, FL, &csL);
     prj_riemann_state(WR, pR, gR, eos, UR, FR, &csR);
 
-    SL = prj_riemann_min_double(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
-    SR = prj_riemann_max_double(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
+    SL = PRJ_MIN(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
+    SR = PRJ_MAX(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
 
     if (0.0 <= SL) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -539,8 +526,8 @@ void prj_riemann_hllc(const double *WL, const double *WR,
     prj_riemann_state(WL, pL, gL, eos, UL, FL, &csL);
     prj_riemann_state(WR, pR, gR, eos, UR, FR, &csR);
 
-    SL = prj_riemann_min_double(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
-    SR = prj_riemann_max_double(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
+    SL = PRJ_MIN(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
+    SR = PRJ_MAX(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
 
     /* Toro (2009), Eq. 10.37: contact wave speed from Rankine-Hugoniot conditions. */
     SM = (pR - pL +
@@ -623,12 +610,12 @@ void prj_riemann_hllc(const double *WL, const double *WR,
 static int prj_blocks_overlap_open(double amin, double amax, double bmin, double bmax)
 {
     const double tol = 1.0e-12;
-    return prj_riemann_min_double(amax, bmax) - prj_riemann_max_double(amin, bmin) > tol;
+    return PRJ_MIN(amax, bmax) - PRJ_MAX(amin, bmin) > tol;
 }
 
 static double prj_overlap_length(double amin, double amax, double bmin, double bmax)
 {
-    double overlap = prj_riemann_min_double(amax, bmax) - prj_riemann_max_double(amin, bmin);
+    double overlap = PRJ_MIN(amax, bmax) - PRJ_MAX(amin, bmin);
 
     return overlap > 0.0 ? overlap : 0.0;
 }
@@ -649,15 +636,15 @@ int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, doub
         return -1;
     }
 
-    pressure_ratio = prj_riemann_max_double(pL, pR) /
-        prj_riemann_max_double(prj_riemann_min_double(pL, pR), 1.0e-12);
+    pressure_ratio = PRJ_MAX(pL, pR) /
+        PRJ_MAX(PRJ_MIN(pL, pR), 1.0e-12);
     if (pressure_ratio < 1.5 || WR[PRJ_PRIM_V1] - WL[PRJ_PRIM_V1] >= 0.0) {
         return -1;
     }
 
-    compression[0] = prj_abs_double(WR[PRJ_PRIM_V1] - WL[PRJ_PRIM_V1]);
-    compression[1] = prj_abs_double(WR[PRJ_PRIM_V2] - WL[PRJ_PRIM_V2]);
-    compression[2] = prj_abs_double(WR[PRJ_PRIM_V3] - WL[PRJ_PRIM_V3]);
+    compression[0] = fabs(WR[PRJ_PRIM_V1] - WL[PRJ_PRIM_V1]);
+    compression[1] = fabs(WR[PRJ_PRIM_V2] - WL[PRJ_PRIM_V2]);
+    compression[2] = fabs(WR[PRJ_PRIM_V3] - WL[PRJ_PRIM_V3]);
     best_dir = X1DIR;
     if (compression[X2DIR] > compression[best_dir]) {
         best_dir = X2DIR;
@@ -665,7 +652,7 @@ int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, doub
     if (compression[X3DIR] > compression[best_dir]) {
         best_dir = X3DIR;
     }
-    if (compression[best_dir] < 2.0 * prj_riemann_max_double(
+    if (compression[best_dir] < 2.0 * PRJ_MAX(
             compression[(best_dir + 1) % 3],
             compression[(best_dir + 2) % 3])) {
         return -1;
@@ -694,14 +681,14 @@ void prj_riemann_flux_send(prj_block *block)
                 continue;
             }
             for (d = 0; d < 3; ++d) {
-                if (prj_abs_double(block->xmax[d] - neighbor->xmin[d]) < 1.0e-12) {
+                if (fabs(block->xmax[d] - neighbor->xmin[d]) < 1.0e-12) {
                     if (axis >= 0) {
                         axis = -2;
                         break;
                     }
                     axis = d;
                     side = 1;
-                } else if (prj_abs_double(neighbor->xmax[d] - block->xmin[d]) < 1.0e-12) {
+                } else if (fabs(neighbor->xmax[d] - block->xmin[d]) < 1.0e-12) {
                     if (axis >= 0) {
                         axis = -2;
                         break;
