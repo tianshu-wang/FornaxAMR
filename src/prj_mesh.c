@@ -79,29 +79,37 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
             slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
             slot->recv_loc_start[d] = -PRJ_NGHOST;
             slot->recv_loc_end[d] = 0;
-        } else if (slot->rel_level == 0) {
-            slot->send_loc_start[d] = 0;
-            slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
-            slot->recv_loc_start[d] = 0;
-            slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
-        } else if (slot->rel_level > 0) {
-            if (prj_neighbor_abs(b->xmin[d] - a->xmin[d]) < tol) {
-                slot->send_loc_start[d] = 0;
-            } else {
-                slot->send_loc_start[d] = PRJ_BLOCK_SIZE / 2;
-            }
-            slot->send_loc_end[d] = slot->send_loc_start[d] + PRJ_BLOCK_SIZE / 2;
-            slot->recv_loc_start[d] = 0;
-            slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
         } else {
-            slot->send_loc_start[d] = 0;
-            slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
-            if (prj_neighbor_abs(a->xmin[d] - b->xmin[d]) < tol) {
-                slot->recv_loc_start[d] = 0;
+            int ri_lo = -PRJ_NGHOST;
+            int ri_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+            int si_lo = -PRJ_NGHOST;
+            int si_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+
+            while (ri_lo < ri_hi &&
+                   b->xmin[d] + ((double)ri_lo + 0.5) * b->dx[d] < a->xmin[d] - tol)
+                ri_lo++;
+            while (ri_hi > ri_lo &&
+                   b->xmin[d] + ((double)ri_hi - 0.5) * b->dx[d] >= a->xmax[d] + tol)
+                ri_hi--;
+
+            slot->recv_loc_start[d] = ri_lo;
+            slot->recv_loc_end[d] = ri_hi;
+
+            if (ri_hi > ri_lo) {
+                double rpos_lo = b->xmin[d] + ((double)ri_lo + 0.5) * b->dx[d];
+                double rpos_hi = b->xmin[d] + ((double)ri_hi - 0.5) * b->dx[d];
+                while (si_lo < si_hi &&
+                       a->xmin[d] + ((double)si_lo + 0.5) * a->dx[d] < rpos_lo - tol)
+                    si_lo++;
+                while (si_hi > si_lo &&
+                       a->xmin[d] + ((double)si_hi - 0.5) * a->dx[d] > rpos_hi + tol)
+                    si_hi--;
             } else {
-                slot->recv_loc_start[d] = PRJ_BLOCK_SIZE / 2;
+                si_lo = 0;
+                si_hi = 0;
             }
-            slot->recv_loc_end[d] = slot->recv_loc_start[d] + PRJ_BLOCK_SIZE / 2;
+            slot->send_loc_start[d] = si_lo;
+            slot->send_loc_end[d] = si_hi;
         }
     }
 }
