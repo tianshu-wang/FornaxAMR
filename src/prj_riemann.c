@@ -1,10 +1,13 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
 
 #include "prj.h"
-
-static prj_mesh *prj_riemann_flux_mesh = 0;
 
 #if PRJ_MHD
 #define PRJ_HLLD_SMALL_NUMBER 1.0e-8
@@ -621,9 +624,10 @@ static double prj_overlap_length(double amin, double amax, double bmin, double b
     return overlap > 0.0 ? overlap : 0.0;
 }
 
+/* prj_riemann_set_mesh kept for API compatibility; no longer needed internally */
 void prj_riemann_set_mesh(prj_mesh *mesh)
 {
-    prj_riemann_flux_mesh = mesh;
+    (void)mesh;
 }
 
 int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, double pR)
@@ -661,155 +665,322 @@ int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, doub
     return best_dir;
 }
 
-void prj_riemann_flux_send(prj_block *block)
+/*
+ * Helper: restrict fine-block face fluxes onto one coarse face cell and write them
+ * into dst[v] for v in [0, PRJ_NVAR_CONS).  Returns 1 if weight_sum > 0, else 0.
+ */
+static int prj_riemann_restrict_one(
+    const prj_block *fine, int axis, int side,
+    double cmin0, double cmax0, double cmin1, double cmax1,
+    int tan0, int tan1,
+    double *dst)
 {
-    int n;
+    int fi0s = (int)((cmin0 - fine->xmin[tan0]) / fine->dx[tan0]);
+    int fi0e = (int)((cmax0 - fine->xmin[tan0]) / fine->dx[tan0]);
+    int fi1s = (int)((cmin1 - fine->xmin[tan1]) / fine->dx[tan1]);
+    int fi1e = (int)((cmax1 - fine->xmin[tan1]) / fine->dx[tan1]);
+    int fine_ax_idx = side == 1 ? PRJ_BLOCK_SIZE : 0;
+    int r0, r1, v;
 
-    if (prj_riemann_flux_mesh == 0 || block == 0) {
-        return;
+    if (fi0s < 0) fi0s = 0;
+    if (fi1s < 0) fi1s = 0;
+    if (fi0e >= PRJ_BLOCK_SIZE) fi0e = PRJ_BLOCK_SIZE - 1;
+    if (fi1e >= PRJ_BLOCK_SIZE) fi1e = PRJ_BLOCK_SIZE - 1;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        double restricted = 0.0;
+        double weight_sum = 0.0;
+        int fine_face[3] = {0, 0, 0};
+
+        fine_face[axis] = fine_ax_idx;
+        for (r0 = fi0s; r0 <= fi0e; ++r0) {
+            for (r1 = fi1s; r1 <= fi1e; ++r1) {
+                double fm0 = fine->xmin[tan0] + (double)r0 * fine->dx[tan0];
+                double fm1 = fine->xmin[tan1] + (double)r1 * fine->dx[tan1];
+                double ov0 = prj_overlap_length(cmin0, cmax0, fm0, fm0 + fine->dx[tan0]);
+                double ov1 = prj_overlap_length(cmin1, cmax1, fm1, fm1 + fine->dx[tan1]);
+                double w = ov0 * ov1;
+
+                if (w <= 0.0) continue;
+                fine_face[tan0] = r0;
+                fine_face[tan1] = r1;
+                restricted += fine->flux[axis][VIDX(v, fine_face[0], fine_face[1], fine_face[2])] * w;
+                weight_sum += w;
+            }
+        }
+        if (weight_sum <= 0.0) return 0;
+        dst[v] = restricted / weight_sum;
     }
+    return 1;
+}
 
-    for (n = 0; n < 56; ++n) {
-        int nid = block->slot[n].id;
+/*
+ * Helper: find the face axis and side for block→slot, with tangential overlap check.
+ * Returns axis in [0,2] (side set via *side_out), or -1 if not a valid face neighbor.
+ */
+static int prj_riemann_face_axis(const prj_block *block, const double slot_xmin[3],
+    const double slot_xmax[3], int *side_out)
+{
+    int axis = -1;
+    int side = -1;
+    int d;
 
-        if (nid >= 0 && nid < prj_riemann_flux_mesh->nblocks) {
-            prj_block *neighbor = &prj_riemann_flux_mesh->blocks[nid];
-            int axis = -1;
-            int side = -1;
-            int d;
+    for (d = 0; d < 3; ++d) {
+        if (fabs(block->xmax[d] - slot_xmin[d]) < 1.0e-12) {
+            if (axis >= 0) return -1;
+            axis = d; side = 1;
+        } else if (fabs(slot_xmax[d] - block->xmin[d]) < 1.0e-12) {
+            if (axis >= 0) return -1;
+            axis = d; side = 0;
+        }
+    }
+    if (axis < 0) return -1;
+    for (d = 0; d < 3; ++d) {
+        if (d == axis) continue;
+        if (!prj_blocks_overlap_open(block->xmin[d], block->xmax[d],
+                slot_xmin[d], slot_xmax[d]))
+            return -1;
+    }
+    *side_out = side;
+    return axis;
+}
 
-            if (neighbor->id < 0 || neighbor->active != 1) {
-                continue;
-            }
-            for (d = 0; d < 3; ++d) {
-                if (fabs(block->xmax[d] - neighbor->xmin[d]) < 1.0e-12) {
-                    if (axis >= 0) {
-                        axis = -2;
-                        break;
-                    }
-                    axis = d;
-                    side = 1;
-                } else if (fabs(neighbor->xmax[d] - block->xmin[d]) < 1.0e-12) {
-                    if (axis >= 0) {
-                        axis = -2;
-                        break;
-                    }
-                    axis = d;
-                    side = 0;
+void prj_riemann_flux_send(prj_mesh *mesh)
+{
+    prj_mpi *mpi;
+    int my_rank;
+    int bidx;
+
+    if (mesh == 0) return;
+
+    mpi = prj_mpi_current();
+    my_rank = (mpi != 0) ? mpi->rank : 0;
+
+    /* ---- Phase 1: local (same-rank) coarse-fine correction ---- */
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int n;
+
+        if (block->id < 0 || block->active != 1 || block->rank != my_rank) continue;
+
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
+            prj_block *neighbor;
+            int axis, side, tan0, tan1, it0, it1;
+
+            if (nid < 0 || nid >= mesh->nblocks) continue;
+            neighbor = &mesh->blocks[nid];
+            if (neighbor->id < 0 || neighbor->active != 1) continue;
+            if (neighbor->rank != my_rank) continue;
+
+            axis = prj_riemann_face_axis(block, neighbor->xmin, neighbor->xmax, &side);
+            if (axis < 0) continue;
+            if (neighbor->dx[axis] <= block->dx[axis]) continue;
+
+            tan0 = (axis + 1) % 3;
+            tan1 = (axis + 2) % 3;
+
+            for (it0 = 0; it0 < PRJ_BLOCK_SIZE; ++it0) {
+                for (it1 = 0; it1 < PRJ_BLOCK_SIZE; ++it1) {
+                    int cf[3] = {0, 0, 0};
+                    double cmin0, cmax0, cmin1, cmax1;
+                    double flux[PRJ_NVAR_CONS];
+                    int v;
+
+                    cf[axis] = side == 1 ? 0 : PRJ_BLOCK_SIZE;
+                    cf[tan0] = it0;
+                    cf[tan1] = it1;
+                    cmin0 = neighbor->xmin[tan0] + (double)it0 * neighbor->dx[tan0];
+                    cmax0 = cmin0 + neighbor->dx[tan0];
+                    cmin1 = neighbor->xmin[tan1] + (double)it1 * neighbor->dx[tan1];
+                    cmax1 = cmin1 + neighbor->dx[tan1];
+
+                    if (!prj_blocks_overlap_open(cmin0, cmax0, block->xmin[tan0], block->xmax[tan0]) ||
+                        !prj_blocks_overlap_open(cmin1, cmax1, block->xmin[tan1], block->xmax[tan1]))
+                        continue;
+
+                    if (!prj_riemann_restrict_one(block, axis, side, cmin0, cmax0, cmin1, cmax1,
+                            tan0, tan1, flux))
+                        continue;
+
+                    for (v = 0; v < PRJ_NVAR_CONS; ++v)
+                        neighbor->flux[axis][VIDX(v, cf[0], cf[1], cf[2])] = flux[v];
                 }
-            }
-            if (axis < 0) {
-                continue;
-            }
-            for (d = 0; d < 3; ++d) {
-                if (d == axis) {
-                    continue;
-                }
-                if (!prj_blocks_overlap_open(block->xmin[d], block->xmax[d], neighbor->xmin[d], neighbor->xmax[d])) {
-                    axis = -1;
-                    break;
-                }
-            }
-            if (axis < 0) {
-                continue;
-            }
-            if (neighbor->dx[axis] <= block->dx[axis]) {
-                continue;
-            }
-            if (neighbor->rank == block->rank) {
-                int ratio = (int)(neighbor->dx[axis] / block->dx[axis] + 0.5);
-                int it0;
-                int it1;
-
-                if (ratio < 1) {
-                    ratio = 1;
-                }
-
-                for (it0 = 0; it0 < PRJ_BLOCK_SIZE; ++it0) {
-                    for (it1 = 0; it1 < PRJ_BLOCK_SIZE; ++it1) {
-                        int coarse_face[3] = {0, 0, 0};
-                        int tan0 = (axis + 1) % 3;
-                        int tan1 = (axis + 2) % 3;
-                        double coarse_min0;
-                        double coarse_max0;
-                        double coarse_min1;
-                        double coarse_max1;
-                        int fine_i0_start;
-                        int fine_i0_end;
-                        int fine_i1_start;
-                        int fine_i1_end;
-                        int r0;
-                        int r1;
-
-                        coarse_face[axis] = side == 1 ? 0 : PRJ_BLOCK_SIZE;
-                        coarse_face[tan0] = it0;
-                        coarse_face[tan1] = it1;
-                        coarse_min0 = neighbor->xmin[tan0] + (double)it0 * neighbor->dx[tan0];
-                        coarse_max0 = coarse_min0 + neighbor->dx[tan0];
-                        coarse_min1 = neighbor->xmin[tan1] + (double)it1 * neighbor->dx[tan1];
-                        coarse_max1 = coarse_min1 + neighbor->dx[tan1];
-
-                        if (!prj_blocks_overlap_open(coarse_min0, coarse_max0, block->xmin[tan0], block->xmax[tan0]) ||
-                            !prj_blocks_overlap_open(coarse_min1, coarse_max1, block->xmin[tan1], block->xmax[tan1])) {
-                            continue;
-                        }
-
-                        fine_i0_start = (int)((coarse_min0 - block->xmin[tan0]) / block->dx[tan0]);
-                        fine_i0_end = (int)((coarse_max0 - block->xmin[tan0]) / block->dx[tan0]);
-                        fine_i1_start = (int)((coarse_min1 - block->xmin[tan1]) / block->dx[tan1]);
-                        fine_i1_end = (int)((coarse_max1 - block->xmin[tan1]) / block->dx[tan1]);
-                        if (fine_i0_start < 0) {
-                            fine_i0_start = 0;
-                        }
-                        if (fine_i1_start < 0) {
-                            fine_i1_start = 0;
-                        }
-                        if (fine_i0_end >= PRJ_BLOCK_SIZE) {
-                            fine_i0_end = PRJ_BLOCK_SIZE - 1;
-                        }
-                        if (fine_i1_end >= PRJ_BLOCK_SIZE) {
-                            fine_i1_end = PRJ_BLOCK_SIZE - 1;
-                        }
-                        {
-                            int v;
-
-                            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                                double restricted_flux = 0.0;
-                                double weight_sum = 0.0;
-
-                                for (r0 = fine_i0_start; r0 <= fine_i0_end; ++r0) {
-                                    for (r1 = fine_i1_start; r1 <= fine_i1_end; ++r1) {
-                                        int fine_face[3] = {0, 0, 0};
-                                        double fine_min0 = block->xmin[tan0] + (double)r0 * block->dx[tan0];
-                                        double fine_max0 = fine_min0 + block->dx[tan0];
-                                        double fine_min1 = block->xmin[tan1] + (double)r1 * block->dx[tan1];
-                                        double fine_max1 = fine_min1 + block->dx[tan1];
-                                        double overlap0 = prj_overlap_length(coarse_min0, coarse_max0, fine_min0, fine_max0);
-                                        double overlap1 = prj_overlap_length(coarse_min1, coarse_max1, fine_min1, fine_max1);
-                                        double weight = overlap0 * overlap1;
-
-                                        if (weight <= 0.0) {
-                                            continue;
-                                        }
-                                        fine_face[axis] = side == 1 ? PRJ_BLOCK_SIZE : 0;
-                                        fine_face[tan0] = r0;
-                                        fine_face[tan1] = r1;
-                                        restricted_flux +=
-                                            block->flux[axis][VIDX(v, fine_face[0], fine_face[1], fine_face[2])] * weight;
-                                        weight_sum += weight;
-                                    }
-                                }
-                                if (weight_sum > 0.0) {
-                                    neighbor->flux[axis][VIDX(v, coarse_face[0], coarse_face[1], coarse_face[2])] =
-                                        restricted_flux / weight_sum;
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                /* MPI flux exchange buffer path not implemented yet. */
             }
         }
     }
+
+#if defined(PRJ_ENABLE_MPI)
+    /* ---- Phase 2: MPI coarse-fine correction ---- */
+    if (mpi == 0 || mpi->totrank <= 1 || mpi->neighbor_number == 0) return;
+    {
+        /*
+         * Each entry in the send buffer encodes one restricted coarse face cell:
+         *   idx[5*e+0] = coarse block id
+         *   idx[5*e+1] = coarse face i
+         *   idx[5*e+2] = coarse face j
+         *   idx[5*e+3] = coarse face k
+         *   idx[5*e+4] = face axis
+         *   val[e*PRJ_NVAR_CONS .. +PRJ_NVAR_CONS-1] = restricted flux values
+         */
+        int nn = mpi->neighbor_number;
+        int *sc  = (int *)calloc((size_t)nn, sizeof(int));   /* send count per nb */
+        int *scap= (int *)calloc((size_t)nn, sizeof(int));   /* send capacity */
+        int **si = (int **)calloc((size_t)nn, sizeof(int *));
+        double **sv = (double **)calloc((size_t)nn, sizeof(double *));
+        int *rc  = (int *)calloc((size_t)nn, sizeof(int));   /* recv count per nb */
+        int **ri = (int **)calloc((size_t)nn, sizeof(int *));
+        double **rv = (double **)calloc((size_t)nn, sizeof(double *));
+        MPI_Request *reqs = (MPI_Request *)malloc((size_t)(4 * nn) * sizeof(MPI_Request));
+        int req_count = 0;
+        int nb, e;
+
+        if (!sc || !scap || !si || !sv || !rc || !ri || !rv || !reqs) {
+            fprintf(stderr, "prj_riemann_flux_send: MPI alloc failed\n");
+            exit(1);
+        }
+
+        /* Pack: for each local fine block with a remote coarse neighbor */
+        for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+            prj_block *block = &mesh->blocks[bidx];
+            int n;
+
+            if (block->id < 0 || block->active != 1 || block->rank != my_rank) continue;
+
+            for (n = 0; n < 56; ++n) {
+                const prj_neighbor *slot = &block->slot[n];
+                int nid = slot->id;
+                int axis, side, tan0, tan1, it0, it1;
+
+                if (nid < 0 || nid >= mesh->nblocks) continue;
+                if (slot->rank == my_rank) continue;
+                if (slot->dx[0] == 0.0 && slot->dx[1] == 0.0 && slot->dx[2] == 0.0) continue;
+
+                /* Find which outbox this rank maps to */
+                nb = -1;
+                {
+                    int nb2;
+                    for (nb2 = 0; nb2 < nn; ++nb2) {
+                        if (mpi->neighbor_buffer[nb2].receiver_rank == slot->rank) {
+                            nb = nb2; break;
+                        }
+                    }
+                }
+                if (nb < 0) continue;
+
+                axis = prj_riemann_face_axis(block, slot->xmin, slot->xmax, &side);
+                if (axis < 0) continue;
+                if (slot->dx[axis] <= block->dx[axis]) continue;
+
+                tan0 = (axis + 1) % 3;
+                tan1 = (axis + 2) % 3;
+
+                for (it0 = 0; it0 < PRJ_BLOCK_SIZE; ++it0) {
+                    for (it1 = 0; it1 < PRJ_BLOCK_SIZE; ++it1) {
+                        int cf[3] = {0, 0, 0};
+                        double cmin0, cmax0, cmin1, cmax1;
+                        double flux[PRJ_NVAR_CONS];
+                        int e2;
+
+                        cf[axis] = side == 1 ? 0 : PRJ_BLOCK_SIZE;
+                        cf[tan0] = it0;
+                        cf[tan1] = it1;
+                        cmin0 = slot->xmin[tan0] + (double)it0 * slot->dx[tan0];
+                        cmax0 = cmin0 + slot->dx[tan0];
+                        cmin1 = slot->xmin[tan1] + (double)it1 * slot->dx[tan1];
+                        cmax1 = cmin1 + slot->dx[tan1];
+
+                        if (!prj_blocks_overlap_open(cmin0, cmax0, block->xmin[tan0], block->xmax[tan0]) ||
+                            !prj_blocks_overlap_open(cmin1, cmax1, block->xmin[tan1], block->xmax[tan1]))
+                            continue;
+
+                        if (!prj_riemann_restrict_one(block, axis, side, cmin0, cmax0, cmin1, cmax1,
+                                tan0, tan1, flux))
+                            continue;
+
+                        /* Grow outbox if needed */
+                        if (sc[nb] >= scap[nb]) {
+                            int nc = scap[nb] == 0 ? 64 : scap[nb] * 2;
+                            int *ni2 = (int *)realloc(si[nb], (size_t)(5 * nc) * sizeof(int));
+                            double *nv2 = (double *)realloc(sv[nb], (size_t)(nc * PRJ_NVAR_CONS) * sizeof(double));
+
+                            if (!ni2 || !nv2) {
+                                fprintf(stderr, "prj_riemann_flux_send: send buf realloc failed\n");
+                                exit(1);
+                            }
+                            si[nb] = ni2; sv[nb] = nv2; scap[nb] = nc;
+                        }
+                        e2 = sc[nb];
+                        si[nb][5*e2+0] = nid;
+                        si[nb][5*e2+1] = cf[0];
+                        si[nb][5*e2+2] = cf[1];
+                        si[nb][5*e2+3] = cf[2];
+                        si[nb][5*e2+4] = axis;
+                        memcpy(sv[nb] + (size_t)e2 * PRJ_NVAR_CONS, flux, PRJ_NVAR_CONS * sizeof(double));
+                        sc[nb]++;
+                    }
+                }
+            }
+        }
+
+        /* Exchange entry counts */
+        for (nb = 0; nb < nn; ++nb) {
+            MPI_Sendrecv(&sc[nb], 1, MPI_INT, mpi->neighbor_buffer[nb].receiver_rank, 200,
+                &rc[nb], 1, MPI_INT, mpi->neighbor_buffer[nb].receiver_rank, 200,
+                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+        /* Allocate recv buffers, post non-blocking transfers */
+        for (nb = 0; nb < nn; ++nb) {
+            int rk = mpi->neighbor_buffer[nb].receiver_rank;
+
+            if (rc[nb] > 0) {
+                ri[nb] = (int *)malloc((size_t)(5 * rc[nb]) * sizeof(int));
+                rv[nb] = (double *)malloc((size_t)(rc[nb] * PRJ_NVAR_CONS) * sizeof(double));
+                if (!ri[nb] || !rv[nb]) {
+                    fprintf(stderr, "prj_riemann_flux_send: recv buf alloc failed\n");
+                    exit(1);
+                }
+                MPI_Irecv(ri[nb], 5 * rc[nb], MPI_INT,    rk, 201, MPI_COMM_WORLD, &reqs[req_count++]);
+                MPI_Irecv(rv[nb], rc[nb] * PRJ_NVAR_CONS, MPI_DOUBLE, rk, 202, MPI_COMM_WORLD, &reqs[req_count++]);
+            }
+            if (sc[nb] > 0) {
+                MPI_Isend(si[nb], 5 * sc[nb], MPI_INT,    rk, 201, MPI_COMM_WORLD, &reqs[req_count++]);
+                MPI_Isend(sv[nb], sc[nb] * PRJ_NVAR_CONS, MPI_DOUBLE, rk, 202, MPI_COMM_WORLD, &reqs[req_count++]);
+            }
+        }
+        if (req_count > 0) MPI_Waitall(req_count, reqs, MPI_STATUSES_IGNORE);
+
+        /* Apply received restricted fluxes to local coarse blocks */
+        for (nb = 0; nb < nn; ++nb) {
+            if (rc[nb] == 0 || !ri[nb] || !rv[nb]) continue;
+            for (e = 0; e < rc[nb]; ++e) {
+                int blk_id = ri[nb][5*e+0];
+                int ci     = ri[nb][5*e+1];
+                int cj     = ri[nb][5*e+2];
+                int ck     = ri[nb][5*e+3];
+                int faxis  = ri[nb][5*e+4];
+                prj_block *coarse;
+                int v;
+
+                if (blk_id < 0 || blk_id >= mesh->nblocks) continue;
+                if (faxis < 0 || faxis >= 3) continue;
+                coarse = &mesh->blocks[blk_id];
+                if (coarse->id < 0 || coarse->active != 1 || coarse->rank != my_rank) continue;
+                if (coarse->flux[faxis] == 0) continue;
+                for (v = 0; v < PRJ_NVAR_CONS; ++v)
+                    coarse->flux[faxis][VIDX(v, ci, cj, ck)] = rv[nb][(size_t)e * PRJ_NVAR_CONS + v];
+            }
+        }
+
+        /* Free all per-rank buffers */
+        for (nb = 0; nb < nn; ++nb) {
+            free(si[nb]); free(sv[nb]);
+            free(ri[nb]); free(rv[nb]);
+        }
+        free(sc); free(scap); free(si); free(sv);
+        free(rc); free(ri); free(rv); free(reqs);
+    }
+#endif
 }

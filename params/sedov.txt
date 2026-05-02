@@ -11,8 +11,8 @@ x2max = 2.0
 x3min = -2.0
 x3max = 2.0
 
-root_nx = 5
-max_level = 1
+root_nx = 4
+max_level = 2
 
 cfl = 0.8
 t_end = 10.0

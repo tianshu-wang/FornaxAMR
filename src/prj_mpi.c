@@ -20,11 +20,13 @@ static int prj_block_is_active(const prj_block *block)
     return block != 0 && block->id >= 0 && block->active == 1;
 }
 
+#if PRJ_MHD
 static int prj_mpi_block_is_local(const prj_block *block)
 {
     return prj_block_is_active(block) &&
         (prj_mpi_active == 0 || block->rank == prj_mpi_active->rank);
 }
+#endif
 
 static double *prj_mpi_stage_array(prj_block *block, int stage)
 {
@@ -230,6 +232,7 @@ static int prj_mpi_sample_is_same_level(int sample_code)
     return sample_code >= PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET;
 }
 
+#if PRJ_MHD
 static int prj_mpi_append_int(int **array, int *count, int *capacity, int value)
 {
     int *next;
@@ -267,6 +270,7 @@ static int prj_mpi_append_double(double **array, int *count, int *capacity, doub
     *count += 1;
     return 0;
 }
+#endif /* PRJ_MHD */
 
 static int prj_mpi_append_triplet(int **arrays, int *count, int *capacity, int a, int b, int c)
 {
@@ -1616,212 +1620,6 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
 #endif
 }
 
-void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)
-{
-#if defined(PRJ_ENABLE_MPI)
-    int nb;
-    MPI_Request *requests;
-    int request_count;
-    int request_capacity;
-
-    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
-        return;
-    }
-    requests = 0;
-    request_count = 0;
-    request_capacity = 0;
-    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
-        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int *send_sizes;
-        int recv_entries;
-        int face_total_recv;
-        int axis;
-        int bidx;
-        int occ;
-        int *idx_send[3];
-        double *value_send;
-        int idx_count;
-        int idx_capacity;
-        int value_count;
-        int value_capacity;
-
-        send_sizes = (int *)calloc((size_t)buffer->number, sizeof(*send_sizes));
-        idx_send[0] = 0;
-        idx_send[1] = 0;
-        idx_send[2] = 0;
-        value_send = 0;
-        idx_count = 0;
-        idx_capacity = 0;
-        value_count = 0;
-        value_capacity = 0;
-        occ = 0;
-        for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-            prj_block *block = &mesh->blocks[bidx];
-            int n;
-
-            if (!prj_mpi_block_is_local(block)) {
-                continue;
-            }
-            for (n = 0; n < 56; ++n) {
-                int nid = block->slot[n].id;
-                const prj_block *neighbor;
-                int face_axis;
-                int side;
-                int d;
-                int before = idx_count;
-
-                if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != buffer->receiver_rank) {
-                    continue;
-                }
-                neighbor = &mesh->blocks[nid];
-                face_axis = -1;
-                side = -1;
-                for (d = 0; d < 3; ++d) {
-                    if (fabs(block->xmax[d] - neighbor->xmin[d]) < 1.0e-12) {
-                        face_axis = d;
-                        side = 1;
-                        break;
-                    }
-                    if (fabs(neighbor->xmax[d] - block->xmin[d]) < 1.0e-12) {
-                        face_axis = d;
-                        side = 0;
-                        break;
-                    }
-                }
-                if (face_axis < 0 || neighbor->dx[face_axis] <= block->dx[face_axis]) {
-                    send_sizes[occ++] = 0;
-                    continue;
-                }
-                for (d = 0; d < PRJ_BLOCK_SIZE; ++d) {
-                    int e;
-
-                    for (e = 0; e < PRJ_BLOCK_SIZE; ++e) {
-                        int face[3] = {0, 0, 0};
-                        int v;
-
-                        face[face_axis] = side == 1 ? PRJ_BLOCK_SIZE : 0;
-                        face[(face_axis + 1) % 3] = d;
-                        face[(face_axis + 2) % 3] = e;
-                        if (prj_mpi_append_int(&idx_send[0], &idx_count, &idx_capacity, nid) != 0 ||
-                            prj_mpi_append_int(&idx_send[1], &idx_count, &idx_capacity,
-                                prj_mpi_encode_cell_index(face[0], face[1], face[2])) != 0 ||
-                            prj_mpi_append_int(&idx_send[2], &idx_count, &idx_capacity, face_axis) != 0) {
-                            continue;
-                        }
-                        idx_count -= 2;
-                        idx_send[1][idx_count] = prj_mpi_encode_cell_index(face[0], face[1], face[2]);
-                        idx_send[2][idx_count] = face_axis;
-                        idx_count += 2;
-                        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                            double flux = block->flux[face_axis][VIDX(v, face[0], face[1], face[2])];
-
-                            if (prj_mpi_append_double(&value_send, &value_count, &value_capacity, flux) != 0) {
-                                break;
-                            }
-                        }
-                    }
-                }
-                send_sizes[occ++] = (idx_count - before) / 3;
-            }
-        }
-
-        free(buffer->face_data_size_send);
-        free(buffer->face_buffer_send);
-        for (axis = 0; axis < 3; ++axis) {
-            free(buffer->face_data_idx_send[axis]);
-            free(buffer->face_data_idx_recv[axis]);
-            buffer->face_data_idx_send[axis] = idx_send[axis];
-            buffer->face_data_idx_recv[axis] = 0;
-        }
-        free(buffer->face_data_size_recv);
-        free(buffer->face_buffer_recv);
-        buffer->face_data_size_send = send_sizes;
-        buffer->face_buffer_send = value_send;
-        buffer->face_data_size_recv = 0;
-        buffer->face_buffer_recv = 0;
-
-        MPI_Sendrecv(&buffer->number, 1, MPI_INT, buffer->receiver_rank, 200,
-            &recv_entries, 1, MPI_INT, buffer->receiver_rank, 200, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        buffer->face_data_size_recv = (int *)calloc((size_t)recv_entries, sizeof(*buffer->face_data_size_recv));
-        MPI_Sendrecv(buffer->face_data_size_send, buffer->number, MPI_INT, buffer->receiver_rank, 201,
-            buffer->face_data_size_recv, recv_entries, MPI_INT, buffer->receiver_rank, 201, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        face_total_recv = 0;
-        for (axis = 0; axis < recv_entries; ++axis) {
-            face_total_recv += buffer->face_data_size_recv[axis];
-        }
-        for (axis = 0; axis < 3; ++axis) {
-            buffer->face_data_idx_recv[axis] = (int *)calloc((size_t)face_total_recv, sizeof(*buffer->face_data_idx_recv[axis]));
-        }
-        buffer->face_buffer_recv = (double *)calloc((size_t)face_total_recv * PRJ_NVAR_CONS, sizeof(*buffer->face_buffer_recv));
-
-        if (request_count + 8 > request_capacity) {
-            int new_capacity = request_capacity == 0 ? 16 : request_capacity * 2;
-            MPI_Request *next = (MPI_Request *)realloc(requests, (size_t)new_capacity * sizeof(*next));
-
-            if (next == 0) {
-                free(requests);
-                return;
-            }
-            requests = next;
-            request_capacity = new_capacity;
-        }
-        for (axis = 0; axis < 3; ++axis) {
-            MPI_Irecv(buffer->face_data_idx_recv[axis], face_total_recv, MPI_INT, buffer->receiver_rank, 210 + axis,
-                MPI_COMM_WORLD, &requests[request_count++]);
-            MPI_Isend(buffer->face_data_idx_send[axis], idx_count / 3, MPI_INT, buffer->receiver_rank, 210 + axis,
-                MPI_COMM_WORLD, &requests[request_count++]);
-        }
-        MPI_Irecv(buffer->face_buffer_recv, face_total_recv * PRJ_NVAR_CONS, MPI_DOUBLE, buffer->receiver_rank, 220,
-            MPI_COMM_WORLD, &requests[request_count++]);
-        MPI_Isend(buffer->face_buffer_send, value_count, MPI_DOUBLE, buffer->receiver_rank, 220,
-            MPI_COMM_WORLD, &requests[request_count++]);
-    }
-    if (request_count > 0) {
-        MPI_Waitall(request_count, requests, MPI_STATUSES_IGNORE);
-    }
-    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
-        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int total = 0;
-        int pos = 0;
-        int i;
-
-        if (buffer->face_data_size_recv == 0) {
-            continue;
-        }
-        for (i = 0; i < buffer->number; ++i) {
-            total += buffer->face_data_size_recv[i];
-        }
-        for (i = 0; i < total; ++i) {
-            int block_id = buffer->face_data_idx_recv[0][i];
-            int code = buffer->face_data_idx_recv[1][i];
-            int face_axis = buffer->face_data_idx_recv[2][i];
-            int ii;
-            int jj;
-            int kk;
-            int v;
-            prj_block *block;
-
-            if (block_id < 0 || block_id >= mesh->nblocks || face_axis < 0 || face_axis >= 3) {
-                pos += PRJ_NVAR_CONS;
-                continue;
-            }
-            block = &mesh->blocks[block_id];
-            if (!prj_mpi_block_is_local(block) || block->flux[face_axis] == 0) {
-                pos += PRJ_NVAR_CONS;
-                continue;
-            }
-            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
-            for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                block->flux[face_axis][VIDX(v, ii, jj, kk)] = buffer->face_buffer_recv[pos++];
-            }
-        }
-    }
-    free(requests);
-#else
-    (void)mesh;
-    (void)mpi;
-#endif
-}
 
 double prj_mpi_min_dt(double local_dt)
 {

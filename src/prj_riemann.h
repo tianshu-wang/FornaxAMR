@@ -17,6 +17,6 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     double *Bv1, double *Bv2, double deltau, double deltav, double deltaw);
 #endif
 int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, double pR);
-void prj_riemann_flux_send(prj_block *block);
+void prj_riemann_flux_send(prj_mesh *mesh);
 
 #endif
