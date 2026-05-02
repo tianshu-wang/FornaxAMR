@@ -40,7 +40,9 @@ struct prj_neighbor {
     int rel_level;
     int type;
     int send_loc_start[3];
+    int send_loc_end[3];
     int recv_loc_start[3];
+    int recv_loc_end[3];
     double xmin[3];
     double xmax[3];
     double dx[3];

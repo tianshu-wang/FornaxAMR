@@ -431,13 +431,16 @@ static double prj_eos_pressure_log_interp(const prj_eos *eos,
         jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp);
 }
 
-static double prj_eos_rey_slice_eint(const prj_eos *eos, int jy, int jyp, int jr, int jrp, int jt,
-    double coeff0, double coeff1, double coeff2, double coeff3)
+static double prj_eos_rey_slice_eint(const prj_eos *eos,
+    int base_eint, int off_y_r, int off_yp_r, int off_y_rp, int off_yp_rp,
+    int jt, double coeff0, double coeff1, double coeff2, double coeff3)
 {
-    return coeff0 * prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jy, jr, jt) +
-        coeff1 * prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jyp, jr, jt) +
-        coeff2 * prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jy, jrp, jt) +
-        coeff3 * prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jyp, jrp, jt);
+    int jt_off = jt - 1;
+    const double *t = eos->table;
+    return coeff0 * t[base_eint + off_y_r   + jt_off] +
+           coeff1 * t[base_eint + off_yp_r  + jt_off] +
+           coeff2 * t[base_eint + off_y_rp  + jt_off] +
+           coeff3 * t[base_eint + off_yp_rp + jt_off];
 }
 
 void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quantities)
@@ -541,32 +544,38 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         coeff2 = drho * (1.0 - dye);
         coeff3 = drho * dye;
 
-        elo = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, 1, coeff0, coeff1, coeff2, coeff3);
-        ehi = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, eos->nt, coeff0, coeff1, coeff2, coeff3);
+        int base_eint = (PRJ_EOS_REC_EINT - 1) * eos->ny * eos->nr * eos->nt;
+        int off_y_r   = (jy  - 1) * eos->nr * eos->nt + (jr  - 1) * eos->nt;
+        int off_yp_r  = (jyp - 1) * eos->nr * eos->nt + (jr  - 1) * eos->nt;
+        int off_y_rp  = (jy  - 1) * eos->nr * eos->nt + (jrp - 1) * eos->nt;
+        int off_yp_rp = (jyp - 1) * eos->nr * eos->nt + (jrp - 1) * eos->nt;
+
+        elo = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, 1, coeff0, coeff1, coeff2, coeff3);
+        ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, eos->nt, coeff0, coeff1, coeff2, coeff3);
         if (e_table < elo || e_table > ehi) {
             prj_eos_table_range_fail("eint/PRJ_EOS_ENERGY_SCALE", e_table, elo, ehi);
         }
         if (e_table == elo) {
             jt = 1;
-            ehi = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, 2, coeff0, coeff1, coeff2, coeff3);
+            ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, 2, coeff0, coeff1, coeff2, coeff3);
         } else if (e_table == ehi) {
             jt = eos->nt - 1;
-            elo = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, jt, coeff0, coeff1, coeff2, coeff3);
-            ehi = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, eos->nt, coeff0, coeff1, coeff2, coeff3);
+            elo = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, jt, coeff0, coeff1, coeff2, coeff3);
+            ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, eos->nt, coeff0, coeff1, coeff2, coeff3);
         } else {
             jt_lo = 1;
             jt_hi = eos->nt;
             while (jt_hi - jt_lo > 1) {
                 jt_mid = jt_lo + (jt_hi - jt_lo) / 2;
-                if (prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, jt_mid, coeff0, coeff1, coeff2, coeff3) <= e_table) {
+                if (prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, jt_mid, coeff0, coeff1, coeff2, coeff3) <= e_table) {
                     jt_lo = jt_mid;
                 } else {
                     jt_hi = jt_mid;
                 }
             }
             jt = jt_lo;
-            elo = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, jt, coeff0, coeff1, coeff2, coeff3);
-            ehi = prj_eos_rey_slice_eint(eos, jy, jyp, jr, jrp, jt + 1, coeff0, coeff1, coeff2, coeff3);
+            elo = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, jt, coeff0, coeff1, coeff2, coeff3);
+            ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, jt + 1, coeff0, coeff1, coeff2, coeff3);
         }
         jtp = jt + 1;
         if (fabs(ehi - elo) > 0.0) {

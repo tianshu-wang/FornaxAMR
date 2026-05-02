@@ -8,6 +8,9 @@ static prj_mesh *prj_riemann_flux_mesh = 0;
 
 #if PRJ_MHD
 #define PRJ_HLLD_SMALL_NUMBER 1.0e-8
+#ifndef PRJ_RIEMANN_DEBUG
+#define PRJ_RIEMANN_DEBUG 0
+#endif
 
 typedef struct prj_hlld_state {
     double rho;
@@ -45,6 +48,7 @@ static void prj_riemann_hlld_fail(const char *message)
     exit(1);
 }
 
+#if PRJ_RIEMANN_DEBUG
 static void prj_hlld_require_finite(double x, const char *name)
 {
     if (!isfinite(x)) {
@@ -52,15 +56,13 @@ static void prj_hlld_require_finite(double x, const char *name)
         exit(1);
     }
 }
+#else
+#define prj_hlld_require_finite(x, name) ((void)(x))
+#endif
 
 static void prj_hlld_fill_conserved(double rho, double vx, double vy, double vz,
     double bx, double by, double bz, double ye, double e, double *U)
 {
-    int v;
-
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        U[v] = 0.0;
-    }
     U[PRJ_CONS_RHO] = rho;
     U[PRJ_CONS_MOM1] = rho * vx;
     U[PRJ_CONS_MOM2] = rho * vy;
@@ -78,11 +80,6 @@ static void prj_hlld_fill_flux(double rho, double vx, double vy, double vz,
     double b2;
     double pt;
     double vdotb;
-    int v;
-
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        F[v] = 0.0;
-    }
 
     b2 = bx * bx + by * by + bz * bz;
     pt = p + 0.5 * b2;
@@ -199,10 +196,12 @@ static void prj_hlld_outer_star(const prj_hlld_state *s, double S, double SM,
         star->by = s->by;
         star->bz = s->bz;
     } else {
-        star->vy = s->vy - s->bx * s->by * (SM - s->vx) / denom;
-        star->vz = s->vz - s->bx * s->bz * (SM - s->vx) / denom;
-        star->by = s->by * (s->rho * alpha * alpha - s->bx * s->bx) / denom;
-        star->bz = s->bz * (s->rho * alpha * alpha - s->bx * s->bx) / denom;
+        double sm_diff_vx_over_denom = (SM - s->vx) / denom;
+        double mag_factor = (s->rho * alpha * alpha - s->bx * s->bx) / denom;
+        star->vy = s->vy - s->bx * s->by * sm_diff_vx_over_denom;
+        star->vz = s->vz - s->bx * s->bz * sm_diff_vx_over_denom;
+        star->by = s->by * mag_factor;
+        star->bz = s->bz * mag_factor;
     }
 
     vdotb = s->vx * s->bx + s->vy * s->by + s->vz * s->bz;
@@ -214,8 +213,8 @@ static void prj_hlld_outer_star(const prj_hlld_state *s, double S, double SM,
     prj_hlld_fill_star_conserved(star);
 }
 
-static void prj_hlld_double_star(const prj_hlld_star *left, const prj_hlld_star *right,
-    double bx, prj_hlld_star *left_ss, prj_hlld_star *right_ss)
+static void prj_hlld_double_star_one(const prj_hlld_star *left, const prj_hlld_star *right,
+    double bx, int right_side, prj_hlld_star *ss)
 {
     double sqrt_l;
     double sqrt_r;
@@ -226,8 +225,6 @@ static void prj_hlld_double_star(const prj_hlld_star *left, const prj_hlld_star 
     double by_ss;
     double bz_ss;
     double vbdot_ss;
-    double vbdot_l;
-    double vbdot_r;
 
     sqrt_l = sqrt(left->rho);
     sqrt_r = sqrt(right->rho);
@@ -246,27 +243,24 @@ static void prj_hlld_double_star(const prj_hlld_star *left, const prj_hlld_star 
     bz_ss = (sqrt_l * right->bz + sqrt_r * left->bz +
         sqrt_l * sqrt_r * (right->vz - left->vz) * sign_bx) * inv_sum;
 
-    *left_ss = *left;
-    *right_ss = *right;
-    left_ss->vy = vy_ss;
-    left_ss->vz = vz_ss;
-    left_ss->by = by_ss;
-    left_ss->bz = bz_ss;
-    right_ss->vy = vy_ss;
-    right_ss->vz = vz_ss;
-    right_ss->by = by_ss;
-    right_ss->bz = bz_ss;
+    vbdot_ss = (right_side ? right->vx : left->vx) * bx + vy_ss * by_ss + vz_ss * bz_ss;
 
-    vbdot_ss = left->vx * bx + vy_ss * by_ss + vz_ss * bz_ss;
-    vbdot_l = left->vx * bx + left->vy * left->by + left->vz * left->bz;
-    vbdot_r = right->vx * bx + right->vy * right->by + right->vz * right->bz;
-    left_ss->e = left->e - sqrt_l * sign_bx * (vbdot_l - vbdot_ss);
-    right_ss->e = right->e + sqrt_r * sign_bx * (vbdot_r - vbdot_ss);
-    prj_hlld_require_finite(left_ss->e, "left double-star total energy");
-    prj_hlld_require_finite(right_ss->e, "right double-star total energy");
-
-    prj_hlld_fill_star_conserved(left_ss);
-    prj_hlld_fill_star_conserved(right_ss);
+    if (!right_side) {
+        double vbdot_l = left->vx * bx + left->vy * left->by + left->vz * left->bz;
+        *ss = *left;
+        ss->e = left->e - sqrt_l * sign_bx * (vbdot_l - vbdot_ss);
+        prj_hlld_require_finite(ss->e, "left double-star total energy");
+    } else {
+        double vbdot_r = right->vx * bx + right->vy * right->by + right->vz * right->bz;
+        *ss = *right;
+        ss->e = right->e + sqrt_r * sign_bx * (vbdot_r - vbdot_ss);
+        prj_hlld_require_finite(ss->e, "right double-star total energy");
+    }
+    ss->vy = vy_ss;
+    ss->vz = vz_ss;
+    ss->by = by_ss;
+    ss->bz = bz_ss;
+    prj_hlld_fill_star_conserved(ss);
 }
 
 static void prj_hlld_flux_from_jump(const double *F0, double S,
@@ -283,12 +277,10 @@ static void prj_hlld_flux_from_double_jump(const double *F0, double S0,
     const double *Ustar, const double *U0, double Sstar,
     const double *Uss, double *F)
 {
-    double Fstar[PRJ_NVAR_CONS];
     int v;
 
-    prj_hlld_flux_from_jump(F0, S0, Ustar, U0, Fstar);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        F[v] = Fstar[v] + Sstar * (Uss[v] - Ustar[v]);
+        F[v] = F0[v] + S0 * (Ustar[v] - U0[v]) + Sstar * (Uss[v] - Ustar[v]);
     }
 }
 
@@ -317,8 +309,7 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     prj_hlld_state R;
     prj_hlld_star Ls;
     prj_hlld_star Rs;
-    prj_hlld_star Lss;
-    prj_hlld_star Rss;
+    prj_hlld_star ss;
     double cfL;
     double cfR;
     double SL;
@@ -331,6 +322,7 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     double pt_star_r;
     double pt_star;
     int v;
+    int bn_small;
 
     (void)eos;
 
@@ -348,13 +340,30 @@ void prj_riemann_hlld(const double *WL, const double *WR,
         prj_riemann_hlld_fail("invalid fast-wave ordering");
     }
 
+    if (0.0 <= SL) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            flux[v] = L.F[v];
+        }
+        prj_hlld_face_outputs(L.vx, L.vy, L.vz, L.bx, L.by, L.bz, v_face, Bv1, Bv2);
+        return;
+    }
+    if (SR <= 0.0) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            flux[v] = R.F[v];
+        }
+        prj_hlld_face_outputs(R.vx, R.vy, R.vz, R.bx, R.by, R.bz, v_face, Bv1, Bv2);
+        return;
+    }
+
     denom = R.rho * (SR - R.vx) - L.rho * (SL - L.vx);
     if (fabs(denom) <= 1.0e-14 *
         (fabs(R.rho * (SR - R.vx)) + fabs(L.rho * (SL - L.vx)) + 1.0)) {
         prj_riemann_hlld_fail("degenerate contact-speed denominator");
     }
     double cfmax = PRJ_MAX(cfL,cfR);
-    double theta = PRJ_MIN(1.0, pow((-PRJ_MIN(deltau,0)+cfmax)/(-PRJ_MIN(PRJ_MIN(deltav,deltaw),0)+cfmax),4.0));
+    double theta_r = (-PRJ_MIN(deltau,0)+cfmax)/(-PRJ_MIN(PRJ_MIN(deltav,deltaw),0)+cfmax);
+    theta_r *= theta_r;
+    double theta = PRJ_MIN(1.0, theta_r * theta_r);
     SM = (R.rho * R.vx * (SR - R.vx) -
         L.rho * L.vx * (SL - L.vx) + theta*(L.pt - R.pt)) / denom;
     prj_hlld_require_finite(SM, "contact speed");
@@ -365,42 +374,34 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     if (pt_star <= 0.0 || !isfinite(pt_star)) {
         prj_riemann_hlld_fail("invalid star total pressure");
     }
+    bn_small = (0.5 * bn * bn < PRJ_HLLD_SMALL_NUMBER * pt_star);
 
-    prj_hlld_outer_star(&L, SL, SM, pt_star, &Ls);
-    prj_hlld_outer_star(&R, SR, SM, pt_star, &Rs);
-    SLs = SM - fabs(bn) / sqrt(Ls.rho);
-    SRs = SM + fabs(bn) / sqrt(Rs.rho);
-    prj_hlld_require_finite(SLs, "left Alfven speed");
-    prj_hlld_require_finite(SRs, "right Alfven speed");
-    if (0.5 * bn * bn < PRJ_HLLD_SMALL_NUMBER * pt_star) {
-        Lss = Ls;
-        Rss = Rs;
-    } else {
-        prj_hlld_double_star(&Ls, &Rs, bn, &Lss, &Rss);
-    }
-
-    if (0.0 <= SL) {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-            flux[v] = L.F[v];
+    if (0.0 <= SM) {
+        prj_hlld_outer_star(&L, SL, SM, pt_star, &Ls);
+        SLs = SM - fabs(bn) / sqrt(Ls.rho);
+        prj_hlld_require_finite(SLs, "left Alfven speed");
+        if (0.0 <= SLs || bn_small) {
+            prj_hlld_flux_from_jump(L.F, SL, Ls.U, L.U, flux);
+            prj_hlld_face_outputs(Ls.vx, Ls.vy, Ls.vz, Ls.bx, Ls.by, Ls.bz, v_face, Bv1, Bv2);
+        } else {
+            prj_hlld_outer_star(&R, SR, SM, pt_star, &Rs);
+            prj_hlld_double_star_one(&Ls, &Rs, bn, 0, &ss);
+            prj_hlld_flux_from_double_jump(L.F, SL, Ls.U, L.U, SLs, ss.U, flux);
+            prj_hlld_face_outputs(ss.vx, ss.vy, ss.vz, ss.bx, ss.by, ss.bz, v_face, Bv1, Bv2);
         }
-        prj_hlld_face_outputs(L.vx, L.vy, L.vz, L.bx, L.by, L.bz, v_face, Bv1, Bv2);
-    } else if (0.0 <= SLs) {
-        prj_hlld_flux_from_jump(L.F, SL, Ls.U, L.U, flux);
-        prj_hlld_face_outputs(Ls.vx, Ls.vy, Ls.vz, Ls.bx, Ls.by, Ls.bz, v_face, Bv1, Bv2);
-    } else if (0.0 <= SM) {
-        prj_hlld_flux_from_double_jump(L.F, SL, Ls.U, L.U, SLs, Lss.U, flux);
-        prj_hlld_face_outputs(Lss.vx, Lss.vy, Lss.vz, Lss.bx, Lss.by, Lss.bz, v_face, Bv1, Bv2);
-    } else if (0.0 <= SRs) {
-        prj_hlld_flux_from_double_jump(R.F, SR, Rs.U, R.U, SRs, Rss.U, flux);
-        prj_hlld_face_outputs(Rss.vx, Rss.vy, Rss.vz, Rss.bx, Rss.by, Rss.bz, v_face, Bv1, Bv2);
-    } else if (0.0 <= SR) {
-        prj_hlld_flux_from_jump(R.F, SR, Rs.U, R.U, flux);
-        prj_hlld_face_outputs(Rs.vx, Rs.vy, Rs.vz, Rs.bx, Rs.by, Rs.bz, v_face, Bv1, Bv2);
     } else {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-            flux[v] = R.F[v];
+        prj_hlld_outer_star(&R, SR, SM, pt_star, &Rs);
+        SRs = SM + fabs(bn) / sqrt(Rs.rho);
+        prj_hlld_require_finite(SRs, "right Alfven speed");
+        if (SRs <= 0.0 || bn_small) {
+            prj_hlld_flux_from_jump(R.F, SR, Rs.U, R.U, flux);
+            prj_hlld_face_outputs(Rs.vx, Rs.vy, Rs.vz, Rs.bx, Rs.by, Rs.bz, v_face, Bv1, Bv2);
+        } else {
+            prj_hlld_outer_star(&L, SL, SM, pt_star, &Ls);
+            prj_hlld_double_star_one(&Ls, &Rs, bn, 1, &ss);
+            prj_hlld_flux_from_double_jump(R.F, SR, Rs.U, R.U, SRs, ss.U, flux);
+            prj_hlld_face_outputs(ss.vx, ss.vy, ss.vz, ss.bx, ss.by, ss.bz, v_face, Bv1, Bv2);
         }
-        prj_hlld_face_outputs(R.vx, R.vy, R.vz, R.bx, R.by, R.bz, v_face, Bv1, Bv2);
     }
 }
 #endif

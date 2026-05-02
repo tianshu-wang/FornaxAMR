@@ -39,15 +39,6 @@ static int prj_boundary_active_block(const prj_block *block)
         (mpi == 0 || block->rank == mpi->rank);
 }
 
-static int prj_boundary_point_inside(const prj_block *block, double x1, double x2, double x3)
-{
-    const double tol = 1.0e-12;
-
-    return x1 > block->xmin[0] - tol && x1 < block->xmax[0] + tol &&
-        x2 > block->xmin[1] - tol && x2 < block->xmax[1] + tol &&
-        x3 > block->xmin[2] - tol && x3 < block->xmax[2] + tol;
-}
-
 static int prj_boundary_fraction_case(double frac)
 {
     const double tol = 1.0e-2;
@@ -261,27 +252,21 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
             if (!prj_boundary_active_block(neighbor)) {
                 continue;
             }
-            for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-                for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                    for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                        double x1;
-                        double x2;
-                        double x3;
-
-                        if (i >= 0 && i < PRJ_BLOCK_SIZE &&
-                            j >= 0 && j < PRJ_BLOCK_SIZE &&
-                            k >= 0 && k < PRJ_BLOCK_SIZE) {
-                            continue;
-                        }
-
-                        x1 = neighbor->xmin[0] + ((double)i + 0.5) * neighbor->dx[0];
-                        x2 = neighbor->xmin[1] + ((double)j + 0.5) * neighbor->dx[1];
-                        x3 = neighbor->xmin[2] + ((double)k + 0.5) * neighbor->dx[2];
-
-                        if (prj_boundary_point_inside(block, x1, x2, x3)) {
+            {
+                const prj_neighbor *slot = &block->slot[n];
+                for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
+                    for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
+                        for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
+                            double x1;
+                            double x2;
+                            double x3;
                             double w[PRJ_NVAR_PRIM];
                             int sample_kind;
                             int v;
+
+                            x1 = neighbor->xmin[0] + ((double)i + 0.5) * neighbor->dx[0];
+                            x2 = neighbor->xmin[1] + ((double)j + 0.5) * neighbor->dx[1];
+                            x3 = neighbor->xmin[2] + ((double)k + 0.5) * neighbor->dx[2];
 
                             sample_kind = prj_boundary_sample_kind(block, x1, x2, x3);
                             if (sample_kind < 0) {
@@ -637,7 +622,7 @@ static double prj_boundary_restrict_bf_value(const prj_block *fine, int use_bf1,
 }
 
 static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
-    prj_block *dst_block, int use_bf1)
+    prj_block *dst_block, int use_bf1, const prj_neighbor *slot)
 {
     int dir;
 
@@ -649,9 +634,9 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
         int j;
         int k;
 
-        for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-            for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+        for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
+            for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
+                for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
                     double x[3];
                     int sidx[3];
                     double value;
@@ -662,9 +647,6 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
                     x[0] = prj_boundary_bf_face_coord(dst_block, dir, 0, i);
                     x[1] = prj_boundary_bf_face_coord(dst_block, dir, 1, j);
                     x[2] = prj_boundary_bf_face_coord(dst_block, dir, 2, k);
-                    if (!prj_boundary_bf_point_inside(src_block, x)) {
-                        continue;
-                    }
                     if (!prj_boundary_bf_index_from_coord(src_block, dir, x, sidx)) {
                         fprintf(stderr, "prj_boundary_copy_bf_same_level: source face is not grid-aligned\n");
                         exit(EXIT_FAILURE);
@@ -679,7 +661,7 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
 }
 
 static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
-    prj_block *coarse, int use_bf1)
+    prj_block *coarse, int use_bf1, const prj_neighbor *slot)
 {
     int dir;
 
@@ -690,9 +672,9 @@ static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
         int j;
         int k;
 
-        for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-            for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+        for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
+            for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
+                for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
                     double x[3];
                     double value;
 
@@ -722,7 +704,7 @@ static int prj_boundary_patch_fully_active(int fi, int fj, int fk)
 }
 
 static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
-    prj_block *fine, int use_bf1)
+    prj_block *fine, int use_bf1, const prj_neighbor *slot)
 {
     int fi;
     int fj;
@@ -730,9 +712,9 @@ static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
 
     prj_boundary_check_bf_storage(coarse, "prj_boundary_prolong_bf_to_fine");
     prj_boundary_check_bf_storage(fine, "prj_boundary_prolong_bf_to_fine");
-    for (fi = -PRJ_NGHOST; fi + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fi) {
-        for (fj = -PRJ_NGHOST; fj + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fj) {
-            for (fk = -PRJ_NGHOST; fk + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fk) {
+    for (fi = slot->recv_loc_start[0]; fi < slot->recv_loc_end[0] && fi + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fi) {
+        for (fj = slot->recv_loc_start[1]; fj < slot->recv_loc_end[1] && fj + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fj) {
+            for (fk = slot->recv_loc_start[2]; fk < slot->recv_loc_end[2] && fk + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fk) {
                 double lo[3];
                 double hi[3];
                 int ci;
@@ -917,23 +899,27 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
         if (!prj_boundary_active_block(neighbor) || neighbor->rank != block->rank) {
             continue;
         }
-        if (fill_kind == PRJ_BOUNDARY_FILL_NONRECON) {
-            if (block->slot[n].rel_level == 0) {
-                prj_boundary_copy_bf_same_level(block, neighbor, use_bf1);
-            } else if (block->slot[n].rel_level < 0) {
-                prj_boundary_restrict_bf_to_coarse(block, neighbor, use_bf1);
-            }
-        } else if (fill_kind == PRJ_BOUNDARY_FILL_RECON) {
-            if (block->slot[n].rel_level > 0) {
-                prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1);
-            }
-        } else if (fill_kind == PRJ_BOUNDARY_FILL_ALL) {
-            if (block->slot[n].rel_level == 0) {
-                prj_boundary_copy_bf_same_level(block, neighbor, use_bf1);
-            } else if (block->slot[n].rel_level < 0) {
-                prj_boundary_restrict_bf_to_coarse(block, neighbor, use_bf1);
-            } else {
-                prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1);
+        {
+            const prj_neighbor *slot = &block->slot[n];
+
+            if (fill_kind == PRJ_BOUNDARY_FILL_NONRECON) {
+                if (slot->rel_level == 0) {
+                    prj_boundary_copy_bf_same_level(block, neighbor, use_bf1, slot);
+                } else if (slot->rel_level < 0) {
+                    prj_boundary_restrict_bf_to_coarse(block, neighbor, use_bf1, slot);
+                }
+            } else if (fill_kind == PRJ_BOUNDARY_FILL_RECON) {
+                if (slot->rel_level > 0) {
+                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
+                }
+            } else if (fill_kind == PRJ_BOUNDARY_FILL_ALL) {
+                if (slot->rel_level == 0) {
+                    prj_boundary_copy_bf_same_level(block, neighbor, use_bf1, slot);
+                } else if (slot->rel_level < 0) {
+                    prj_boundary_restrict_bf_to_coarse(block, neighbor, use_bf1, slot);
+                } else {
+                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
+                }
             }
         }
     }

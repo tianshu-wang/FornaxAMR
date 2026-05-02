@@ -71,27 +71,37 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
 
         if (ar == -1) {
             slot->send_loc_start[d] = 0;
-            slot->recv_loc_start[d] = PRJ_BLOCK_SIZE - PRJ_NGHOST;
+            slot->send_loc_end[d] = PRJ_NGHOST;
+            slot->recv_loc_start[d] = PRJ_BLOCK_SIZE;
+            slot->recv_loc_end[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST;
         } else if (ar == 1) {
             slot->send_loc_start[d] = PRJ_BLOCK_SIZE - PRJ_NGHOST;
-            slot->recv_loc_start[d] = 0;
+            slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
+            slot->recv_loc_start[d] = -PRJ_NGHOST;
+            slot->recv_loc_end[d] = 0;
         } else if (slot->rel_level == 0) {
             slot->send_loc_start[d] = 0;
+            slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
             slot->recv_loc_start[d] = 0;
+            slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
         } else if (slot->rel_level > 0) {
             if (prj_neighbor_abs(b->xmin[d] - a->xmin[d]) < tol) {
                 slot->send_loc_start[d] = 0;
             } else {
                 slot->send_loc_start[d] = PRJ_BLOCK_SIZE / 2;
             }
+            slot->send_loc_end[d] = slot->send_loc_start[d] + PRJ_BLOCK_SIZE / 2;
             slot->recv_loc_start[d] = 0;
+            slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
         } else {
             slot->send_loc_start[d] = 0;
+            slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
             if (prj_neighbor_abs(a->xmin[d] - b->xmin[d]) < tol) {
                 slot->recv_loc_start[d] = 0;
             } else {
                 slot->recv_loc_start[d] = PRJ_BLOCK_SIZE / 2;
             }
+            slot->recv_loc_end[d] = slot->recv_loc_start[d] + PRJ_BLOCK_SIZE / 2;
         }
     }
 }
@@ -107,7 +117,9 @@ static void prj_neighbor_clear_derived(prj_neighbor *slot)
     slot->type = PRJ_NEIGHBOR_NONE;
     for (d = 0; d < 3; ++d) {
         slot->send_loc_start[d] = 0;
+        slot->send_loc_end[d] = 0;
         slot->recv_loc_start[d] = 0;
+        slot->recv_loc_end[d] = 0;
     }
 }
 
