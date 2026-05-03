@@ -11,12 +11,12 @@ x2max = 3.0e9
 x3min = -3.0e9
 x3max = 3.0e9
 
-root_nx = 2
-max_level = 2
+root_nx = 4
+max_level = 1
 
 cfl = 0.4
 t_end = 1.0e9
-max_steps = 20
+max_steps = 10
 output_interval = -1
 restart_interval = -1
 output_dt = -1
