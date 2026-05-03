@@ -56,12 +56,6 @@ static int prj_boundary_fraction_case(double frac)
 }
 
 enum {
-    PRJ_BOUNDARY_FILL_NONRECON = 0,
-    PRJ_BOUNDARY_FILL_RECON = 1,
-    PRJ_BOUNDARY_FILL_ALL = 2
-};
-
-enum {
     PRJ_BOUNDARY_PHYS_FACE_ONLY = 0,
     PRJ_BOUNDARY_PHYS_ALL = 1
 };

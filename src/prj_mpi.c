@@ -127,93 +127,6 @@ static void prj_mpi_decode_cell_index(int code, int *i, int *j, int *k)
     *i = code - PRJ_NGHOST;
 }
 
-static int prj_mpi_cell_point_inside(const prj_block *block, double x1, double x2, double x3)
-{
-    const double tol = 1.0e-12;
-
-    return x1 > block->xmin[0] - tol && x1 < block->xmax[0] + tol &&
-        x2 > block->xmin[1] - tol && x2 < block->xmax[1] + tol &&
-        x3 > block->xmin[2] - tol && x3 < block->xmax[2] + tol;
-}
-
-static int prj_mpi_floor_to_int(double x)
-{
-    int i = (int)x;
-
-    if ((double)i > x) {
-        i -= 1;
-    }
-    return i;
-}
-
-static int prj_mpi_abs_kind(double x, double target, double tol)
-{
-    return fabs(x - target) < tol;
-}
-
-static int prj_mpi_fraction_case(double frac)
-{
-    const double tol = 1.0e-2;
-
-    if (prj_mpi_abs_kind(frac, 0.0, tol) || prj_mpi_abs_kind(frac, 1.0, tol)) {
-        return 1;
-    }
-    if (prj_mpi_abs_kind(frac, 0.5, tol)) {
-        return 2;
-    }
-    if (prj_mpi_abs_kind(frac, 0.25, tol) || prj_mpi_abs_kind(frac, 0.75, tol)) {
-        return 3;
-    }
-    return 0;
-}
-
-static int prj_mpi_sample_kind(const prj_block *block, double x1, double x2, double x3)
-{
-    double ox[3];
-    double frac[3];
-    int cases[3];
-
-    if (block == 0) {
-        return -1;
-    }
-    ox[0] = (x1 - block->xmin[0]) / block->dx[0] - 0.5;
-    ox[1] = (x2 - block->xmin[1]) / block->dx[1] - 0.5;
-    ox[2] = (x3 - block->xmin[2]) / block->dx[2] - 0.5;
-    frac[0] = ox[0] - (double)prj_mpi_floor_to_int(ox[0]);
-    frac[1] = ox[1] - (double)prj_mpi_floor_to_int(ox[1]);
-    frac[2] = ox[2] - (double)prj_mpi_floor_to_int(ox[2]);
-    if (frac[0] < 0.0) {
-        frac[0] += 1.0;
-    }
-    if (frac[1] < 0.0) {
-        frac[1] += 1.0;
-    }
-    if (frac[2] < 0.0) {
-        frac[2] += 1.0;
-    }
-
-    cases[0] = prj_mpi_fraction_case(frac[0]);
-    cases[1] = prj_mpi_fraction_case(frac[1]);
-    cases[2] = prj_mpi_fraction_case(frac[2]);
-    if (cases[0] == 0 || cases[1] == 0 || cases[2] == 0) {
-        return -1;
-    }
-    if (cases[0] == 1 && cases[1] == 1 && cases[2] == 1) {
-        return 0;
-    }
-    if (cases[0] == 2 && cases[1] == 2 && cases[2] == 2) {
-        return 0;
-    }
-    if (cases[0] == 3 && cases[1] == 3 && cases[2] == 3) {
-        return 1;
-    }
-    fprintf(stderr,
-        "prj_mpi_sample_kind: invalid fraction case tuple (%d,%d,%d) "
-        "at (x1=%g, x2=%g, x3=%g) -- violates 2:1 AMR constraint\n",
-        cases[0], cases[1], cases[2], x1, x2, x3);
-    abort();
-}
-
 static int prj_mpi_sample_code(int sample_kind, int same_level)
 {
     return sample_kind + (same_level != 0 ? PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET : 0);
@@ -650,7 +563,8 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             continue;
         }
         for (n = 0; n < 56; ++n) {
-            int nid = block->slot[n].id;
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
             const prj_block *neighbor;
             int i;
             int j;
@@ -662,33 +576,21 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             }
             neighbor = &mesh->blocks[nid];
             before = record_count;
-            for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-                for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                    for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                        double x1;
-                        double x2;
-                        double x3;
+            int sample_kind;
+            if(slot->rel_level<=0){sample_kind=PRJ_BOUNDARY_FILL_NONRECON;}
+            else{sample_kind=PRJ_BOUNDARY_FILL_RECON;}
+            int sample_code = prj_mpi_sample_code(sample_kind, block->level == neighbor->level);
 
-                        if (i >= 0 && i < PRJ_BLOCK_SIZE &&
-                            j >= 0 && j < PRJ_BLOCK_SIZE &&
-                            k >= 0 && k < PRJ_BLOCK_SIZE) {
-                            continue;
-                        }
-                        x1 = neighbor->xmin[0] + ((double)i + 0.5) * neighbor->dx[0];
-                        x2 = neighbor->xmin[1] + ((double)j + 0.5) * neighbor->dx[1];
-                        x3 = neighbor->xmin[2] + ((double)k + 0.5) * neighbor->dx[2];
-                        if (prj_mpi_cell_point_inside(block, x1, x2, x3)) {
-                            int sample_kind = prj_mpi_sample_kind(block, x1, x2, x3);
-                            int sample_code = prj_mpi_sample_code(sample_kind, block->level == neighbor->level);
-
-                            if (prj_mpi_append_triplet(idx_send, &record_count, &idx_capacity,
-                                    nid, prj_mpi_encode_cell_index(i, j, k), sample_code) != 0) {
-                                free(send_sizes);
-                                for (axis = 0; axis < 3; ++axis) {
-                                    free(idx_send[axis]);
-                                }
-                                return 1;
+            for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
+                for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
+                    for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
+                        if (prj_mpi_append_triplet(idx_send, &record_count, &idx_capacity,
+                                nid, prj_mpi_encode_cell_index(i, j, k), sample_code) != 0) {
+                            free(send_sizes);
+                            for (axis = 0; axis < 3; ++axis) {
+                                free(idx_send[axis]);
                             }
+                            return 1;
                         }
                     }
                 }
@@ -754,63 +656,134 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
         if (!prj_block_is_active(block) || block->rank != mpi->rank) {
             continue;
         }
+        double *W_send = stage == 2 ? block->W1 : block->W;
+        double *eos_send = block->eosvar;
         for (n = 0; n < 56; ++n) {
-            int nid = block->slot[n].id;
-            const prj_block *neighbor;
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
             int i;
             int j;
             int k;
+            int v;
+
+            int sample_kind;
+            if(slot->rel_level<=0){sample_kind=PRJ_BOUNDARY_FILL_NONRECON;}
+            else{sample_kind=PRJ_BOUNDARY_FILL_RECON;}
 
             if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != buffer->receiver_rank) {
                 continue;
             }
-            neighbor = &mesh->blocks[nid];
-            for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-                for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                    for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                        double x1;
-                        double x2;
-                        double x3;
 
-                        if (i >= 0 && i < PRJ_BLOCK_SIZE &&
-                            j >= 0 && j < PRJ_BLOCK_SIZE &&
-                            k >= 0 && k < PRJ_BLOCK_SIZE) {
-                            continue;
-                        }
-                        x1 = neighbor->xmin[0] + ((double)i + 0.5) * neighbor->dx[0];
-                        x2 = neighbor->xmin[1] + ((double)j + 0.5) * neighbor->dx[1];
-                        x3 = neighbor->xmin[2] + ((double)k + 0.5) * neighbor->dx[2];
-                        if (prj_mpi_cell_point_inside(block, x1, x2, x3)) {
-                            double w[PRJ_NVAR_PRIM];
-                            double eosv[PRJ_NVAR_EOSVAR];
-                            int sample_kind;
-                            int v;
-
-                            sample_kind = prj_mpi_sample_kind(block, x1, x2, x3);
-                            if (sample_kind < 0) {
-                                fprintf(stderr,
-                                    "prj_mpi_pack_ghost_values: failed to classify ghost sample "
-                                    "src_block=%d dst_block=%d i=%d j=%d k=%d x=(%.17g, %.17g, %.17g)\n",
-                                    block->id, nid, i, j, k, x1, x2, x3);
-                                exit(EXIT_FAILURE);
-                            }
-                            if (fill_kind == 2 || sample_kind == fill_kind) {
-                                prj_boundary_get_prim(block, stage, x1, x2, x3, w);
-                                prj_boundary_get_eosvar(block, x1, x2, x3, eosv);
-                            } else {
-                                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                                    w[v] = 0.0;
-                                }
-                                for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                    eosv[v] = 0.0;
-                                }
-                            }
+            for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; ++i) {
+                for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; ++j) {
+                    for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; ++k) {
+                        if (fill_kind != PRJ_BOUNDARY_FILL_ALL && sample_kind != fill_kind) {
                             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                                buffer->cell_buffer_send[pos++] = w[v];
+                                buffer->cell_buffer_send[pos++] = 0.0;
                             }
                             for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                buffer->cell_buffer_send[pos++] = eosv[v];
+                                buffer->cell_buffer_send[pos++] = 0.0;
                             }
+                            continue;
+                        }
+                        if (slot->rel_level==0){
+                            // Same level
+                            for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                                buffer->cell_buffer_send[pos++] =
+                                    W_send[VIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
+                            }
+                            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+                                buffer->cell_buffer_send[pos++] =
+                                    eos_send[EIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
+                            }
+                        } else if (slot->rel_level==-1) {
+                            // Neighbor is coarser, restriction
+                            for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                                buffer->cell_buffer_send[pos++] = 
+                                    0.125*
+                                    (W_send[VIDX(v, 2*i+slot->send_loc_start[0],   
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0], 
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0], 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0], 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2]+1)]);
+                            }
+                            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+                                buffer->cell_buffer_send[pos++] = 
+                                    0.125*
+                                    (eos_send[EIDX(v, 2*i+slot->send_loc_start[0],   
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +eos_send[EIDX(v, 2*i+slot->send_loc_start[0], 
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +eos_send[EIDX(v, 2*i+slot->send_loc_start[0], 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +eos_send[EIDX(v, 2*i+slot->send_loc_start[0], 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1], 
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2])]
+                                    +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
+                                                    2*j+slot->send_loc_start[1]+1, 
+                                                    2*k+slot->send_loc_start[2]+1)]);
+                            }
+                        } else if (slot->rel_level==1) {
+                            // Neighbor is finer, prolongation
+                            double slope[3]={0};
+                            for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                                prj_boundary_get_slope(W_send, v, 
+                                                       i/2+slot->send_loc_start[0], 
+                                                       j/2+slot->send_loc_start[1], 
+                                                       k/2+slot->send_loc_start[2], 
+                                                       0, slope);
+                                buffer->cell_buffer_send[pos++] = 
+                                    W_send[VIDX(v, i/2+slot->send_loc_start[0], j/2+slot->send_loc_start[1], k/2+slot->send_loc_start[2])]
+                                   +((i%2==0) ? +0.25*slope[0] : -0.25*slope[0])
+                                   +((j%2==0) ? +0.25*slope[1] : -0.25*slope[1])
+                                   +((k%2==0) ? +0.25*slope[2] : -0.25*slope[2]);
+                            }
+                            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+                                prj_boundary_get_slope(eos_send, v, 
+                                                       i/2+slot->send_loc_start[0], 
+                                                       j/2+slot->send_loc_start[1], 
+                                                       k/2+slot->send_loc_start[2], 
+                                                       1, slope);
+                                buffer->cell_buffer_send[pos++] = 
+                                    eos_send[EIDX(v, i/2+slot->send_loc_start[0], j/2+slot->send_loc_start[1], k/2+slot->send_loc_start[2])]
+                                   +((i%2==0) ? +0.25*slope[0] : -0.25*slope[0])
+                                   +((j%2==0) ? +0.25*slope[1] : -0.25*slope[1])
+                                   +((k%2==0) ? +0.25*slope[2] : -0.25*slope[2]);
+                            }
+                        } else {
+                          fprintf(stderr,"slot->rel_level unrecognized: %d\n", slot->rel_level);
+                          exit(1);
                         }
                     }
                 }

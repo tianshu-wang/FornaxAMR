@@ -154,6 +154,12 @@ enum prj_eos_kind {
     PRJ_EOS_KIND_TABLE = 1
 };
 
+enum {
+    PRJ_BOUNDARY_FILL_NONRECON = 0,
+    PRJ_BOUNDARY_FILL_RECON = 1,
+    PRJ_BOUNDARY_FILL_ALL = 2
+};
+
 #define PRJ_MAX(a,b) (((a) > (b)) ? (a) : (b))
 #define PRJ_MIN(a,b) (((a) < (b)) ? (a) : (b))
 
