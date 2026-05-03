@@ -32,7 +32,7 @@ static double prj_neighbor_abs(double x)
 
 void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_neighbor *slot)
 {
-    const double tol = 1.0e-12;
+    double tol=0;
     int axisrel[3];
     int touching;
     int d;
@@ -43,6 +43,7 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
 
     touching = 0;
     for (d = 0; d < 3; ++d) {
+        tol = 1.0e-2*PRJ_MIN(a->dx[d],b->dx[d]);
         if (prj_neighbor_abs(a->xmax[d] - b->xmin[d]) < tol) {
             axisrel[d] = 1;
             touching += 1;
@@ -71,6 +72,7 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
         int ri_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
         int si_lo = -PRJ_NGHOST;
         int si_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+        tol = 1.0e-2*PRJ_MIN(a->dx[d],b->dx[d]);
 
         while (ri_lo < ri_hi &&
                b->xmin[d] + ((double)ri_lo + 0.5) * b->dx[d] < a->xmin[d] - tol)
