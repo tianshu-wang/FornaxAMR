@@ -72,34 +72,77 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
         int ri_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
         int si_lo = -PRJ_NGHOST;
         int si_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
-        tol = 1.0e-2*PRJ_MIN(a->dx[d],b->dx[d]);
-
-        while (ri_lo < ri_hi &&
-               b->xmin[d] + ((double)ri_lo + 0.5) * b->dx[d] < a->xmin[d] - tol)
-            ri_lo++;
-        while (ri_hi > ri_lo &&
-               b->xmin[d] + ((double)ri_hi - 0.5) * b->dx[d] >= a->xmax[d] + tol)
-            ri_hi--;
-
-        slot->recv_loc_start[d] = ri_lo;
-        slot->recv_loc_end[d] = ri_hi;
-
-        if (ri_hi > ri_lo) {
-            double rpos_lo = b->xmin[d] + ((double)ri_lo + 0.5) * b->dx[d];
-            double rpos_hi = b->xmin[d] + ((double)ri_hi - 0.5) * b->dx[d];
-            while (si_lo < si_hi &&
-                   a->xmin[d] + ((double)si_lo + 0.5) * a->dx[d] < rpos_lo - tol)
-                si_lo++;
-            while (si_hi > si_lo &&
-                   a->xmin[d] + ((double)si_hi - 0.5) * a->dx[d] > rpos_hi + tol)
-                si_hi--;
-        } else {
-            si_lo = 0;
-            si_hi = 0;
-        }
-        slot->send_loc_start[d] = si_lo;
-        slot->send_loc_end[d] = si_hi;
         
+        if (slot->rel_level==0){
+            // Same level
+            if (axisrel[d]==1) {
+                slot->recv_loc_start[d] = -PRJ_NGHOST;
+                slot->recv_loc_end[d] = 0;
+                slot->send_loc_start[d] = PRJ_BLOCK_SIZE-PRJ_NGHOST;
+                slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
+            } else if (axisrel[d]==-1) {
+                slot->recv_loc_start[d] = PRJ_BLOCK_SIZE;
+                slot->recv_loc_end[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+                slot->send_loc_start[d] = 0;
+                slot->send_loc_end[d] = PRJ_NGHOST;
+            } else {
+                slot->recv_loc_start[d] = 0;
+                slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
+                slot->send_loc_start[d] = 0;
+                slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
+            }
+        } else if (slot->rel_level==-1) {
+            // Neighbor is coarser
+            if (axisrel[d]==1) {
+                slot->recv_loc_start[d] = -PRJ_NGHOST;
+                slot->recv_loc_end[d] = 0;
+                slot->send_loc_start[d] = PRJ_BLOCK_SIZE-2*PRJ_NGHOST;
+                slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
+            } else if (axisrel[d]==-1) {
+                slot->recv_loc_start[d] = PRJ_BLOCK_SIZE;
+                slot->recv_loc_end[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+                slot->send_loc_start[d] = 0;
+                slot->send_loc_end[d] = 2*PRJ_NGHOST;
+            } else {
+                if ((b->xmin[d]+b->xmax[d]) > (a->xmin[d]+a->xmax[d])) {
+                    slot->recv_loc_start[d] = 0;
+                    slot->recv_loc_end[d] = PRJ_BLOCK_SIZE/2;
+                } else {
+                    slot->recv_loc_start[d] = PRJ_BLOCK_SIZE/2;
+                    slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
+                }
+                slot->send_loc_start[d] = 0;
+                slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
+            }
+        } else if (slot->rel_level==1) {
+            // Neighbor is finer
+            if (axisrel[d]==1) {
+                slot->recv_loc_start[d] = -PRJ_NGHOST;
+                slot->recv_loc_end[d] = 0;
+                slot->send_loc_start[d] = PRJ_BLOCK_SIZE-PRJ_NGHOST/2;
+                slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
+            } else if (axisrel[d]==-1) {
+                slot->recv_loc_start[d] = PRJ_BLOCK_SIZE;
+                slot->recv_loc_end[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+                slot->send_loc_start[d] = 0;
+                slot->send_loc_end[d] = PRJ_NGHOST/2;
+            } else {
+                if ((b->xmin[d]+b->xmax[d]) > (a->xmin[d]+a->xmax[d])) {
+                    slot->recv_loc_start[d] = -PRJ_NGHOST;
+                    slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
+                    slot->send_loc_start[d] = PRJ_BLOCK_SIZE/2-PRJ_NGHOST/2;
+                    slot->send_loc_end[d] = PRJ_BLOCK_SIZE;
+                } else {
+                    slot->recv_loc_start[d] = 0;
+                    slot->recv_loc_end[d] = PRJ_BLOCK_SIZE+PRJ_NGHOST;
+                    slot->send_loc_start[d] = 0;
+                    slot->send_loc_end[d] = PRJ_BLOCK_SIZE/2+PRJ_NGHOST/2;
+                }
+            }
+        } else {
+            fprintf(stderr,"Neighbor geometry error!\n");
+            exit(1);
+        }
     }
 }
 
