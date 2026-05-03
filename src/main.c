@@ -363,7 +363,7 @@ int main(int argc, char *argv[])
     prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
 #if PRJ_MHD
-    prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
+    prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0, &sim.eos);
 #endif
 #if PRJ_USE_GRAVITY
     prj_gravity_monopole_reduce(&sim.mesh, 1);
@@ -460,7 +460,7 @@ int main(int argc, char *argv[])
                 prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
             #if PRJ_MHD
-                prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0);
+                prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0, &sim.eos);
             #endif
                 PRJ_TIMER_STOP(&timer, "ghost_fill_post_amr");
             #if PRJ_USE_GRAVITY

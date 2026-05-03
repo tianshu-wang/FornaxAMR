@@ -613,7 +613,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     prj_eos_fill_mesh(mesh, eos, 2);
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_fill_bf_stage1");
-    prj_boundary_fill_bf(mesh, bc, 1);
+    prj_boundary_fill_bf(mesh, bc, 1, eos);
     PRJ_TIMER_STOP(timer, "mhd_fill_bf_stage1");
 #endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage1");
@@ -715,7 +715,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     prj_eos_fill_mesh(mesh, eos, 1);
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_fill_bf_stage2");
-    prj_boundary_fill_bf(mesh, bc, 0);
+    prj_boundary_fill_bf(mesh, bc, 0, eos);
     PRJ_TIMER_STOP(timer, "mhd_fill_bf_stage2");
 #endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage2");

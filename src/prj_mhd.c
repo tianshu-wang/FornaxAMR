@@ -608,9 +608,9 @@ void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1)
         src[d] = use_bf1 != 0 ? block->Bf1[d] : block->Bf[d];
     }
 
-    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
                 double wcell[PRJ_NVAR_PRIM];
                 double ucell[PRJ_NVAR_CONS];
                 double b1;

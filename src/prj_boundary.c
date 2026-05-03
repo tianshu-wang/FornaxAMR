@@ -925,7 +925,7 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
     }
 }
 
-void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1)
+void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos *eos)
 {
     prj_mpi *mpi = prj_mpi_current();
     int i;
@@ -956,6 +956,11 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1)
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
+        }
+    }
+    for (i = 0; i < mesh->nblocks; ++i) {
+        if (prj_boundary_active_block(&mesh->blocks[i])) {
+            prj_mhd_bf2bc(eos, &mesh->blocks[i], use_bf1);
         }
     }
 }
