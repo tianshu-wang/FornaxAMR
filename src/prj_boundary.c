@@ -554,8 +554,11 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
                         continue;
                     }
                     value = src[IDX(i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
-                    prj_boundary_write_bf_face(dst_block, use_bf1, dir, i, j, k, value,
-                        PRJ_MHD_FIDELITY_SAME);
+                    prj_boundary_write_bf_face(dst_block, use_bf1, dir, 
+                                               i+slot->recv_loc_start[0], 
+                                               j+slot->recv_loc_start[1], 
+                                               k+slot->recv_loc_start[2], 
+                                               value, PRJ_MHD_FIDELITY_SAME);
                 }
             }
         }
@@ -607,8 +610,11 @@ static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
                                         +src[IDX(it_send2[0],it_send2[1],it_send2[2])]
                                         +src[IDX(it_send3[0],it_send3[1],it_send3[2])]
                                         );
-                    prj_boundary_write_bf_face(coarse, use_bf1, dir, i, j, k, value,
-                        PRJ_MHD_FIDELITY_FINER);
+                    prj_boundary_write_bf_face(coarse, use_bf1, dir, 
+                                               i+slot->recv_loc_start[0], 
+                                               j+slot->recv_loc_start[1], 
+                                               k+slot->recv_loc_start[2], 
+                                               value, PRJ_MHD_FIDELITY_FINER);
                 }
             }
         }
@@ -789,6 +795,8 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
         if (!prj_boundary_active_block(neighbor) || neighbor->rank != block->rank) {
             continue;
         }
+        
+
         {
             const prj_neighbor *slot = &block->slot[n];
 
