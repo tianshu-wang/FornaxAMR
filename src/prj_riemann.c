@@ -765,47 +765,52 @@ void prj_riemann_flux_send(prj_mesh *mesh)
 
         for (n = 0; n < 56; ++n) {
             const prj_neighbor *slot = &block->slot[n];
+            if (slot->type!=PRJ_NEIGHBOR_FACE||slot->rel_level>=0||slot->rank!=my_rank) continue;
             int nid = slot->id;
-            prj_block *neighbor;
-            int axis, side, tan0, tan1, it0, it1;
-
             if (nid < 0 || nid >= mesh->nblocks) continue;
-            neighbor = &mesh->blocks[nid];
-            if (neighbor->id < 0 || neighbor->active != 1) continue;
-            if (neighbor->rank != my_rank) continue;
-
+            prj_block *neighbor = &mesh->blocks[nid];
+            
+            int axis, side, tan0, tan1, it0, it1;
             axis = prj_riemann_face_axis(block, neighbor->xmin, neighbor->xmax, &side);
             if (axis < 0) continue;
-            if (neighbor->dx[axis] <= block->dx[axis]) continue;
 
             tan0 = (axis + 1) % 3;
             tan1 = (axis + 2) % 3;
 
-            for (it0 = 0; it0 < PRJ_BLOCK_SIZE; ++it0) {
-                for (it1 = 0; it1 < PRJ_BLOCK_SIZE; ++it1) {
-                    int cf[3] = {0, 0, 0};
-                    double cmin0, cmax0, cmin1, cmax1;
-                    double flux[PRJ_NVAR_CONS];
-                    int v;
+            for (it0 = 0; it0 < slot->recv_loc_end[tan0]-slot->recv_loc_start[tan0]; ++it0) {
+                for (it1 = 0; it1 < slot->recv_loc_end[tan1]-slot->recv_loc_start[tan1]; ++it1) {
+                    int it_recv[3] = {0, 0, 0};
+                    int it_send0[3] = {0, 0, 0};
+                    int it_send1[3] = {0, 0, 0};
+                    int it_send2[3] = {0, 0, 0};
+                    int it_send3[3] = {0, 0, 0};
+                    it_recv[axis] = side == 1 ? 0 : PRJ_BLOCK_SIZE;
+                    it_recv[tan0] = it0+slot->recv_loc_start[tan0];
+                    it_recv[tan1] = it1+slot->recv_loc_start[tan1];
+                    
+                    it_send0[axis] = side == 1 ? PRJ_BLOCK_SIZE : 0;
+                    it_send0[tan0] = 2*it0+slot->send_loc_start[tan0];
+                    it_send0[tan1] = 2*it1+slot->send_loc_start[tan1];
+                    
+                    it_send1[axis] = it_send0[axis];
+                    it_send1[tan0] = 2*it0+slot->send_loc_start[tan0]+1;
+                    it_send1[tan1] = 2*it1+slot->send_loc_start[tan1];
+                    
+                    it_send2[axis] = it_send0[axis];
+                    it_send2[tan0] = 2*it0+slot->send_loc_start[tan0];
+                    it_send2[tan1] = 2*it1+slot->send_loc_start[tan1]+1;
 
-                    cf[axis] = side == 1 ? 0 : PRJ_BLOCK_SIZE;
-                    cf[tan0] = it0;
-                    cf[tan1] = it1;
-                    cmin0 = neighbor->xmin[tan0] + (double)it0 * neighbor->dx[tan0];
-                    cmax0 = cmin0 + neighbor->dx[tan0];
-                    cmin1 = neighbor->xmin[tan1] + (double)it1 * neighbor->dx[tan1];
-                    cmax1 = cmin1 + neighbor->dx[tan1];
-
-                    if (!prj_blocks_overlap_open(cmin0, cmax0, block->xmin[tan0], block->xmax[tan0]) ||
-                        !prj_blocks_overlap_open(cmin1, cmax1, block->xmin[tan1], block->xmax[tan1]))
-                        continue;
-
-                    if (!prj_riemann_restrict_one(block, axis, side, cmin0, cmax0, cmin1, cmax1,
-                            tan0, tan1, flux))
-                        continue;
-
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v)
-                        neighbor->flux[axis][VIDX(v, cf[0], cf[1], cf[2])] = flux[v];
+                    it_send3[axis] = it_send0[axis];
+                    it_send3[tan0] = 2*it0+slot->send_loc_start[tan0]+1;
+                    it_send3[tan1] = 2*it1+slot->send_loc_start[tan1]+1;
+                    for (int v = 0; v < PRJ_NVAR_CONS; ++v) {
+                        neighbor->flux[axis][VIDX(v, it_recv[0], it_recv[1], it_recv[2])] = 
+                            0.25 * (block->flux[axis][VIDX(v, it_send0[0], it_send0[1], it_send0[2])]
+                                   +block->flux[axis][VIDX(v, it_send1[0], it_send1[1], it_send1[2])]
+                                   +block->flux[axis][VIDX(v, it_send2[0], it_send2[1], it_send2[2])]
+                                   +block->flux[axis][VIDX(v, it_send3[0], it_send3[1], it_send3[2])]
+                                   );
+                    }
                 }
             }
         }
