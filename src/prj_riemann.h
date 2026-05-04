@@ -18,5 +18,14 @@ void prj_riemann_hlld(const double *WL, const double *WR,
 #endif
 int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, double pR);
 void prj_riemann_flux_send(prj_mesh *mesh);
+int prj_blocks_overlap_open(double amin, double amax, double bmin, double bmax);
+double prj_overlap_length(double amin, double amax, double bmin, double bmax);
+int prj_riemann_face_axis(const prj_block *block, const double slot_xmin[3],
+    const double slot_xmax[3], int *side_out);
+int prj_riemann_restrict_one(
+    const prj_block *fine, int axis, int side,
+    double cmin0, double cmax0, double cmin1, double cmax1,
+    int tan0, int tan1,
+    double *dst);
 
 #endif

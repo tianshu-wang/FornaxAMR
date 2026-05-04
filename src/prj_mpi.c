@@ -1593,6 +1593,182 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
 #endif
 }
 
+void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)
+{
+#if defined(PRJ_ENABLE_MPI)
+    int nn;
+    int *sc;
+    int *scap;
+    int **si;
+    double **sv;
+    int *rc;
+    int **ri;
+    double **rv;
+    MPI_Request *reqs;
+    int req_count;
+    int nb;
+    int bidx;
+
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1 || mpi->neighbor_number == 0) {
+        return;
+    }
+
+    nn = mpi->neighbor_number;
+    sc  = (int *)calloc((size_t)nn, sizeof(int));
+    scap= (int *)calloc((size_t)nn, sizeof(int));
+    si = (int **)calloc((size_t)nn, sizeof(int *));
+    sv = (double **)calloc((size_t)nn, sizeof(double *));
+    rc  = (int *)calloc((size_t)nn, sizeof(int));
+    ri = (int **)calloc((size_t)nn, sizeof(int *));
+    rv = (double **)calloc((size_t)nn, sizeof(double *));
+    reqs = (MPI_Request *)malloc((size_t)(4 * nn) * sizeof(MPI_Request));
+    req_count = 0;
+
+    if (!sc || !scap || !si || !sv || !rc || !ri || !rv || !reqs) {
+        fprintf(stderr, "prj_mpi_exchange_fluxes: MPI alloc failed\n");
+        exit(1);
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int n;
+
+        if (block->id < 0 || block->active != 1 || block->rank != mpi->rank) continue;
+
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
+            int axis, side, tan0, tan1, it0, it1;
+
+            if (nid < 0 || nid >= mesh->nblocks) continue;
+            if (slot->rank == mpi->rank) continue;
+            if (slot->dx[0] == 0.0 && slot->dx[1] == 0.0 && slot->dx[2] == 0.0) continue;
+
+            nb = -1;
+            {
+                int nb2;
+                for (nb2 = 0; nb2 < nn; ++nb2) {
+                    if (mpi->neighbor_buffer[nb2].receiver_rank == slot->rank) {
+                        nb = nb2; break;
+                    }
+                }
+            }
+            if (nb < 0) continue;
+
+            axis = prj_riemann_face_axis(block, slot->xmin, slot->xmax, &side);
+            if (axis < 0) continue;
+            if (slot->dx[axis] <= block->dx[axis]) continue;
+
+            tan0 = (axis + 1) % 3;
+            tan1 = (axis + 2) % 3;
+
+            for (it0 = 0; it0 < PRJ_BLOCK_SIZE; ++it0) {
+                for (it1 = 0; it1 < PRJ_BLOCK_SIZE; ++it1) {
+                    int cf[3] = {0, 0, 0};
+                    double cmin0, cmax0, cmin1, cmax1;
+                    double flux[PRJ_NVAR_CONS];
+                    int e2;
+
+                    cf[axis] = side == 1 ? 0 : PRJ_BLOCK_SIZE;
+                    cf[tan0] = it0;
+                    cf[tan1] = it1;
+                    cmin0 = slot->xmin[tan0] + (double)it0 * slot->dx[tan0];
+                    cmax0 = cmin0 + slot->dx[tan0];
+                    cmin1 = slot->xmin[tan1] + (double)it1 * slot->dx[tan1];
+                    cmax1 = cmin1 + slot->dx[tan1];
+
+                    if (!prj_blocks_overlap_open(cmin0, cmax0, block->xmin[tan0], block->xmax[tan0]) ||
+                        !prj_blocks_overlap_open(cmin1, cmax1, block->xmin[tan1], block->xmax[tan1]))
+                        continue;
+
+                    if (!prj_riemann_restrict_one(block, axis, side, cmin0, cmax0, cmin1, cmax1,
+                            tan0, tan1, flux))
+                        continue;
+
+                    if (sc[nb] >= scap[nb]) {
+                        int nc = scap[nb] == 0 ? 64 : scap[nb] * 2;
+                        int *ni2 = (int *)realloc(si[nb], (size_t)(5 * nc) * sizeof(int));
+                        double *nv2 = (double *)realloc(sv[nb], (size_t)(nc * PRJ_NVAR_CONS) * sizeof(double));
+
+                        if (!ni2 || !nv2) {
+                            fprintf(stderr, "prj_mpi_exchange_fluxes: send buf realloc failed\n");
+                            exit(1);
+                        }
+                        si[nb] = ni2; sv[nb] = nv2; scap[nb] = nc;
+                    }
+                    e2 = sc[nb];
+                    si[nb][5*e2+0] = nid;
+                    si[nb][5*e2+1] = cf[0];
+                    si[nb][5*e2+2] = cf[1];
+                    si[nb][5*e2+3] = cf[2];
+                    si[nb][5*e2+4] = axis;
+                    memcpy(sv[nb] + (size_t)e2 * PRJ_NVAR_CONS, flux, PRJ_NVAR_CONS * sizeof(double));
+                    sc[nb]++;
+                }
+            }
+        }
+    }
+
+    for (nb = 0; nb < nn; ++nb) {
+        MPI_Sendrecv(&sc[nb], 1, MPI_INT, mpi->neighbor_buffer[nb].receiver_rank, 200,
+            &rc[nb], 1, MPI_INT, mpi->neighbor_buffer[nb].receiver_rank, 200,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+
+    for (nb = 0; nb < nn; ++nb) {
+        int rk = mpi->neighbor_buffer[nb].receiver_rank;
+
+        if (rc[nb] > 0) {
+            ri[nb] = (int *)malloc((size_t)(5 * rc[nb]) * sizeof(int));
+            rv[nb] = (double *)malloc((size_t)(rc[nb] * PRJ_NVAR_CONS) * sizeof(double));
+            if (!ri[nb] || !rv[nb]) {
+                fprintf(stderr, "prj_mpi_exchange_fluxes: recv buf alloc failed\n");
+                exit(1);
+            }
+            MPI_Irecv(ri[nb], 5 * rc[nb], MPI_INT,    rk, 201, MPI_COMM_WORLD, &reqs[req_count++]);
+            MPI_Irecv(rv[nb], rc[nb] * PRJ_NVAR_CONS, MPI_DOUBLE, rk, 202, MPI_COMM_WORLD, &reqs[req_count++]);
+        }
+        if (sc[nb] > 0) {
+            MPI_Isend(si[nb], 5 * sc[nb], MPI_INT,    rk, 201, MPI_COMM_WORLD, &reqs[req_count++]);
+            MPI_Isend(sv[nb], sc[nb] * PRJ_NVAR_CONS, MPI_DOUBLE, rk, 202, MPI_COMM_WORLD, &reqs[req_count++]);
+        }
+    }
+    if (req_count > 0) MPI_Waitall(req_count, reqs, MPI_STATUSES_IGNORE);
+
+    for (nb = 0; nb < nn; ++nb) {
+        if (rc[nb] == 0 || !ri[nb] || !rv[nb]) continue;
+        int e;
+        for (e = 0; e < rc[nb]; ++e) {
+            int blk_id = ri[nb][5*e+0];
+            int ci     = ri[nb][5*e+1];
+            int cj     = ri[nb][5*e+2];
+            int ck     = ri[nb][5*e+3];
+            int faxis  = ri[nb][5*e+4];
+            prj_block *coarse;
+            int v;
+
+            if (blk_id < 0 || blk_id >= mesh->nblocks) continue;
+            if (faxis < 0 || faxis >= 3) continue;
+            coarse = &mesh->blocks[blk_id];
+            if (coarse->id < 0 || coarse->active != 1 || coarse->rank != mpi->rank) continue;
+            if (coarse->flux[faxis] == 0) continue;
+            for (v = 0; v < PRJ_NVAR_CONS; ++v)
+                coarse->flux[faxis][VIDX(v, ci, cj, ck)] = rv[nb][(size_t)e * PRJ_NVAR_CONS + v];
+        }
+    }
+
+    for (nb = 0; nb < nn; ++nb) {
+        free(si[nb]); free(sv[nb]);
+        free(ri[nb]); free(rv[nb]);
+    }
+    free(sc); free(scap); free(si); free(sv);
+    free(rc); free(ri); free(rv); free(reqs);
+#else
+    (void)mesh;
+    (void)mpi;
+#endif
+}
+
 
 double prj_mpi_min_dt(double local_dt)
 {
