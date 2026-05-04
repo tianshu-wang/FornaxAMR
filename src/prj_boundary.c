@@ -677,13 +677,12 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
         int j;
         int k;
 
-        for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]+(dir==0)?1:0; ++i) {
-            for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]+(dir==1)?1:0; ++j) {
-                for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]+(dir==2)?1:0; ++k) {
+        for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; ++i) {
+            for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; ++j) {
+                for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; ++k) {
                     double x[3];
                     int sidx[3];
                     double value;
-
                     if (prj_boundary_bf_face_active(dir, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])) {
                         continue;
                     }
@@ -711,9 +710,9 @@ static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
 
         int tan0 = (dir + 1) % 3;
         int tan1 = (dir + 2) % 3;
-        for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]+(dir==0)?1:0; ++i) {
-            for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]+(dir==1)?1:0; ++j) {
-                for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]+(dir==2)?1:0; ++k) {
+        for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; ++i) {
+            for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; ++j) {
+                for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; ++k) {
                     int it_send0[3] = {0, 0, 0};
                     int it_send1[3] = {0, 0, 0};
                     int it_send2[3] = {0, 0, 0};
@@ -776,6 +775,11 @@ static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
                 int ci = i/2+slot->send_loc_start[0];
                 int cj = j/2+slot->send_loc_start[1];
                 int ck = k/2+slot->send_loc_start[2];
+                if (fi+2 >=  PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+                    fj+2 >=  PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+                    fk+2 >=  PRJ_BLOCK_SIZE + PRJ_NGHOST) {
+                    continue;
+                }
                 prj_mhd_bf_prolongate(coarse, fine, ci, cj, ck, fi, fj, fk, use_bf1);
             }
         }
