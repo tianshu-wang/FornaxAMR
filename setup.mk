@@ -1,1 +1,1 @@
-setups/cc.mk
+setups/magnetized_cc.mk

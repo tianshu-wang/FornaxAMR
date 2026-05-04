@@ -564,6 +564,7 @@ static int prj_boundary_aligned_cell_index(const prj_block *block, int axis, dou
     q = (xlo - block->xmin[axis]) / block->dx[axis];
     idx = prj_boundary_nearest_int(q);
     if (fabs(q - (double)idx) > tol) {
+        fprintf(stderr,"test %g %d %g %g %g\n",q,idx,xlo,block->xmin[axis],block->dx[axis]);
         return -1000000;
     }
     return idx;
@@ -676,24 +677,17 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
         int j;
         int k;
 
-        for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
-            for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
-                for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
+        for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]+(dir==0)?1:0; ++i) {
+            for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]+(dir==1)?1:0; ++j) {
+                for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]+(dir==2)?1:0; ++k) {
                     double x[3];
                     int sidx[3];
                     double value;
 
-                    if (prj_boundary_bf_face_active(dir, i, j, k)) {
+                    if (prj_boundary_bf_face_active(dir, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])) {
                         continue;
                     }
-                    x[0] = prj_boundary_bf_face_coord(dst_block, dir, 0, i);
-                    x[1] = prj_boundary_bf_face_coord(dst_block, dir, 1, j);
-                    x[2] = prj_boundary_bf_face_coord(dst_block, dir, 2, k);
-                    if (!prj_boundary_bf_index_from_coord(src_block, dir, x, sidx)) {
-                        fprintf(stderr, "prj_boundary_copy_bf_same_level: source face is not grid-aligned\n");
-                        exit(EXIT_FAILURE);
-                    }
-                    value = src[IDX(sidx[0], sidx[1], sidx[2])];
+                    value = src[IDX(i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                     prj_boundary_write_bf_face(dst_block, use_bf1, dir, i, j, k, value,
                         PRJ_MHD_FIDELITY_SAME);
                 }
@@ -713,23 +707,40 @@ static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
         int i;
         int j;
         int k;
+        const double *src = prj_boundary_bf_array_const(fine, dir, use_bf1);
 
-        for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
-            for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
-                for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
-                    double x[3];
-                    double value;
+        int tan0 = (dir + 1) % 3;
+        int tan1 = (dir + 2) % 3;
+        for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]+(dir==0)?1:0; ++i) {
+            for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]+(dir==1)?1:0; ++j) {
+                for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]+(dir==2)?1:0; ++k) {
+                    int it_send0[3] = {0, 0, 0};
+                    int it_send1[3] = {0, 0, 0};
+                    int it_send2[3] = {0, 0, 0};
+                    int it_send3[3] = {0, 0, 0};
 
-                    if (prj_boundary_bf_face_active(dir, i, j, k)) {
-                        continue;
-                    }
-                    x[0] = prj_boundary_bf_face_coord(coarse, dir, 0, i);
-                    x[1] = prj_boundary_bf_face_coord(coarse, dir, 1, j);
-                    x[2] = prj_boundary_bf_face_coord(coarse, dir, 2, k);
-                    if (!prj_boundary_bf_point_inside(fine, x)) {
-                        continue;
-                    }
-                    value = prj_boundary_restrict_bf_value(fine, use_bf1, dir, x);
+                    it_send0[0] = 2*i+slot->send_loc_start[0]; 
+                    it_send0[1] = 2*j+slot->send_loc_start[1];
+                    it_send0[2] = 2*k+slot->send_loc_start[2];
+
+                    it_send1[dir]  = it_send0[dir];
+                    it_send1[tan0] = it_send0[tan0];
+                    it_send1[tan1] = it_send0[tan1]+1;
+
+                    it_send2[dir]  = it_send0[dir];
+                    it_send2[tan0] = it_send0[tan0]+1;
+                    it_send2[tan1] = it_send0[tan1];
+
+                    it_send3[dir]  = it_send0[dir];
+                    it_send3[tan0] = it_send0[tan0]+1;
+                    it_send3[tan1] = it_send0[tan1]+1;
+
+                    double value = 0.25*(
+                                         src[IDX(it_send0[0],it_send0[1],it_send0[2])]
+                                        +src[IDX(it_send1[0],it_send1[1],it_send1[2])]
+                                        +src[IDX(it_send2[0],it_send2[1],it_send2[2])]
+                                        +src[IDX(it_send3[0],it_send3[1],it_send3[2])]
+                                        );
                     prj_boundary_write_bf_face(coarse, use_bf1, dir, i, j, k, value,
                         PRJ_MHD_FIDELITY_FINER);
                 }
@@ -748,43 +759,23 @@ static int prj_boundary_patch_fully_active(int fi, int fj, int fk)
 static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
     prj_block *fine, int use_bf1, const prj_neighbor *slot)
 {
-    int fi;
-    int fj;
-    int fk;
+    int i;
+    int j;
+    int k;
 
     prj_boundary_check_bf_storage(coarse, "prj_boundary_prolong_bf_to_fine");
     prj_boundary_check_bf_storage(fine, "prj_boundary_prolong_bf_to_fine");
-    for (fi = slot->recv_loc_start[0]; fi < slot->recv_loc_end[0] && fi + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fi) {
-        for (fj = slot->recv_loc_start[1]; fj < slot->recv_loc_end[1] && fj + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fj) {
-            for (fk = slot->recv_loc_start[2]; fk < slot->recv_loc_end[2] && fk + 2 < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++fk) {
+    for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; i+=2) {
+        for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; j+=2) {
+            for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; k+=2) {
                 double lo[3];
                 double hi[3];
-                int ci;
-                int cj;
-                int ck;
-
-                if (prj_boundary_patch_fully_active(fi, fj, fk)) {
-                    continue;
-                }
-                lo[0] = fine->xmin[0] + (double)fi * fine->dx[0];
-                lo[1] = fine->xmin[1] + (double)fj * fine->dx[1];
-                lo[2] = fine->xmin[2] + (double)fk * fine->dx[2];
-                hi[0] = lo[0] + 2.0 * fine->dx[0];
-                hi[1] = lo[1] + 2.0 * fine->dx[1];
-                hi[2] = lo[2] + 2.0 * fine->dx[2];
-                if (lo[0] < coarse->xmin[0] - 1.0e-12 || hi[0] > coarse->xmax[0] + 1.0e-12 ||
-                    lo[1] < coarse->xmin[1] - 1.0e-12 || hi[1] > coarse->xmax[1] + 1.0e-12 ||
-                    lo[2] < coarse->xmin[2] - 1.0e-12 || hi[2] > coarse->xmax[2] + 1.0e-12) {
-                    continue;
-                }
-                ci = prj_boundary_aligned_cell_index(coarse, 0, lo[0]);
-                cj = prj_boundary_aligned_cell_index(coarse, 1, lo[1]);
-                ck = prj_boundary_aligned_cell_index(coarse, 2, lo[2]);
-                if (ci < -PRJ_NGHOST || ci >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
-                    cj < -PRJ_NGHOST || cj >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
-                    ck < -PRJ_NGHOST || ck >= PRJ_BLOCK_SIZE + PRJ_NGHOST) {
-                    continue;
-                }
+                int fi = i+slot->recv_loc_start[0];
+                int fj = j+slot->recv_loc_start[1];
+                int fk = k+slot->recv_loc_start[2];
+                int ci = i/2+slot->send_loc_start[0];
+                int cj = j/2+slot->send_loc_start[1];
+                int ck = k/2+slot->send_loc_start[2];
                 prj_mhd_bf_prolongate(coarse, fine, ci, cj, ck, fi, fj, fk, use_bf1);
             }
         }

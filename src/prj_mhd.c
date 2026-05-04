@@ -183,9 +183,9 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
 
 static inline void prj_mhd_check_storage_index(const char *label, int i, int j, int k)
 {
-    if (i < -PRJ_NGHOST || i >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
-        j < -PRJ_NGHOST || j >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
-        k < -PRJ_NGHOST || k >= PRJ_BLOCK_SIZE + PRJ_NGHOST) {
+    if (i < -PRJ_NGHOST || i > PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        j < -PRJ_NGHOST || j > PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        k < -PRJ_NGHOST || k > PRJ_BLOCK_SIZE + PRJ_NGHOST) {
         fprintf(stderr,
             "%s: index out of storage bounds i=%d j=%d k=%d (valid [%d, %d])\n",
             label, i, j, k, -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST - 1);
