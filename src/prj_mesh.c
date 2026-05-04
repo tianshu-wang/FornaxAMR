@@ -68,11 +68,6 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
     slot->rel_level = b->level - a->level;
 
     for (d = 0; d < 3; ++d) {
-        int ri_lo = -PRJ_NGHOST;
-        int ri_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
-        int si_lo = -PRJ_NGHOST;
-        int si_hi = PRJ_BLOCK_SIZE + PRJ_NGHOST;
-        
         if (slot->rel_level==0){
             // Same level
             if (axisrel[d]==1) {

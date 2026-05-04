@@ -68,9 +68,6 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
                 double g2;
                 double g3;
                 double rho;
-                double v1;
-                double v2;
-                double v3;
 
                 if (r <= 0.0) {
                     continue;
