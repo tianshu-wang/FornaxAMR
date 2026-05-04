@@ -12,7 +12,7 @@ x3min = -2.0
 x3max = 2.0
 
 root_nx = 3
-max_level = 0
+max_level = 1
 
 cfl = 0.4
 t_end = 10.0
