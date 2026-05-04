@@ -90,7 +90,7 @@ static inline void prj_mhd_store_vector_potential(prj_block *block, int init_typ
     int k;
 
     for (d = 0; d < 3; ++d) {
-        prj_fill(block->emf[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
+        prj_fill(block->emf[d], (size_t)PRJ_BLOCK_NEDGES, 0.0);
     }
 
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -120,7 +120,7 @@ static inline void prj_mhd_curl_a_to_bf(prj_block *block)
     int ihi = PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
 
     for (d = 0; d < 3; ++d) {
-        prj_fill(block->Bf[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
+        prj_fill(block->Bf[d], (size_t)PRJ_BLOCK_NFACES, 0.0);
     }
 
     for (i = ilo; i < ihi; ++i) {
@@ -154,7 +154,7 @@ static inline void prj_mhd_copy_bf_to_bf1(prj_block *block)
     int n;
 
     for (d = 0; d < 3; ++d) {
-        for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+        for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
             block->Bf1[d][n] = block->Bf[d][n];
         }
     }
@@ -181,15 +181,37 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
     }
 }
 
-static inline void prj_mhd_check_storage_index(const char *label, int i, int j, int k)
+static inline void prj_mhd_check_face_storage_index(const char *label, int dir, int i, int j, int k)
 {
-    if (i < -PRJ_NGHOST || i >=  PRJ_BLOCK_SIZE + PRJ_NGHOST ||
-        j < -PRJ_NGHOST || j >=  PRJ_BLOCK_SIZE + PRJ_NGHOST ||
-        k < -PRJ_NGHOST || k >=  PRJ_BLOCK_SIZE + PRJ_NGHOST) {
-        fprintf(stderr,
-            "%s: index out of storage bounds i=%d j=%d k=%d (valid [%d, %d])\n",
-            label, i, j, k, -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST - 1);
-        exit(EXIT_FAILURE);
+    int idx[3] = {i, j, k};
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        int lo = -PRJ_NGHOST;
+        int hi = dir == d ? PRJ_BLOCK_SIZE + PRJ_NGHOST : PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
+        if (idx[d] < lo || idx[d] > hi) {
+            fprintf(stderr,
+                "%s: index out of face storage bounds dir=%d i=%d j=%d k=%d (axis %d valid [%d, %d])\n",
+                label, dir, i, j, k, d, lo, hi);
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+static inline void prj_mhd_check_edge_storage_index(const char *label, int dir, int i, int j, int k)
+{
+    int idx[3] = {i, j, k};
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        int lo = -PRJ_NGHOST;
+        int hi = dir == d ? PRJ_BLOCK_SIZE + PRJ_NGHOST - 1 : PRJ_BLOCK_SIZE + PRJ_NGHOST;
+        if (idx[d] < lo || idx[d] > hi) {
+            fprintf(stderr,
+                "%s: index out of edge storage bounds dir=%d i=%d j=%d k=%d (axis %d valid [%d, %d])\n",
+                label, dir, i, j, k, d, lo, hi);
+            exit(EXIT_FAILURE);
+        }
     }
 }
 
@@ -229,14 +251,14 @@ static inline double prj_mhd_minmod_slope(double left, double center, double rig
 }
 
 static inline double prj_mhd_read_bf_face(const double *bf,
-    const char *label, int i, int j, int k)
+    const char *label, int dir, int i, int j, int k)
 {
     double value;
 
     if (bf == 0) {
         prj_mhd_fail("prj_mhd_bf_prolongate: null face-centered source");
     }
-    prj_mhd_check_storage_index(label, i, j, k);
+    prj_mhd_check_face_storage_index(label, dir, i, j, k);
     value = bf[IDX(i, j, k)];
     if (!isfinite(value)) {
         fprintf(stderr, "%s: non-finite face-centered magnetic field at i=%d j=%d k=%d\n",
@@ -254,16 +276,16 @@ static inline double prj_mhd_interp_x1_face_flux(const prj_block *coarse,
     double sz;
     double value;
 
-    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 face", i, j, k);
+    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 face", X1DIR, i, j, k);
     sy = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 y-stencil", i, j - 1, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 y-stencil", X1DIR, i, j - 1, k),
         base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 y-stencil", i, j + 1, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 y-stencil", X1DIR, i, j + 1, k),
         coarse->dx[1]);
     sz = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 z-stencil", i, j, k - 1),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 z-stencil", X1DIR, i, j, k - 1),
         base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 z-stencil", i, j, k + 1),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 z-stencil", X1DIR, i, j, k + 1),
         coarse->dx[2]);
     value = base +
         sy * (0.25 * prj_mhd_sign_half(fine_j) * coarse->dx[1]) +
@@ -282,16 +304,16 @@ static inline double prj_mhd_interp_x2_face_flux(const prj_block *coarse,
     double sz;
     double value;
 
-    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 face", i, j, k);
+    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 face", X2DIR, i, j, k);
     sx = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 x-stencil", i - 1, j, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 x-stencil", X2DIR, i - 1, j, k),
         base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 x-stencil", i + 1, j, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 x-stencil", X2DIR, i + 1, j, k),
         coarse->dx[0]);
     sz = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 z-stencil", i, j, k - 1),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 z-stencil", X2DIR, i, j, k - 1),
         base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 z-stencil", i, j, k + 1),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 z-stencil", X2DIR, i, j, k + 1),
         coarse->dx[2]);
     value = base +
         sx * (0.25 * prj_mhd_sign_half(fine_i) * coarse->dx[0]) +
@@ -310,16 +332,16 @@ static inline double prj_mhd_interp_x3_face_flux(const prj_block *coarse,
     double sy;
     double value;
 
-    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 face", i, j, k);
+    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 face", X3DIR, i, j, k);
     sx = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 x-stencil", i - 1, j, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 x-stencil", X3DIR, i - 1, j, k),
         base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 x-stencil", i + 1, j, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 x-stencil", X3DIR, i + 1, j, k),
         coarse->dx[0]);
     sy = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 y-stencil", i, j - 1, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 y-stencil", X3DIR, i, j - 1, k),
         base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 y-stencil", i, j + 1, k),
+        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 y-stencil", X3DIR, i, j + 1, k),
         coarse->dx[1]);
     value = base +
         sx * (0.25 * prj_mhd_sign_half(fine_i) * coarse->dx[0]) +
@@ -343,7 +365,7 @@ static inline void prj_mhd_outer_or_prolongated_flux(prj_block *fine,
     if (!isfinite(area) || area <= 0.0 || !isfinite(prolongated_flux)) {
         prj_mhd_fail("prj_mhd_bf_prolongate: invalid outer face flux");
     }
-    prj_mhd_check_storage_index("prj_mhd_bf_prolongate: fine outer face", i, j, k);
+    prj_mhd_check_face_storage_index("prj_mhd_bf_prolongate: fine outer face", dir, i, j, k);
     idx = IDX(i, j, k);
     if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
         value = dst[dir][idx];
@@ -369,7 +391,7 @@ static inline void prj_mhd_write_inner_flux(prj_block *fine, double *dst[3],
     if (!isfinite(area) || area <= 0.0 || !isfinite(flux)) {
         prj_mhd_fail("prj_mhd_bf_prolongate: invalid inner face flux");
     }
-    prj_mhd_check_storage_index("prj_mhd_bf_prolongate: fine inner face", i, j, k);
+    prj_mhd_check_face_storage_index("prj_mhd_bf_prolongate: fine inner face", dir, i, j, k);
     idx = IDX(i, j, k);
     if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
         if (!isfinite(dst[dir][idx])) {
@@ -805,7 +827,7 @@ static inline double prj_mhd_restrict_emf_value(const prj_block *fine, int dir,
         eidx[1] = idx[1];
         eidx[2] = idx[2];
         eidx[dir] = edge_base + n;
-        prj_mhd_check_storage_index("prj_mhd_emf_send: fine edge", eidx[0], eidx[1], eidx[2]);
+        prj_mhd_check_edge_storage_index("prj_mhd_emf_send: fine edge", dir, eidx[0], eidx[1], eidx[2]);
         value = fine->emf[dir][IDX(eidx[0], eidx[1], eidx[2])];
         if (!isfinite(value)) {
             prj_mhd_fail("prj_mhd_emf_send: non-finite fine emf");
@@ -825,7 +847,7 @@ static inline void prj_mhd_write_emf_edge(prj_block *block, int dir,
         fidelity < PRJ_MHD_FIDELITY_NONE || fidelity > PRJ_MHD_FIDELITY_FINER) {
         prj_mhd_fail("prj_mhd_emf_send: invalid emf write");
     }
-    prj_mhd_check_storage_index("prj_mhd_emf_send: destination edge", i, j, k);
+    prj_mhd_check_edge_storage_index("prj_mhd_emf_send: destination edge", dir, i, j, k);
     idx = IDX(i, j, k);
     if (fidelity < block->edge_fidelity[dir][idx]) {
         return;
@@ -890,7 +912,7 @@ static inline void prj_mhd_init_edge_fidelity(prj_mesh *mesh)
             int k;
             int n;
 
-            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+            for (n = 0; n < PRJ_BLOCK_NEDGES; ++n) {
                 block->edge_fidelity[dir][n] = PRJ_MHD_FIDELITY_NONE;
             }
 
@@ -1125,7 +1147,7 @@ void prj_mhd_init(prj_sim *sim)
         prj_mhd_curl_a_to_bf(block);
         prj_mhd_copy_bf_to_bf1(block);
         for (d = 0; d < 3; ++d) {
-            prj_fill(block->emf[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
+            prj_fill(block->emf[d], (size_t)PRJ_BLOCK_NEDGES, 0.0);
         }
         prj_mhd_bf2bc(&sim->eos, block, 0);
         prj_mhd_bf2bc(&sim->eos, block, 1);

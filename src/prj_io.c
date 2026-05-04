@@ -859,7 +859,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
 #if PRJ_MHD
     dims_bf[0] = (hsize_t)mesh->nblocks;
     dims_bf[1] = 3;
-    dims_bf[2] = (hsize_t)PRJ_BLOCK_NCELLS;
+    dims_bf[2] = (hsize_t)PRJ_BLOCK_NFACES;
 #endif
     file = prj_io_create_file(filename);
     prj_io_write_attr_double(file, "time", time);
@@ -938,10 +938,10 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
 #if PRJ_MHD
         if (block->active == 1 && block->Bf[0] != 0 && block->Bf[1] != 0 && block->Bf[2] != 0) {
             hsize_t start_bf[3] = {(hsize_t)bidx, 0, 0};
-            hsize_t count_bf[3] = {1, 3, (hsize_t)PRJ_BLOCK_NCELLS};
+            hsize_t count_bf[3] = {1, 3, (hsize_t)PRJ_BLOCK_NFACES};
             hid_t mem_bf = H5Screate_simple(3, count_bf, count_bf);
             hid_t file_bf = H5Dget_space(dset_bf);
-            double *buffer = (double *)calloc(3U * (size_t)PRJ_BLOCK_NCELLS, sizeof(*buffer));
+            double *buffer = (double *)calloc(3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*buffer));
             hid_t dxpl = prj_io_data_xfer_plist();
             int d;
             int n;
@@ -950,8 +950,8 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
                 prj_io_fail("prj_io_write_restart: Bf allocation failed");
             }
             for (d = 0; d < 3; ++d) {
-                for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
-                    buffer[(size_t)d * (size_t)PRJ_BLOCK_NCELLS + (size_t)n] = block->Bf[d][n];
+                for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
+                    buffer[(size_t)d * (size_t)PRJ_BLOCK_NFACES + (size_t)n] = block->Bf[d][n];
                 }
             }
             H5Sselect_hyperslab(file_bf, H5S_SELECT_SET, start_bf, 0, count_bf, 0);
@@ -1113,10 +1113,10 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
 #if PRJ_MHD
             {
                 hsize_t start_bf[3] = {(hsize_t)bidx, 0, 0};
-                hsize_t count_bf[3] = {1, 3, (hsize_t)PRJ_BLOCK_NCELLS};
+                hsize_t count_bf[3] = {1, 3, (hsize_t)PRJ_BLOCK_NFACES};
                 hid_t mem_bf = H5Screate_simple(3, count_bf, count_bf);
                 hid_t file_bf = H5Dget_space(dset_bf);
-                double *bf_buffer = (double *)calloc(3U * (size_t)PRJ_BLOCK_NCELLS, sizeof(*bf_buffer));
+                double *bf_buffer = (double *)calloc(3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*bf_buffer));
                 hid_t bf_dxpl = prj_io_data_xfer_plist();
                 int d;
                 int n;
@@ -1134,8 +1134,8 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
                 H5Sclose(file_bf);
                 H5Sclose(mem_bf);
                 for (d = 0; d < 3; ++d) {
-                    for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
-                        double value = bf_buffer[(size_t)d * (size_t)PRJ_BLOCK_NCELLS + (size_t)n];
+                    for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
+                        double value = bf_buffer[(size_t)d * (size_t)PRJ_BLOCK_NFACES + (size_t)n];
 
                         block->Bf[d][n] = value;
                         block->Bf1[d][n] = value;

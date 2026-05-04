@@ -250,7 +250,7 @@ static size_t prj_mpi_block_data_count(void)
     return 2U * prim_count + eosvar_count + 5U * cons_count +
         9U * (size_t)PRJ_BLOCK_NCELLS
 #if PRJ_MHD
-        + 15U * (size_t)PRJ_BLOCK_NCELLS
+        + 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
 #endif
         ;
 }
@@ -864,7 +864,7 @@ static int prj_mpi_pack_bf_blocks(const prj_mesh *mesh, const int *ids, int coun
     if (count <= 0) {
         return 0;
     }
-    nvalue = (size_t)count * 3U * (size_t)PRJ_BLOCK_NCELLS;
+    nvalue = (size_t)count * 3U * (size_t)PRJ_BLOCK_NFACES;
     *values = (double *)malloc(nvalue * sizeof(**values));
     if (*values == 0) {
         return 1;
@@ -888,7 +888,7 @@ static int prj_mpi_pack_bf_blocks(const prj_mesh *mesh, const int *ids, int coun
                 *values = 0;
                 return 1;
             }
-            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
                 double value = src[n];
 
                 if (!isfinite(value)) {
@@ -930,9 +930,9 @@ static int prj_mpi_install_remote_bf_blocks(prj_mesh *mesh, const int *ids, int 
             block->face_fidelity[1] != 0 || block->face_fidelity[2] != 0) {
             return 1;
         }
-        base = (double *)calloc(6U * (size_t)PRJ_BLOCK_NCELLS, sizeof(*base));
+        base = (double *)calloc(6U * (size_t)PRJ_BLOCK_NFACES, sizeof(*base));
         for (dir = 0; dir < 3; ++dir) {
-            block->face_fidelity[dir] = (int *)calloc((size_t)PRJ_BLOCK_NCELLS,
+            block->face_fidelity[dir] = (int *)calloc((size_t)PRJ_BLOCK_NFACES,
                 sizeof(*block->face_fidelity[dir]));
         }
         if (base == 0 || block->face_fidelity[0] == 0 ||
@@ -945,18 +945,18 @@ static int prj_mpi_install_remote_bf_blocks(prj_mesh *mesh, const int *ids, int 
             return 1;
         }
         for (dir = 0; dir < 3; ++dir) {
-            block->Bf[dir] = base + (size_t)dir * (size_t)PRJ_BLOCK_NCELLS;
-            block->Bf1[dir] = base + (size_t)(dir + 3) * (size_t)PRJ_BLOCK_NCELLS;
+            block->Bf[dir] = base + (size_t)dir * (size_t)PRJ_BLOCK_NFACES;
+            block->Bf1[dir] = base + (size_t)(dir + 3) * (size_t)PRJ_BLOCK_NFACES;
         }
         for (dir = 0; dir < 3; ++dir) {
             double *dst = prj_mpi_bf_array(block, dir, use_bf1);
 
-            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
                 dst[n] = values[pos++];
             }
         }
         for (dir = 0; dir < 3; ++dir) {
-            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
                 block->face_fidelity[dir][n] = PRJ_MHD_FIDELITY_SAME;
             }
         }
@@ -1036,8 +1036,8 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
             recv_ids, recv_count, MPI_INT, buffer->receiver_rank, 301,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        send_value_count = send_count * 3 * PRJ_BLOCK_NCELLS;
-        recv_value_count = recv_count * 3 * PRJ_BLOCK_NCELLS;
+        send_value_count = send_count * 3 * PRJ_BLOCK_NFACES;
+        recv_value_count = recv_count * 3 * PRJ_BLOCK_NFACES;
         recv_values = recv_value_count > 0 ?
             (double *)malloc((size_t)recv_value_count * sizeof(*recv_values)) : 0;
         if (recv_value_count > 0 && recv_values == 0) {
@@ -1119,11 +1119,19 @@ static int prj_mpi_edge_point_inside(const prj_block *block, const double x[3])
     return 1;
 }
 
-static int prj_mpi_storage_index_ok(int i, int j, int k)
+static int prj_mpi_edge_storage_index_ok(int dir, int i, int j, int k)
 {
-    return i >= -PRJ_NGHOST && i < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
-        j >= -PRJ_NGHOST && j < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
-        k >= -PRJ_NGHOST && k < PRJ_BLOCK_SIZE + PRJ_NGHOST;
+    int idx[3] = {i, j, k};
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        int lo = -PRJ_NGHOST;
+        int hi = dir == d ? PRJ_BLOCK_SIZE + PRJ_NGHOST - 1 : PRJ_BLOCK_SIZE + PRJ_NGHOST;
+        if (idx[d] < lo || idx[d] > hi) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int prj_mpi_nearest_int(double x)
@@ -1180,7 +1188,7 @@ static double prj_mpi_restrict_emf_value(const prj_block *fine, int dir,
         eidx[1] = idx[1];
         eidx[2] = idx[2];
         eidx[dir] = edge_base + n;
-        if (!prj_mpi_storage_index_ok(eidx[0], eidx[1], eidx[2])) {
+        if (!prj_mpi_edge_storage_index_ok(dir, eidx[0], eidx[1], eidx[2])) {
             fprintf(stderr, "prj_mpi_restrict_emf_value: fine edge index out of storage\n");
             exit(EXIT_FAILURE);
         }
@@ -1335,7 +1343,7 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
                 continue;
             }
             prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
-            if (!prj_mpi_storage_index_ok(ii, jj, kk)) {
+            if (!prj_mpi_edge_storage_index_ok(dir, ii, jj, kk)) {
                 fprintf(stderr, "prj_mpi_exchange_emf: received edge index out of storage\n");
                 exit(EXIT_FAILURE);
             }

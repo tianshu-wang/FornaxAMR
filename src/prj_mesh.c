@@ -244,7 +244,7 @@ int prj_block_alloc_data(prj_block *b)
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     total_count = 2U * prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
-    total_count += 15U * (size_t)PRJ_BLOCK_NCELLS;
+    total_count += 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
 #endif
 
     base = (double *)malloc(total_count * sizeof(*base));
@@ -254,8 +254,8 @@ int prj_block_alloc_data(prj_block *b)
     eos_done = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eos_done));
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
-        face_fidelity[d] = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*face_fidelity[d]));
-        edge_fidelity[d] = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*edge_fidelity[d]));
+        face_fidelity[d] = (int *)calloc((size_t)PRJ_BLOCK_NFACES, sizeof(*face_fidelity[d]));
+        edge_fidelity[d] = (int *)calloc((size_t)PRJ_BLOCK_NEDGES, sizeof(*edge_fidelity[d]));
     }
 #endif
     ridx = (int *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
@@ -307,11 +307,11 @@ int prj_block_alloc_data(prj_block *b)
         b->face_fidelity[d] = face_fidelity[d];
         b->edge_fidelity[d] = edge_fidelity[d];
         b->Bf[d] = base;
-        base += (size_t)PRJ_BLOCK_NCELLS;
+        base += (size_t)PRJ_BLOCK_NFACES;
     }
     for (int d = 0; d < 3; ++d) {
         b->Bf1[d] = base;
-        base += (size_t)PRJ_BLOCK_NCELLS;
+        base += (size_t)PRJ_BLOCK_NFACES;
     }
     for (int d = 0; d < 3; ++d) {
         b->Bv1[d] = base;
@@ -323,7 +323,7 @@ int prj_block_alloc_data(prj_block *b)
     }
     for (int d = 0; d < 3; ++d) {
         b->emf[d] = base;
-        base += (size_t)PRJ_BLOCK_NCELLS;
+        base += (size_t)PRJ_BLOCK_NEDGES;
     }
 #endif
     b->ridx = ridx;

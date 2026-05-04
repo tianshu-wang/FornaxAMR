@@ -58,6 +58,8 @@
 #define PRJ_PATH_MAX 1024
 #define PRJ_BS (PRJ_BLOCK_SIZE + 2 * PRJ_NGHOST)
 #define PRJ_BLOCK_NCELLS (PRJ_BS * PRJ_BS * PRJ_BS)
+#define PRJ_BLOCK_NFACES ((PRJ_BS + 1) * PRJ_BS * PRJ_BS)
+#define PRJ_BLOCK_NEDGES ((PRJ_BS + 1) * (PRJ_BS + 1) * PRJ_BS)
 
 #define IDX(i, j, k) \
     (((i) + PRJ_NGHOST) * PRJ_BS * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST))

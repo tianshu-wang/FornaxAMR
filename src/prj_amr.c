@@ -199,7 +199,7 @@ static void prj_zero_block_arrays(prj_block *b)
         (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS +
         9U * (size_t)PRJ_BLOCK_NCELLS
 #if PRJ_MHD
-        + 15U * (size_t)PRJ_BLOCK_NCELLS
+        + 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
 #endif
         ;
     for (n = 0; n < total; ++n) {
@@ -217,7 +217,7 @@ static size_t prj_block_data_count(void)
     return 2U * prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
         5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS
 #if PRJ_MHD
-        + 15U * (size_t)PRJ_BLOCK_NCELLS
+        + 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
 #endif
         ;
 }
@@ -1124,12 +1124,12 @@ static void prj_amr_mhd_clear_faces(prj_block *block, int use_bf1)
     prj_amr_mhd_check_block(block, "prj_amr_mhd_clear_faces: missing MHD storage");
     bf = use_bf1 != 0 ? block->Bf1 : block->Bf;
     for (d = 0; d < 3; ++d) {
-        prj_fill(bf[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
+        prj_fill(bf[d], (size_t)PRJ_BLOCK_NFACES, 0.0);
     }
     for (d = 0; d < 3; ++d) {
         int n;
 
-        for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+        for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
             block->face_fidelity[d][n] = PRJ_MHD_FIDELITY_NONE;
         }
     }

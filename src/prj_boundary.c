@@ -469,11 +469,19 @@ static void prj_boundary_check_bf_storage(const prj_block *block, const char *la
     }
 }
 
-static int prj_boundary_storage_index_ok(int i, int j, int k)
+static int prj_boundary_face_storage_index_ok(int dir, int i, int j, int k)
 {
-    return i >= -PRJ_NGHOST && i < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
-        j >= -PRJ_NGHOST && j < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
-        k >= -PRJ_NGHOST && k < PRJ_BLOCK_SIZE + PRJ_NGHOST;
+    int idx[3] = {i, j, k};
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        int lo = -PRJ_NGHOST;
+        int hi = dir == d ? PRJ_BLOCK_SIZE + PRJ_NGHOST : PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
+        if (idx[d] < lo || idx[d] > hi) {
+            return 0;
+        }
+    }
+    return 1;
 }
 
 static int prj_boundary_bf_axis_active_max(int dir, int axis)
@@ -504,7 +512,7 @@ static void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
     double *dst;
 
     prj_boundary_check_bf_storage(block, "prj_boundary_write_bf_face");
-    if (dir < 0 || dir >= 3 || !prj_boundary_storage_index_ok(i, j, k)) {
+    if (dir < 0 || dir >= 3 || !prj_boundary_face_storage_index_ok(dir, i, j, k)) {
         fprintf(stderr, "prj_boundary_write_bf_face: invalid face index dir=%d i=%d j=%d k=%d\n",
             dir, i, j, k);
         exit(EXIT_FAILURE);
@@ -652,7 +660,7 @@ static void prj_boundary_init_face_fidelity(prj_mesh *mesh)
             int k;
             int n;
 
-            for (n = 0; n < PRJ_BLOCK_NCELLS; ++n) {
+            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
                 block->face_fidelity[dir][n] = PRJ_MHD_FIDELITY_NONE;
             }
 
@@ -714,7 +722,7 @@ static void prj_boundary_apply_bf_axis(prj_block *block, int use_bf1,
                     }
                     src_idx[(axis + 1) % 3] = idx[(axis + 1) % 3];
                     src_idx[(axis + 2) % 3] = idx[(axis + 2) % 3];
-                    if (!prj_boundary_storage_index_ok(src_idx[0], src_idx[1], src_idx[2])) {
+                    if (!prj_boundary_face_storage_index_ok(dir, src_idx[0], src_idx[1], src_idx[2])) {
                         continue;
                     }
                     src_flat = IDX(src_idx[0], src_idx[1], src_idx[2]);
