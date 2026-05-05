@@ -865,28 +865,99 @@ static inline void prj_mhd_restrict_emf_to_coarse(const prj_block *fine,
 
     prj_mhd_check_emf_storage(fine);
     prj_mhd_check_emf_storage(coarse);
+
+    int axis[3] = {0,0,0};
+    int touch = 0;
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        if (fabs(fine->xmax[d] - coarse->xmin[d]) < 1.0e-12*fine->dx[d]) {
+            axis[d] = 1;
+            touch += 1;
+        } else if (fabs(coarse->xmax[d] - fine->xmin[d]) < 1.0e-12*fine->dx[d]) {
+            axis[d] = -1;
+            touch += 1;
+        } else {
+            axis[d] = 0;
+        }
+    }
+    if (touch==0||touch>2){return;}
+
+
+    int it_recv[3] = {-100,-100,-100};
+    int it_send[3] = {-100,-100,-100};
+
+    for (d = 0; d < 3; ++d) {
+        if (axis[d]==1) {
+            it_send[d] = PRJ_BLOCK_SIZE;
+            it_recv[d] = 0;
+        }
+        if (axis[d]==-1) {
+            it_send[d] = 0;
+            it_recv[d] = PRJ_BLOCK_SIZE;
+        }
+    }
+
     for (dir = 0; dir < 3; ++dir) {
-        int i;
-        int j;
-        int k;
+        if (axis[dir]!=0) {continue;}
 
-        for (i = 0; i <= prj_mhd_edge_axis_active_max(dir, 0); ++i) {
-            for (j = 0; j <= prj_mhd_edge_axis_active_max(dir, 1); ++j) {
-                for (k = 0; k <= prj_mhd_edge_axis_active_max(dir, 2); ++k) {
-                    double x[3];
-                    double value;
+        int tan0 = (dir+1)%3;
+        int tan1 = (dir+2)%3;
+        
+        if (axis[tan0]!=0&&axis[tan1]!=0) {
+            int i;
+            for (i = 0; i<PRJ_BLOCK_SIZE; i+=2) {
+                double value = 0;
+                it_send[dir] = i;
+                value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                it_send[dir] = i+1;
+                value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
 
-                    x[0] = prj_mhd_edge_coord(coarse, 0, dir, i);
-                    x[1] = prj_mhd_edge_coord(coarse, 1, dir, j);
-                    x[2] = prj_mhd_edge_coord(coarse, 2, dir, k);
-                    if (!prj_mhd_edge_point_inside(fine, x)) {
-                        continue;
-                    }
-                    value = prj_mhd_restrict_emf_value(fine, dir, x);
-                    prj_mhd_write_emf_edge(coarse, dir, i, j, k, value,
+                it_recv[dir] = i/2;
+                prj_mhd_write_emf_edge(coarse, dir, it_recv[0], it_recv[1], it_recv[2], value,
+                    PRJ_MHD_FIDELITY_FINER);
+            }
+        } else if (axis[tan0]!=0) {
+            int i;
+            int j;
+            for (i = 0; i<PRJ_BLOCK_SIZE; i+=2) {
+                for (j = 0; j<=PRJ_BLOCK_SIZE; j+=2) {
+                    it_send[tan1] = j;
+                    it_recv[tan1] = j/2;
+
+                    double value = 0;
+                    it_send[dir] = i;
+                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                    it_send[dir] = i+1;
+                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+
+                    it_recv[dir] = i/2;
+                    prj_mhd_write_emf_edge(coarse, dir, it_recv[0], it_recv[1], it_recv[2], value,
                         PRJ_MHD_FIDELITY_FINER);
                 }
             }
+        } else if (axis[tan1]!=0) {
+            int i;
+            int j;
+            for (i = 0; i<PRJ_BLOCK_SIZE; i+=2) {
+                for (j = 0; j<=PRJ_BLOCK_SIZE; j+=2) {
+                    it_send[tan0] = j;
+                    it_recv[tan0] = j/2;
+
+                    double value = 0;
+                    it_send[dir] = i;
+                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                    it_send[dir] = i+1;
+                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+
+                    it_recv[dir] = i/2;
+                    prj_mhd_write_emf_edge(coarse, dir, it_recv[0], it_recv[1], it_recv[2], value,
+                        PRJ_MHD_FIDELITY_FINER);
+                }
+            }
+        } else {
+            fprintf(stderr,"Unknown emf edge type\n"); 
+            exit(1);
         }
     }
 }

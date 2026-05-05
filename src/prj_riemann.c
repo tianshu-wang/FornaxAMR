@@ -722,10 +722,10 @@ int prj_riemann_face_axis(const prj_block *block, const double slot_xmin[3],
     int d;
 
     for (d = 0; d < 3; ++d) {
-        if (fabs(block->xmax[d] - slot_xmin[d]) < 1.0e-12) {
+        if (fabs(block->xmax[d] - slot_xmin[d]) < 1.0e-12*block->dx[d]) {
             if (axis >= 0) return -1;
             axis = d; side = 1;
-        } else if (fabs(slot_xmax[d] - block->xmin[d]) < 1.0e-12) {
+        } else if (fabs(slot_xmax[d] - block->xmin[d]) < 1.0e-12*block->dx[d]) {
             if (axis >= 0) return -1;
             axis = d; side = 0;
         }
