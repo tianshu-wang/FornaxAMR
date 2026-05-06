@@ -171,7 +171,10 @@ enum prj_eos_kind {
 enum {
     PRJ_BOUNDARY_FILL_NONRECON = 0,
     PRJ_BOUNDARY_FILL_RECON = 1,
-    PRJ_BOUNDARY_FILL_ALL = 2
+    PRJ_BOUNDARY_FILL_ALL = 2,
+    PRJ_BOUNDARY_FILL_SAME_LEVEL = 3,
+    PRJ_BOUNDARY_FILL_RESTRICTION = 4,
+    PRJ_BOUNDARY_FILL_PROLONGATION = 5
 };
 
 #define PRJ_MAX(a,b) (((a) > (b)) ? (a) : (b))

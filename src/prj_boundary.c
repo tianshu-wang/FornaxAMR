@@ -1219,17 +1219,35 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
         {
             const prj_neighbor *slot = &block->slot[n];
 
-            if (fill_kind == PRJ_BOUNDARY_FILL_NONRECON) {
+            switch (fill_kind) {
+            case PRJ_BOUNDARY_FILL_SAME_LEVEL:
+                if (slot->rel_level == 0) {
+                    prj_boundary_copy_bf_same_level(block, neighbor, use_bf1, slot);
+                }
+                break;
+            case PRJ_BOUNDARY_FILL_RESTRICTION:
+                if (slot->rel_level < 0) {
+                    prj_boundary_restrict_bf_to_coarse(block, neighbor, use_bf1, slot);
+                }
+                break;
+            case PRJ_BOUNDARY_FILL_PROLONGATION:
+                if (slot->rel_level > 0) {
+                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
+                }
+                break;
+            case PRJ_BOUNDARY_FILL_NONRECON:
                 if (slot->rel_level == 0) {
                     prj_boundary_copy_bf_same_level(block, neighbor, use_bf1, slot);
                 } else if (slot->rel_level < 0) {
                     prj_boundary_restrict_bf_to_coarse(block, neighbor, use_bf1, slot);
                 }
-            } else if (fill_kind == PRJ_BOUNDARY_FILL_RECON) {
+                break;
+            case PRJ_BOUNDARY_FILL_RECON:
                 if (slot->rel_level > 0) {
                     prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
                 }
-            } else if (fill_kind == PRJ_BOUNDARY_FILL_ALL) {
+                break;
+            case PRJ_BOUNDARY_FILL_ALL:
                 if (slot->rel_level == 0) {
                     prj_boundary_copy_bf_same_level(block, neighbor, use_bf1, slot);
                 } else if (slot->rel_level < 0) {
@@ -1237,6 +1255,10 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
                 } else {
                     prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
                 }
+                break;
+            default:
+                fprintf(stderr, "prj_boundary_send_bf: invalid fill_kind=%d\n", fill_kind);
+                exit(EXIT_FAILURE);
             }
         }
     }
@@ -1245,7 +1267,13 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
 void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos *eos)
 {
     prj_mpi *mpi = prj_mpi_current();
+    const int fill_passes[3] = {
+        PRJ_BOUNDARY_FILL_SAME_LEVEL,
+        PRJ_BOUNDARY_FILL_RESTRICTION,
+        PRJ_BOUNDARY_FILL_PROLONGATION
+    };
     int i;
+    int pass;
 
     if (mesh == 0 || bc == 0) {
         fprintf(stderr, "prj_boundary_fill_bf: mesh or bc is null\n");
@@ -1258,15 +1286,19 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
             prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
         }
     }
-    for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_send_bf(&mesh->blocks[i], use_bf1, PRJ_BOUNDARY_FILL_NONRECON);
+    for (pass = 0; pass < 2; ++pass) {
+        int fill_kind = fill_passes[pass];
+
+        for (i = 0; i < mesh->nblocks; ++i) {
+            if (prj_boundary_active_block(&mesh->blocks[i])) {
+                prj_boundary_send_bf(&mesh->blocks[i], use_bf1, fill_kind);
+            }
         }
     }
     prj_mpi_exchange_bf(mesh, mpi, use_bf1, PRJ_BOUNDARY_FILL_NONRECON);
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_send_bf(&mesh->blocks[i], use_bf1, PRJ_BOUNDARY_FILL_RECON);
+            prj_boundary_send_bf(&mesh->blocks[i], use_bf1, fill_passes[2]);
         }
     }
     prj_mpi_exchange_bf(mesh, mpi, use_bf1, PRJ_BOUNDARY_FILL_RECON);
