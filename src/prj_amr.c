@@ -1530,16 +1530,16 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block
                     int ip = gi / 2;
                     int jp = gj / 2;
                     int kp = gk / 2;
-                    double sx;
-                    double sy;
-                    double sz;
-                    double stx[3];
-                    double sty[3];
-                    double stz[3];
-                    double offx;
-                    double offy;
-                    double offz;
-                    double base;
+	                    double stx[3];
+	                    double sty[3];
+	                    double stz[3];
+	                    double tx[1];
+	                    double ty[1];
+	                    double tz[1];
+	                    double vx[1];
+	                    double vy[1];
+	                    double vz[1];
+	                    double base;
 
                     stx[0] = prj_block_conserved_at(parent, v, ip - 1, jp, kp);
                     stx[1] = prj_block_conserved_at(parent, v, ip, jp, kp);
@@ -1550,14 +1550,14 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block
                     stz[0] = prj_block_conserved_at(parent, v, ip, jp, kp - 1);
                     stz[1] = prj_block_conserved_at(parent, v, ip, jp, kp);
                     stz[2] = prj_block_conserved_at(parent, v, ip, jp, kp + 1);
-                    sx = prj_reconstruct_slope(stx, parent->dx[0]);
-                    sy = prj_reconstruct_slope(sty, parent->dx[1]);
-                    sz = prj_reconstruct_slope(stz, parent->dx[2]);
-                    offx = ((gi % 2) == 0 ? -0.25 : 0.25) * parent->dx[0];
-                    offy = ((gj % 2) == 0 ? -0.25 : 0.25) * parent->dx[1];
-                    offz = ((gk % 2) == 0 ? -0.25 : 0.25) * parent->dx[2];
-                    base = parent->U[VIDX(v, ip, jp, kp)];
-                    child->U[VIDX(v, i, j, k)] = base + sx * offx + sy * offy + sz * offz;
+	                    base = parent->U[VIDX(v, ip, jp, kp)];
+	                    tx[0] = ((gi % 2) == 0) ? -0.25 : 0.25;
+	                    ty[0] = ((gj % 2) == 0) ? -0.25 : 0.25;
+	                    tz[0] = ((gk % 2) == 0) ? -0.25 : 0.25;
+	                    prj_reconstruct_for_prolongate(stx, 1, tx, vx);
+	                    prj_reconstruct_for_prolongate(sty, 1, ty, vy);
+	                    prj_reconstruct_for_prolongate(stz, 1, tz, vz);
+	                    child->U[VIDX(v, i, j, k)] = vx[0] + vy[0] + vz[0] - 2.0 * base;
                 }
             }
         }

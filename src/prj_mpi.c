@@ -702,6 +702,41 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 #endif
 }
 
+static double prj_mpi_prolongate_cell_value(const double *src, int var,
+    int i, int j, int k, int is_eosvar, const double target[3])
+{
+    double base;
+    double stx[3];
+    double sty[3];
+    double stz[3];
+    double tx[1];
+    double ty[1];
+    double tz[1];
+    double vx[1];
+    double vy[1];
+    double vz[1];
+
+    base = is_eosvar != 0 ? src[EIDX(var, i, j, k)] : src[VIDX(var, i, j, k)];
+    stx[0] = is_eosvar != 0 ? src[EIDX(var, i - 1, j, k)] : src[VIDX(var, i - 1, j, k)];
+    stx[1] = base;
+    stx[2] = is_eosvar != 0 ? src[EIDX(var, i + 1, j, k)] : src[VIDX(var, i + 1, j, k)];
+    sty[0] = is_eosvar != 0 ? src[EIDX(var, i, j - 1, k)] : src[VIDX(var, i, j - 1, k)];
+    sty[1] = base;
+    sty[2] = is_eosvar != 0 ? src[EIDX(var, i, j + 1, k)] : src[VIDX(var, i, j + 1, k)];
+    stz[0] = is_eosvar != 0 ? src[EIDX(var, i, j, k - 1)] : src[VIDX(var, i, j, k - 1)];
+    stz[1] = base;
+    stz[2] = is_eosvar != 0 ? src[EIDX(var, i, j, k + 1)] : src[VIDX(var, i, j, k + 1)];
+
+    tx[0] = target[0];
+    ty[0] = target[1];
+    tz[0] = target[2];
+    prj_reconstruct_for_prolongate(stx, 1, tx, vx);
+    prj_reconstruct_for_prolongate(sty, 1, ty, vy);
+    prj_reconstruct_for_prolongate(stz, 1, tz, vz);
+
+    return vx[0] + vy[0] + vz[0] - 2.0 * base;
+}
+
 static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buffer *buffer,
     int stage, int fill_kind)
 {
@@ -820,33 +855,29 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                                                     2*j+slot->send_loc_start[1]+1, 
                                                     2*k+slot->send_loc_start[2]+1)]);
                             }
-                        } else if (slot->rel_level==1) {
-                            // Neighbor is finer, prolongation
-                            double slope[3]={0};
-                            for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                                prj_boundary_get_slope(W_send, v, 
-                                                       i/2+slot->send_loc_start[0], 
-                                                       j/2+slot->send_loc_start[1], 
-                                                       k/2+slot->send_loc_start[2], 
-                                                       0, slope);
-                                buffer->cell_buffer_send[pos++] = 
-                                    W_send[VIDX(v, i/2+slot->send_loc_start[0], j/2+slot->send_loc_start[1], k/2+slot->send_loc_start[2])]
-                                   +((i%2==0) ? +0.25*slope[0] : -0.25*slope[0])
-                                   +((j%2==0) ? +0.25*slope[1] : -0.25*slope[1])
-                                   +((k%2==0) ? +0.25*slope[2] : -0.25*slope[2]);
-                            }
-                            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                prj_boundary_get_slope(eos_send, v, 
-                                                       i/2+slot->send_loc_start[0], 
-                                                       j/2+slot->send_loc_start[1], 
-                                                       k/2+slot->send_loc_start[2], 
-                                                       1, slope);
-                                buffer->cell_buffer_send[pos++] = 
-                                    eos_send[EIDX(v, i/2+slot->send_loc_start[0], j/2+slot->send_loc_start[1], k/2+slot->send_loc_start[2])]
-                                   +((i%2==0) ? +0.25*slope[0] : -0.25*slope[0])
-                                   +((j%2==0) ? +0.25*slope[1] : -0.25*slope[1])
-                                   +((k%2==0) ? +0.25*slope[2] : -0.25*slope[2]);
-                            }
+	                        } else if (slot->rel_level==1) {
+	                            // Neighbor is finer, prolongation
+	                            double target[3];
+
+	                            target[0] = (i % 2 == 0) ? 0.25 : -0.25;
+	                            target[1] = (j % 2 == 0) ? 0.25 : -0.25;
+	                            target[2] = (k % 2 == 0) ? 0.25 : -0.25;
+	                            for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+	                                buffer->cell_buffer_send[pos++] =
+	                                    prj_mpi_prolongate_cell_value(W_send, v,
+	                                        i/2+slot->send_loc_start[0],
+	                                        j/2+slot->send_loc_start[1],
+	                                        k/2+slot->send_loc_start[2],
+	                                        0, target);
+	                            }
+	                            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+	                                buffer->cell_buffer_send[pos++] =
+	                                    prj_mpi_prolongate_cell_value(eos_send, v,
+	                                        i/2+slot->send_loc_start[0],
+	                                        j/2+slot->send_loc_start[1],
+	                                        k/2+slot->send_loc_start[2],
+	                                        1, target);
+	                            }
                         } else {
                           fprintf(stderr,"slot->rel_level unrecognized: %d\n", slot->rel_level);
                           exit(1);
@@ -1255,16 +1286,6 @@ static inline double prj_mpi_bf_buf_read(const double *buf,
                (k - buf_lo[2])];
 }
 
-static inline double prj_mpi_bf_buf_minmod(double left, double center,
-    double right, double dx)
-{
-    double sl = (center - left) / dx;
-    double sr = (right - center) / dx;
-
-    if (sl * sr <= 0.0) return 0.0;
-    return fabs(sl) < fabs(sr) ? sl : sr;
-}
-
 static inline double prj_mpi_bf_buf_sign_half(int bit)
 {
     return bit == 0 ? -1.0 : 1.0;
@@ -1275,19 +1296,25 @@ static inline double prj_mpi_bf_interp_x1_buf(const double *buf,
     int i, int j, int k, int fine_j, int fine_k, double area)
 {
     double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double sy = prj_mpi_bf_buf_minmod(
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
-        base,
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
-        dx[1]);
-    double sz = prj_mpi_bf_buf_minmod(
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
-        base,
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
-        dx[2]);
-    double value = base +
-        sy * (0.25 * prj_mpi_bf_buf_sign_half(fine_j) * dx[1]) +
-        sz * (0.25 * prj_mpi_bf_buf_sign_half(fine_k) * dx[2]);
+    double sty[3];
+    double stz[3];
+    double target[1];
+    double vy[1];
+    double vz[1];
+    double value;
+
+    (void)dx;
+    sty[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k);
+    sty[1] = base;
+    sty[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k);
+    stz[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1);
+    stz[1] = base;
+    stz[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1);
+    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_j);
+    prj_reconstruct_for_prolongate(sty, 1, target, vy);
+    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_k);
+    prj_reconstruct_for_prolongate(stz, 1, target, vz);
+    value = vy[0] + vz[0] - base;
 
     return value * area;
 }
@@ -1297,19 +1324,25 @@ static inline double prj_mpi_bf_interp_x2_buf(const double *buf,
     int i, int j, int k, int fine_i, int fine_k, double area)
 {
     double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double sx = prj_mpi_bf_buf_minmod(
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
-        base,
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
-        dx[0]);
-    double sz = prj_mpi_bf_buf_minmod(
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
-        base,
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
-        dx[2]);
-    double value = base +
-        sx * (0.25 * prj_mpi_bf_buf_sign_half(fine_i) * dx[0]) +
-        sz * (0.25 * prj_mpi_bf_buf_sign_half(fine_k) * dx[2]);
+    double stx[3];
+    double stz[3];
+    double target[1];
+    double vx[1];
+    double vz[1];
+    double value;
+
+    (void)dx;
+    stx[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k);
+    stx[1] = base;
+    stx[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k);
+    stz[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1);
+    stz[1] = base;
+    stz[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1);
+    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_i);
+    prj_reconstruct_for_prolongate(stx, 1, target, vx);
+    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_k);
+    prj_reconstruct_for_prolongate(stz, 1, target, vz);
+    value = vx[0] + vz[0] - base;
 
     return value * area;
 }
@@ -1319,19 +1352,25 @@ static inline double prj_mpi_bf_interp_x3_buf(const double *buf,
     int i, int j, int k, int fine_i, int fine_j, double area)
 {
     double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double sx = prj_mpi_bf_buf_minmod(
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
-        base,
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
-        dx[0]);
-    double sy = prj_mpi_bf_buf_minmod(
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
-        base,
-        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
-        dx[1]);
-    double value = base +
-        sx * (0.25 * prj_mpi_bf_buf_sign_half(fine_i) * dx[0]) +
-        sy * (0.25 * prj_mpi_bf_buf_sign_half(fine_j) * dx[1]);
+    double stx[3];
+    double sty[3];
+    double target[1];
+    double vx[1];
+    double vy[1];
+    double value;
+
+    (void)dx;
+    stx[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k);
+    stx[1] = base;
+    stx[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k);
+    sty[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k);
+    sty[1] = base;
+    sty[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k);
+    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_i);
+    prj_reconstruct_for_prolongate(stx, 1, target, vx);
+    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_j);
+    prj_reconstruct_for_prolongate(sty, 1, target, vy);
+    value = vx[0] + vy[0] - base;
 
     return value * area;
 }

@@ -234,16 +234,6 @@ static inline double prj_mhd_buf_read(const double *buf,
                (k - buf_lo[2])];
 }
 
-static inline double prj_mhd_buf_minmod(double left, double center,
-    double right, double dx)
-{
-    double sl = (center - left) / dx;
-    double sr = (right - center) / dx;
-
-    if (sl * sr <= 0.0) return 0.0;
-    return fabs(sl) < fabs(sr) ? sl : sr;
-}
-
 static inline double prj_mhd_buf_sign_half(int bit)
 {
     return bit == 0 ? -1.0 : 1.0;
@@ -254,19 +244,25 @@ static inline double prj_mhd_interp_x1_buf(const double *buf,
     int i, int j, int k, int fine_j, int fine_k, double area)
 {
     double base = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double sy = prj_mhd_buf_minmod(
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
-        base,
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
-        dx[1]);
-    double sz = prj_mhd_buf_minmod(
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
-        base,
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
-        dx[2]);
-    double value = base +
-        sy * (0.25 * prj_mhd_buf_sign_half(fine_j) * dx[1]) +
-        sz * (0.25 * prj_mhd_buf_sign_half(fine_k) * dx[2]);
+    double sty[3];
+    double stz[3];
+    double target[1];
+    double vy[1];
+    double vz[1];
+    double value;
+
+    (void)dx;
+    sty[0] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j - 1, k);
+    sty[1] = base;
+    sty[2] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j + 1, k);
+    stz[0] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k - 1);
+    stz[1] = base;
+    stz[2] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k + 1);
+    target[0] = 0.25 * prj_mhd_buf_sign_half(fine_j);
+    prj_reconstruct_for_prolongate(sty, 1, target, vy);
+    target[0] = 0.25 * prj_mhd_buf_sign_half(fine_k);
+    prj_reconstruct_for_prolongate(stz, 1, target, vz);
+    value = vy[0] + vz[0] - base;
 
     return value * area;
 }
@@ -276,19 +272,25 @@ static inline double prj_mhd_interp_x2_buf(const double *buf,
     int i, int j, int k, int fine_i, int fine_k, double area)
 {
     double base = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double sx = prj_mhd_buf_minmod(
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
-        base,
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
-        dx[0]);
-    double sz = prj_mhd_buf_minmod(
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
-        base,
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
-        dx[2]);
-    double value = base +
-        sx * (0.25 * prj_mhd_buf_sign_half(fine_i) * dx[0]) +
-        sz * (0.25 * prj_mhd_buf_sign_half(fine_k) * dx[2]);
+    double stx[3];
+    double stz[3];
+    double target[1];
+    double vx[1];
+    double vz[1];
+    double value;
+
+    (void)dx;
+    stx[0] = prj_mhd_buf_read(buf, buf_lo, buf_n, i - 1, j, k);
+    stx[1] = base;
+    stx[2] = prj_mhd_buf_read(buf, buf_lo, buf_n, i + 1, j, k);
+    stz[0] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k - 1);
+    stz[1] = base;
+    stz[2] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k + 1);
+    target[0] = 0.25 * prj_mhd_buf_sign_half(fine_i);
+    prj_reconstruct_for_prolongate(stx, 1, target, vx);
+    target[0] = 0.25 * prj_mhd_buf_sign_half(fine_k);
+    prj_reconstruct_for_prolongate(stz, 1, target, vz);
+    value = vx[0] + vz[0] - base;
 
     return value * area;
 }
@@ -298,19 +300,25 @@ static inline double prj_mhd_interp_x3_buf(const double *buf,
     int i, int j, int k, int fine_i, int fine_j, double area)
 {
     double base = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double sx = prj_mhd_buf_minmod(
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
-        base,
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
-        dx[0]);
-    double sy = prj_mhd_buf_minmod(
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
-        base,
-        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
-        dx[1]);
-    double value = base +
-        sx * (0.25 * prj_mhd_buf_sign_half(fine_i) * dx[0]) +
-        sy * (0.25 * prj_mhd_buf_sign_half(fine_j) * dx[1]);
+    double stx[3];
+    double sty[3];
+    double target[1];
+    double vx[1];
+    double vy[1];
+    double value;
+
+    (void)dx;
+    stx[0] = prj_mhd_buf_read(buf, buf_lo, buf_n, i - 1, j, k);
+    stx[1] = base;
+    stx[2] = prj_mhd_buf_read(buf, buf_lo, buf_n, i + 1, j, k);
+    sty[0] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j - 1, k);
+    sty[1] = base;
+    sty[2] = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j + 1, k);
+    target[0] = 0.25 * prj_mhd_buf_sign_half(fine_i);
+    prj_reconstruct_for_prolongate(stx, 1, target, vx);
+    target[0] = 0.25 * prj_mhd_buf_sign_half(fine_j);
+    prj_reconstruct_for_prolongate(sty, 1, target, vy);
+    value = vx[0] + vy[0] - base;
 
     return value * area;
 }

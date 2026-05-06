@@ -74,6 +74,40 @@ static double prj_boundary_read_value(const double *src, int var, int i, int j, 
     return src[is_eosvar != 0 ? EIDX(var, i, j, k) : VIDX(var, i, j, k)];
 }
 
+static double prj_boundary_prolongate_value(const double *src, int var,
+    int i, int j, int k, int is_eosvar, const double target[3])
+{
+    double base = prj_boundary_read_value(src, var, i, j, k, is_eosvar);
+    double stx[3];
+    double sty[3];
+    double stz[3];
+    double tx[1];
+    double ty[1];
+    double tz[1];
+    double vx[1];
+    double vy[1];
+    double vz[1];
+
+    stx[0] = prj_boundary_read_value(src, var, i - 1, j, k, is_eosvar);
+    stx[1] = base;
+    stx[2] = prj_boundary_read_value(src, var, i + 1, j, k, is_eosvar);
+    sty[0] = prj_boundary_read_value(src, var, i, j - 1, k, is_eosvar);
+    sty[1] = base;
+    sty[2] = prj_boundary_read_value(src, var, i, j + 1, k, is_eosvar);
+    stz[0] = prj_boundary_read_value(src, var, i, j, k - 1, is_eosvar);
+    stz[1] = base;
+    stz[2] = prj_boundary_read_value(src, var, i, j, k + 1, is_eosvar);
+
+    tx[0] = target[0];
+    ty[0] = target[1];
+    tz[0] = target[2];
+    prj_reconstruct_for_prolongate(stx, 1, tx, vx);
+    prj_reconstruct_for_prolongate(sty, 1, ty, vy);
+    prj_reconstruct_for_prolongate(stz, 1, tz, vz);
+
+    return vx[0] + vy[0] + vz[0] - 2.0 * base;
+}
+
 static void prj_boundary_get_values(const prj_block *block, const double *src, int nvar, int is_eosvar,
     const char *label, double x1, double x2, double x3, double *dst)
 {
@@ -136,59 +170,20 @@ static void prj_boundary_get_values(const prj_block *block, const double *src, i
             int i = prj_floor_to_int(ox[0] + 0.5);
             int j = prj_floor_to_int(ox[1] + 0.5);
             int k = prj_floor_to_int(ox[2] + 0.5);
-            double stx[3];
-            double sty[3];
-            double stz[3];
-            double sx;
-            double sy;
-            double sz;
             double xcenter = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
             double ycenter = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
             double zcenter = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-            double base = prj_boundary_read_value(src, v, i, j, k, is_eosvar);
+            double target[3];
 
-            stx[0] = prj_boundary_read_value(src, v, i - 1, j, k, is_eosvar);
-            stx[1] = base;
-            stx[2] = prj_boundary_read_value(src, v, i + 1, j, k, is_eosvar);
-            sty[0] = prj_boundary_read_value(src, v, i, j - 1, k, is_eosvar);
-            sty[1] = base;
-            sty[2] = prj_boundary_read_value(src, v, i, j + 1, k, is_eosvar);
-            stz[0] = prj_boundary_read_value(src, v, i, j, k - 1, is_eosvar);
-            stz[1] = base;
-            stz[2] = prj_boundary_read_value(src, v, i, j, k + 1, is_eosvar);
-            sx = prj_reconstruct_slope(stx, block->dx[0]);
-            sy = prj_reconstruct_slope(sty, block->dx[1]);
-            sz = prj_reconstruct_slope(stz, block->dx[2]);
-            dst[v] = base +
-                sx * (x1 - xcenter) +
-                sy * (x2 - ycenter) +
-                sz * (x3 - zcenter);
+            target[0] = (x1 - xcenter) / block->dx[0];
+            target[1] = (x2 - ycenter) / block->dx[1];
+            target[2] = (x3 - zcenter) / block->dx[2];
+            dst[v] = prj_boundary_prolongate_value(src, v, i, j, k, is_eosvar, target);
         } else {
             fprintf(stderr, "%s: mixed unsupported sample location (%g, %g, %g)\n", label, x1, x2, x3);
             exit(EXIT_FAILURE);
         }
     }
-}
-
-void prj_boundary_get_slope(double *src, int v, int i, int j, int k, int is_eosvar, double *slope)
-{
-    double stx[3];
-    double sty[3];
-    double stz[3];
-    double base = is_eosvar==1 ? src[EIDX(v, i, j, k)] : src[VIDX(v, i, j, k)];
-
-    stx[0] = is_eosvar==1 ? src[EIDX(v, i-1, j, k)] : src[VIDX(v, i-1, j, k)];
-    stx[1] = base;
-    stx[2] = is_eosvar==1 ? src[EIDX(v, i+1, j, k)] : src[VIDX(v, i+1, j, k)];
-    sty[0] = is_eosvar==1 ? src[EIDX(v, i, j-1, k)] : src[VIDX(v, i, j-1, k)];
-    sty[1] = base;
-    sty[2] = is_eosvar==1 ? src[EIDX(v, i, j+1, k)] : src[VIDX(v, i, j+1, k)];
-    stz[0] = is_eosvar==1 ? src[EIDX(v, i, j, k-1)] : src[VIDX(v, i, j, k-1)];
-    stz[1] = base;
-    stz[2] = is_eosvar==1 ? src[EIDX(v, i, j, k+1)] : src[VIDX(v, i, j, k+1)];
-    slope[0] = prj_reconstruct_slope(stx, 1.0);
-    slope[1] = prj_reconstruct_slope(sty, 1.0);
-    slope[2] = prj_reconstruct_slope(stz, 1.0);
 }
 
 void prj_boundary_get_prim(const prj_block *block, int stage, double x1, double x2, double x3, double *w)
@@ -308,33 +303,29 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                                                         2*j+slot->send_loc_start[1]+1, 
                                                         2*k+slot->send_loc_start[2]+1)]);
                                 }
-                            } else if (slot->rel_level==1) {
-                                // Neighbor is finer, prolongation
-                                double slope[3]={0};
-                                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                                    prj_boundary_get_slope(W_send, v, 
-                                                           i/2+slot->send_loc_start[0], 
-                                                           j/2+slot->send_loc_start[1], 
-                                                           k/2+slot->send_loc_start[2], 
-                                                           0, slope);
-                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
-                                        W_send[VIDX(v, i/2+slot->send_loc_start[0], j/2+slot->send_loc_start[1], k/2+slot->send_loc_start[2])]
-                                       +((i%2==0) ? +0.25*slope[0] : -0.25*slope[0])
-                                       +((j%2==0) ? +0.25*slope[1] : -0.25*slope[1])
-                                       +((k%2==0) ? +0.25*slope[2] : -0.25*slope[2]);
-                                }
-                                for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                    prj_boundary_get_slope(eos_send, v, 
-                                                           i/2+slot->send_loc_start[0], 
-                                                           j/2+slot->send_loc_start[1], 
-                                                           k/2+slot->send_loc_start[2], 
-                                                           1, slope);
-                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
-                                        eos_send[EIDX(v, i/2+slot->send_loc_start[0], j/2+slot->send_loc_start[1], k/2+slot->send_loc_start[2])]
-                                       +((i%2==0) ? +0.25*slope[0] : -0.25*slope[0])
-                                       +((j%2==0) ? +0.25*slope[1] : -0.25*slope[1])
-                                       +((k%2==0) ? +0.25*slope[2] : -0.25*slope[2]);
-                                }
+	                            } else if (slot->rel_level==1) {
+	                                // Neighbor is finer, prolongation
+	                                double target[3];
+
+	                                target[0] = (i % 2 == 0) ? 0.25 : -0.25;
+	                                target[1] = (j % 2 == 0) ? 0.25 : -0.25;
+	                                target[2] = (k % 2 == 0) ? 0.25 : -0.25;
+	                                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+	                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
+	                                        prj_boundary_prolongate_value(W_send, v,
+	                                            i/2+slot->send_loc_start[0],
+	                                            j/2+slot->send_loc_start[1],
+	                                            k/2+slot->send_loc_start[2],
+	                                            0, target);
+	                                }
+	                                for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+	                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
+	                                        prj_boundary_prolongate_value(eos_send, v,
+	                                            i/2+slot->send_loc_start[0],
+	                                            j/2+slot->send_loc_start[1],
+	                                            k/2+slot->send_loc_start[2],
+	                                            1, target);
+	                                }
                             } else {
                               fprintf(stderr,"slot->rel_level unrecognized: %d\n", slot->rel_level);
                               exit(1);

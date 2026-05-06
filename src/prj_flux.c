@@ -151,10 +151,10 @@ static void prj_flux_face_states(double *W, int dir, int i, int j, int k, double
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
         double left_stencil[3];
         double right_stencil[3];
-        double slope_l;
-        double slope_r;
-        double WLg;
-        double WRg;
+        double left_target[1] = {0.5};
+        double right_target[1] = {-0.5};
+        double left_value[1];
+        double right_value[1];
 
         if (dir == X1DIR) {
             left_stencil[0] = W[VIDX(v, il - 1, jl, kl)];
@@ -179,12 +179,10 @@ static void prj_flux_face_states(double *W, int dir, int i, int j, int k, double
             right_stencil[2] = W[VIDX(v, ir, jr, kr + 1)];
         }
 
-        slope_l = prj_reconstruct_slope(left_stencil, 1.0);
-        slope_r = prj_reconstruct_slope(right_stencil, 1.0);
-        WLg = W[VIDX(v, il, jl, kl)] + 0.5 * slope_l;
-        WRg = W[VIDX(v, ir, jr, kr)] - 0.5 * slope_r;
-        WL[v] = WLg;
-        WR[v] = WRg;
+        prj_reconstruct_for_riemann(left_stencil, 1, left_target, left_value);
+        prj_reconstruct_for_riemann(right_stencil, 1, right_target, right_value);
+        WL[v] = left_value[0];
+        WR[v] = right_value[0];
     }
 }
 
@@ -208,8 +206,10 @@ static void prj_flux_face_eosvar(const double *eosvar, int var, int dir, int i, 
     int kr;
     double left_stencil[3];
     double right_stencil[3];
-    double slope_l;
-    double slope_r;
+    double left_target[1] = {0.5};
+    double right_target[1] = {-0.5};
+    double left_result[1];
+    double right_result[1];
 
     il = i;
     jl = j;
@@ -251,10 +251,10 @@ static void prj_flux_face_eosvar(const double *eosvar, int var, int dir, int i, 
         right_stencil[2] = eosvar[EIDX(var, ir, jr, kr + 1)];
     }
 
-    slope_l = prj_reconstruct_slope(left_stencil, 1.0);
-    slope_r = prj_reconstruct_slope(right_stencil, 1.0);
-    *left_value = eosvar[EIDX(var, il, jl, kl)] + 0.5 * slope_l;
-    *right_value = eosvar[EIDX(var, ir, jr, kr)] - 0.5 * slope_r;
+    prj_reconstruct_for_riemann(left_stencil, 1, left_target, left_result);
+    prj_reconstruct_for_riemann(right_stencil, 1, right_target, right_result);
+    *left_value = left_result[0];
+    *right_value = right_result[0];
 }
 
 void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
