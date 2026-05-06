@@ -1205,10 +1205,8 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
     prj_amr_mhd_clear_faces(child, use_bf1);
 
 
-#if 0
     int n,dir;
     for (n = 0; n < 56; ++n){
-        fprintf(stderr,"test %d\n",n);
         const prj_neighbor *slot = &parent->slot[n];
         if (slot->id<0||slot->type!=PRJ_NEIGHBOR_FACE||slot->rel_level<1) {continue;}
         if (slot->rank == parent->rank) {
@@ -1221,10 +1219,10 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
                         double *src = use_bf1 != 0 ? neighbor->Bf1[dir] : neighbor->Bf[dir];
                         int i, j;
                         if (fabs(child->xmax[dir] - slot->xmin[dir]) < 1.0e-12*child->dx[dir]){
-                            double buffer[PRJ_BLOCK_NCELLS*PRJ_BLOCK_NCELLS];
+                            double buffer[PRJ_BLOCK_SIZE*PRJ_BLOCK_SIZE];
                             int buf_idx = 0;
-                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
-                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                                     int it_send[3] = {0,0,0};
                                     it_send[dir] = 0;
                                     it_send[tan0] = i;
@@ -1235,10 +1233,10 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
 
 
                             buf_idx = 0;
-                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
-                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                                     int it_recv[3] = {0,0,0};
-                                    it_recv[dir] = PRJ_BLOCK_NCELLS;
+                                    it_recv[dir] = PRJ_BLOCK_SIZE;
                                     it_recv[tan0] = i;
                                     it_recv[tan1] = j;
                                     prj_boundary_write_bf_face(child, use_bf1, dir,
@@ -1250,12 +1248,12 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
                             }
                         }
                         if (fabs(child->xmin[dir] - slot->xmax[dir]) < 1.0e-12*child->dx[dir]){
-                            double buffer[PRJ_BLOCK_NCELLS*PRJ_BLOCK_NCELLS];
+                            double buffer[PRJ_BLOCK_SIZE*PRJ_BLOCK_SIZE];
                             int buf_idx = 0;
-                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
-                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                                     int it_send[3] = {0,0,0};
-                                    it_send[dir] = PRJ_BLOCK_NCELLS;
+                                    it_send[dir] = PRJ_BLOCK_SIZE;
                                     it_send[tan0] = i;
                                     it_send[tan1] = j;
                                     buffer[buf_idx++] = src[FACE_IDX(dir, it_send[0], it_send[1], it_send[2])];
@@ -1263,8 +1261,8 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
                             }
 
                             buf_idx = 0;
-                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
-                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                                     int it_recv[3] = {0,0,0};
                                     it_recv[dir] = 0;
                                     it_recv[tan0] = i;
@@ -1285,7 +1283,6 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
             // MPI case, read from MPI buffer. TBD.
         }
     }
-#endif
 
 
     for (ci = ci0; ci < ci0 + PRJ_BLOCK_SIZE / 2; ++ci) {
