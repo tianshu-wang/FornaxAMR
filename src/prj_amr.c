@@ -1372,7 +1372,8 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
                 int fk = 2 * (ck - ck0);
 
                 prj_mhd_prolong_bf_from_buffer(cbuf, buf_lo, buf_n,
-                    parent->dx, child, ci, cj, ck, fi, fj, fk, use_bf1);
+                    parent->dx, child, ci, cj, ck, fi, fj, fk, use_bf1,
+                    mesh != 0 && mesh->use_BJ != 0);
             }
         }
     }
@@ -1517,6 +1518,7 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block
     int xoct = child_oct & 1;
     int yoct = (child_oct >> 1) & 1;
     int zoct = (child_oct >> 2) & 1;
+    int use_BJ = mesh != 0 && mesh->use_BJ != 0;
 
     prj_zero_block_arrays(child);
 
@@ -1530,34 +1532,25 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block
                     int ip = gi / 2;
                     int jp = gj / 2;
                     int kp = gk / 2;
-	                    double stx[3];
-	                    double sty[3];
-	                    double stz[3];
-	                    double tx[1];
-	                    double ty[1];
-	                    double tz[1];
-	                    double vx[1];
-	                    double vy[1];
-	                    double vz[1];
-	                    double base;
+                    double stencil[27];
+                    double target[3];
+                    int di;
+                    int dj;
+                    int dk;
 
-                    stx[0] = prj_block_conserved_at(parent, v, ip - 1, jp, kp);
-                    stx[1] = prj_block_conserved_at(parent, v, ip, jp, kp);
-                    stx[2] = prj_block_conserved_at(parent, v, ip + 1, jp, kp);
-                    sty[0] = prj_block_conserved_at(parent, v, ip, jp - 1, kp);
-                    sty[1] = prj_block_conserved_at(parent, v, ip, jp, kp);
-                    sty[2] = prj_block_conserved_at(parent, v, ip, jp + 1, kp);
-                    stz[0] = prj_block_conserved_at(parent, v, ip, jp, kp - 1);
-                    stz[1] = prj_block_conserved_at(parent, v, ip, jp, kp);
-                    stz[2] = prj_block_conserved_at(parent, v, ip, jp, kp + 1);
-	                    base = parent->U[VIDX(v, ip, jp, kp)];
-	                    tx[0] = ((gi % 2) == 0) ? -0.25 : 0.25;
-	                    ty[0] = ((gj % 2) == 0) ? -0.25 : 0.25;
-	                    tz[0] = ((gk % 2) == 0) ? -0.25 : 0.25;
-	                    prj_reconstruct_for_prolongate(stx, 1, tx, vx);
-	                    prj_reconstruct_for_prolongate(sty, 1, ty, vy);
-	                    prj_reconstruct_for_prolongate(stz, 1, tz, vz);
-	                    child->U[VIDX(v, i, j, k)] = vx[0] + vy[0] + vz[0] - 2.0 * base;
+                    for (di = -1; di <= 1; ++di) {
+                        for (dj = -1; dj <= 1; ++dj) {
+                            for (dk = -1; dk <= 1; ++dk) {
+                                stencil[prj_reconstruct_stencil3_index(di, dj, dk)] =
+                                    prj_block_conserved_at(parent, v, ip + di, jp + dj, kp + dk);
+                            }
+                        }
+                    }
+                    target[0] = ((gi % 2) == 0) ? -0.25 : 0.25;
+                    target[1] = ((gj % 2) == 0) ? -0.25 : 0.25;
+                    target[2] = ((gk % 2) == 0) ? -0.25 : 0.25;
+                    child->U[VIDX(v, i, j, k)] =
+                        prj_reconstruct_cell_for_prolongate(stencil, target, use_BJ);
                 }
             }
         }

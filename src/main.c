@@ -245,6 +245,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "amr estimator: %s\n",
         prj_amr_estimator_label(sim)
     );
+    fprintf(stderr, "use_BJ: %s\n", sim->mesh.use_BJ != 0 ? "on" : "off");
     fprintf(stderr, "max_level: %d\n", sim->mesh.max_level);
     fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
 }
@@ -264,6 +265,7 @@ int main(int argc, char *argv[])
     int saved_amr_lohner_var[PRJ_AMR_N];
     int saved_amr_criterion_set[PRJ_AMR_N];
     int saved_use_amr_angle_resolution;
+    int saved_use_BJ;
     double saved_amr_angle_resolution_limit;
     double saved_min_dx;
     int resolution = -1;
@@ -332,6 +334,7 @@ int main(int argc, char *argv[])
             saved_amr_criterion_set[i] = sim.mesh.amr_criterion_set[i];
         }
         saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
+        saved_use_BJ = sim.mesh.use_BJ;
         saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
         saved_min_dx = sim.mesh.min_dx;
         prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
@@ -345,6 +348,7 @@ int main(int argc, char *argv[])
             sim.mesh.amr_criterion_set[i] = saved_amr_criterion_set[i];
         }
         sim.mesh.use_amr_angle_resolution = saved_use_amr_angle_resolution;
+        sim.mesh.use_BJ = saved_use_BJ;
         sim.mesh.amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
         sim.mesh.min_dx = saved_min_dx;
         next_output_time = prj_next_event_time(last_output_time, sim.output_dt, sim.time);

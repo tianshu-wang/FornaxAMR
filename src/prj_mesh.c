@@ -519,6 +519,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     int saved_amr_criterion_set[PRJ_AMR_N];
     double saved_amr_lohner_eps[PRJ_AMR_N];
     int saved_use_amr_angle_resolution;
+    int saved_use_BJ;
     double saved_amr_angle_resolution_limit;
     double saved_E_floor;
     double saved_min_dx;
@@ -537,6 +538,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         saved_amr_criterion_set[amr_idx] = mesh->amr_criterion_set[amr_idx];
     }
     saved_use_amr_angle_resolution = mesh->use_amr_angle_resolution;
+    saved_use_BJ = mesh->use_BJ;
     saved_amr_angle_resolution_limit = mesh->amr_angle_resolution_limit;
     saved_E_floor = mesh->E_floor;
     saved_min_dx = mesh->min_dx;
@@ -559,6 +561,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         mesh->amr_criterion_set[amr_idx] = saved_amr_criterion_set[amr_idx];
     }
     mesh->use_amr_angle_resolution = saved_use_amr_angle_resolution;
+    mesh->use_BJ = saved_use_BJ;
     mesh->amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
     mesh->E_floor = saved_E_floor;
     mesh->blocks = 0;

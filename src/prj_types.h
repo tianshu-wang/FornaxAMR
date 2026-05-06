@@ -109,6 +109,7 @@ struct prj_mesh {
     int amr_lohner_var[PRJ_AMR_N];
     int amr_criterion_set[PRJ_AMR_N];
     int use_amr_angle_resolution;
+    int use_BJ;
     double amr_angle_resolution_limit;
     double E_floor;
 };

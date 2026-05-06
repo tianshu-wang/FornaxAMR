@@ -702,39 +702,29 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 #endif
 }
 
-static double prj_mpi_prolongate_cell_value(const double *src, int var,
-    int i, int j, int k, int is_eosvar, const double target[3])
+static double prj_mpi_read_cell_value(const double *src, int var,
+    int i, int j, int k, int is_eosvar)
 {
-    double base;
-    double stx[3];
-    double sty[3];
-    double stz[3];
-    double tx[1];
-    double ty[1];
-    double tz[1];
-    double vx[1];
-    double vy[1];
-    double vz[1];
+    return is_eosvar != 0 ? src[EIDX(var, i, j, k)] : src[VIDX(var, i, j, k)];
+}
 
-    base = is_eosvar != 0 ? src[EIDX(var, i, j, k)] : src[VIDX(var, i, j, k)];
-    stx[0] = is_eosvar != 0 ? src[EIDX(var, i - 1, j, k)] : src[VIDX(var, i - 1, j, k)];
-    stx[1] = base;
-    stx[2] = is_eosvar != 0 ? src[EIDX(var, i + 1, j, k)] : src[VIDX(var, i + 1, j, k)];
-    sty[0] = is_eosvar != 0 ? src[EIDX(var, i, j - 1, k)] : src[VIDX(var, i, j - 1, k)];
-    sty[1] = base;
-    sty[2] = is_eosvar != 0 ? src[EIDX(var, i, j + 1, k)] : src[VIDX(var, i, j + 1, k)];
-    stz[0] = is_eosvar != 0 ? src[EIDX(var, i, j, k - 1)] : src[VIDX(var, i, j, k - 1)];
-    stz[1] = base;
-    stz[2] = is_eosvar != 0 ? src[EIDX(var, i, j, k + 1)] : src[VIDX(var, i, j, k + 1)];
+static double prj_mpi_prolongate_cell_value(const double *src, int var,
+    int i, int j, int k, int is_eosvar, const double target[3], int use_BJ)
+{
+    double stencil[27];
+    int di;
+    int dj;
+    int dk;
 
-    tx[0] = target[0];
-    ty[0] = target[1];
-    tz[0] = target[2];
-    prj_reconstruct_for_prolongate(stx, 1, tx, vx);
-    prj_reconstruct_for_prolongate(sty, 1, ty, vy);
-    prj_reconstruct_for_prolongate(stz, 1, tz, vz);
-
-    return vx[0] + vy[0] + vz[0] - 2.0 * base;
+    for (di = -1; di <= 1; ++di) {
+        for (dj = -1; dj <= 1; ++dj) {
+            for (dk = -1; dk <= 1; ++dk) {
+                stencil[prj_reconstruct_stencil3_index(di, dj, dk)] =
+                    prj_mpi_read_cell_value(src, var, i + di, j + dj, k + dk, is_eosvar);
+            }
+        }
+    }
+    return prj_reconstruct_cell_for_prolongate(stencil, target, use_BJ);
 }
 
 static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buffer *buffer,
@@ -868,7 +858,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
 	                                        i/2+slot->send_loc_start[0],
 	                                        j/2+slot->send_loc_start[1],
 	                                        k/2+slot->send_loc_start[2],
-	                                        0, target);
+	                                        0, target, mesh->use_BJ);
 	                            }
 	                            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
 	                                buffer->cell_buffer_send[pos++] =
@@ -876,7 +866,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
 	                                        i/2+slot->send_loc_start[0],
 	                                        j/2+slot->send_loc_start[1],
 	                                        k/2+slot->send_loc_start[2],
-	                                        1, target);
+	                                        1, target, mesh->use_BJ);
 	                            }
                         } else {
                           fprintf(stderr,"slot->rel_level unrecognized: %d\n", slot->rel_level);
@@ -1293,84 +1283,72 @@ static inline double prj_mpi_bf_buf_sign_half(int bit)
 
 static inline double prj_mpi_bf_interp_x1_buf(const double *buf,
     const int buf_lo[3], const int buf_n[3], const double dx[3],
-    int i, int j, int k, int fine_j, int fine_k, double area)
+    int i, int j, int k, int fine_j, int fine_k, double area, int use_BJ)
 {
-    double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double sty[3];
-    double stz[3];
-    double target[1];
-    double vy[1];
-    double vz[1];
+    double stencil[9];
+    double target[2];
     double value;
+    int dj;
+    int dk;
 
     (void)dx;
-    sty[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k);
-    sty[1] = base;
-    sty[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k);
-    stz[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1);
-    stz[1] = base;
-    stz[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1);
+    for (dj = -1; dj <= 1; ++dj) {
+        for (dk = -1; dk <= 1; ++dk) {
+            stencil[prj_reconstruct_stencil2_index(dj, dk)] =
+                prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + dj, k + dk);
+        }
+    }
     target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_j);
-    prj_reconstruct_for_prolongate(sty, 1, target, vy);
-    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_k);
-    prj_reconstruct_for_prolongate(stz, 1, target, vz);
-    value = vy[0] + vz[0] - base;
+    target[1] = 0.25 * prj_mpi_bf_buf_sign_half(fine_k);
+    value = prj_reconstruct_face_for_prolongate(stencil, target, use_BJ);
 
     return value * area;
 }
 
 static inline double prj_mpi_bf_interp_x2_buf(const double *buf,
     const int buf_lo[3], const int buf_n[3], const double dx[3],
-    int i, int j, int k, int fine_i, int fine_k, double area)
+    int i, int j, int k, int fine_i, int fine_k, double area, int use_BJ)
 {
-    double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double stx[3];
-    double stz[3];
-    double target[1];
-    double vx[1];
-    double vz[1];
+    double stencil[9];
+    double target[2];
     double value;
+    int di;
+    int dk;
 
     (void)dx;
-    stx[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k);
-    stx[1] = base;
-    stx[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k);
-    stz[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1);
-    stz[1] = base;
-    stz[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1);
+    for (di = -1; di <= 1; ++di) {
+        for (dk = -1; dk <= 1; ++dk) {
+            stencil[prj_reconstruct_stencil2_index(di, dk)] =
+                prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + di, j, k + dk);
+        }
+    }
     target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_i);
-    prj_reconstruct_for_prolongate(stx, 1, target, vx);
-    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_k);
-    prj_reconstruct_for_prolongate(stz, 1, target, vz);
-    value = vx[0] + vz[0] - base;
+    target[1] = 0.25 * prj_mpi_bf_buf_sign_half(fine_k);
+    value = prj_reconstruct_face_for_prolongate(stencil, target, use_BJ);
 
     return value * area;
 }
 
 static inline double prj_mpi_bf_interp_x3_buf(const double *buf,
     const int buf_lo[3], const int buf_n[3], const double dx[3],
-    int i, int j, int k, int fine_i, int fine_j, double area)
+    int i, int j, int k, int fine_i, int fine_j, double area, int use_BJ)
 {
-    double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
-    double stx[3];
-    double sty[3];
-    double target[1];
-    double vx[1];
-    double vy[1];
+    double stencil[9];
+    double target[2];
     double value;
+    int di;
+    int dj;
 
     (void)dx;
-    stx[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k);
-    stx[1] = base;
-    stx[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k);
-    sty[0] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k);
-    sty[1] = base;
-    sty[2] = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k);
+    for (di = -1; di <= 1; ++di) {
+        for (dj = -1; dj <= 1; ++dj) {
+            stencil[prj_reconstruct_stencil2_index(di, dj)] =
+                prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + di, j + dj, k);
+        }
+    }
     target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_i);
-    prj_reconstruct_for_prolongate(stx, 1, target, vx);
-    target[0] = 0.25 * prj_mpi_bf_buf_sign_half(fine_j);
-    prj_reconstruct_for_prolongate(sty, 1, target, vy);
-    value = vx[0] + vy[0] - base;
+    target[1] = 0.25 * prj_mpi_bf_buf_sign_half(fine_j);
+    value = prj_reconstruct_face_for_prolongate(stencil, target, use_BJ);
 
     return value * area;
 }
@@ -1443,7 +1421,7 @@ static inline void prj_mpi_bf_compute_inner_fluxes(double u[3][2][2],
 static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
     const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
     prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
-    int use_bf1)
+    int use_bf1, int use_BJ)
 {
     double u[3][2][2];
     double v[2][3][2];
@@ -1471,7 +1449,7 @@ static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
             int idx;
 
             flux = prj_mpi_bf_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
-                buf_n[X1DIR], coarse_dx, ci, cj, ck, j, k, area_u);
+                buf_n[X1DIR], coarse_dx, ci, cj, ck, j, k, area_u, use_BJ);
             idx = FACE_IDX(X1DIR, fi, fj + j, fk + k);
             if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 u[0][j][k] = dst[X1DIR][idx] * area_u;
@@ -1482,7 +1460,7 @@ static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
             }
 
             flux = prj_mpi_bf_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
-                buf_n[X1DIR], coarse_dx, ci + 1, cj, ck, j, k, area_u);
+                buf_n[X1DIR], coarse_dx, ci + 1, cj, ck, j, k, area_u, use_BJ);
             idx = FACE_IDX(X1DIR, fi + 2, fj + j, fk + k);
             if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 u[2][j][k] = dst[X1DIR][idx] * area_u;
@@ -1500,7 +1478,7 @@ static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
             int idx;
 
             flux = prj_mpi_bf_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
-                buf_n[X2DIR], coarse_dx, ci, cj, ck, i, k, area_v);
+                buf_n[X2DIR], coarse_dx, ci, cj, ck, i, k, area_v, use_BJ);
             idx = FACE_IDX(X2DIR, fi + i, fj, fk + k);
             if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 v[i][0][k] = dst[X2DIR][idx] * area_v;
@@ -1511,7 +1489,7 @@ static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
             }
 
             flux = prj_mpi_bf_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
-                buf_n[X2DIR], coarse_dx, ci, cj + 1, ck, i, k, area_v);
+                buf_n[X2DIR], coarse_dx, ci, cj + 1, ck, i, k, area_v, use_BJ);
             idx = FACE_IDX(X2DIR, fi + i, fj + 2, fk + k);
             if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 v[i][2][k] = dst[X2DIR][idx] * area_v;
@@ -1529,7 +1507,7 @@ static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
             int idx;
 
             flux = prj_mpi_bf_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
-                buf_n[X3DIR], coarse_dx, ci, cj, ck, i, j, area_w);
+                buf_n[X3DIR], coarse_dx, ci, cj, ck, i, j, area_w, use_BJ);
             idx = FACE_IDX(X3DIR, fi + i, fj + j, fk);
             if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 w[i][j][0] = dst[X3DIR][idx] * area_w;
@@ -1540,7 +1518,7 @@ static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
             }
 
             flux = prj_mpi_bf_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
-                buf_n[X3DIR], coarse_dx, ci, cj, ck + 1, i, j, area_w);
+                buf_n[X3DIR], coarse_dx, ci, cj, ck + 1, i, j, area_w, use_BJ);
             idx = FACE_IDX(X3DIR, fi + i, fj + j, fk + 2);
             if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 w[i][j][2] = dst[X3DIR][idx] * area_w;
@@ -1695,7 +1673,7 @@ static int prj_mpi_apply_bf_restriction_record(prj_block *coarse, int use_bf1,
 }
 
 static int prj_mpi_apply_bf_prolongation_record(prj_block *fine, int use_bf1,
-    const prj_neighbor *slot, const double *values, int value_count)
+    const prj_neighbor *slot, const double *values, int value_count, int use_BJ)
 {
     const double *buf[3];
     int buf_lo[3][3];
@@ -1745,7 +1723,7 @@ static int prj_mpi_apply_bf_prolongation_record(prj_block *fine, int use_bf1,
                 int ck = k / 2 + slot->send_loc_start[2];
 
                 prj_mpi_bf_prolong_from_buffer(buf, buf_lo, buf_n,
-                    coarse_dx, fine, ci, cj, ck, fi, fj, fk, use_bf1);
+                    coarse_dx, fine, ci, cj, ck, fi, fj, fk, use_bf1, use_BJ);
             }
         }
     }
@@ -1794,7 +1772,7 @@ static int prj_mpi_apply_bf_records(prj_mesh *mesh, int use_bf1,
                 &slot, values + pos, nvalue);
         } else {
             err = prj_mpi_apply_bf_prolongation_record(dst, use_bf1,
-                &slot, values + pos, nvalue);
+                &slot, values + pos, nvalue, mesh->use_BJ);
         }
         if (err != 0) {
             return 1;

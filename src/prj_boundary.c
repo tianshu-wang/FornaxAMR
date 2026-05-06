@@ -74,38 +74,28 @@ static double prj_boundary_read_value(const double *src, int var, int i, int j, 
     return src[is_eosvar != 0 ? EIDX(var, i, j, k) : VIDX(var, i, j, k)];
 }
 
+static int prj_boundary_use_BJ(void)
+{
+    return prj_boundary_active_mesh != 0 && prj_boundary_active_mesh->use_BJ != 0;
+}
+
 static double prj_boundary_prolongate_value(const double *src, int var,
     int i, int j, int k, int is_eosvar, const double target[3])
 {
-    double base = prj_boundary_read_value(src, var, i, j, k, is_eosvar);
-    double stx[3];
-    double sty[3];
-    double stz[3];
-    double tx[1];
-    double ty[1];
-    double tz[1];
-    double vx[1];
-    double vy[1];
-    double vz[1];
+    double stencil[27];
+    int di;
+    int dj;
+    int dk;
 
-    stx[0] = prj_boundary_read_value(src, var, i - 1, j, k, is_eosvar);
-    stx[1] = base;
-    stx[2] = prj_boundary_read_value(src, var, i + 1, j, k, is_eosvar);
-    sty[0] = prj_boundary_read_value(src, var, i, j - 1, k, is_eosvar);
-    sty[1] = base;
-    sty[2] = prj_boundary_read_value(src, var, i, j + 1, k, is_eosvar);
-    stz[0] = prj_boundary_read_value(src, var, i, j, k - 1, is_eosvar);
-    stz[1] = base;
-    stz[2] = prj_boundary_read_value(src, var, i, j, k + 1, is_eosvar);
-
-    tx[0] = target[0];
-    ty[0] = target[1];
-    tz[0] = target[2];
-    prj_reconstruct_for_prolongate(stx, 1, tx, vx);
-    prj_reconstruct_for_prolongate(sty, 1, ty, vy);
-    prj_reconstruct_for_prolongate(stz, 1, tz, vz);
-
-    return vx[0] + vy[0] + vz[0] - 2.0 * base;
+    for (di = -1; di <= 1; ++di) {
+        for (dj = -1; dj <= 1; ++dj) {
+            for (dk = -1; dk <= 1; ++dk) {
+                stencil[prj_reconstruct_stencil3_index(di, dj, dk)] =
+                    prj_boundary_read_value(src, var, i + di, j + dj, k + dk, is_eosvar);
+            }
+        }
+    }
+    return prj_reconstruct_cell_for_prolongate(stencil, target, prj_boundary_use_BJ());
 }
 
 static void prj_boundary_get_values(const prj_block *block, const double *src, int nvar, int is_eosvar,
@@ -752,7 +742,8 @@ static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
                 cbuf[1] = buf[1];
                 cbuf[2] = buf[2];
                 prj_mhd_prolong_bf_from_buffer(cbuf, buf_lo, buf_n,
-                    coarse->dx, fine, ci, cj, ck, fi, fj, fk, use_bf1);
+                    coarse->dx, fine, ci, cj, ck, fi, fj, fk, use_bf1,
+                    prj_boundary_use_BJ());
             }
         }
     }
