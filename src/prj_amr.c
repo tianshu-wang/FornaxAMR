@@ -1188,6 +1188,72 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
     }
 }
 
+static void prj_amr_mhd_free_prolong_bf_buffer(double *buf[3])
+{
+    int dir;
+
+    for (dir = 0; dir < 3; ++dir) {
+        free(buf[dir]);
+        buf[dir] = 0;
+    }
+}
+
+static void prj_amr_mhd_pack_prolong_bf_buffer(const prj_block *parent,
+    int ci0, int cj0, int ck0, int use_bf1, double *buf[3],
+    int buf_lo[3][3], int buf_n[3][3])
+{
+    int coarse_lo[3];
+    int dir;
+
+    coarse_lo[0] = ci0;
+    coarse_lo[1] = cj0;
+    coarse_lo[2] = ck0;
+    for (dir = 0; dir < 3; ++dir) {
+        buf[dir] = 0;
+    }
+    for (dir = 0; dir < 3; ++dir) {
+        const double *src = use_bf1 != 0 ? parent->Bf1[dir] : parent->Bf[dir];
+        int count = 1;
+        int d;
+        int i;
+        int j;
+        int k;
+        int idx;
+
+        for (d = 0; d < 3; ++d) {
+            if (d == dir) {
+                buf_lo[dir][d] = coarse_lo[d];
+                buf_n[dir][d] = PRJ_BLOCK_SIZE / 2 + 1;
+            } else {
+                buf_lo[dir][d] = coarse_lo[d] - 1;
+                buf_n[dir][d] = PRJ_BLOCK_SIZE / 2 + 2;
+            }
+            count *= buf_n[dir][d];
+        }
+
+        buf[dir] = (double *)malloc((size_t)count * sizeof(double));
+        if (buf[dir] == 0) {
+            prj_amr_mhd_free_prolong_bf_buffer(buf);
+            prj_amr_mhd_fail("prj_amr_mhd_pack_prolong_bf_buffer: malloc failed");
+        }
+
+        idx = 0;
+        for (i = buf_lo[dir][0]; i < buf_lo[dir][0] + buf_n[dir][0]; ++i) {
+            for (j = buf_lo[dir][1]; j < buf_lo[dir][1] + buf_n[dir][1]; ++j) {
+                for (k = buf_lo[dir][2]; k < buf_lo[dir][2] + buf_n[dir][2]; ++k) {
+                    double value = src[FACE_IDX(dir, i, j, k)];
+
+                    if (!isfinite(value)) {
+                        prj_amr_mhd_free_prolong_bf_buffer(buf);
+                        prj_amr_mhd_fail("prj_amr_mhd_pack_prolong_bf_buffer: non-finite face-centered magnetic field");
+                    }
+                    buf[dir][idx++] = value;
+                }
+            }
+        }
+    }
+}
+
 static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block *parent, prj_block *child,
     int child_oct, int use_bf1)
 {
@@ -1200,6 +1266,10 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
     int ci;
     int cj;
     int ck;
+    double *buf[3] = {0, 0, 0};
+    const double *cbuf[3];
+    int buf_lo[3][3];
+    int buf_n[3][3];
     
     prj_amr_mhd_check_block(parent, "prj_amr_mhd_prolongate_bf_one: missing parent MHD storage");
     prj_amr_mhd_clear_faces(child, use_bf1);
@@ -1288,6 +1358,12 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
     }
 
 
+    prj_amr_mhd_pack_prolong_bf_buffer(parent, ci0, cj0, ck0, use_bf1,
+        buf, buf_lo, buf_n);
+    cbuf[0] = buf[0];
+    cbuf[1] = buf[1];
+    cbuf[2] = buf[2];
+
     for (ci = ci0; ci < ci0 + PRJ_BLOCK_SIZE / 2; ++ci) {
         for (cj = cj0; cj < cj0 + PRJ_BLOCK_SIZE / 2; ++cj) {
             for (ck = ck0; ck < ck0 + PRJ_BLOCK_SIZE / 2; ++ck) {
@@ -1295,10 +1371,13 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
                 int fj = 2 * (cj - cj0);
                 int fk = 2 * (ck - ck0);
 
-                prj_mhd_bf_prolongate(parent, child, ci, cj, ck, fi, fj, fk, use_bf1);
+                prj_boundary_prolong_bf_from_buffer(cbuf, buf_lo, buf_n,
+                    parent->dx, child, ci, cj, ck, fi, fj, fk, use_bf1);
             }
         }
     }
+
+    prj_amr_mhd_free_prolong_bf_buffer(buf);
 }
 
 static void prj_amr_mhd_prolongate_bf(const prj_mesh *mesh, const prj_block *parent, prj_block *child, int child_oct)

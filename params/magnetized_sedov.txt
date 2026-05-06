@@ -12,14 +12,14 @@ x3min = -2.0
 x3max = 2.0
 
 root_nx = 3
-max_level = 1
+max_level = 3
 
 cfl = 0.4
 t_end = 10.0
 max_steps = 1000
-output_interval = 10
+output_interval = -1
 restart_interval = -1
-output_dt = -1
+output_dt = 1e-3
 restart_dt = -1
 amr_interval = 1
 
