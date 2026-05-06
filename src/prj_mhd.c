@@ -103,7 +103,7 @@ static inline void prj_mhd_store_vector_potential(prj_block *block, int init_typ
                     double A[3];
 
                     prj_mhd_vector_potential(init_type, B_norm, B_scale, x, y, z, A);
-                    block->emf[d][IDX(i, j, k)] = A[d];
+                    block->emf[d][EDGE_IDX(d, i, j, k)] = A[d];
                 }
             }
         }
@@ -130,19 +130,19 @@ static inline void prj_mhd_curl_a_to_bf(prj_block *block)
                 double B2;
                 double B3;
 
-                B1 = (block->emf[X3DIR][IDX(i, j + 1, k)] - block->emf[X3DIR][IDX(i, j, k)]) / block->dx[1] -
-                    (block->emf[X2DIR][IDX(i, j, k + 1)] - block->emf[X2DIR][IDX(i, j, k)]) / block->dx[2];
-                B2 = (block->emf[X1DIR][IDX(i, j, k + 1)] - block->emf[X1DIR][IDX(i, j, k)]) / block->dx[2] -
-                    (block->emf[X3DIR][IDX(i + 1, j, k)] - block->emf[X3DIR][IDX(i, j, k)]) / block->dx[0];
-                B3 = (block->emf[X2DIR][IDX(i + 1, j, k)] - block->emf[X2DIR][IDX(i, j, k)]) / block->dx[0] -
-                    (block->emf[X1DIR][IDX(i, j + 1, k)] - block->emf[X1DIR][IDX(i, j, k)]) / block->dx[1];
+                B1 = (block->emf[X3DIR][EDGE_IDX(X3DIR, i, j + 1, k)] - block->emf[X3DIR][EDGE_IDX(X3DIR, i, j, k)]) / block->dx[1] -
+                     (block->emf[X2DIR][EDGE_IDX(X2DIR, i, j, k + 1)] - block->emf[X2DIR][EDGE_IDX(X2DIR, i, j, k)]) / block->dx[2];
+                B2 = (block->emf[X1DIR][EDGE_IDX(X1DIR, i, j, k + 1)] - block->emf[X1DIR][EDGE_IDX(X1DIR, i, j, k)]) / block->dx[2] -
+                     (block->emf[X3DIR][EDGE_IDX(X3DIR, i + 1, j, k)] - block->emf[X3DIR][EDGE_IDX(X3DIR, i, j, k)]) / block->dx[0];
+                B3 = (block->emf[X2DIR][EDGE_IDX(X2DIR, i + 1, j, k)] - block->emf[X2DIR][EDGE_IDX(X2DIR, i, j, k)]) / block->dx[0] -
+                     (block->emf[X1DIR][EDGE_IDX(X1DIR, i, j + 1, k)] - block->emf[X1DIR][EDGE_IDX(X1DIR, i, j, k)]) / block->dx[1];
 
                 if (!isfinite(B1) || !isfinite(B2) || !isfinite(B3)) {
                     prj_mhd_fail("prj_mhd_init: non-finite face-centered magnetic field");
                 }
-                block->Bf[X1DIR][IDX(i, j, k)] = B1;
-                block->Bf[X2DIR][IDX(i, j, k)] = B2;
-                block->Bf[X3DIR][IDX(i, j, k)] = B3;
+                block->Bf[X1DIR][FACE_IDX(X1DIR, i, j, k)] = B1;
+                block->Bf[X2DIR][FACE_IDX(X2DIR, i, j, k)] = B2;
+                block->Bf[X3DIR][FACE_IDX(X3DIR, i, j, k)] = B3;
             }
         }
     }
@@ -259,7 +259,7 @@ static inline double prj_mhd_read_bf_face(const double *bf,
         prj_mhd_fail("prj_mhd_bf_prolongate: null face-centered source");
     }
     prj_mhd_check_face_storage_index(label, dir, i, j, k);
-    value = bf[IDX(i, j, k)];
+    value = bf[FACE_IDX(dir, i, j, k)];
     if (!isfinite(value)) {
         fprintf(stderr, "%s: non-finite face-centered magnetic field at i=%d j=%d k=%d\n",
             label, i, j, k);
@@ -366,7 +366,7 @@ static inline void prj_mhd_outer_or_prolongated_flux(prj_block *fine,
         prj_mhd_fail("prj_mhd_bf_prolongate: invalid outer face flux");
     }
     prj_mhd_check_face_storage_index("prj_mhd_bf_prolongate: fine outer face", dir, i, j, k);
-    idx = IDX(i, j, k);
+    idx = FACE_IDX(dir, i, j, k);
     if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
         value = dst[dir][idx];
         if (!isfinite(value)) {
@@ -392,7 +392,7 @@ static inline void prj_mhd_write_inner_flux(prj_block *fine, double *dst[3],
         prj_mhd_fail("prj_mhd_bf_prolongate: invalid inner face flux");
     }
     prj_mhd_check_face_storage_index("prj_mhd_bf_prolongate: fine inner face", dir, i, j, k);
-    idx = IDX(i, j, k);
+    idx = FACE_IDX(dir, i, j, k);
     if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
         if (!isfinite(dst[dir][idx])) {
             prj_mhd_fail("prj_mhd_bf_prolongate: non-finite existing fine inner face");
@@ -640,9 +640,9 @@ void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1)
                 double b3;
                 int v;
 
-                b1 = 0.5 * (src[X1DIR][IDX(i, j, k)] + src[X1DIR][IDX(i + 1, j, k)]);
-                b2 = 0.5 * (src[X2DIR][IDX(i, j, k)] + src[X2DIR][IDX(i, j + 1, k)]);
-                b3 = 0.5 * (src[X3DIR][IDX(i, j, k)] + src[X3DIR][IDX(i, j, k + 1)]);
+                b1 = 0.5 * (src[X1DIR][FACE_IDX(X1DIR, i, j, k)] + src[X1DIR][FACE_IDX(X1DIR, i + 1, j, k)]);
+                b2 = 0.5 * (src[X2DIR][FACE_IDX(X2DIR, i, j, k)] + src[X2DIR][FACE_IDX(X2DIR, i, j + 1, k)]);
+                b3 = 0.5 * (src[X3DIR][FACE_IDX(X3DIR, i, j, k)] + src[X3DIR][FACE_IDX(X3DIR, i, j, k + 1)]);
                 if (!isfinite(b1) || !isfinite(b2) || !isfinite(b3)) {
                     prj_mhd_fail("prj_mhd_bf2bc: non-finite cell-centered magnetic field");
                 }
@@ -721,7 +721,7 @@ double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
     if (!isfinite(emf)) {
         prj_mhd_fail("prj_mhd_emf_upwind: non-finite result");
     }
-    block->emf[dir][IDX(i, j, k)] = emf;
+    block->emf[dir][EDGE_IDX(dir, i, j, k)] = emf;
     return emf;
 }
 
@@ -828,7 +828,7 @@ static inline double prj_mhd_restrict_emf_value(const prj_block *fine, int dir,
         eidx[2] = idx[2];
         eidx[dir] = edge_base + n;
         prj_mhd_check_edge_storage_index("prj_mhd_emf_send: fine edge", dir, eidx[0], eidx[1], eidx[2]);
-        value = fine->emf[dir][IDX(eidx[0], eidx[1], eidx[2])];
+        value = fine->emf[dir][EDGE_IDX(dir, eidx[0], eidx[1], eidx[2])];
         if (!isfinite(value)) {
             prj_mhd_fail("prj_mhd_emf_send: non-finite fine emf");
         }
@@ -848,7 +848,7 @@ static inline void prj_mhd_write_emf_edge(prj_block *block, int dir,
         prj_mhd_fail("prj_mhd_emf_send: invalid emf write");
     }
     prj_mhd_check_edge_storage_index("prj_mhd_emf_send: destination edge", dir, i, j, k);
-    idx = IDX(i, j, k);
+    idx = EDGE_IDX(dir, i, j, k);
     if (fidelity < block->edge_fidelity[dir][idx]) {
         return;
     }
@@ -900,38 +900,45 @@ static inline void prj_mhd_restrict_emf_to_coarse(const prj_block *fine,
 
     for (dir = 0; dir < 3; ++dir) {
         if (axis[dir]!=0) {continue;}
+        int i_offset = ((fine->xmin[dir]+fine->xmax[dir]) < (coarse->xmin[dir]+coarse->xmax[dir])) ? 0 : PRJ_BLOCK_SIZE/2;
 
         int tan0 = (dir+1)%3;
         int tan1 = (dir+2)%3;
+
         
         if (axis[tan0]!=0&&axis[tan1]!=0) {
             int i;
             for (i = 0; i<PRJ_BLOCK_SIZE; i+=2) {
                 double value = 0;
                 it_send[dir] = i;
-                value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                value += fine->emf[dir][EDGE_IDX(dir, it_send[0], it_send[1], it_send[2])];   
                 it_send[dir] = i+1;
-                value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                value += fine->emf[dir][EDGE_IDX(dir, it_send[0], it_send[1], it_send[2])];   
 
-                it_recv[dir] = i/2;
+                value *= 0.5;
+
+                it_recv[dir] = i/2 + i_offset;
                 prj_mhd_write_emf_edge(coarse, dir, it_recv[0], it_recv[1], it_recv[2], value,
                     PRJ_MHD_FIDELITY_FINER);
             }
         } else if (axis[tan0]!=0) {
             int i;
             int j;
+            int j_offset = ((fine->xmin[tan1]+fine->xmax[tan1]) < (coarse->xmin[tan1]+coarse->xmax[tan1])) ? 0 : PRJ_BLOCK_SIZE/2;
             for (i = 0; i<PRJ_BLOCK_SIZE; i+=2) {
                 for (j = 0; j<=PRJ_BLOCK_SIZE; j+=2) {
                     it_send[tan1] = j;
-                    it_recv[tan1] = j/2;
+                    it_recv[tan1] = j/2 + j_offset;
 
                     double value = 0;
                     it_send[dir] = i;
-                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                    value += fine->emf[dir][EDGE_IDX(dir, it_send[0], it_send[1], it_send[2])];   
                     it_send[dir] = i+1;
-                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                    value += fine->emf[dir][EDGE_IDX(dir, it_send[0], it_send[1], it_send[2])];   
 
-                    it_recv[dir] = i/2;
+                    value *= 0.5;
+
+                    it_recv[dir] = i/2 + i_offset;
                     prj_mhd_write_emf_edge(coarse, dir, it_recv[0], it_recv[1], it_recv[2], value,
                         PRJ_MHD_FIDELITY_FINER);
                 }
@@ -939,18 +946,21 @@ static inline void prj_mhd_restrict_emf_to_coarse(const prj_block *fine,
         } else if (axis[tan1]!=0) {
             int i;
             int j;
+            int j_offset = ((fine->xmin[tan0]+fine->xmax[tan0]) < (coarse->xmin[tan0]+coarse->xmax[tan0])) ? 0 : PRJ_BLOCK_SIZE/2;
             for (i = 0; i<PRJ_BLOCK_SIZE; i+=2) {
                 for (j = 0; j<=PRJ_BLOCK_SIZE; j+=2) {
                     it_send[tan0] = j;
-                    it_recv[tan0] = j/2;
+                    it_recv[tan0] = j/2 + j_offset;
 
                     double value = 0;
                     it_send[dir] = i;
-                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                    value += fine->emf[dir][EDGE_IDX(dir, it_send[0], it_send[1], it_send[2])];   
                     it_send[dir] = i+1;
-                    value += fine->emf[dir][IDX(it_send[0], it_send[1], it_send[2])];   
+                    value += fine->emf[dir][EDGE_IDX(dir, it_send[0], it_send[1], it_send[2])];   
 
-                    it_recv[dir] = i/2;
+                    value *= 0.5;
+                    
+                    it_recv[dir] = i/2 + i_offset;
                     prj_mhd_write_emf_edge(coarse, dir, it_recv[0], it_recv[1], it_recv[2], value,
                         PRJ_MHD_FIDELITY_FINER);
                 }
@@ -990,7 +1000,7 @@ static inline void prj_mhd_init_edge_fidelity(prj_mesh *mesh)
             for (i = 0; i <= prj_mhd_edge_axis_active_max(dir, 0); ++i) {
                 for (j = 0; j <= prj_mhd_edge_axis_active_max(dir, 1); ++j) {
                     for (k = 0; k <= prj_mhd_edge_axis_active_max(dir, 2); ++k) {
-                        block->edge_fidelity[dir][IDX(i, j, k)] = PRJ_MHD_FIDELITY_SAME;
+                        block->edge_fidelity[dir][EDGE_IDX(dir, i, j, k)] = PRJ_MHD_FIDELITY_SAME;
                     }
                 }
             }
@@ -1052,9 +1062,9 @@ void prj_mhd_debug_check_divb(const prj_mesh *mesh, int use_bf1)
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                     double divb =
-                        (bf[X1DIR][IDX(i + 1, j, k)] - bf[X1DIR][IDX(i, j, k)]) / block->dx[0] +
-                        (bf[X2DIR][IDX(i, j + 1, k)] - bf[X2DIR][IDX(i, j, k)]) / block->dx[1] +
-                        (bf[X3DIR][IDX(i, j, k + 1)] - bf[X3DIR][IDX(i, j, k)]) / block->dx[2];
+                        (bf[X1DIR][FACE_IDX(X1DIR, i + 1, j, k)] - bf[X1DIR][FACE_IDX(X1DIR, i, j, k)]) / block->dx[0] +
+                        (bf[X2DIR][FACE_IDX(X2DIR, i, j + 1, k)] - bf[X2DIR][FACE_IDX(X2DIR, i, j, k)]) / block->dx[1] +
+                        (bf[X3DIR][FACE_IDX(X3DIR, i, j, k + 1)] - bf[X3DIR][FACE_IDX(X3DIR, i, j, k)]) / block->dx[2];
 
                     if (!isfinite(divb) || fabs(divb) > 1.0e-10) {
                         fprintf(stderr,
@@ -1130,12 +1140,12 @@ void prj_mhd_debug_check_emf(const prj_mesh *mesh)
                                 if (!prj_mhd_edge_active(dir, idx[0], idx[1], idx[2])) {
                                     continue;
                                 }
-                                a = block->emf[dir][IDX(i, j, k)];
-                                b = neighbor->emf[dir][IDX(idx[0], idx[1], idx[2])];
+                                a = block->emf[dir][EDGE_IDX(dir, i, j, k)];
+                                b = neighbor->emf[dir][EDGE_IDX(dir, idx[0], idx[1], idx[2])];
                                 if (!isfinite(a) || !isfinite(b) || fabs(a - b) > 1.0e-10) {
                                     fprintf(stderr,
-                                        "prj_mhd_debug_check_emf: same-level mismatch blocks %d/%d dir=%d value=(%.17e, %.17e)\n",
-                                        block->id, neighbor->id, dir, a, b);
+                                        "prj_mhd_debug_check_emf: same-level mismatch blocks %d/%d dir=%d value=(%.17e, %.17e) index=(%d, %d, %d), (%d, %d, %d) fidelity=(%d, %d)\n",
+                                        block->id, neighbor->id, dir, a, b, i,j,k,idx[0],idx[1],idx[2],block->edge_fidelity[dir][EDGE_IDX(dir, i, j, k)], neighbor->edge_fidelity[dir][EDGE_IDX(dir, idx[0], idx[1], idx[2])]);
                                     exit(EXIT_FAILURE);
                                 }
                             }
@@ -1162,12 +1172,12 @@ void prj_mhd_debug_check_emf(const prj_mesh *mesh)
                                     continue;
                                 }
                                 restricted = prj_mhd_restrict_emf_value(block, dir, x);
-                                coarse_value = neighbor->emf[dir][IDX(i, j, k)];
+                                coarse_value = neighbor->emf[dir][EDGE_IDX(dir, i, j, k)];
                                 if (!isfinite(coarse_value) ||
                                     fabs(restricted - coarse_value) > 1.0e-10) {
                                     fprintf(stderr,
-                                        "prj_mhd_debug_check_emf: coarse/fine mismatch fine=%d coarse=%d dir=%d value=(%.17e, %.17e)\n",
-                                        block->id, neighbor->id, dir, restricted, coarse_value);
+                                        "prj_mhd_debug_check_emf: coarse/fine mismatch fine=%d coarse=%d dir=%d value=(%.17e, %.17e) index=(%d, %d, %d)\n",
+                                        block->id, neighbor->id, dir, restricted, coarse_value, i, j, k);
                                     exit(EXIT_FAILURE);
                                 }
                             }

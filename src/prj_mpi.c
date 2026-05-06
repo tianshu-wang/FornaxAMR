@@ -1192,7 +1192,7 @@ static double prj_mpi_restrict_emf_value(const prj_block *fine, int dir,
             fprintf(stderr, "prj_mpi_restrict_emf_value: fine edge index out of storage\n");
             exit(EXIT_FAILURE);
         }
-        value = fine->emf[dir][IDX(eidx[0], eidx[1], eidx[2])];
+        value = fine->emf[dir][EDGE_IDX(dir, eidx[0], eidx[1], eidx[2])];
         if (!isfinite(value)) {
             fprintf(stderr, "prj_mpi_restrict_emf_value: non-finite emf\n");
             exit(EXIT_FAILURE);
@@ -1347,7 +1347,7 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
                 fprintf(stderr, "prj_mpi_exchange_emf: received edge index out of storage\n");
                 exit(EXIT_FAILURE);
             }
-            flat = IDX(ii, jj, kk);
+            flat = FACE_IDX(dir, ii, jj, kk);
             if (PRJ_MHD_FIDELITY_FINER < block->edge_fidelity[dir][flat]) {
                 continue;
             }

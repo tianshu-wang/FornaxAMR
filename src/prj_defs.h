@@ -63,6 +63,18 @@
 
 #define IDX(i, j, k) \
     (((i) + PRJ_NGHOST) * PRJ_BS * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST))
+#define FACE_IDX(dir, i, j, k) \
+    ((dir) == X1DIR ? \
+        (((i) + PRJ_NGHOST) * PRJ_BS * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST)) : \
+     (dir) == X2DIR ? \
+        (((i) + PRJ_NGHOST) * (PRJ_BS + 1) * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST)) : \
+        (((i) + PRJ_NGHOST) * PRJ_BS * (PRJ_BS + 1) + ((j) + PRJ_NGHOST) * (PRJ_BS + 1) + ((k) + PRJ_NGHOST)))
+#define EDGE_IDX(dir, i, j, k) \
+    ((dir) == X1DIR ? \
+        (((i) + PRJ_NGHOST) * (PRJ_BS + 1) * (PRJ_BS + 1) + ((j) + PRJ_NGHOST) * (PRJ_BS + 1) + ((k) + PRJ_NGHOST)) : \
+     (dir) == X2DIR ? \
+        (((i) + PRJ_NGHOST) * PRJ_BS * (PRJ_BS + 1) + ((j) + PRJ_NGHOST) * (PRJ_BS + 1) + ((k) + PRJ_NGHOST)) : \
+        (((i) + PRJ_NGHOST) * (PRJ_BS + 1) * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST)))
 #define VIDX(v, i, j, k) ((v) * PRJ_BLOCK_NCELLS + IDX(i, j, k))
 #define EIDX(v, i, j, k) ((v) * PRJ_BLOCK_NCELLS + IDX(i, j, k))
 

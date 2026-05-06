@@ -505,7 +505,7 @@ static int prj_boundary_bf_face_active(int dir, int i, int j, int k)
     return 1;
 }
 
-static void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
+void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
     int i, int j, int k, double value, int fidelity)
 {
     int idx;
@@ -522,7 +522,7 @@ static void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
         fprintf(stderr, "prj_boundary_write_bf_face: invalid value or fidelity\n");
         exit(EXIT_FAILURE);
     }
-    idx = IDX(i, j, k);
+    idx = FACE_IDX(dir, i, j, k);
     if (fidelity < block->face_fidelity[dir][idx]) {
         return;
     }
@@ -570,7 +570,7 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
                     if (prj_boundary_bf_face_active(dir, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])) {
                         continue;
                     }
-                    buffer[buf_idx++] = src[IDX(i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
+                    buffer[buf_idx++] = src[FACE_IDX(dir, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                 }
             }
         }
@@ -636,7 +636,7 @@ static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
         for (si = slot->send_loc_start[0]; si <= slot->send_loc_end[0] + (dir == 0 ? 1 : 0); ++si) {
             for (sj = slot->send_loc_start[1]; sj <= slot->send_loc_end[1] + (dir == 1 ? 1 : 0); ++sj) {
                 for (sk = slot->send_loc_start[2]; sk <= slot->send_loc_end[2] + (dir == 2 ? 1 : 0); ++sk) {
-                    buffer[buf_idx++] = src[IDX(si, sj, sk)];
+                    buffer[buf_idx++] = src[FACE_IDX(dir, si, sj, sk)];
                 }
             }
         }
@@ -874,7 +874,7 @@ static void prj_boundary_prolong_bf_from_buffer(const double *buf[3],
 
             flux = prj_boundary_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
                 buf_n[X1DIR], coarse_dx, ci, cj, ck, j, k, area_u);
-            idx = IDX(fi, fj + j, fk + k);
+            idx = FACE_IDX(X1DIR, fi, fj + j, fk + k);
             if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 u[0][j][k] = dst[X1DIR][idx] * area_u;
             } else {
@@ -885,7 +885,7 @@ static void prj_boundary_prolong_bf_from_buffer(const double *buf[3],
 
             flux = prj_boundary_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
                 buf_n[X1DIR], coarse_dx, ci + 1, cj, ck, j, k, area_u);
-            idx = IDX(fi + 2, fj + j, fk + k);
+            idx = FACE_IDX(X1DIR, fi + 2, fj + j, fk + k);
             if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 u[2][j][k] = dst[X1DIR][idx] * area_u;
             } else {
@@ -903,7 +903,7 @@ static void prj_boundary_prolong_bf_from_buffer(const double *buf[3],
 
             flux = prj_boundary_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
                 buf_n[X2DIR], coarse_dx, ci, cj, ck, i, k, area_v);
-            idx = IDX(fi + i, fj, fk + k);
+            idx = FACE_IDX(X2DIR, fi + i, fj, fk + k);
             if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 v[i][0][k] = dst[X2DIR][idx] * area_v;
             } else {
@@ -914,7 +914,7 @@ static void prj_boundary_prolong_bf_from_buffer(const double *buf[3],
 
             flux = prj_boundary_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
                 buf_n[X2DIR], coarse_dx, ci, cj + 1, ck, i, k, area_v);
-            idx = IDX(fi + i, fj + 2, fk + k);
+            idx = FACE_IDX(X2DIR, fi + i, fj + 2, fk + k);
             if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 v[i][2][k] = dst[X2DIR][idx] * area_v;
             } else {
@@ -932,7 +932,7 @@ static void prj_boundary_prolong_bf_from_buffer(const double *buf[3],
 
             flux = prj_boundary_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
                 buf_n[X3DIR], coarse_dx, ci, cj, ck, i, j, area_w);
-            idx = IDX(fi + i, fj + j, fk);
+            idx = FACE_IDX(X3DIR, fi + i, fj + j, fk);
             if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 w[i][j][0] = dst[X3DIR][idx] * area_w;
             } else {
@@ -943,7 +943,7 @@ static void prj_boundary_prolong_bf_from_buffer(const double *buf[3],
 
             flux = prj_boundary_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
                 buf_n[X3DIR], coarse_dx, ci, cj, ck + 1, i, j, area_w);
-            idx = IDX(fi + i, fj + j, fk + 2);
+            idx = FACE_IDX(X3DIR, fi + i, fj + j, fk + 2);
             if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
                 w[i][j][2] = dst[X3DIR][idx] * area_w;
             } else {
@@ -1034,7 +1034,7 @@ static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
         for (si = lo[0]; si <= hi[0]; ++si) {
             for (sj = lo[1]; sj <= hi[1]; ++sj) {
                 for (sk = lo[2]; sk <= hi[2]; ++sk) {
-                    buf[dir][buf_idx++] = src[IDX(si, sj, sk)];
+                    buf[dir][buf_idx++] = src[FACE_IDX(dir, si, sj, sk)];
                 }
             }
         }
@@ -1092,7 +1092,7 @@ static void prj_boundary_init_face_fidelity(prj_mesh *mesh)
             for (i = 0; i <= prj_boundary_bf_axis_active_max(dir, 0); ++i) {
                 for (j = 0; j <= prj_boundary_bf_axis_active_max(dir, 1); ++j) {
                     for (k = 0; k <= prj_boundary_bf_axis_active_max(dir, 2); ++k) {
-                        block->face_fidelity[dir][IDX(i, j, k)] = PRJ_MHD_FIDELITY_SAME;
+                        block->face_fidelity[dir][FACE_IDX(dir, i, j, k)] = PRJ_MHD_FIDELITY_SAME;
                     }
                 }
             }
@@ -1150,7 +1150,7 @@ static void prj_boundary_apply_bf_axis(prj_block *block, int use_bf1,
                     if (!prj_boundary_face_storage_index_ok(dir, src_idx[0], src_idx[1], src_idx[2])) {
                         continue;
                     }
-                    src_flat = IDX(src_idx[0], src_idx[1], src_idx[2]);
+                    src_flat = FACE_IDX(dir, src_idx[0], src_idx[1], src_idx[2]);
                     fidelity = block->face_fidelity[dir][src_flat];
                     if (fidelity == PRJ_MHD_FIDELITY_NONE) {
                         continue;

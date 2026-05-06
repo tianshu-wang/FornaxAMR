@@ -264,22 +264,22 @@ static double prj_timeint_mhd_ct_value(const prj_block *block, double *src[3],
         block->emf[1] == 0 || block->emf[2] == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_ct_value: invalid input");
     }
-    value = src[dir][IDX(i, j, k)];
+    value = src[dir][FACE_IDX(dir, i, j, k)];
     if (dir == X1DIR) {
-        value += -dt * (block->emf[X3DIR][IDX(i, j + 1, k)] -
-            block->emf[X3DIR][IDX(i, j, k)]) / block->dx[1];
-        value += dt * (block->emf[X2DIR][IDX(i, j, k + 1)] -
-            block->emf[X2DIR][IDX(i, j, k)]) / block->dx[2];
+        value += -dt * (block->emf[X3DIR][EDGE_IDX(X3DIR, i, j + 1, k)] -
+                        block->emf[X3DIR][EDGE_IDX(X3DIR, i, j, k)]) / block->dx[1];
+        value +=  dt * (block->emf[X2DIR][EDGE_IDX(X2DIR, i, j, k + 1)] -
+                        block->emf[X2DIR][EDGE_IDX(X2DIR, i, j, k)]) / block->dx[2];
     } else if (dir == X2DIR) {
-        value += -dt * (block->emf[X1DIR][IDX(i, j, k + 1)] -
-            block->emf[X1DIR][IDX(i, j, k)]) / block->dx[2];
-        value += dt * (block->emf[X3DIR][IDX(i + 1, j, k)] -
-            block->emf[X3DIR][IDX(i, j, k)]) / block->dx[0];
+        value += -dt * (block->emf[X1DIR][EDGE_IDX(X1DIR, i, j, k + 1)] -
+                        block->emf[X1DIR][EDGE_IDX(X1DIR, i, j, k)]) / block->dx[2];
+        value +=  dt * (block->emf[X3DIR][EDGE_IDX(X3DIR, i + 1, j, k)] -
+                        block->emf[X3DIR][EDGE_IDX(X3DIR, i, j, k)]) / block->dx[0];
     } else {
-        value += -dt * (block->emf[X2DIR][IDX(i + 1, j, k)] -
-            block->emf[X2DIR][IDX(i, j, k)]) / block->dx[0];
-        value += dt * (block->emf[X1DIR][IDX(i, j + 1, k)] -
-            block->emf[X1DIR][IDX(i, j, k)]) / block->dx[1];
+        value += -dt * (block->emf[X2DIR][EDGE_IDX(X2DIR, i + 1, j, k)] -
+                        block->emf[X2DIR][EDGE_IDX(X2DIR, i, j, k)]) / block->dx[0];
+        value +=  dt * (block->emf[X1DIR][EDGE_IDX(X1DIR, i, j + 1, k)] -
+                        block->emf[X1DIR][EDGE_IDX(X1DIR, i, j, k)]) / block->dx[1];
     }
     if (!isfinite(value)) {
         prj_timeint_mhd_fail("prj_timeint_mhd_ct_value: non-finite updated magnetic field");
@@ -321,9 +321,9 @@ static void prj_timeint_mhd_update_bf(prj_block *block, int stage, double dt)
                     double value = prj_timeint_mhd_ct_value(block, src, dir, i, j, k, dt);
 
                     if (stage == 2) {
-                        value = 0.5 * old[dir][IDX(i, j, k)] + 0.5 * value;
+                        value = 0.5 * old[dir][FACE_IDX(dir, i, j, k)] + 0.5 * value;
                     }
-                    dst[dir][IDX(i, j, k)] = value;
+                    dst[dir][FACE_IDX(dir, i, j, k)] = value;
                 }
             }
         }
@@ -336,9 +336,9 @@ static void prj_timeint_mhd_set_cons_b_from_bf(const prj_block *block,
     if (block == 0 || bf == 0 || u == 0 || bf[0] == 0 || bf[1] == 0 || bf[2] == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_set_cons_b_from_bf: invalid input");
     }
-    u[PRJ_CONS_B1] = 0.5 * (bf[X1DIR][IDX(i, j, k)] + bf[X1DIR][IDX(i + 1, j, k)]);
-    u[PRJ_CONS_B2] = 0.5 * (bf[X2DIR][IDX(i, j, k)] + bf[X2DIR][IDX(i, j + 1, k)]);
-    u[PRJ_CONS_B3] = 0.5 * (bf[X3DIR][IDX(i, j, k)] + bf[X3DIR][IDX(i, j, k + 1)]);
+    u[PRJ_CONS_B1] = 0.5 * (bf[X1DIR][FACE_IDX(X1DIR, i, j, k)] + bf[X1DIR][FACE_IDX(X1DIR, i + 1, j, k)]);
+    u[PRJ_CONS_B2] = 0.5 * (bf[X2DIR][FACE_IDX(X2DIR, i, j, k)] + bf[X2DIR][FACE_IDX(X2DIR, i, j + 1, k)]);
+    u[PRJ_CONS_B3] = 0.5 * (bf[X3DIR][FACE_IDX(X3DIR, i, j, k)] + bf[X3DIR][FACE_IDX(X3DIR, i, j, k + 1)]);
     if (!isfinite(u[PRJ_CONS_B1]) || !isfinite(u[PRJ_CONS_B2]) || !isfinite(u[PRJ_CONS_B3])) {
         prj_timeint_mhd_fail("prj_timeint_mhd_set_cons_b_from_bf: non-finite cell-centered magnetic field");
     }

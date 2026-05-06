@@ -1148,7 +1148,7 @@ static void prj_amr_mhd_mark_active_faces(prj_block *block, int fidelity)
         for (i = 0; i <= prj_amr_mhd_face_axis_max(dir, 0); ++i) {
             for (j = 0; j <= prj_amr_mhd_face_axis_max(dir, 1); ++j) {
                 for (k = 0; k <= prj_amr_mhd_face_axis_max(dir, 2); ++k) {
-                    block->face_fidelity[dir][IDX(i, j, k)] = fidelity;
+                    block->face_fidelity[dir][FACE_IDX(dir, i, j, k)] = fidelity;
                 }
             }
         }
@@ -1167,9 +1167,9 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                double b1 = 0.5 * (bf[X1DIR][IDX(i, j, k)] + bf[X1DIR][IDX(i + 1, j, k)]);
-                double b2 = 0.5 * (bf[X2DIR][IDX(i, j, k)] + bf[X2DIR][IDX(i, j + 1, k)]);
-                double b3 = 0.5 * (bf[X3DIR][IDX(i, j, k)] + bf[X3DIR][IDX(i, j, k + 1)]);
+                double b1 = 0.5 * (bf[X1DIR][FACE_IDX(X1DIR, i, j, k)] + bf[X1DIR][FACE_IDX(X1DIR, i + 1, j, k)]);
+                double b2 = 0.5 * (bf[X2DIR][FACE_IDX(X2DIR, i, j, k)] + bf[X2DIR][FACE_IDX(X2DIR, i, j + 1, k)]);
+                double b3 = 0.5 * (bf[X3DIR][FACE_IDX(X3DIR, i, j, k)] + bf[X3DIR][FACE_IDX(X3DIR, i, j, k + 1)]);
 
                 if (!isfinite(b1) || !isfinite(b2) || !isfinite(b3)) {
                     prj_amr_mhd_fail("prj_amr_mhd_set_cons_b_from_bf: non-finite magnetic field");
@@ -1188,7 +1188,7 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
     }
 }
 
-static void prj_amr_mhd_prolongate_bf_one(const prj_block *parent, prj_block *child,
+static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block *parent, prj_block *child,
     int child_oct, int use_bf1)
 {
     int xoct = child_oct & 1;
@@ -1200,9 +1200,94 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_block *parent, prj_block *ch
     int ci;
     int cj;
     int ck;
-
+    
     prj_amr_mhd_check_block(parent, "prj_amr_mhd_prolongate_bf_one: missing parent MHD storage");
     prj_amr_mhd_clear_faces(child, use_bf1);
+
+
+#if 0
+    int n,dir;
+    for (n = 0; n < 56; ++n){
+        fprintf(stderr,"test %d\n",n);
+        const prj_neighbor *slot = &parent->slot[n];
+        if (slot->id<0||slot->type!=PRJ_NEIGHBOR_FACE||slot->rel_level<1) {continue;}
+        if (slot->rank == parent->rank) {
+            for (dir = 0; dir < 3; ++dir){
+                int tan0 = (dir+1)%3;
+                int tan1 = (dir+2)%3;
+                if (fabs(child->xmin[tan0] - slot->xmin[tan0]) < 1.0e-12*child->dx[tan0]){
+                    if (fabs(child->xmin[tan1] - slot->xmin[tan1]) < 1.0e-12*child->dx[tan1]){
+                        const prj_block *neighbor = &mesh->blocks[slot->id];
+                        double *src = use_bf1 != 0 ? neighbor->Bf1[dir] : neighbor->Bf[dir];
+                        int i, j;
+                        if (fabs(child->xmax[dir] - slot->xmin[dir]) < 1.0e-12*child->dx[dir]){
+                            double buffer[PRJ_BLOCK_NCELLS*PRJ_BLOCK_NCELLS];
+                            int buf_idx = 0;
+                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                                    int it_send[3] = {0,0,0};
+                                    it_send[dir] = 0;
+                                    it_send[tan0] = i;
+                                    it_send[tan1] = j;
+                                    buffer[buf_idx++] = src[FACE_IDX(dir, it_send[0], it_send[1], it_send[2])];
+                                }
+                            }
+
+
+                            buf_idx = 0;
+                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                                    int it_recv[3] = {0,0,0};
+                                    it_recv[dir] = PRJ_BLOCK_NCELLS;
+                                    it_recv[tan0] = i;
+                                    it_recv[tan1] = j;
+                                    prj_boundary_write_bf_face(child, use_bf1, dir,
+                                                               it_recv[0],
+                                                               it_recv[1],
+                                                               it_recv[2],
+                                                               buffer[buf_idx++], PRJ_MHD_FIDELITY_SAME);
+                                }
+                            }
+                        }
+                        if (fabs(child->xmin[dir] - slot->xmax[dir]) < 1.0e-12*child->dx[dir]){
+                            double buffer[PRJ_BLOCK_NCELLS*PRJ_BLOCK_NCELLS];
+                            int buf_idx = 0;
+                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                                    int it_send[3] = {0,0,0};
+                                    it_send[dir] = PRJ_BLOCK_NCELLS;
+                                    it_send[tan0] = i;
+                                    it_send[tan1] = j;
+                                    buffer[buf_idx++] = src[FACE_IDX(dir, it_send[0], it_send[1], it_send[2])];
+                                }
+                            }
+
+                            buf_idx = 0;
+                            for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
+                                for (j = 0; j < PRJ_BLOCK_NCELLS; ++j) {
+                                    int it_recv[3] = {0,0,0};
+                                    it_recv[dir] = 0;
+                                    it_recv[tan0] = i;
+                                    it_recv[tan1] = j;
+                                    prj_boundary_write_bf_face(child, use_bf1, dir,
+                                                               it_recv[0],
+                                                               it_recv[1],
+                                                               it_recv[2],
+                                                               buffer[buf_idx++], PRJ_MHD_FIDELITY_SAME);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+        } else {
+            // MPI case, read from MPI buffer. TBD.
+        }
+    }
+#endif
+
+
     for (ci = ci0; ci < ci0 + PRJ_BLOCK_SIZE / 2; ++ci) {
         for (cj = cj0; cj < cj0 + PRJ_BLOCK_SIZE / 2; ++cj) {
             for (ck = ck0; ck < ck0 + PRJ_BLOCK_SIZE / 2; ++ck) {
@@ -1216,10 +1301,10 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_block *parent, prj_block *ch
     }
 }
 
-static void prj_amr_mhd_prolongate_bf(const prj_block *parent, prj_block *child, int child_oct)
+static void prj_amr_mhd_prolongate_bf(const prj_mesh *mesh, const prj_block *parent, prj_block *child, int child_oct)
 {
-    prj_amr_mhd_prolongate_bf_one(parent, child, child_oct, 0);
-    prj_amr_mhd_prolongate_bf_one(parent, child, child_oct, 1);
+    prj_amr_mhd_prolongate_bf_one(mesh, parent, child, child_oct, 0);
+    prj_amr_mhd_prolongate_bf_one(mesh, parent, child, child_oct, 1);
     prj_amr_mhd_mark_active_faces(child, PRJ_MHD_FIDELITY_COARSER);
     prj_amr_mhd_set_cons_b_from_bf(child, 0);
 }
@@ -1295,7 +1380,7 @@ static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
             if (src == 0) {
                 prj_amr_mhd_fail("prj_amr_mhd_restrict_face_value: missing child Bf storage");
             }
-            value = src[IDX(local[0], local[1], local[2])];
+            value = src[FACE_IDX(dir, local[0], local[1], local[2])];
             if (!isfinite(value)) {
                 prj_amr_mhd_fail("prj_amr_mhd_restrict_face_value: non-finite child Bf");
             }
@@ -1321,7 +1406,7 @@ static void prj_amr_mhd_restrict_bf_one(const prj_block *children[8],
         for (i = 0; i <= prj_amr_mhd_face_axis_max(dir, 0); ++i) {
             for (j = 0; j <= prj_amr_mhd_face_axis_max(dir, 1); ++j) {
                 for (k = 0; k <= prj_amr_mhd_face_axis_max(dir, 2); ++k) {
-                    dst[dir][IDX(i, j, k)] = prj_amr_mhd_restrict_face_value(
+                    dst[dir][FACE_IDX(dir, i, j, k)] = prj_amr_mhd_restrict_face_value(
                         children, dir, i, j, k, use_bf1);
                 }
             }
@@ -1344,7 +1429,7 @@ static void prj_amr_mhd_restrict_bf(const prj_block *children[8], prj_block *par
 }
 #endif
 
-void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct, double E_floor)
+void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block *child, int child_oct, double E_floor)
 {
     int i;
     int j;
@@ -1433,7 +1518,7 @@ void prj_amr_prolongate(const prj_block *parent, prj_block *child, int child_oct
         }
     }
 #if PRJ_MHD
-    prj_amr_mhd_prolongate_bf(parent, child, child_oct);
+    prj_amr_mhd_prolongate_bf(mesh,parent, child, child_oct);
 #endif
 }
 
@@ -1610,7 +1695,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
                 return;
             }
             prj_block_setup_geometry(child, &mesh->coord);
-            prj_amr_prolongate(parent, child, oct, mesh->E_floor);
+            prj_amr_prolongate(mesh, parent, child, oct, mesh->E_floor);
         } else {
             child->W = 0;
             child->W1 = 0;

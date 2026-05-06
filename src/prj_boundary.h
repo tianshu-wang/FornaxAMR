@@ -11,6 +11,8 @@ void prj_boundary_fill_ghosts(prj_mesh *mesh, const prj_bc *bc, int stage);
 #if PRJ_MHD
 void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind);
 void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos *eos);
+void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
+    int i, int j, int k, double value, int fidelity);
 #endif
 
 #endif

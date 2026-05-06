@@ -1420,7 +1420,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
                     for (i = 0; i <= imax; ++i) {
                         for (j = 0; j <= jmax; ++j) {
                             for (k = 0; k <= kmax; ++k) {
-                                buffer[pos++] = (float)(block->Bf[dir][IDX(i, j, k)] * mhd_dump_scale);
+                                buffer[pos++] = (float)(block->Bf[dir][FACE_IDX(dir, i, j, k)] * mhd_dump_scale);
                             }
                         }
                     }
@@ -1438,7 +1438,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
                     for (i = 0; i <= imax; ++i) {
                         for (j = 0; j <= jmax; ++j) {
                             for (k = 0; k <= kmax; ++k) {
-                                buffer[pos++] = block->Bf[dir][IDX(i, j, k)] * mhd_dump_scale;
+                                buffer[pos++] = block->Bf[dir][FACE_IDX(dir, i, j, k)] * mhd_dump_scale;
                             }
                         }
                     }

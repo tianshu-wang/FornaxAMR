@@ -416,7 +416,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                             fprintf(stderr, "prj_flux_update: missing MHD face storage for dir=%d\n", dir);
                             exit(1);
                         }
-                        bn = bf_dir[IDX(i, j, k)];
+                        bn = bf_dir[FACE_IDX(dir, i, j, k)];
                         WL[PRJ_PRIM_B1] = bn;
                         WR[PRJ_PRIM_B1] = bn;
 
