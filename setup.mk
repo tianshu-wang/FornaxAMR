@@ -1,1 +1,0 @@
-setups/magnetized_cc.mk
