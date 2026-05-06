@@ -179,8 +179,12 @@ static const char *prj_amr_estimator_label(const prj_sim *sim)
             }
             if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
                 name = "pressure_scale_height";
-            } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_DENSITY_JUMP) {
-                name = "density_jump";
+            } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP) {
+                if (sim->mesh.amr_fractional_jump_var[i] == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
+                    name = "fractional_jump_pressure";
+                } else {
+                    name = "fractional_jump_density";
+                }
             } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_VELOCITY) {
                 name = "velocity";
             } else {
@@ -263,6 +267,7 @@ int main(int argc, char *argv[])
     double saved_amr_lohner_eps[PRJ_AMR_N];
     int saved_amr_estimator[PRJ_AMR_N];
     int saved_amr_lohner_var[PRJ_AMR_N];
+    int saved_amr_fractional_jump_var[PRJ_AMR_N];
     int saved_amr_criterion_set[PRJ_AMR_N];
     int saved_use_amr_angle_resolution;
     int saved_use_BJ;
@@ -330,6 +335,7 @@ int main(int argc, char *argv[])
             saved_amr_derefine_thresh[i] = sim.mesh.amr_derefine_thresh[i];
             saved_amr_estimator[i] = sim.mesh.amr_estimator[i];
             saved_amr_lohner_var[i] = sim.mesh.amr_lohner_var[i];
+            saved_amr_fractional_jump_var[i] = sim.mesh.amr_fractional_jump_var[i];
             saved_amr_lohner_eps[i] = sim.mesh.amr_lohner_eps[i];
             saved_amr_criterion_set[i] = sim.mesh.amr_criterion_set[i];
         }
@@ -344,6 +350,7 @@ int main(int argc, char *argv[])
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
             sim.mesh.amr_estimator[i] = saved_amr_estimator[i];
             sim.mesh.amr_lohner_var[i] = saved_amr_lohner_var[i];
+            sim.mesh.amr_fractional_jump_var[i] = saved_amr_fractional_jump_var[i];
             sim.mesh.amr_lohner_eps[i] = saved_amr_lohner_eps[i];
             sim.mesh.amr_criterion_set[i] = saved_amr_criterion_set[i];
         }

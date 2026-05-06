@@ -634,40 +634,54 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
     return cell_size / Hp;
 }
 
-static double prj_density_jump_cell_indicator(const prj_block *b, int i, int j, int k)
+static double prj_fractional_jump_cell_value(const prj_block *b, int jump_var, int i, int j, int k)
+{
+    if (jump_var == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
+        return b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    }
+    return b->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+}
+
+static double prj_fractional_jump_cell_indicator(const prj_block *b, int jump_var, int i, int j, int k)
 {
     const double small = 1.0e-14;
-    double r0;
+    double q0;
     double max_indicator = 0.0;
     int di;
     int dj;
     int dk;
 
-    if (b == 0 || b->W == 0) {
+    if (b == 0) {
+        return 0.0;
+    }
+    if (jump_var == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE && b->eosvar == 0) {
+        return 0.0;
+    }
+    if (jump_var != PRJ_FRACTIONAL_JUMP_VAR_PRESSURE && b->W == 0) {
         return 0.0;
     }
 
-    r0 = b->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
-    if (r0 <= 0.0) {
+    q0 = prj_fractional_jump_cell_value(b, jump_var, i, j, k);
+    if (q0 <= 0.0) {
         return 0.0;
     }
 
     for (di = -1; di <= 1; ++di) {
         for (dj = -1; dj <= 1; ++dj) {
             for (dk = -1; dk <= 1; ++dk) {
-                double rnei;
+                double qnei;
                 double denom;
                 double jump;
 
                 if (di == 0 && dj == 0 && dk == 0) {
                     continue;
                 }
-                rnei = b->W[VIDX(PRJ_PRIM_RHO, i + di, j + dj, k + dk)];
-                if (rnei <= 0.0) {
+                qnei = prj_fractional_jump_cell_value(b, jump_var, i + di, j + dj, k + dk);
+                if (qnei <= 0.0) {
                     continue;
                 }
-                denom = r0 < rnei ? r0 : rnei;
-                jump = prj_abs_double(r0 - rnei) / (denom + small);
+                denom = q0 < qnei ? q0 : qnei;
+                jump = prj_abs_double(q0 - qnei) / (denom + small);
                 max_indicator = prj_max_double(max_indicator, jump);
             }
         }
@@ -679,8 +693,8 @@ static double prj_density_jump_cell_indicator(const prj_block *b, int i, int j, 
 static double prj_amr_cell_indicator_for_estimator(
     const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int amr_idx, int estimator, int i, int j, int k)
 {
-    if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_DENSITY_JUMP) {
-        return prj_density_jump_cell_indicator(b, i, j, k);
+    if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP) {
+        return prj_fractional_jump_cell_indicator(b, mesh->amr_fractional_jump_var[amr_idx], i, j, k);
     }
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
         return prj_pressure_scale_height_cell_indicator(b, i, j, k);
@@ -709,6 +723,10 @@ int prj_amr_criteria_need_eosvar(const prj_mesh *mesh)
         estimator = mesh->amr_estimator[amr_idx];
         if (estimator == PRJ_AMR_ESTIMATOR_VELOCITY ||
             estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+            return 1;
+        }
+        if (estimator == PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP &&
+            mesh->amr_fractional_jump_var[amr_idx] == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
             return 1;
         }
         if (estimator == PRJ_AMR_ESTIMATOR_LOEHNER &&

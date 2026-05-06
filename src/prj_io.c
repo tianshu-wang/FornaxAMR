@@ -96,8 +96,8 @@ static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
         *amr_estimator = PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT;
         return 0;
     }
-    if (strcmp(value, "density_jump") == 0) {
-        *amr_estimator = PRJ_AMR_ESTIMATOR_DENSITY_JUMP;
+    if (strcmp(value, "fractional_jump") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP;
         return 0;
     }
     return 1;
@@ -122,6 +122,22 @@ static int prj_io_parse_lohner_var(const char *value, int *lohner_var)
     }
     if (strcmp(value, "temperature") == 0) {
         *lohner_var = PRJ_LOHNER_VAR_TEMPERATURE;
+        return 0;
+    }
+    return 1;
+}
+
+static int prj_io_parse_fractional_jump_var(const char *value, int *jump_var)
+{
+    if (value == 0 || jump_var == 0) {
+        return 1;
+    }
+    if (strcmp(value, "density") == 0) {
+        *jump_var = PRJ_FRACTIONAL_JUMP_VAR_DENSITY;
+        return 0;
+    }
+    if (strcmp(value, "pressure") == 0) {
+        *jump_var = PRJ_FRACTIONAL_JUMP_VAR_PRESSURE;
         return 0;
     }
     return 1;
@@ -219,6 +235,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
             sim->mesh.amr_derefine_thresh[amr_idx] = 0.2;
             sim->mesh.amr_estimator[amr_idx] = PRJ_AMR_ESTIMATOR_LOEHNER;
             sim->mesh.amr_lohner_var[amr_idx] = PRJ_LOHNER_VAR_PRESSURE;
+            sim->mesh.amr_fractional_jump_var[amr_idx] = PRJ_FRACTIONAL_JUMP_VAR_PRESSURE;
             sim->mesh.amr_lohner_eps[amr_idx] = 0.1;
             sim->mesh.amr_criterion_set[amr_idx] = 0;
         }
@@ -349,6 +366,12 @@ void prj_io_parser(prj_sim *sim, char *filename)
             }
         } else if (prj_io_parse_amr_slot_key(key, "amr_lohner_var", &amr_slot)) {
             if (prj_io_parse_lohner_var(value, &sim->mesh.amr_lohner_var[amr_slot]) != 0) {
+                endptr = value;
+            } else {
+                endptr = value + strlen(value);
+            }
+        } else if (prj_io_parse_amr_slot_key(key, "amr_fractional_jump_var", &amr_slot)) {
+            if (prj_io_parse_fractional_jump_var(value, &sim->mesh.amr_fractional_jump_var[amr_slot]) != 0) {
                 endptr = value;
             } else {
                 endptr = value + strlen(value);

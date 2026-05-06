@@ -107,6 +107,7 @@ struct prj_mesh {
     double amr_lohner_eps[PRJ_AMR_N];
     int amr_estimator[PRJ_AMR_N];
     int amr_lohner_var[PRJ_AMR_N];
+    int amr_fractional_jump_var[PRJ_AMR_N];
     int amr_criterion_set[PRJ_AMR_N];
     int use_amr_angle_resolution;
     int use_BJ;

@@ -516,6 +516,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     double saved_amr_derefine_thresh[PRJ_AMR_N];
     int saved_amr_estimator[PRJ_AMR_N];
     int saved_amr_lohner_var[PRJ_AMR_N];
+    int saved_amr_fractional_jump_var[PRJ_AMR_N];
     int saved_amr_criterion_set[PRJ_AMR_N];
     double saved_amr_lohner_eps[PRJ_AMR_N];
     int saved_use_amr_angle_resolution;
@@ -534,6 +535,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         saved_amr_derefine_thresh[amr_idx] = mesh->amr_derefine_thresh[amr_idx];
         saved_amr_estimator[amr_idx] = mesh->amr_estimator[amr_idx];
         saved_amr_lohner_var[amr_idx] = mesh->amr_lohner_var[amr_idx];
+        saved_amr_fractional_jump_var[amr_idx] = mesh->amr_fractional_jump_var[amr_idx];
         saved_amr_lohner_eps[amr_idx] = mesh->amr_lohner_eps[amr_idx];
         saved_amr_criterion_set[amr_idx] = mesh->amr_criterion_set[amr_idx];
     }
@@ -557,6 +559,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         mesh->amr_derefine_thresh[amr_idx] = saved_amr_derefine_thresh[amr_idx];
         mesh->amr_estimator[amr_idx] = saved_amr_estimator[amr_idx];
         mesh->amr_lohner_var[amr_idx] = saved_amr_lohner_var[amr_idx];
+        mesh->amr_fractional_jump_var[amr_idx] = saved_amr_fractional_jump_var[amr_idx];
         mesh->amr_lohner_eps[amr_idx] = saved_amr_lohner_eps[amr_idx];
         mesh->amr_criterion_set[amr_idx] = saved_amr_criterion_set[amr_idx];
     }
