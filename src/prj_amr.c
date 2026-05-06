@@ -1371,7 +1371,7 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
                 int fj = 2 * (cj - cj0);
                 int fk = 2 * (ck - ck0);
 
-                prj_boundary_prolong_bf_from_buffer(cbuf, buf_lo, buf_n,
+                prj_mhd_prolong_bf_from_buffer(cbuf, buf_lo, buf_n,
                     parent->dx, child, ci, cj, ck, fi, fj, fk, use_bf1);
             }
         }

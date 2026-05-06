@@ -13,10 +13,6 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind);
 void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos *eos);
 void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
     int i, int j, int k, double value, int fidelity);
-void prj_boundary_prolong_bf_from_buffer(const double *buf[3],
-    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
-    prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
-    int use_bf1);
 #endif
 
 #endif

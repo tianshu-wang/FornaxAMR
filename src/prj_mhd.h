@@ -6,8 +6,10 @@
 #if PRJ_MHD
 void prj_mhd_init(prj_sim *sim);
 void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1);
-void prj_mhd_bf_prolongate(const prj_block *coarse, prj_block *fine,
-    int ci, int cj, int ck, int fi, int fj, int fk, int use_bf1);
+void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
+    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
+    prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
+    int use_bf1);
 double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
     const double emf_face[4], const double emf_cell[4], const double v_norm[4]);
 void prj_mhd_emf_send(prj_mesh *mesh);
@@ -26,10 +28,15 @@ static inline void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1)
     (void)use_bf1;
 }
 
-static inline void prj_mhd_bf_prolongate(const prj_block *coarse, prj_block *fine,
-    int ci, int cj, int ck, int fi, int fj, int fk, int use_bf1)
+static inline void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
+    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
+    prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
+    int use_bf1)
 {
-    (void)coarse;
+    (void)buf;
+    (void)buf_lo;
+    (void)buf_n;
+    (void)coarse_dx;
     (void)fine;
     (void)ci;
     (void)cj;

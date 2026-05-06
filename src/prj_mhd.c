@@ -160,292 +160,164 @@ static inline void prj_mhd_copy_bf_to_bf1(prj_block *block)
     }
 }
 
-enum {
-    PRJ_MHD_FACE_FROM_COARSER = PRJ_MHD_FIDELITY_COARSER
-};
-
 static inline void prj_mhd_check_bf_storage(const prj_block *block)
 {
     int d;
 
     if (block == 0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: block is null");
+        prj_mhd_fail("prj_mhd_check_bf_storage: block is null");
     }
     for (d = 0; d < 3; ++d) {
         if (block->face_fidelity[d] == 0) {
-            prj_mhd_fail("prj_mhd_bf_prolongate: missing face fidelity storage");
+            prj_mhd_fail("prj_mhd_check_bf_storage: missing face fidelity storage");
         }
         if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
-            prj_mhd_fail("prj_mhd_bf_prolongate: missing face-centered magnetic field storage");
+            prj_mhd_fail("prj_mhd_check_bf_storage: missing face-centered magnetic field storage");
         }
     }
 }
 
-static inline void prj_mhd_check_face_storage_index(const char *label, int dir, int i, int j, int k)
+static inline double *prj_mhd_bf_array(prj_block *block, int dir, int use_bf1)
+{
+    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+}
+
+static inline int prj_mhd_face_storage_index_ok(int dir, int i, int j, int k)
 {
     int idx[3] = {i, j, k};
     int d;
 
+    if (dir < 0 || dir >= 3) {
+        return 0;
+    }
     for (d = 0; d < 3; ++d) {
         int lo = -PRJ_NGHOST;
         int hi = dir == d ? PRJ_BLOCK_SIZE + PRJ_NGHOST : PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
         if (idx[d] < lo || idx[d] > hi) {
-            fprintf(stderr,
-                "%s: index out of face storage bounds dir=%d i=%d j=%d k=%d (axis %d valid [%d, %d])\n",
-                label, dir, i, j, k, d, lo, hi);
-            exit(EXIT_FAILURE);
+            return 0;
         }
     }
+    return 1;
 }
 
-static inline void prj_mhd_check_edge_storage_index(const char *label, int dir, int i, int j, int k)
+static inline void prj_mhd_write_bf_face(prj_block *block, int use_bf1,
+    int dir, int i, int j, int k, double value, int fidelity)
 {
-    int idx[3] = {i, j, k};
-    int d;
+    int idx;
+    double *dst;
 
-    for (d = 0; d < 3; ++d) {
-        int lo = -PRJ_NGHOST;
-        int hi = dir == d ? PRJ_BLOCK_SIZE + PRJ_NGHOST - 1 : PRJ_BLOCK_SIZE + PRJ_NGHOST;
-        if (idx[d] < lo || idx[d] > hi) {
-            fprintf(stderr,
-                "%s: index out of edge storage bounds dir=%d i=%d j=%d k=%d (axis %d valid [%d, %d])\n",
-                label, dir, i, j, k, d, lo, hi);
-            exit(EXIT_FAILURE);
-        }
-    }
-}
-
-static inline double prj_mhd_sign_half(int bit)
-{
-    if (bit == 0) {
-        return -1.0;
-    }
-    if (bit == 1) {
-        return 1.0;
-    }
-    prj_mhd_fail("prj_mhd_bf_prolongate: expected fine half index 0 or 1");
-    return 0.0;
-}
-
-static inline double prj_mhd_minmod_slope(double left, double center, double right, double dx)
-{
-    double sl;
-    double sr;
-
-    if (!isfinite(left) || !isfinite(center) || !isfinite(right) ||
-        !isfinite(dx) || dx <= 0.0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid minmod stencil");
-    }
-    sl = (center - left) / dx;
-    sr = (right - center) / dx;
-    if (!isfinite(sl) || !isfinite(sr)) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: non-finite minmod slope");
-    }
-    if (sl * sr <= 0.0) {
-        return 0.0;
-    }
-    if (fabs(sl) < fabs(sr)) {
-        return sl;
-    }
-    return sr;
-}
-
-static inline double prj_mhd_read_bf_face(const double *bf,
-    const char *label, int dir, int i, int j, int k)
-{
-    double value;
-
-    if (bf == 0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: null face-centered source");
-    }
-    prj_mhd_check_face_storage_index(label, dir, i, j, k);
-    value = bf[FACE_IDX(dir, i, j, k)];
-    if (!isfinite(value)) {
-        fprintf(stderr, "%s: non-finite face-centered magnetic field at i=%d j=%d k=%d\n",
-            label, i, j, k);
+    prj_mhd_check_bf_storage(block);
+    if (!prj_mhd_face_storage_index_ok(dir, i, j, k)) {
+        fprintf(stderr, "prj_mhd_write_bf_face: invalid face index dir=%d i=%d j=%d k=%d\n",
+            dir, i, j, k);
         exit(EXIT_FAILURE);
     }
-    return value;
-}
-
-static inline double prj_mhd_interp_x1_face_flux(const prj_block *coarse,
-    const double *bf, int i, int j, int k, int fine_j, int fine_k, double area)
-{
-    double base;
-    double sy;
-    double sz;
-    double value;
-
-    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 face", X1DIR, i, j, k);
-    sy = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 y-stencil", X1DIR, i, j - 1, k),
-        base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 y-stencil", X1DIR, i, j + 1, k),
-        coarse->dx[1]);
-    sz = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 z-stencil", X1DIR, i, j, k - 1),
-        base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x1 z-stencil", X1DIR, i, j, k + 1),
-        coarse->dx[2]);
-    value = base +
-        sy * (0.25 * prj_mhd_sign_half(fine_j) * coarse->dx[1]) +
-        sz * (0.25 * prj_mhd_sign_half(fine_k) * coarse->dx[2]);
-    if (!isfinite(value) || !isfinite(area) || area <= 0.0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid x1 interpolated flux");
+    if (!isfinite(value) || fidelity < PRJ_MHD_FIDELITY_NONE ||
+        fidelity > PRJ_MHD_FIDELITY_FINER) {
+        prj_mhd_fail("prj_mhd_write_bf_face: invalid value or fidelity");
     }
-    return value * area;
-}
-
-static inline double prj_mhd_interp_x2_face_flux(const prj_block *coarse,
-    const double *bf, int i, int j, int k, int fine_i, int fine_k, double area)
-{
-    double base;
-    double sx;
-    double sz;
-    double value;
-
-    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 face", X2DIR, i, j, k);
-    sx = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 x-stencil", X2DIR, i - 1, j, k),
-        base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 x-stencil", X2DIR, i + 1, j, k),
-        coarse->dx[0]);
-    sz = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 z-stencil", X2DIR, i, j, k - 1),
-        base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x2 z-stencil", X2DIR, i, j, k + 1),
-        coarse->dx[2]);
-    value = base +
-        sx * (0.25 * prj_mhd_sign_half(fine_i) * coarse->dx[0]) +
-        sz * (0.25 * prj_mhd_sign_half(fine_k) * coarse->dx[2]);
-    if (!isfinite(value) || !isfinite(area) || area <= 0.0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid x2 interpolated flux");
-    }
-    return value * area;
-}
-
-static inline double prj_mhd_interp_x3_face_flux(const prj_block *coarse,
-    const double *bf, int i, int j, int k, int fine_i, int fine_j, double area)
-{
-    double base;
-    double sx;
-    double sy;
-    double value;
-
-    base = prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 face", X3DIR, i, j, k);
-    sx = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 x-stencil", X3DIR, i - 1, j, k),
-        base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 x-stencil", X3DIR, i + 1, j, k),
-        coarse->dx[0]);
-    sy = prj_mhd_minmod_slope(
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 y-stencil", X3DIR, i, j - 1, k),
-        base,
-        prj_mhd_read_bf_face(bf, "prj_mhd_bf_prolongate: x3 y-stencil", X3DIR, i, j + 1, k),
-        coarse->dx[1]);
-    value = base +
-        sx * (0.25 * prj_mhd_sign_half(fine_i) * coarse->dx[0]) +
-        sy * (0.25 * prj_mhd_sign_half(fine_j) * coarse->dx[1]);
-    if (!isfinite(value) || !isfinite(area) || area <= 0.0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid x3 interpolated flux");
-    }
-    return value * area;
-}
-
-static inline void prj_mhd_outer_or_prolongated_flux(prj_block *fine,
-    double *dst[3], int dir, int i, int j, int k, double area,
-    double prolongated_flux, double *flux)
-{
-    int idx;
-    double value;
-
-    if (fine == 0 || dst == 0 || flux == 0 || dir < 0 || dir >= 3 || dst[dir] == 0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid fine face destination");
-    }
-    if (!isfinite(area) || area <= 0.0 || !isfinite(prolongated_flux)) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid outer face flux");
-    }
-    prj_mhd_check_face_storage_index("prj_mhd_bf_prolongate: fine outer face", dir, i, j, k);
     idx = FACE_IDX(dir, i, j, k);
-    if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
-        value = dst[dir][idx];
-        if (!isfinite(value)) {
-            prj_mhd_fail("prj_mhd_bf_prolongate: non-finite existing fine face");
-        }
-        *flux = value * area;
+    if (fidelity < block->face_fidelity[dir][idx]) {
         return;
     }
-    *flux = prolongated_flux;
-    dst[dir][idx] = prolongated_flux / area;
-    fine->face_fidelity[dir][idx] = PRJ_MHD_FACE_FROM_COARSER;
+    dst = prj_mhd_bf_array(block, dir, use_bf1);
+    dst[idx] = value;
+    if (fidelity > block->face_fidelity[dir][idx]) {
+        block->face_fidelity[dir][idx] = fidelity;
+    }
 }
 
-static inline void prj_mhd_write_inner_flux(prj_block *fine, double *dst[3],
-    int dir, int i, int j, int k, double area, double flux)
+static inline double prj_mhd_buf_read(const double *buf,
+    const int buf_lo[3], const int buf_n[3], int i, int j, int k)
 {
-    int idx;
-
-    if (fine == 0 || dst == 0 || dir < 0 || dir >= 3 || dst[dir] == 0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid fine inner face destination");
-    }
-    if (!isfinite(area) || area <= 0.0 || !isfinite(flux)) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid inner face flux");
-    }
-    prj_mhd_check_face_storage_index("prj_mhd_bf_prolongate: fine inner face", dir, i, j, k);
-    idx = FACE_IDX(dir, i, j, k);
-    if (fine->face_fidelity[dir][idx] > PRJ_MHD_FACE_FROM_COARSER) {
-        if (!isfinite(dst[dir][idx])) {
-            prj_mhd_fail("prj_mhd_bf_prolongate: non-finite existing fine inner face");
-        }
-        return;
-    }
-    dst[dir][idx] = flux / area;
-    fine->face_fidelity[dir][idx] = PRJ_MHD_FACE_FROM_COARSER;
+    return buf[((i - buf_lo[0]) * buf_n[1] + (j - buf_lo[1])) * buf_n[2] +
+               (k - buf_lo[2])];
 }
 
-static inline void prj_mhd_check_prolongation_geometry(const prj_block *coarse,
-    const prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk)
+static inline double prj_mhd_buf_minmod(double left, double center,
+    double right, double dx)
 {
-    const double tol = 1.0e-10;
-    int cidx[3];
-    int fidx[3];
-    int d;
+    double sl = (center - left) / dx;
+    double sr = (right - center) / dx;
 
-    cidx[0] = ci;
-    cidx[1] = cj;
-    cidx[2] = ck;
-    fidx[0] = fi;
-    fidx[1] = fj;
-    fidx[2] = fk;
-
-    for (d = 0; d < 3; ++d) {
-        double scale;
-        double dx_err;
-        double coarse_lo;
-        double fine_lo;
-        double align_err;
-
-        if (!isfinite(coarse->dx[d]) || !isfinite(fine->dx[d]) ||
-            coarse->dx[d] <= 0.0 || fine->dx[d] <= 0.0) {
-            prj_mhd_fail("prj_mhd_bf_prolongate: invalid block cell size");
-        }
-        scale = fabs(coarse->dx[d]) + fabs(fine->dx[d]) + 1.0;
-        dx_err = fabs(coarse->dx[d] - 2.0 * fine->dx[d]);
-        if (dx_err > tol * scale) {
-            prj_mhd_fail("prj_mhd_bf_prolongate: coarse/fine cell sizes are not 2:1");
-        }
-        coarse_lo = coarse->xmin[d] + (double)cidx[d] * coarse->dx[d];
-        fine_lo = fine->xmin[d] + (double)fidx[d] * fine->dx[d];
-        align_err = fabs(coarse_lo - fine_lo);
-        scale = fabs(coarse_lo) + fabs(fine_lo) + fabs(coarse->dx[d]) + 1.0;
-        if (align_err > tol * scale) {
-            prj_mhd_fail("prj_mhd_bf_prolongate: coarse and fine patches are not aligned");
-        }
-    }
+    if (sl * sr <= 0.0) return 0.0;
+    return fabs(sl) < fabs(sr) ? sl : sr;
 }
 
-static inline void prj_mhd_compute_inner_fluxes(double u[3][2][2],
-    double v[2][3][2], double w[2][2][3], double dx1, double dx2, double dx3)
+static inline double prj_mhd_buf_sign_half(int bit)
+{
+    return bit == 0 ? -1.0 : 1.0;
+}
+
+static inline double prj_mhd_interp_x1_buf(const double *buf,
+    const int buf_lo[3], const int buf_n[3], const double dx[3],
+    int i, int j, int k, int fine_j, int fine_k, double area)
+{
+    double base = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k);
+    double sy = prj_mhd_buf_minmod(
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
+        base,
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
+        dx[1]);
+    double sz = prj_mhd_buf_minmod(
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
+        base,
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
+        dx[2]);
+    double value = base +
+        sy * (0.25 * prj_mhd_buf_sign_half(fine_j) * dx[1]) +
+        sz * (0.25 * prj_mhd_buf_sign_half(fine_k) * dx[2]);
+
+    return value * area;
+}
+
+static inline double prj_mhd_interp_x2_buf(const double *buf,
+    const int buf_lo[3], const int buf_n[3], const double dx[3],
+    int i, int j, int k, int fine_i, int fine_k, double area)
+{
+    double base = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k);
+    double sx = prj_mhd_buf_minmod(
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
+        base,
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
+        dx[0]);
+    double sz = prj_mhd_buf_minmod(
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
+        base,
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
+        dx[2]);
+    double value = base +
+        sx * (0.25 * prj_mhd_buf_sign_half(fine_i) * dx[0]) +
+        sz * (0.25 * prj_mhd_buf_sign_half(fine_k) * dx[2]);
+
+    return value * area;
+}
+
+static inline double prj_mhd_interp_x3_buf(const double *buf,
+    const int buf_lo[3], const int buf_n[3], const double dx[3],
+    int i, int j, int k, int fine_i, int fine_j, double area)
+{
+    double base = prj_mhd_buf_read(buf, buf_lo, buf_n, i, j, k);
+    double sx = prj_mhd_buf_minmod(
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
+        base,
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
+        dx[0]);
+    double sy = prj_mhd_buf_minmod(
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
+        base,
+        prj_mhd_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
+        dx[1]);
+    double value = base +
+        sx * (0.25 * prj_mhd_buf_sign_half(fine_i) * dx[0]) +
+        sy * (0.25 * prj_mhd_buf_sign_half(fine_j) * dx[1]);
+
+    return value * area;
+}
+
+static inline void prj_mhd_compute_buffer_inner_fluxes(double u[3][2][2],
+    double v[2][3][2], double w[2][2][3], double dx1, double dx2,
+    double dx3)
 {
     double Uxx = 0.0;
     double Vyy = 0.0;
@@ -453,30 +325,19 @@ static inline void prj_mhd_compute_inner_fluxes(double u[3][2][2],
     double Uxyz = 0.0;
     double Vxyz = 0.0;
     double Wxyz = 0.0;
-    double dx1s;
-    double dx2s;
-    double dx3s;
+    double dx1s = dx1 * dx1;
+    double dx2s = dx2 * dx2;
+    double dx3s = dx3 * dx3;
     int i;
     int j;
     int k;
 
-    if (!isfinite(dx1) || !isfinite(dx2) || !isfinite(dx3) ||
-        dx1 <= 0.0 || dx2 <= 0.0 || dx3 <= 0.0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid fine cell sizes");
-    }
-    dx1s = dx1 * dx1;
-    dx2s = dx2 * dx2;
-    dx3s = dx3 * dx3;
-
     for (i = 0; i < 2; ++i) {
-        double si = prj_mhd_sign_half(i);
-
+        double si = prj_mhd_buf_sign_half(i);
         for (j = 0; j < 2; ++j) {
-            double sj = prj_mhd_sign_half(j);
-
+            double sj = prj_mhd_buf_sign_half(j);
             for (k = 0; k < 2; ++k) {
-                double sk = prj_mhd_sign_half(k);
-
+                double sk = prj_mhd_buf_sign_half(k);
                 Uxx += si * sj * v[i][2 * j][k] + si * sk * w[i][j][2 * k];
                 Vyy += sj * sk * w[i][j][2 * k] + sj * si * u[2 * i][j][k];
                 Wzz += sk * si * u[2 * i][j][k] + sk * sj * v[i][2 * j][k];
@@ -494,44 +355,39 @@ static inline void prj_mhd_compute_inner_fluxes(double u[3][2][2],
     Wxyz *= 0.125;
 
     for (j = 0; j < 2; ++j) {
-        double sj = prj_mhd_sign_half(j);
-
+        double sj = prj_mhd_buf_sign_half(j);
         for (k = 0; k < 2; ++k) {
-            double sk = prj_mhd_sign_half(k);
-
+            double sk = prj_mhd_buf_sign_half(k);
             u[1][j][k] = 0.5 * (u[2][j][k] + u[0][j][k]) +
                 Uxx + sk * dx3s * Vxyz + sj * dx2s * Wxyz;
         }
     }
     for (i = 0; i < 2; ++i) {
-        double si = prj_mhd_sign_half(i);
-
+        double si = prj_mhd_buf_sign_half(i);
         for (k = 0; k < 2; ++k) {
-            double sk = prj_mhd_sign_half(k);
-
+            double sk = prj_mhd_buf_sign_half(k);
             v[i][1][k] = 0.5 * (v[i][2][k] + v[i][0][k]) +
                 Vyy + si * dx1s * Wxyz + sk * dx3s * Uxyz;
         }
     }
     for (i = 0; i < 2; ++i) {
-        double si = prj_mhd_sign_half(i);
-
+        double si = prj_mhd_buf_sign_half(i);
         for (j = 0; j < 2; ++j) {
-            double sj = prj_mhd_sign_half(j);
-
+            double sj = prj_mhd_buf_sign_half(j);
             w[i][j][1] = 0.5 * (w[i][j][2] + w[i][j][0]) +
                 Wzz + sj * dx2s * Uxyz + si * dx1s * Vxyz;
         }
     }
 }
 
-void prj_mhd_bf_prolongate(const prj_block *coarse, prj_block *fine,
-    int ci, int cj, int ck, int fi, int fj, int fk, int use_bf1)
+void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
+    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
+    prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
+    int use_bf1)
 {
     double u[3][2][2];
     double v[2][3][2];
     double w[2][2][3];
-    const double *src[3];
     double *dst[3];
     double area_u;
     double area_v;
@@ -541,72 +397,142 @@ void prj_mhd_bf_prolongate(const prj_block *coarse, prj_block *fine,
     int k;
     int d;
 
-    prj_mhd_check_bf_storage(coarse);
     prj_mhd_check_bf_storage(fine);
-    prj_mhd_check_prolongation_geometry(coarse, fine, ci, cj, ck, fi, fj, fk);
 
     for (d = 0; d < 3; ++d) {
-        src[d] = use_bf1 != 0 ? coarse->Bf1[d] : coarse->Bf[d];
-        dst[d] = use_bf1 != 0 ? fine->Bf1[d] : fine->Bf[d];
+        dst[d] = prj_mhd_bf_array(fine, d, use_bf1);
     }
 
     area_u = fine->dx[1] * fine->dx[2];
     area_v = fine->dx[0] * fine->dx[2];
     area_w = fine->dx[0] * fine->dx[1];
-    if (!isfinite(area_u) || !isfinite(area_v) || !isfinite(area_w) ||
-        area_u <= 0.0 || area_v <= 0.0 || area_w <= 0.0) {
-        prj_mhd_fail("prj_mhd_bf_prolongate: invalid fine face area");
-    }
 
     for (j = 0; j < 2; ++j) {
         for (k = 0; k < 2; ++k) {
-            prj_mhd_outer_or_prolongated_flux(fine, dst, X1DIR, fi, fj + j, fk + k, area_u,
-                prj_mhd_interp_x1_face_flux(coarse, src[X1DIR], ci, cj, ck, j, k, area_u),
-                &u[0][j][k]);
-            prj_mhd_outer_or_prolongated_flux(fine, dst, X1DIR, fi + 2, fj + j, fk + k, area_u,
-                prj_mhd_interp_x1_face_flux(coarse, src[X1DIR], ci + 1, cj, ck, j, k, area_u),
-                &u[2][j][k]);
+            double flux;
+            int idx;
+
+            flux = prj_mhd_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
+                buf_n[X1DIR], coarse_dx, ci, cj, ck, j, k, area_u);
+            idx = FACE_IDX(X1DIR, fi, fj + j, fk + k);
+            if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                u[0][j][k] = dst[X1DIR][idx] * area_u;
+            } else {
+                u[0][j][k] = flux;
+                dst[X1DIR][idx] = flux / area_u;
+                fine->face_fidelity[X1DIR][idx] = PRJ_MHD_FIDELITY_COARSER;
+            }
+
+            flux = prj_mhd_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
+                buf_n[X1DIR], coarse_dx, ci + 1, cj, ck, j, k, area_u);
+            idx = FACE_IDX(X1DIR, fi + 2, fj + j, fk + k);
+            if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                u[2][j][k] = dst[X1DIR][idx] * area_u;
+            } else {
+                u[2][j][k] = flux;
+                dst[X1DIR][idx] = flux / area_u;
+                fine->face_fidelity[X1DIR][idx] = PRJ_MHD_FIDELITY_COARSER;
+            }
+        }
+    }
+
+    for (i = 0; i < 2; ++i) {
+        for (k = 0; k < 2; ++k) {
+            double flux;
+            int idx;
+
+            flux = prj_mhd_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
+                buf_n[X2DIR], coarse_dx, ci, cj, ck, i, k, area_v);
+            idx = FACE_IDX(X2DIR, fi + i, fj, fk + k);
+            if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                v[i][0][k] = dst[X2DIR][idx] * area_v;
+            } else {
+                v[i][0][k] = flux;
+                dst[X2DIR][idx] = flux / area_v;
+                fine->face_fidelity[X2DIR][idx] = PRJ_MHD_FIDELITY_COARSER;
+            }
+
+            flux = prj_mhd_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
+                buf_n[X2DIR], coarse_dx, ci, cj + 1, ck, i, k, area_v);
+            idx = FACE_IDX(X2DIR, fi + i, fj + 2, fk + k);
+            if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                v[i][2][k] = dst[X2DIR][idx] * area_v;
+            } else {
+                v[i][2][k] = flux;
+                dst[X2DIR][idx] = flux / area_v;
+                fine->face_fidelity[X2DIR][idx] = PRJ_MHD_FIDELITY_COARSER;
+            }
+        }
+    }
+
+    for (i = 0; i < 2; ++i) {
+        for (j = 0; j < 2; ++j) {
+            double flux;
+            int idx;
+
+            flux = prj_mhd_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
+                buf_n[X3DIR], coarse_dx, ci, cj, ck, i, j, area_w);
+            idx = FACE_IDX(X3DIR, fi + i, fj + j, fk);
+            if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                w[i][j][0] = dst[X3DIR][idx] * area_w;
+            } else {
+                w[i][j][0] = flux;
+                dst[X3DIR][idx] = flux / area_w;
+                fine->face_fidelity[X3DIR][idx] = PRJ_MHD_FIDELITY_COARSER;
+            }
+
+            flux = prj_mhd_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
+                buf_n[X3DIR], coarse_dx, ci, cj, ck + 1, i, j, area_w);
+            idx = FACE_IDX(X3DIR, fi + i, fj + j, fk + 2);
+            if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                w[i][j][2] = dst[X3DIR][idx] * area_w;
+            } else {
+                w[i][j][2] = flux;
+                dst[X3DIR][idx] = flux / area_w;
+                fine->face_fidelity[X3DIR][idx] = PRJ_MHD_FIDELITY_COARSER;
+            }
+        }
+    }
+
+    prj_mhd_compute_buffer_inner_fluxes(u, v, w,
+        fine->dx[0], fine->dx[1], fine->dx[2]);
+
+    for (j = 0; j < 2; ++j) {
+        for (k = 0; k < 2; ++k) {
+            prj_mhd_write_bf_face(fine, use_bf1, X1DIR,
+                fi + 1, fj + j, fk + k,
+                u[1][j][k] / area_u, PRJ_MHD_FIDELITY_COARSER);
         }
     }
     for (i = 0; i < 2; ++i) {
         for (k = 0; k < 2; ++k) {
-            prj_mhd_outer_or_prolongated_flux(fine, dst, X2DIR, fi + i, fj, fk + k, area_v,
-                prj_mhd_interp_x2_face_flux(coarse, src[X2DIR], ci, cj, ck, i, k, area_v),
-                &v[i][0][k]);
-            prj_mhd_outer_or_prolongated_flux(fine, dst, X2DIR, fi + i, fj + 2, fk + k, area_v,
-                prj_mhd_interp_x2_face_flux(coarse, src[X2DIR], ci, cj + 1, ck, i, k, area_v),
-                &v[i][2][k]);
+            prj_mhd_write_bf_face(fine, use_bf1, X2DIR,
+                fi + i, fj + 1, fk + k,
+                v[i][1][k] / area_v, PRJ_MHD_FIDELITY_COARSER);
         }
     }
     for (i = 0; i < 2; ++i) {
         for (j = 0; j < 2; ++j) {
-            prj_mhd_outer_or_prolongated_flux(fine, dst, X3DIR, fi + i, fj + j, fk, area_w,
-                prj_mhd_interp_x3_face_flux(coarse, src[X3DIR], ci, cj, ck, i, j, area_w),
-                &w[i][j][0]);
-            prj_mhd_outer_or_prolongated_flux(fine, dst, X3DIR, fi + i, fj + j, fk + 2, area_w,
-                prj_mhd_interp_x3_face_flux(coarse, src[X3DIR], ci, cj, ck + 1, i, j, area_w),
-                &w[i][j][2]);
+            prj_mhd_write_bf_face(fine, use_bf1, X3DIR,
+                fi + i, fj + j, fk + 1,
+                w[i][j][1] / area_w, PRJ_MHD_FIDELITY_COARSER);
         }
     }
+}
 
-    prj_mhd_compute_inner_fluxes(u, v, w, fine->dx[0], fine->dx[1], fine->dx[2]);
+static inline void prj_mhd_check_edge_storage_index(const char *label, int dir, int i, int j, int k)
+{
+    int idx[3] = {i, j, k};
+    int d;
 
-    for (j = 0; j < 2; ++j) {
-        for (k = 0; k < 2; ++k) {
-            prj_mhd_write_inner_flux(fine, dst, X1DIR, fi + 1, fj + j, fk + k, area_u,
-                u[1][j][k]);
-        }
-    }
-    for (i = 0; i < 2; ++i) {
-        for (k = 0; k < 2; ++k) {
-            prj_mhd_write_inner_flux(fine, dst, X2DIR, fi + i, fj + 1, fk + k, area_v,
-                v[i][1][k]);
-        }
-    }
-    for (i = 0; i < 2; ++i) {
-        for (j = 0; j < 2; ++j) {
-            prj_mhd_write_inner_flux(fine, dst, X3DIR, fi + i, fj + j, fk + 1, area_w,
-                w[i][j][1]);
+    for (d = 0; d < 3; ++d) {
+        int lo = -PRJ_NGHOST;
+        int hi = dir == d ? PRJ_BLOCK_SIZE + PRJ_NGHOST - 1 : PRJ_BLOCK_SIZE + PRJ_NGHOST;
+        if (idx[d] < lo || idx[d] > hi) {
+            fprintf(stderr,
+                "%s: index out of edge storage bounds dir=%d i=%d j=%d k=%d (axis %d valid [%d, %d])\n",
+                label, dir, i, j, k, d, lo, hi);
+            exit(EXIT_FAILURE);
         }
     }
 }
