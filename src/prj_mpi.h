@@ -9,6 +9,10 @@ void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi);
 #if PRJ_MHD
 void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kind);
 void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi);
+void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi);
+int prj_mpi_amr_mhd_prolongate_bf_one(const prj_block *parent,
+    const prj_neighbor *slot, prj_block *child, int child_oct,
+    int use_bf1, int dir);
 #endif
 double prj_mpi_min_dt(double local_dt);
 double prj_mpi_global_sum(double local_val);

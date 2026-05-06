@@ -1779,6 +1779,396 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
 #endif
 
 #if PRJ_MHD
+enum {
+    PRJ_MPI_AMR_BF_HDR_PARENT_ID = 0,
+    PRJ_MPI_AMR_BF_HDR_CHILD_OCT = 1,
+    PRJ_MPI_AMR_BF_HDR_NEIGHBOR_ID = 2,
+    PRJ_MPI_AMR_BF_HDR_USE_BF1 = 3,
+    PRJ_MPI_AMR_BF_HDR_DIR = 4,
+    PRJ_MPI_AMR_BF_HDR_RECV_FACE = 5,
+    PRJ_MPI_AMR_BF_HEADER_NINT = 6
+};
+
+#define PRJ_MPI_AMR_BF_FACE_NVALUE (PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE)
+
+static int *prj_mpi_amr_bf_headers = 0;
+static double *prj_mpi_amr_bf_values = 0;
+static int prj_mpi_amr_bf_record_count = 0;
+static int prj_mpi_amr_bf_value_count = 0;
+
+static void prj_mpi_amr_bf_clear_cache(void)
+{
+    free(prj_mpi_amr_bf_headers);
+    free(prj_mpi_amr_bf_values);
+    prj_mpi_amr_bf_headers = 0;
+    prj_mpi_amr_bf_values = 0;
+    prj_mpi_amr_bf_record_count = 0;
+    prj_mpi_amr_bf_value_count = 0;
+}
+
+static int prj_mpi_amr_bf_append_header(int **headers, int *record_count,
+    int *record_capacity, const int header[PRJ_MPI_AMR_BF_HEADER_NINT])
+{
+    int new_capacity;
+    int *next;
+
+    if (*record_count >= *record_capacity) {
+        new_capacity = *record_capacity == 0 ? 32 : 2 * (*record_capacity);
+        next = (int *)realloc(*headers,
+            (size_t)new_capacity * (size_t)PRJ_MPI_AMR_BF_HEADER_NINT * sizeof(**headers));
+        if (next == 0) {
+            return 1;
+        }
+        *headers = next;
+        *record_capacity = new_capacity;
+    }
+    memcpy(*headers + (size_t)(*record_count) * (size_t)PRJ_MPI_AMR_BF_HEADER_NINT,
+        header, (size_t)PRJ_MPI_AMR_BF_HEADER_NINT * sizeof(**headers));
+    *record_count += 1;
+    return 0;
+}
+
+static int prj_mpi_amr_bf_cache_append(const int *headers, int record_count,
+    const double *values, int value_count)
+{
+    int *next_headers;
+    double *next_values;
+
+    if (record_count < 0 || value_count < 0 ||
+        value_count != record_count * PRJ_MPI_AMR_BF_FACE_NVALUE) {
+        return 1;
+    }
+    if (record_count == 0) {
+        return 0;
+    }
+    next_headers = (int *)realloc(prj_mpi_amr_bf_headers,
+        (size_t)(prj_mpi_amr_bf_record_count + record_count) *
+        (size_t)PRJ_MPI_AMR_BF_HEADER_NINT * sizeof(*next_headers));
+    if (next_headers == 0) {
+        return 1;
+    }
+    prj_mpi_amr_bf_headers = next_headers;
+    next_values = (double *)realloc(prj_mpi_amr_bf_values,
+        (size_t)(prj_mpi_amr_bf_value_count + value_count) * sizeof(*next_values));
+    if (next_values == 0) {
+        return 1;
+    }
+    prj_mpi_amr_bf_values = next_values;
+    memcpy(prj_mpi_amr_bf_headers +
+            (size_t)prj_mpi_amr_bf_record_count * (size_t)PRJ_MPI_AMR_BF_HEADER_NINT,
+        headers, (size_t)record_count * (size_t)PRJ_MPI_AMR_BF_HEADER_NINT * sizeof(*headers));
+    memcpy(prj_mpi_amr_bf_values + prj_mpi_amr_bf_value_count,
+        values, (size_t)value_count * sizeof(*values));
+    prj_mpi_amr_bf_record_count += record_count;
+    prj_mpi_amr_bf_value_count += value_count;
+    return 0;
+}
+
+static void prj_mpi_amr_bf_child_bounds(const prj_block *parent, int child_oct,
+    double child_xmin[3], double child_xmax[3], double child_dx[3])
+{
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        double xmid = 0.5 * (parent->xmin[d] + parent->xmax[d]);
+        int bit = (child_oct >> d) & 1;
+
+        child_xmin[d] = bit == 0 ? parent->xmin[d] : xmid;
+        child_xmax[d] = bit == 0 ? xmid : parent->xmax[d];
+        child_dx[d] = 0.5 * parent->dx[d];
+    }
+}
+
+static int prj_mpi_amr_bf_slot_face_for_child(const prj_block *parent,
+    const prj_neighbor *slot, int child_oct, int dir, int *recv_face,
+    int *send_face)
+{
+    double child_xmin[3];
+    double child_xmax[3];
+    double child_dx[3];
+    int tan0;
+    int tan1;
+
+    if (parent == 0 || slot == 0 || child_oct < 0 || child_oct >= 8 ||
+        dir < 0 || dir >= 3) {
+        return 0;
+    }
+    prj_mpi_amr_bf_child_bounds(parent, child_oct, child_xmin, child_xmax, child_dx);
+    tan0 = (dir + 1) % 3;
+    tan1 = (dir + 2) % 3;
+    if (fabs(child_xmin[tan0] - slot->xmin[tan0]) >= 1.0e-12 * child_dx[tan0] ||
+        fabs(child_xmin[tan1] - slot->xmin[tan1]) >= 1.0e-12 * child_dx[tan1]) {
+        return 0;
+    }
+    if (fabs(child_xmax[dir] - slot->xmin[dir]) < 1.0e-12 * child_dx[dir]) {
+        if (recv_face != 0) {
+            *recv_face = PRJ_BLOCK_SIZE;
+        }
+        if (send_face != 0) {
+            *send_face = 0;
+        }
+        return 1;
+    }
+    if (fabs(child_xmin[dir] - slot->xmax[dir]) < 1.0e-12 * child_dx[dir]) {
+        if (recv_face != 0) {
+            *recv_face = 0;
+        }
+        if (send_face != 0) {
+            *send_face = PRJ_BLOCK_SIZE;
+        }
+        return 1;
+    }
+    return 0;
+}
+
+static int prj_mpi_amr_bf_pack_face_record(const prj_block *parent,
+    const prj_neighbor *slot, const prj_block *neighbor, int child_oct,
+    int use_bf1, int dir, int recv_face, int send_face, int **headers,
+    double **values, int *record_count, int *record_capacity,
+    int *value_count, int *value_capacity)
+{
+    const double *src;
+    int header[PRJ_MPI_AMR_BF_HEADER_NINT];
+    int tan0 = (dir + 1) % 3;
+    int tan1 = (dir + 2) % 3;
+    int i;
+    int j;
+
+    prj_mpi_check_bf_storage(neighbor, "prj_mpi_amr_bf_pack_face_record");
+    src = prj_mpi_bf_array_const(neighbor, dir, use_bf1);
+    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+            int it_send[3] = {0, 0, 0};
+
+            it_send[dir] = send_face;
+            it_send[tan0] = i;
+            it_send[tan1] = j;
+            if (prj_mpi_bf_append_value(values, value_count, value_capacity,
+                    src[FACE_IDX(dir, it_send[0], it_send[1], it_send[2])]) != 0) {
+                return 1;
+            }
+        }
+    }
+
+    header[PRJ_MPI_AMR_BF_HDR_PARENT_ID] = parent->id;
+    header[PRJ_MPI_AMR_BF_HDR_CHILD_OCT] = child_oct;
+    header[PRJ_MPI_AMR_BF_HDR_NEIGHBOR_ID] = slot->id;
+    header[PRJ_MPI_AMR_BF_HDR_USE_BF1] = use_bf1 != 0 ? 1 : 0;
+    header[PRJ_MPI_AMR_BF_HDR_DIR] = dir;
+    header[PRJ_MPI_AMR_BF_HDR_RECV_FACE] = recv_face;
+    return prj_mpi_amr_bf_append_header(headers, record_count,
+        record_capacity, header);
+}
+
+static int prj_mpi_amr_bf_pack_records(const prj_mesh *mesh, int receiver_rank,
+    int **headers, double **values, int *record_count, int *value_count)
+{
+    int record_capacity = 0;
+    int value_capacity = 0;
+    int parent_idx;
+
+    *headers = 0;
+    *values = 0;
+    *record_count = 0;
+    *value_count = 0;
+    for (parent_idx = 0; parent_idx < mesh->nblocks; ++parent_idx) {
+        const prj_block *parent = &mesh->blocks[parent_idx];
+        int n;
+
+        if (!prj_block_is_active(parent) || parent->rank != receiver_rank ||
+            parent->refine_flag <= 0) {
+            continue;
+        }
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &parent->slot[n];
+            const prj_block *neighbor;
+            int child_oct;
+
+            if (slot->id < 0 || slot->id >= mesh->nblocks ||
+                slot->type != PRJ_NEIGHBOR_FACE || slot->rel_level < 1) {
+                continue;
+            }
+            neighbor = &mesh->blocks[slot->id];
+            if (!prj_mpi_block_is_local(neighbor)) {
+                continue;
+            }
+            for (child_oct = 0; child_oct < 8; ++child_oct) {
+                int dir;
+
+                for (dir = 0; dir < 3; ++dir) {
+                    int recv_face;
+                    int send_face;
+                    int use_bf1;
+
+                    if (!prj_mpi_amr_bf_slot_face_for_child(parent, slot,
+                            child_oct, dir, &recv_face, &send_face)) {
+                        continue;
+                    }
+                    for (use_bf1 = 0; use_bf1 < 2; ++use_bf1) {
+                        if (prj_mpi_amr_bf_pack_face_record(parent, slot,
+                                neighbor, child_oct, use_bf1, dir,
+                                recv_face, send_face, headers, values,
+                                record_count, &record_capacity, value_count,
+                                &value_capacity) != 0) {
+                            free(*headers);
+                            free(*values);
+                            *headers = 0;
+                            *values = 0;
+                            *record_count = 0;
+                            *value_count = 0;
+                            return 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi)
+{
+    prj_mpi_amr_bf_clear_cache();
+#if defined(PRJ_ENABLE_MPI)
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
+        return;
+    }
+    {
+        int nb;
+
+        for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+            prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+            int *send_headers = 0;
+            int *recv_headers = 0;
+            double *send_values = 0;
+            double *recv_values = 0;
+            int send_counts[2] = {0, 0};
+            int recv_counts[2] = {0, 0};
+
+            if (prj_mpi_amr_bf_pack_records(mesh, buffer->receiver_rank,
+                    &send_headers, &send_values, &send_counts[0],
+                    &send_counts[1]) != 0) {
+                fprintf(stderr,
+                    "prj_mpi_exchange_amr_mhd_prolongate_bf: failed to pack Bf records\n");
+                exit(EXIT_FAILURE);
+            }
+            MPI_Sendrecv(send_counts, 2, MPI_INT, buffer->receiver_rank, 500,
+                recv_counts, 2, MPI_INT, buffer->receiver_rank, 500,
+                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if (recv_counts[0] < 0 || recv_counts[1] < 0 ||
+                recv_counts[1] != recv_counts[0] * PRJ_MPI_AMR_BF_FACE_NVALUE) {
+                fprintf(stderr,
+                    "prj_mpi_exchange_amr_mhd_prolongate_bf: received invalid Bf counts\n");
+                exit(EXIT_FAILURE);
+            }
+            recv_headers = recv_counts[0] > 0 ?
+                (int *)malloc((size_t)recv_counts[0] *
+                    (size_t)PRJ_MPI_AMR_BF_HEADER_NINT * sizeof(*recv_headers)) : 0;
+            recv_values = recv_counts[1] > 0 ?
+                (double *)malloc((size_t)recv_counts[1] * sizeof(*recv_values)) : 0;
+            if ((recv_counts[0] > 0 && recv_headers == 0) ||
+                (recv_counts[1] > 0 && recv_values == 0)) {
+                fprintf(stderr,
+                    "prj_mpi_exchange_amr_mhd_prolongate_bf: failed to allocate receive buffers\n");
+                exit(EXIT_FAILURE);
+            }
+            MPI_Sendrecv(send_headers,
+                send_counts[0] * PRJ_MPI_AMR_BF_HEADER_NINT, MPI_INT,
+                buffer->receiver_rank, 501,
+                recv_headers, recv_counts[0] * PRJ_MPI_AMR_BF_HEADER_NINT,
+                MPI_INT, buffer->receiver_rank, 501,
+                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Sendrecv(send_values, send_counts[1], MPI_DOUBLE,
+                buffer->receiver_rank, 502, recv_values, recv_counts[1],
+                MPI_DOUBLE, buffer->receiver_rank, 502,
+                MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if (prj_mpi_amr_bf_cache_append(recv_headers, recv_counts[0],
+                    recv_values, recv_counts[1]) != 0) {
+                fprintf(stderr,
+                    "prj_mpi_exchange_amr_mhd_prolongate_bf: failed to cache Bf records\n");
+                exit(EXIT_FAILURE);
+            }
+            free(send_headers);
+            free(send_values);
+            free(recv_headers);
+            free(recv_values);
+        }
+    }
+#else
+    (void)mesh;
+    (void)mpi;
+#endif
+}
+
+int prj_mpi_amr_mhd_prolongate_bf_one(const prj_block *parent,
+    const prj_neighbor *slot, prj_block *child, int child_oct, int use_bf1,
+    int dir)
+{
+#if defined(PRJ_ENABLE_MPI)
+    int recv_face;
+    int send_face;
+    int r;
+
+    if (prj_mpi_active == 0 || prj_mpi_active->totrank <= 1) {
+        return 0;
+    }
+    if (parent == 0 || slot == 0 || child == 0 || dir < 0 || dir >= 3) {
+        return 0;
+    }
+    if (!prj_mpi_amr_bf_slot_face_for_child(parent, slot, child_oct, dir,
+            &recv_face, &send_face)) {
+        return 0;
+    }
+    (void)send_face;
+    for (r = 0; r < prj_mpi_amr_bf_record_count; ++r) {
+        const int *header = prj_mpi_amr_bf_headers +
+            (size_t)r * (size_t)PRJ_MPI_AMR_BF_HEADER_NINT;
+
+        if (header[PRJ_MPI_AMR_BF_HDR_PARENT_ID] == parent->id &&
+            header[PRJ_MPI_AMR_BF_HDR_CHILD_OCT] == child_oct &&
+            header[PRJ_MPI_AMR_BF_HDR_NEIGHBOR_ID] == slot->id &&
+            header[PRJ_MPI_AMR_BF_HDR_USE_BF1] == (use_bf1 != 0 ? 1 : 0) &&
+            header[PRJ_MPI_AMR_BF_HDR_DIR] == dir &&
+            header[PRJ_MPI_AMR_BF_HDR_RECV_FACE] == recv_face) {
+            const double *values = prj_mpi_amr_bf_values +
+                (size_t)r * (size_t)PRJ_MPI_AMR_BF_FACE_NVALUE;
+            int tan0 = (dir + 1) % 3;
+            int tan1 = (dir + 2) % 3;
+            int i;
+            int j;
+            int pos = 0;
+
+            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                    int it_recv[3] = {0, 0, 0};
+
+                    it_recv[dir] = recv_face;
+                    it_recv[tan0] = i;
+                    it_recv[tan1] = j;
+                    prj_boundary_write_bf_face(child, use_bf1, dir,
+                        it_recv[0], it_recv[1], it_recv[2],
+                        values[pos++], PRJ_MHD_FIDELITY_SAME);
+                }
+            }
+            return 1;
+        }
+    }
+    fprintf(stderr,
+        "prj_mpi_amr_mhd_prolongate_bf_one: missing MPI Bf face "
+        "parent=%d child_oct=%d neighbor=%d use_bf1=%d dir=%d recv_face=%d\n",
+        parent->id, child_oct, slot->id, use_bf1 != 0 ? 1 : 0, dir, recv_face);
+    exit(EXIT_FAILURE);
+#else
+    (void)parent;
+    (void)slot;
+    (void)child;
+    (void)child_oct;
+    (void)use_bf1;
+    (void)dir;
+    return 0;
+#endif
+}
+
 static int prj_mpi_edge_storage_index_ok(int dir, int i, int j, int k)
 {
     int idx[3] = {i, j, k};
@@ -2598,6 +2988,9 @@ int prj_mpi_get_neighbor_rank(const prj_mesh *mesh, int neighbor_block_id)
 
 void prj_mpi_finalize(void)
 {
+#if PRJ_MHD
+    prj_mpi_amr_bf_clear_cache();
+#endif
     if (prj_mpi_active != 0) {
         prj_mpi_clear_neighbors(prj_mpi_active);
     }

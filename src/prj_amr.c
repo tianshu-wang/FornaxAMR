@@ -1280,7 +1280,10 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
             }
 
         } else {
-            // MPI case, read from MPI buffer. TBD.
+            for (dir = 0; dir < 3; ++dir) {
+                prj_mpi_amr_mhd_prolongate_bf_one(parent, slot, child,
+                    child_oct, use_bf1, dir);
+            }
         }
     }
 
@@ -1800,6 +1803,9 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     prj_amr_enforce_two_to_one(mesh);
     prj_amr_sync_refine_flags(mesh);
 
+#if PRJ_MHD
+    prj_mpi_exchange_amr_mhd_prolongate_bf(mesh, prj_mpi_current());
+#endif
     refined = prj_amr_refine_marked_blocks(mesh);
     if (refined) {
         prj_amr_init_neighbors(mesh);
