@@ -1286,7 +1286,7 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
             prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
         }
     }
-    for (pass = 0; pass < 2; ++pass) {
+    for (pass = 0; pass < 3; ++pass) {
         int fill_kind = fill_passes[pass];
 
         for (i = 0; i < mesh->nblocks; ++i) {
@@ -1294,14 +1294,8 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
                 prj_boundary_send_bf(&mesh->blocks[i], use_bf1, fill_kind);
             }
         }
+        prj_mpi_exchange_bf(mesh, mpi, use_bf1, fill_kind);
     }
-    prj_mpi_exchange_bf(mesh, mpi, use_bf1, PRJ_BOUNDARY_FILL_NONRECON);
-    for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_send_bf(&mesh->blocks[i], use_bf1, fill_passes[2]);
-        }
-    }
-    prj_mpi_exchange_bf(mesh, mpi, use_bf1, PRJ_BOUNDARY_FILL_RECON);
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);

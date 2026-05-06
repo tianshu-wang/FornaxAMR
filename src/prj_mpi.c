@@ -146,25 +146,6 @@ static int prj_mpi_sample_is_same_level(int sample_code)
 }
 
 #if PRJ_MHD
-static int prj_mpi_append_int(int **array, int *count, int *capacity, int value)
-{
-    int *next;
-    int new_capacity;
-
-    if (*count >= *capacity) {
-        new_capacity = *capacity == 0 ? 32 : 2 * (*capacity);
-        next = (int *)realloc(*array, (size_t)new_capacity * sizeof(**array));
-        if (next == 0) {
-            return 1;
-        }
-        *array = next;
-        *capacity = new_capacity;
-    }
-    (*array)[*count] = value;
-    *count += 1;
-    return 0;
-}
-
 static int prj_mpi_append_double(double **array, int *count, int *capacity, double value)
 {
     double *next;
@@ -796,52 +777,24 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
 }
 
 #if PRJ_MHD
-static int prj_mpi_append_unique_int(int **array, int *count, int *capacity, int value)
-{
-    int i;
-
-    for (i = 0; i < *count; ++i) {
-        if ((*array)[i] == value) {
-            return 0;
-        }
-    }
-    return prj_mpi_append_int(array, count, capacity, value);
-}
-
-static int prj_mpi_collect_bf_source_blocks(const prj_mesh *mesh, const prj_mpi *mpi,
-    int receiver_rank, int **ids, int *count)
-{
-    int capacity = 0;
-    int bidx;
-
-    *ids = 0;
-    *count = 0;
-    if (mesh == 0 || mpi == 0) {
-        return 1;
-    }
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        const prj_block *block = &mesh->blocks[bidx];
-        int n;
-
-        if (!prj_mpi_block_is_local(block)) {
-            continue;
-        }
-        for (n = 0; n < 56; ++n) {
-            int nid = block->slot[n].id;
-
-            if (nid >= 0 && nid < mesh->nblocks &&
-                mesh->blocks[nid].rank == receiver_rank) {
-                if (prj_mpi_append_unique_int(ids, count, &capacity, bidx) != 0) {
-                    free(*ids);
-                    *ids = 0;
-                    *count = 0;
-                    return 1;
-                }
-            }
-        }
-    }
-    return 0;
-}
+enum {
+    PRJ_MPI_BF_HDR_DST_ID = 0,
+    PRJ_MPI_BF_HDR_REL_LEVEL = 1,
+    PRJ_MPI_BF_HDR_VALUE_COUNT = 2,
+    PRJ_MPI_BF_HDR_RECV_START0 = 3,
+    PRJ_MPI_BF_HDR_RECV_START1 = 4,
+    PRJ_MPI_BF_HDR_RECV_START2 = 5,
+    PRJ_MPI_BF_HDR_RECV_END0 = 6,
+    PRJ_MPI_BF_HDR_RECV_END1 = 7,
+    PRJ_MPI_BF_HDR_RECV_END2 = 8,
+    PRJ_MPI_BF_HDR_SEND_START0 = 9,
+    PRJ_MPI_BF_HDR_SEND_START1 = 10,
+    PRJ_MPI_BF_HDR_SEND_START2 = 11,
+    PRJ_MPI_BF_HDR_SEND_END0 = 12,
+    PRJ_MPI_BF_HDR_SEND_END1 = 13,
+    PRJ_MPI_BF_HDR_SEND_END2 = 14,
+    PRJ_MPI_BF_HEADER_NINT = 15
+};
 
 static double *prj_mpi_bf_array(prj_block *block, int dir, int use_bf1)
 {
@@ -853,144 +806,883 @@ static const double *prj_mpi_bf_array_const(const prj_block *block, int dir, int
     return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
 }
 
-static int prj_mpi_pack_bf_blocks(const prj_mesh *mesh, const int *ids, int count,
-    int use_bf1, double **values)
+static void prj_mpi_check_bf_storage(const prj_block *block, const char *label)
 {
-    int b;
-    int pos = 0;
-    size_t nvalue;
+    int d;
 
-    *values = 0;
-    if (count <= 0) {
+    if (block == 0) {
+        fprintf(stderr, "%s: missing block\n", label);
+        exit(EXIT_FAILURE);
+    }
+    for (d = 0; d < 3; ++d) {
+        if (block->face_fidelity[d] == 0) {
+            fprintf(stderr, "%s: missing face fidelity storage\n", label);
+            exit(EXIT_FAILURE);
+        }
+        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+            fprintf(stderr, "%s: missing face-centered magnetic field storage\n", label);
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
+static int prj_mpi_bf_axis_active_max(int dir, int axis)
+{
+    return dir == axis ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE - 1;
+}
+
+static int prj_mpi_bf_face_active(int dir, int i, int j, int k)
+{
+    int idx[3];
+    int d;
+
+    idx[0] = i;
+    idx[1] = j;
+    idx[2] = k;
+    for (d = 0; d < 3; ++d) {
+        if (idx[d] < 0 || idx[d] > prj_mpi_bf_axis_active_max(dir, d)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int prj_mpi_bf_slot_matches(int fill_kind, int rel_level)
+{
+    switch (fill_kind) {
+    case PRJ_BOUNDARY_FILL_SAME_LEVEL:
+        return rel_level == 0;
+    case PRJ_BOUNDARY_FILL_RESTRICTION:
+        return rel_level < 0;
+    case PRJ_BOUNDARY_FILL_PROLONGATION:
+        return rel_level > 0;
+    case PRJ_BOUNDARY_FILL_NONRECON:
+        return rel_level <= 0;
+    case PRJ_BOUNDARY_FILL_RECON:
+        return rel_level > 0;
+    case PRJ_BOUNDARY_FILL_ALL:
+        return 1;
+    default:
         return 0;
     }
-    nvalue = (size_t)count * 3U * (size_t)PRJ_BLOCK_NFACES;
-    *values = (double *)malloc(nvalue * sizeof(**values));
-    if (*values == 0) {
+}
+
+static int prj_mpi_bf_append_value(double **values, int *count, int *capacity,
+    double value)
+{
+    if (!isfinite(value)) {
         return 1;
     }
-    for (b = 0; b < count; ++b) {
-        const prj_block *block;
-        int dir;
+    return prj_mpi_append_double(values, count, capacity, value);
+}
 
-        if (ids[b] < 0 || ids[b] >= mesh->nblocks) {
-            free(*values);
-            *values = 0;
+static int prj_mpi_bf_append_record(int **headers, int *record_count,
+    int *record_capacity, const prj_neighbor *slot, int value_count)
+{
+    int *next;
+    int new_capacity;
+    int offset;
+    int d;
+
+    if (*record_count >= *record_capacity) {
+        new_capacity = *record_capacity == 0 ? 32 : 2 * (*record_capacity);
+        next = (int *)realloc(*headers,
+            (size_t)new_capacity * (size_t)PRJ_MPI_BF_HEADER_NINT * sizeof(**headers));
+        if (next == 0) {
             return 1;
         }
-        block = &mesh->blocks[ids[b]];
-        for (dir = 0; dir < 3; ++dir) {
-            const double *src = prj_mpi_bf_array_const(block, dir, use_bf1);
-            int n;
+        *headers = next;
+        *record_capacity = new_capacity;
+    }
+    offset = (*record_count) * PRJ_MPI_BF_HEADER_NINT;
+    (*headers)[offset + PRJ_MPI_BF_HDR_DST_ID] = slot->id;
+    (*headers)[offset + PRJ_MPI_BF_HDR_REL_LEVEL] = slot->rel_level;
+    (*headers)[offset + PRJ_MPI_BF_HDR_VALUE_COUNT] = value_count;
+    for (d = 0; d < 3; ++d) {
+        (*headers)[offset + PRJ_MPI_BF_HDR_RECV_START0 + d] = slot->recv_loc_start[d];
+        (*headers)[offset + PRJ_MPI_BF_HDR_RECV_END0 + d] = slot->recv_loc_end[d];
+        (*headers)[offset + PRJ_MPI_BF_HDR_SEND_START0 + d] = slot->send_loc_start[d];
+        (*headers)[offset + PRJ_MPI_BF_HDR_SEND_END0 + d] = slot->send_loc_end[d];
+    }
+    *record_count += 1;
+    return 0;
+}
 
-            if (src == 0) {
-                free(*values);
-                *values = 0;
-                return 1;
-            }
-            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
-                double value = src[n];
+static void prj_mpi_bf_header_to_slot(const int *header, prj_neighbor *slot)
+{
+    int d;
 
-                if (!isfinite(value)) {
-                    free(*values);
-                    *values = 0;
-                    return 1;
+    memset(slot, 0, sizeof(*slot));
+    slot->id = header[PRJ_MPI_BF_HDR_DST_ID];
+    slot->rel_level = header[PRJ_MPI_BF_HDR_REL_LEVEL];
+    for (d = 0; d < 3; ++d) {
+        slot->recv_loc_start[d] = header[PRJ_MPI_BF_HDR_RECV_START0 + d];
+        slot->recv_loc_end[d] = header[PRJ_MPI_BF_HDR_RECV_END0 + d];
+        slot->send_loc_start[d] = header[PRJ_MPI_BF_HDR_SEND_START0 + d];
+        slot->send_loc_end[d] = header[PRJ_MPI_BF_HDR_SEND_END0 + d];
+    }
+}
+
+static int prj_mpi_bf_same_level_value_count(const prj_neighbor *slot)
+{
+    int dir;
+    int count = 0;
+
+    for (dir = 0; dir < 3; ++dir) {
+        int i;
+        int j;
+        int k;
+
+        for (i = 0; i < slot->recv_loc_end[0] - slot->recv_loc_start[0] + (dir == 0 ? 1 : 0); ++i) {
+            for (j = 0; j < slot->recv_loc_end[1] - slot->recv_loc_start[1] + (dir == 1 ? 1 : 0); ++j) {
+                for (k = 0; k < slot->recv_loc_end[2] - slot->recv_loc_start[2] + (dir == 2 ? 1 : 0); ++k) {
+                    if (prj_mpi_bf_face_active(dir,
+                            i + slot->recv_loc_start[0],
+                            j + slot->recv_loc_start[1],
+                            k + slot->recv_loc_start[2])) {
+                        continue;
+                    }
+                    count += 1;
                 }
-                (*values)[pos++] = value;
+            }
+        }
+    }
+    return count;
+}
+
+static int prj_mpi_bf_restriction_value_count(const prj_neighbor *slot)
+{
+    int dir;
+    int count = 0;
+
+    for (dir = 0; dir < 3; ++dir) {
+        int di = slot->send_loc_end[0] - slot->send_loc_start[0] + (dir == 0 ? 1 : 0) + 1;
+        int dj = slot->send_loc_end[1] - slot->send_loc_start[1] + (dir == 1 ? 1 : 0) + 1;
+        int dk = slot->send_loc_end[2] - slot->send_loc_start[2] + (dir == 2 ? 1 : 0) + 1;
+        count += di * dj * dk;
+    }
+    return count;
+}
+
+static int prj_mpi_bf_prolongation_value_count(const prj_neighbor *slot)
+{
+    int dir;
+    int count = 0;
+
+    for (dir = 0; dir < 3; ++dir) {
+        int d;
+        int n[3];
+
+        for (d = 0; d < 3; ++d) {
+            if (d == dir) {
+                n[d] = slot->send_loc_end[d] - slot->send_loc_start[d] + 2;
+            } else {
+                n[d] = slot->send_loc_end[d] - slot->send_loc_start[d] + 3;
+            }
+        }
+        count += n[0] * n[1] * n[2];
+    }
+    return count;
+}
+
+static int prj_mpi_bf_record_value_count(int fill_kind, const prj_neighbor *slot)
+{
+    if (!prj_mpi_bf_slot_matches(fill_kind, slot->rel_level)) {
+        return 0;
+    }
+    if (slot->rel_level == 0) {
+        return prj_mpi_bf_same_level_value_count(slot);
+    }
+    if (slot->rel_level < 0) {
+        return prj_mpi_bf_restriction_value_count(slot);
+    }
+    return prj_mpi_bf_prolongation_value_count(slot);
+}
+
+static int prj_mpi_pack_bf_same_level_values(const prj_block *block,
+    int use_bf1, const prj_neighbor *slot, double **values, int *value_count,
+    int *value_capacity)
+{
+    int dir;
+
+    prj_mpi_check_bf_storage(block, "prj_mpi_pack_bf_same_level_values");
+    for (dir = 0; dir < 3; ++dir) {
+        const double *src = prj_mpi_bf_array_const(block, dir, use_bf1);
+        int i;
+        int j;
+        int k;
+
+        for (i = 0; i < slot->recv_loc_end[0] - slot->recv_loc_start[0] + (dir == 0 ? 1 : 0); ++i) {
+            for (j = 0; j < slot->recv_loc_end[1] - slot->recv_loc_start[1] + (dir == 1 ? 1 : 0); ++j) {
+                for (k = 0; k < slot->recv_loc_end[2] - slot->recv_loc_start[2] + (dir == 2 ? 1 : 0); ++k) {
+                    if (prj_mpi_bf_face_active(dir,
+                            i + slot->recv_loc_start[0],
+                            j + slot->recv_loc_start[1],
+                            k + slot->recv_loc_start[2])) {
+                        continue;
+                    }
+                    if (prj_mpi_bf_append_value(values, value_count, value_capacity,
+                            src[FACE_IDX(dir,
+                                i + slot->send_loc_start[0],
+                                j + slot->send_loc_start[1],
+                                k + slot->send_loc_start[2])]) != 0) {
+                        return 1;
+                    }
+                }
             }
         }
     }
     return 0;
 }
 
-static int prj_mpi_install_remote_bf_blocks(prj_mesh *mesh, const int *ids, int count,
-    const double *values, int use_bf1, int *old_ranks)
+static int prj_mpi_pack_bf_restriction_values(const prj_block *block,
+    int use_bf1, const prj_neighbor *slot, double **values, int *value_count,
+    int *value_capacity)
 {
-    int b;
-    int pos = 0;
+    int dir;
 
-    if (count <= 0) {
-        return 0;
+    prj_mpi_check_bf_storage(block, "prj_mpi_pack_bf_restriction_values");
+    for (dir = 0; dir < 3; ++dir) {
+        const double *src = prj_mpi_bf_array_const(block, dir, use_bf1);
+        int si;
+        int sj;
+        int sk;
+
+        for (si = slot->send_loc_start[0]; si <= slot->send_loc_end[0] + (dir == 0 ? 1 : 0); ++si) {
+            for (sj = slot->send_loc_start[1]; sj <= slot->send_loc_end[1] + (dir == 1 ? 1 : 0); ++sj) {
+                for (sk = slot->send_loc_start[2]; sk <= slot->send_loc_end[2] + (dir == 2 ? 1 : 0); ++sk) {
+                    if (prj_mpi_bf_append_value(values, value_count, value_capacity,
+                            src[FACE_IDX(dir, si, sj, sk)]) != 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
     }
-    if (ids == 0 || values == 0 || old_ranks == 0) {
+    return 0;
+}
+
+static int prj_mpi_pack_bf_prolongation_values(const prj_block *block,
+    int use_bf1, const prj_neighbor *slot, double **values, int *value_count,
+    int *value_capacity)
+{
+    int dir;
+
+    prj_mpi_check_bf_storage(block, "prj_mpi_pack_bf_prolongation_values");
+    for (dir = 0; dir < 3; ++dir) {
+        const double *src = prj_mpi_bf_array_const(block, dir, use_bf1);
+        int lo[3];
+        int hi[3];
+        int d;
+        int si;
+        int sj;
+        int sk;
+
+        for (d = 0; d < 3; ++d) {
+            if (d == dir) {
+                lo[d] = slot->send_loc_start[d];
+                hi[d] = slot->send_loc_end[d] + 1;
+            } else {
+                lo[d] = slot->send_loc_start[d] - 1;
+                hi[d] = slot->send_loc_end[d] + 1;
+            }
+        }
+        for (si = lo[0]; si <= hi[0]; ++si) {
+            for (sj = lo[1]; sj <= hi[1]; ++sj) {
+                for (sk = lo[2]; sk <= hi[2]; ++sk) {
+                    if (prj_mpi_bf_append_value(values, value_count, value_capacity,
+                            src[FACE_IDX(dir, si, sj, sk)]) != 0) {
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+static int prj_mpi_pack_bf_record_values(const prj_block *block, int use_bf1,
+    const prj_neighbor *slot, double **values, int *value_count,
+    int *value_capacity)
+{
+    if (slot->rel_level == 0) {
+        return prj_mpi_pack_bf_same_level_values(block, use_bf1, slot,
+            values, value_count, value_capacity);
+    }
+    if (slot->rel_level < 0) {
+        return prj_mpi_pack_bf_restriction_values(block, use_bf1, slot,
+            values, value_count, value_capacity);
+    }
+    return prj_mpi_pack_bf_prolongation_values(block, use_bf1, slot,
+        values, value_count, value_capacity);
+}
+
+static int prj_mpi_pack_bf_records(const prj_mesh *mesh, const prj_mpi *mpi,
+    int receiver_rank, int use_bf1, int fill_kind, int **headers,
+    int *record_count, double **values, int *value_count)
+{
+    int record_capacity = 0;
+    int value_capacity = 0;
+    int bidx;
+
+    *headers = 0;
+    *record_count = 0;
+    *values = 0;
+    *value_count = 0;
+    if (mesh == 0 || mpi == 0) {
         return 1;
     }
-    for (b = 0; b < count; ++b) {
-        prj_block *block;
-        double *base;
-        int dir;
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        const prj_block *block = &mesh->blocks[bidx];
         int n;
 
-        if (ids[b] < 0 || ids[b] >= mesh->nblocks) {
-            return 1;
+        if (!prj_mpi_block_is_local(block)) {
+            continue;
         }
-        block = &mesh->blocks[ids[b]];
-        if (block->rank == prj_mpi_active->rank || block->Bf[0] != 0 ||
-            block->Bf1[0] != 0 || block->face_fidelity[0] != 0 ||
-            block->face_fidelity[1] != 0 || block->face_fidelity[2] != 0) {
-            return 1;
-        }
-        base = (double *)calloc(6U * (size_t)PRJ_BLOCK_NFACES, sizeof(*base));
-        for (dir = 0; dir < 3; ++dir) {
-            block->face_fidelity[dir] = (int *)calloc((size_t)PRJ_BLOCK_NFACES,
-                sizeof(*block->face_fidelity[dir]));
-        }
-        if (base == 0 || block->face_fidelity[0] == 0 ||
-            block->face_fidelity[1] == 0 || block->face_fidelity[2] == 0) {
-            free(base);
-            for (dir = 0; dir < 3; ++dir) {
-                free(block->face_fidelity[dir]);
-                block->face_fidelity[dir] = 0;
-            }
-            return 1;
-        }
-        for (dir = 0; dir < 3; ++dir) {
-            block->Bf[dir] = base + (size_t)dir * (size_t)PRJ_BLOCK_NFACES;
-            block->Bf1[dir] = base + (size_t)(dir + 3) * (size_t)PRJ_BLOCK_NFACES;
-        }
-        for (dir = 0; dir < 3; ++dir) {
-            double *dst = prj_mpi_bf_array(block, dir, use_bf1);
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
+            int before;
+            int expected;
 
-            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
-                dst[n] = values[pos++];
+            if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != receiver_rank ||
+                !prj_mpi_bf_slot_matches(fill_kind, slot->rel_level)) {
+                continue;
+            }
+            expected = prj_mpi_bf_record_value_count(fill_kind, slot);
+            if (expected <= 0) {
+                continue;
+            }
+            if (prj_mpi_bf_append_record(headers, record_count, &record_capacity,
+                    slot, expected) != 0) {
+                return 1;
+            }
+            before = *value_count;
+            if (prj_mpi_pack_bf_record_values(block, use_bf1, slot,
+                    values, value_count, &value_capacity) != 0 ||
+                *value_count - before != expected) {
+                return 1;
             }
         }
-        for (dir = 0; dir < 3; ++dir) {
-            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
-                block->face_fidelity[dir][n] = PRJ_MHD_FIDELITY_SAME;
-            }
-        }
-        old_ranks[b] = block->rank;
-        block->rank = prj_mpi_active->rank;
     }
     return 0;
 }
 
-static void prj_mpi_uninstall_remote_bf_blocks(prj_mesh *mesh, const int *ids, int count,
-    const int *old_ranks)
+static inline double prj_mpi_bf_buf_read(const double *buf,
+    const int buf_lo[3], const int buf_n[3], int i, int j, int k)
 {
-    int b;
+    return buf[((i - buf_lo[0]) * buf_n[1] + (j - buf_lo[1])) * buf_n[2] +
+               (k - buf_lo[2])];
+}
 
-    if (mesh == 0 || ids == 0 || old_ranks == 0) {
-        return;
+static inline double prj_mpi_bf_buf_minmod(double left, double center,
+    double right, double dx)
+{
+    double sl = (center - left) / dx;
+    double sr = (right - center) / dx;
+
+    if (sl * sr <= 0.0) return 0.0;
+    return fabs(sl) < fabs(sr) ? sl : sr;
+}
+
+static inline double prj_mpi_bf_buf_sign_half(int bit)
+{
+    return bit == 0 ? -1.0 : 1.0;
+}
+
+static inline double prj_mpi_bf_interp_x1_buf(const double *buf,
+    const int buf_lo[3], const int buf_n[3], const double dx[3],
+    int i, int j, int k, int fine_j, int fine_k, double area)
+{
+    double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
+    double sy = prj_mpi_bf_buf_minmod(
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
+        base,
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
+        dx[1]);
+    double sz = prj_mpi_bf_buf_minmod(
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
+        base,
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
+        dx[2]);
+    double value = base +
+        sy * (0.25 * prj_mpi_bf_buf_sign_half(fine_j) * dx[1]) +
+        sz * (0.25 * prj_mpi_bf_buf_sign_half(fine_k) * dx[2]);
+
+    return value * area;
+}
+
+static inline double prj_mpi_bf_interp_x2_buf(const double *buf,
+    const int buf_lo[3], const int buf_n[3], const double dx[3],
+    int i, int j, int k, int fine_i, int fine_k, double area)
+{
+    double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
+    double sx = prj_mpi_bf_buf_minmod(
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
+        base,
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
+        dx[0]);
+    double sz = prj_mpi_bf_buf_minmod(
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k - 1),
+        base,
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k + 1),
+        dx[2]);
+    double value = base +
+        sx * (0.25 * prj_mpi_bf_buf_sign_half(fine_i) * dx[0]) +
+        sz * (0.25 * prj_mpi_bf_buf_sign_half(fine_k) * dx[2]);
+
+    return value * area;
+}
+
+static inline double prj_mpi_bf_interp_x3_buf(const double *buf,
+    const int buf_lo[3], const int buf_n[3], const double dx[3],
+    int i, int j, int k, int fine_i, int fine_j, double area)
+{
+    double base = prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j, k);
+    double sx = prj_mpi_bf_buf_minmod(
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i - 1, j, k),
+        base,
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i + 1, j, k),
+        dx[0]);
+    double sy = prj_mpi_bf_buf_minmod(
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j - 1, k),
+        base,
+        prj_mpi_bf_buf_read(buf, buf_lo, buf_n, i, j + 1, k),
+        dx[1]);
+    double value = base +
+        sx * (0.25 * prj_mpi_bf_buf_sign_half(fine_i) * dx[0]) +
+        sy * (0.25 * prj_mpi_bf_buf_sign_half(fine_j) * dx[1]);
+
+    return value * area;
+}
+
+static inline void prj_mpi_bf_compute_inner_fluxes(double u[3][2][2],
+    double v[2][3][2], double w[2][2][3], double dx1, double dx2,
+    double dx3)
+{
+    double Uxx = 0.0;
+    double Vyy = 0.0;
+    double Wzz = 0.0;
+    double Uxyz = 0.0;
+    double Vxyz = 0.0;
+    double Wxyz = 0.0;
+    double dx1s = dx1 * dx1;
+    double dx2s = dx2 * dx2;
+    double dx3s = dx3 * dx3;
+    int i;
+    int j;
+    int k;
+
+    for (i = 0; i < 2; ++i) {
+        double si = prj_mpi_bf_buf_sign_half(i);
+        for (j = 0; j < 2; ++j) {
+            double sj = prj_mpi_bf_buf_sign_half(j);
+            for (k = 0; k < 2; ++k) {
+                double sk = prj_mpi_bf_buf_sign_half(k);
+                Uxx += si * sj * v[i][2 * j][k] + si * sk * w[i][j][2 * k];
+                Vyy += sj * sk * w[i][j][2 * k] + sj * si * u[2 * i][j][k];
+                Wzz += sk * si * u[2 * i][j][k] + sk * sj * v[i][2 * j][k];
+                Uxyz += si * sj * sk * u[2 * i][j][k] / (dx2s + dx3s);
+                Vxyz += si * sj * sk * v[i][2 * j][k] / (dx1s + dx3s);
+                Wxyz += si * sj * sk * w[i][j][2 * k] / (dx1s + dx2s);
+            }
+        }
     }
-    for (b = 0; b < count; ++b) {
-        prj_block *block;
-        int dir;
+    Uxx *= 0.125;
+    Vyy *= 0.125;
+    Wzz *= 0.125;
+    Uxyz *= 0.125;
+    Vxyz *= 0.125;
+    Wxyz *= 0.125;
 
-        if (ids[b] < 0 || ids[b] >= mesh->nblocks) {
+    for (j = 0; j < 2; ++j) {
+        double sj = prj_mpi_bf_buf_sign_half(j);
+        for (k = 0; k < 2; ++k) {
+            double sk = prj_mpi_bf_buf_sign_half(k);
+            u[1][j][k] = 0.5 * (u[2][j][k] + u[0][j][k]) +
+                Uxx + sk * dx3s * Vxyz + sj * dx2s * Wxyz;
+        }
+    }
+    for (i = 0; i < 2; ++i) {
+        double si = prj_mpi_bf_buf_sign_half(i);
+        for (k = 0; k < 2; ++k) {
+            double sk = prj_mpi_bf_buf_sign_half(k);
+            v[i][1][k] = 0.5 * (v[i][2][k] + v[i][0][k]) +
+                Vyy + si * dx1s * Wxyz + sk * dx3s * Uxyz;
+        }
+    }
+    for (i = 0; i < 2; ++i) {
+        double si = prj_mpi_bf_buf_sign_half(i);
+        for (j = 0; j < 2; ++j) {
+            double sj = prj_mpi_bf_buf_sign_half(j);
+            w[i][j][1] = 0.5 * (w[i][j][2] + w[i][j][0]) +
+                Wzz + sj * dx2s * Uxyz + si * dx1s * Vxyz;
+        }
+    }
+}
+
+static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
+    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
+    prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
+    int use_bf1)
+{
+    double u[3][2][2];
+    double v[2][3][2];
+    double w[2][2][3];
+    double *dst[3];
+    double area_u;
+    double area_v;
+    double area_w;
+    int i;
+    int j;
+    int k;
+    int d;
+
+    prj_mpi_check_bf_storage(fine, "prj_mpi_bf_prolong_from_buffer");
+    for (d = 0; d < 3; ++d) {
+        dst[d] = prj_mpi_bf_array(fine, d, use_bf1);
+    }
+    area_u = fine->dx[1] * fine->dx[2];
+    area_v = fine->dx[0] * fine->dx[2];
+    area_w = fine->dx[0] * fine->dx[1];
+
+    for (j = 0; j < 2; ++j) {
+        for (k = 0; k < 2; ++k) {
+            double flux;
+            int idx;
+
+            flux = prj_mpi_bf_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
+                buf_n[X1DIR], coarse_dx, ci, cj, ck, j, k, area_u);
+            idx = FACE_IDX(X1DIR, fi, fj + j, fk + k);
+            if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                u[0][j][k] = dst[X1DIR][idx] * area_u;
+            } else {
+                u[0][j][k] = flux;
+                prj_boundary_write_bf_face(fine, use_bf1, X1DIR,
+                    fi, fj + j, fk + k, flux / area_u, PRJ_MHD_FIDELITY_COARSER);
+            }
+
+            flux = prj_mpi_bf_interp_x1_buf(buf[X1DIR], buf_lo[X1DIR],
+                buf_n[X1DIR], coarse_dx, ci + 1, cj, ck, j, k, area_u);
+            idx = FACE_IDX(X1DIR, fi + 2, fj + j, fk + k);
+            if (fine->face_fidelity[X1DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                u[2][j][k] = dst[X1DIR][idx] * area_u;
+            } else {
+                u[2][j][k] = flux;
+                prj_boundary_write_bf_face(fine, use_bf1, X1DIR,
+                    fi + 2, fj + j, fk + k, flux / area_u, PRJ_MHD_FIDELITY_COARSER);
+            }
+        }
+    }
+
+    for (i = 0; i < 2; ++i) {
+        for (k = 0; k < 2; ++k) {
+            double flux;
+            int idx;
+
+            flux = prj_mpi_bf_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
+                buf_n[X2DIR], coarse_dx, ci, cj, ck, i, k, area_v);
+            idx = FACE_IDX(X2DIR, fi + i, fj, fk + k);
+            if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                v[i][0][k] = dst[X2DIR][idx] * area_v;
+            } else {
+                v[i][0][k] = flux;
+                prj_boundary_write_bf_face(fine, use_bf1, X2DIR,
+                    fi + i, fj, fk + k, flux / area_v, PRJ_MHD_FIDELITY_COARSER);
+            }
+
+            flux = prj_mpi_bf_interp_x2_buf(buf[X2DIR], buf_lo[X2DIR],
+                buf_n[X2DIR], coarse_dx, ci, cj + 1, ck, i, k, area_v);
+            idx = FACE_IDX(X2DIR, fi + i, fj + 2, fk + k);
+            if (fine->face_fidelity[X2DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                v[i][2][k] = dst[X2DIR][idx] * area_v;
+            } else {
+                v[i][2][k] = flux;
+                prj_boundary_write_bf_face(fine, use_bf1, X2DIR,
+                    fi + i, fj + 2, fk + k, flux / area_v, PRJ_MHD_FIDELITY_COARSER);
+            }
+        }
+    }
+
+    for (i = 0; i < 2; ++i) {
+        for (j = 0; j < 2; ++j) {
+            double flux;
+            int idx;
+
+            flux = prj_mpi_bf_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
+                buf_n[X3DIR], coarse_dx, ci, cj, ck, i, j, area_w);
+            idx = FACE_IDX(X3DIR, fi + i, fj + j, fk);
+            if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                w[i][j][0] = dst[X3DIR][idx] * area_w;
+            } else {
+                w[i][j][0] = flux;
+                prj_boundary_write_bf_face(fine, use_bf1, X3DIR,
+                    fi + i, fj + j, fk, flux / area_w, PRJ_MHD_FIDELITY_COARSER);
+            }
+
+            flux = prj_mpi_bf_interp_x3_buf(buf[X3DIR], buf_lo[X3DIR],
+                buf_n[X3DIR], coarse_dx, ci, cj, ck + 1, i, j, area_w);
+            idx = FACE_IDX(X3DIR, fi + i, fj + j, fk + 2);
+            if (fine->face_fidelity[X3DIR][idx] > PRJ_MHD_FIDELITY_COARSER) {
+                w[i][j][2] = dst[X3DIR][idx] * area_w;
+            } else {
+                w[i][j][2] = flux;
+                prj_boundary_write_bf_face(fine, use_bf1, X3DIR,
+                    fi + i, fj + j, fk + 2, flux / area_w, PRJ_MHD_FIDELITY_COARSER);
+            }
+        }
+    }
+
+    prj_mpi_bf_compute_inner_fluxes(u, v, w,
+        fine->dx[0], fine->dx[1], fine->dx[2]);
+
+    for (j = 0; j < 2; ++j) {
+        for (k = 0; k < 2; ++k) {
+            prj_boundary_write_bf_face(fine, use_bf1, X1DIR,
+                fi + 1, fj + j, fk + k,
+                u[1][j][k] / area_u, PRJ_MHD_FIDELITY_COARSER);
+        }
+    }
+    for (i = 0; i < 2; ++i) {
+        for (k = 0; k < 2; ++k) {
+            prj_boundary_write_bf_face(fine, use_bf1, X2DIR,
+                fi + i, fj + 1, fk + k,
+                v[i][1][k] / area_v, PRJ_MHD_FIDELITY_COARSER);
+        }
+    }
+    for (i = 0; i < 2; ++i) {
+        for (j = 0; j < 2; ++j) {
+            prj_boundary_write_bf_face(fine, use_bf1, X3DIR,
+                fi + i, fj + j, fk + 1,
+                w[i][j][1] / area_w, PRJ_MHD_FIDELITY_COARSER);
+        }
+    }
+}
+
+static int prj_mpi_apply_bf_same_level_record(prj_block *dst, int use_bf1,
+    const prj_neighbor *slot, const double *values, int value_count)
+{
+    int dir;
+    int pos = 0;
+
+    for (dir = 0; dir < 3; ++dir) {
+        int i;
+        int j;
+        int k;
+
+        for (i = 0; i < slot->recv_loc_end[0] - slot->recv_loc_start[0] + (dir == 0 ? 1 : 0); ++i) {
+            for (j = 0; j < slot->recv_loc_end[1] - slot->recv_loc_start[1] + (dir == 1 ? 1 : 0); ++j) {
+                for (k = 0; k < slot->recv_loc_end[2] - slot->recv_loc_start[2] + (dir == 2 ? 1 : 0); ++k) {
+                    if (prj_mpi_bf_face_active(dir,
+                            i + slot->recv_loc_start[0],
+                            j + slot->recv_loc_start[1],
+                            k + slot->recv_loc_start[2])) {
+                        continue;
+                    }
+                    if (pos >= value_count) {
+                        return 1;
+                    }
+                    prj_boundary_write_bf_face(dst, use_bf1, dir,
+                        i + slot->recv_loc_start[0],
+                        j + slot->recv_loc_start[1],
+                        k + slot->recv_loc_start[2],
+                        values[pos++], PRJ_MHD_FIDELITY_SAME);
+                }
+            }
+        }
+    }
+    return pos == value_count ? 0 : 1;
+}
+
+static int prj_mpi_apply_bf_restriction_record(prj_block *coarse, int use_bf1,
+    const prj_neighbor *slot, const double *values, int value_count)
+{
+    int dir;
+    int pos = 0;
+
+    for (dir = 0; dir < 3; ++dir) {
+        int dj = slot->send_loc_end[1] - slot->send_loc_start[1] + (dir == 1 ? 1 : 0) + 1;
+        int dk = slot->send_loc_end[2] - slot->send_loc_start[2] + (dir == 2 ? 1 : 0) + 1;
+        int dir_count =
+            (slot->send_loc_end[0] - slot->send_loc_start[0] + (dir == 0 ? 1 : 0) + 1) *
+            dj * dk;
+        const double *buf;
+        int tan0 = (dir + 1) % 3;
+        int tan1 = (dir + 2) % 3;
+        int i;
+        int j;
+        int k;
+
+        if (pos + dir_count > value_count) {
+            return 1;
+        }
+        buf = values + pos;
+        for (i = 0; i < slot->recv_loc_end[0] - slot->recv_loc_start[0] + (dir == 0 ? 1 : 0); ++i) {
+            for (j = 0; j < slot->recv_loc_end[1] - slot->recv_loc_start[1] + (dir == 1 ? 1 : 0); ++j) {
+                for (k = 0; k < slot->recv_loc_end[2] - slot->recv_loc_start[2] + (dir == 2 ? 1 : 0); ++k) {
+                    int it_send0[3] = {0, 0, 0};
+                    int it_send1[3] = {0, 0, 0};
+                    int it_send2[3] = {0, 0, 0};
+                    int it_send3[3] = {0, 0, 0};
+                    int b0, b1, b2, b3;
+                    double value;
+
+                    it_send0[0] = 2 * i + slot->send_loc_start[0];
+                    it_send0[1] = 2 * j + slot->send_loc_start[1];
+                    it_send0[2] = 2 * k + slot->send_loc_start[2];
+
+                    it_send1[dir] = it_send0[dir];
+                    it_send1[tan0] = it_send0[tan0];
+                    it_send1[tan1] = it_send0[tan1] + 1;
+
+                    it_send2[dir] = it_send0[dir];
+                    it_send2[tan0] = it_send0[tan0] + 1;
+                    it_send2[tan1] = it_send0[tan1];
+
+                    it_send3[dir] = it_send0[dir];
+                    it_send3[tan0] = it_send0[tan0] + 1;
+                    it_send3[tan1] = it_send0[tan1] + 1;
+
+                    b0 = ((it_send0[0] - slot->send_loc_start[0]) * dj +
+                          (it_send0[1] - slot->send_loc_start[1])) * dk +
+                         (it_send0[2] - slot->send_loc_start[2]);
+                    b1 = ((it_send1[0] - slot->send_loc_start[0]) * dj +
+                          (it_send1[1] - slot->send_loc_start[1])) * dk +
+                         (it_send1[2] - slot->send_loc_start[2]);
+                    b2 = ((it_send2[0] - slot->send_loc_start[0]) * dj +
+                          (it_send2[1] - slot->send_loc_start[1])) * dk +
+                         (it_send2[2] - slot->send_loc_start[2]);
+                    b3 = ((it_send3[0] - slot->send_loc_start[0]) * dj +
+                          (it_send3[1] - slot->send_loc_start[1])) * dk +
+                         (it_send3[2] - slot->send_loc_start[2]);
+
+                    if (b0 < 0 || b1 < 0 || b2 < 0 || b3 < 0 ||
+                        b0 >= dir_count || b1 >= dir_count ||
+                        b2 >= dir_count || b3 >= dir_count) {
+                        return 1;
+                    }
+                    value = 0.25 * (buf[b0] + buf[b1] + buf[b2] + buf[b3]);
+                    prj_boundary_write_bf_face(coarse, use_bf1, dir,
+                        i + slot->recv_loc_start[0],
+                        j + slot->recv_loc_start[1],
+                        k + slot->recv_loc_start[2],
+                        value, PRJ_MHD_FIDELITY_FINER);
+                }
+            }
+        }
+        pos += dir_count;
+    }
+    return pos == value_count ? 0 : 1;
+}
+
+static int prj_mpi_apply_bf_prolongation_record(prj_block *fine, int use_bf1,
+    const prj_neighbor *slot, const double *values, int value_count)
+{
+    const double *buf[3];
+    int buf_lo[3][3];
+    int buf_n[3][3];
+    double coarse_dx[3];
+    int pos = 0;
+    int dir;
+    int i;
+    int j;
+    int k;
+
+    for (dir = 0; dir < 3; ++dir) {
+        int d;
+        int dir_count;
+
+        for (d = 0; d < 3; ++d) {
+            if (d == dir) {
+                buf_lo[dir][d] = slot->send_loc_start[d];
+                buf_n[dir][d] = slot->send_loc_end[d] - slot->send_loc_start[d] + 2;
+            } else {
+                buf_lo[dir][d] = slot->send_loc_start[d] - 1;
+                buf_n[dir][d] = slot->send_loc_end[d] - slot->send_loc_start[d] + 3;
+            }
+        }
+        dir_count = buf_n[dir][0] * buf_n[dir][1] * buf_n[dir][2];
+        if (pos + dir_count > value_count) {
+            return 1;
+        }
+        buf[dir] = values + pos;
+        pos += dir_count;
+    }
+    if (pos != value_count) {
+        return 1;
+    }
+    coarse_dx[0] = 2.0 * fine->dx[0];
+    coarse_dx[1] = 2.0 * fine->dx[1];
+    coarse_dx[2] = 2.0 * fine->dx[2];
+
+    for (i = 0; i < slot->recv_loc_end[0] - slot->recv_loc_start[0]; i += 2) {
+        for (j = 0; j < slot->recv_loc_end[1] - slot->recv_loc_start[1]; j += 2) {
+            for (k = 0; k < slot->recv_loc_end[2] - slot->recv_loc_start[2]; k += 2) {
+                int fi = i + slot->recv_loc_start[0];
+                int fj = j + slot->recv_loc_start[1];
+                int fk = k + slot->recv_loc_start[2];
+                int ci = i / 2 + slot->send_loc_start[0];
+                int cj = j / 2 + slot->send_loc_start[1];
+                int ck = k / 2 + slot->send_loc_start[2];
+
+                prj_mpi_bf_prolong_from_buffer(buf, buf_lo, buf_n,
+                    coarse_dx, fine, ci, cj, ck, fi, fj, fk, use_bf1);
+            }
+        }
+    }
+    return 0;
+}
+
+static int prj_mpi_apply_bf_records(prj_mesh *mesh, int use_bf1,
+    int fill_kind, const int *headers, int record_count,
+    const double *values, int value_count)
+{
+    int r;
+    int pos = 0;
+
+    for (r = 0; r < record_count; ++r) {
+        const int *header = headers + r * PRJ_MPI_BF_HEADER_NINT;
+        int block_id = header[PRJ_MPI_BF_HDR_DST_ID];
+        int rel_level = header[PRJ_MPI_BF_HDR_REL_LEVEL];
+        int nvalue = header[PRJ_MPI_BF_HDR_VALUE_COUNT];
+        prj_neighbor slot;
+        prj_block *dst;
+        int err = 0;
+
+        if (nvalue < 0 || pos + nvalue > value_count) {
+            return 1;
+        }
+        if (!prj_mpi_bf_slot_matches(fill_kind, rel_level)) {
+            pos += nvalue;
             continue;
         }
-        block = &mesh->blocks[ids[b]];
-        free(block->Bf[0]);
-        for (dir = 0; dir < 3; ++dir) {
-            free(block->face_fidelity[dir]);
-            block->face_fidelity[dir] = 0;
-            block->Bf[dir] = 0;
-            block->Bf1[dir] = 0;
+        if (block_id < 0 || block_id >= mesh->nblocks) {
+            pos += nvalue;
+            continue;
         }
-        block->rank = old_ranks[b];
+        dst = &mesh->blocks[block_id];
+        if (!prj_mpi_block_is_local(dst)) {
+            pos += nvalue;
+            continue;
+        }
+        prj_mpi_check_bf_storage(dst, "prj_mpi_apply_bf_records");
+        prj_mpi_bf_header_to_slot(header, &slot);
+        if (rel_level == 0) {
+            err = prj_mpi_apply_bf_same_level_record(dst, use_bf1,
+                &slot, values + pos, nvalue);
+        } else if (rel_level < 0) {
+            err = prj_mpi_apply_bf_restriction_record(dst, use_bf1,
+                &slot, values + pos, nvalue);
+        } else {
+            err = prj_mpi_apply_bf_prolongation_record(dst, use_bf1,
+                &slot, values + pos, nvalue);
+        }
+        if (err != 0) {
+            return 1;
+        }
+        pos += nvalue;
     }
+    return pos == value_count ? 0 : 1;
 }
 
 void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kind)
@@ -1003,83 +1695,79 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
     }
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int *send_ids = 0;
-        int *recv_ids = 0;
-        int send_count = 0;
-        int recv_count = 0;
+        int *send_headers = 0;
+        int *recv_headers = 0;
         double *send_values = 0;
         double *recv_values = 0;
-        int *old_ranks = 0;
-        int b;
+        int send_record_count = 0;
+        int recv_record_count = 0;
         int send_value_count;
         int recv_value_count;
+        int send_counts[2];
+        int recv_counts[2];
 
-        if (prj_mpi_collect_bf_source_blocks(mesh, mpi, buffer->receiver_rank,
-                &send_ids, &send_count) != 0 ||
-            prj_mpi_pack_bf_blocks(mesh, send_ids, send_count, use_bf1, &send_values) != 0) {
-            fprintf(stderr, "prj_mpi_exchange_bf: failed to pack local Bf blocks\n");
-            free(send_ids);
+        if (prj_mpi_pack_bf_records(mesh, mpi, buffer->receiver_rank, use_bf1,
+                fill_kind, &send_headers, &send_record_count,
+                &send_values, &send_value_count) != 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to pack Bf records\n");
+            free(send_headers);
             free(send_values);
             exit(EXIT_FAILURE);
         }
-        MPI_Sendrecv(&send_count, 1, MPI_INT, buffer->receiver_rank, 300,
-            &recv_count, 1, MPI_INT, buffer->receiver_rank, 300,
+        send_counts[0] = send_record_count;
+        send_counts[1] = send_value_count;
+        MPI_Sendrecv(send_counts, 2, MPI_INT, buffer->receiver_rank, 300,
+            recv_counts, 2, MPI_INT, buffer->receiver_rank, 300,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        recv_ids = recv_count > 0 ? (int *)calloc((size_t)recv_count, sizeof(*recv_ids)) : 0;
-        if (recv_count > 0 && recv_ids == 0) {
-            fprintf(stderr, "prj_mpi_exchange_bf: failed to allocate received block ids\n");
-            free(send_ids);
+        recv_record_count = recv_counts[0];
+        recv_value_count = recv_counts[1];
+        if (recv_record_count < 0 || recv_value_count < 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: received invalid Bf counts\n");
+            free(send_headers);
             free(send_values);
             exit(EXIT_FAILURE);
         }
-        MPI_Sendrecv(send_ids, send_count, MPI_INT, buffer->receiver_rank, 301,
-            recv_ids, recv_count, MPI_INT, buffer->receiver_rank, 301,
-            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-        send_value_count = send_count * 3 * PRJ_BLOCK_NFACES;
-        recv_value_count = recv_count * 3 * PRJ_BLOCK_NFACES;
+        recv_headers = recv_record_count > 0 ?
+            (int *)malloc((size_t)recv_record_count *
+                (size_t)PRJ_MPI_BF_HEADER_NINT * sizeof(*recv_headers)) : 0;
         recv_values = recv_value_count > 0 ?
             (double *)malloc((size_t)recv_value_count * sizeof(*recv_values)) : 0;
-        if (recv_value_count > 0 && recv_values == 0) {
-            fprintf(stderr, "prj_mpi_exchange_bf: failed to allocate received Bf values\n");
-            free(recv_ids);
-            free(send_ids);
+        if ((recv_record_count > 0 && recv_headers == 0) ||
+            (recv_value_count > 0 && recv_values == 0)) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to allocate receive buffers\n");
+            free(recv_headers);
+            free(recv_values);
+            free(send_headers);
             free(send_values);
             exit(EXIT_FAILURE);
         }
-        MPI_Sendrecv(send_values, send_value_count, MPI_DOUBLE, buffer->receiver_rank, 302,
-            recv_values, recv_value_count, MPI_DOUBLE, buffer->receiver_rank, 302,
+
+        MPI_Sendrecv(send_headers,
+            send_record_count * PRJ_MPI_BF_HEADER_NINT, MPI_INT,
+            buffer->receiver_rank, 301,
+            recv_headers, recv_record_count * PRJ_MPI_BF_HEADER_NINT, MPI_INT,
+            buffer->receiver_rank, 301,
+            MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Sendrecv(send_values, send_value_count, MPI_DOUBLE,
+            buffer->receiver_rank, 302,
+            recv_values, recv_value_count, MPI_DOUBLE,
+            buffer->receiver_rank, 302,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        old_ranks = recv_count > 0 ? (int *)calloc((size_t)recv_count, sizeof(*old_ranks)) : 0;
-        if (recv_count > 0 && old_ranks == 0) {
-            fprintf(stderr, "prj_mpi_exchange_bf: failed to allocate rank scratch\n");
+        if (prj_mpi_apply_bf_records(mesh, use_bf1, fill_kind,
+                recv_headers, recv_record_count, recv_values,
+                recv_value_count) != 0) {
+            fprintf(stderr, "prj_mpi_exchange_bf: failed to unpack Bf records\n");
+            free(recv_headers);
             free(recv_values);
-            free(recv_ids);
-            free(send_ids);
+            free(send_headers);
             free(send_values);
             exit(EXIT_FAILURE);
         }
-        if (prj_mpi_install_remote_bf_blocks(mesh, recv_ids, recv_count,
-                recv_values, use_bf1, old_ranks) != 0) {
-            fprintf(stderr, "prj_mpi_exchange_bf: failed to install remote Bf scratch blocks\n");
-            prj_mpi_uninstall_remote_bf_blocks(mesh, recv_ids, recv_count, old_ranks);
-            free(old_ranks);
-            free(recv_values);
-            free(recv_ids);
-            free(send_ids);
-            free(send_values);
-            exit(EXIT_FAILURE);
-        }
-        for (b = 0; b < recv_count; ++b) {
-            prj_boundary_send_bf(&mesh->blocks[recv_ids[b]], use_bf1, fill_kind);
-        }
-        prj_mpi_uninstall_remote_bf_blocks(mesh, recv_ids, recv_count, old_ranks);
-        free(old_ranks);
+        free(recv_headers);
         free(recv_values);
-        free(recv_ids);
         free(send_values);
-        free(send_ids);
+        free(send_headers);
     }
 #else
     (void)mesh;
