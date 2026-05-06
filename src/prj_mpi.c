@@ -1779,34 +1779,6 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
 #endif
 
 #if PRJ_MHD
-static int prj_mpi_edge_axis_active_max(int dir, int axis)
-{
-    return dir == axis ? PRJ_BLOCK_SIZE - 1 : PRJ_BLOCK_SIZE;
-}
-
-static double prj_mpi_edge_coord(const prj_block *block, int axis, int dir, int idx)
-{
-    double offset = axis == dir ? 0.5 : 0.0;
-
-    return block->xmin[axis] + ((double)idx + offset) * block->dx[axis];
-}
-
-static int prj_mpi_edge_point_inside(const prj_block *block, const double x[3])
-{
-    const double tol = 1.0e-12;
-    int d;
-
-    if (block == 0) {
-        return 0;
-    }
-    for (d = 0; d < 3; ++d) {
-        if (x[d] < block->xmin[d] - tol || x[d] > block->xmax[d] + tol) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
 static int prj_mpi_edge_storage_index_ok(int dir, int i, int j, int k)
 {
     int idx[3] = {i, j, k};
@@ -1822,72 +1794,150 @@ static int prj_mpi_edge_storage_index_ok(int dir, int i, int j, int k)
     return 1;
 }
 
-static int prj_mpi_nearest_int(double x)
+static int prj_mpi_pack_emf_edge_value(const prj_block *fine, int coarse_id,
+    int dir, const int send_idx[3], const int recv_idx[3],
+    int **idx_send, double **value_send, int *count, int *idx_capacity,
+    int *value_count, int *value_capacity)
 {
-    return x >= 0.0 ? (int)(x + 0.5) : (int)(x - 0.5);
-}
-
-static double prj_mpi_restrict_emf_value(const prj_block *fine, int dir,
-    const double x[3])
-{
-    const double tol = 1.0e-8;
-    int idx[3] = {0, 0, 0};
-    int edge_base = 0;
     double sum = 0.0;
     int n;
-    int d;
 
-    if (fine == 0 || dir < 0 || dir >= 3 || fine->emf[dir] == 0) {
-        fprintf(stderr, "prj_mpi_restrict_emf_value: invalid fine emf block\n");
+    if (fine == 0 || dir < 0 || dir >= 3 || fine->emf[dir] == 0 ||
+        fine->edge_fidelity[dir] == 0) {
+        fprintf(stderr, "prj_mpi_pack_emf_edge_value: invalid fine emf block\n");
         exit(EXIT_FAILURE);
     }
-    for (d = 0; d < 3; ++d) {
-        double q;
-
-        if (fine->dx[d] <= 0.0) {
-            fprintf(stderr, "prj_mpi_restrict_emf_value: invalid fine cell size\n");
-            exit(EXIT_FAILURE);
-        }
-        q = (x[d] - fine->xmin[d]) / fine->dx[d];
-        if (d == dir) {
-            double r = q - 0.5;
-
-            edge_base = prj_mpi_nearest_int(r - 0.5);
-            if (fabs(r - ((double)edge_base + 0.5)) > tol) {
-                fprintf(stderr, "prj_mpi_restrict_emf_value: coarse edge is not centered on two fine edges\n");
-                exit(EXIT_FAILURE);
-            }
-            idx[d] = edge_base;
-        } else {
-            int edge_idx = prj_mpi_nearest_int(q);
-
-            if (fabs(q - (double)edge_idx) > tol) {
-                fprintf(stderr, "prj_mpi_restrict_emf_value: coarse edge is not fine-aligned\n");
-                exit(EXIT_FAILURE);
-            }
-            idx[d] = edge_idx;
-        }
+    if (!prj_mpi_edge_storage_index_ok(dir, recv_idx[0], recv_idx[1], recv_idx[2])) {
+        fprintf(stderr, "prj_mpi_pack_emf_edge_value: coarse edge index out of storage\n");
+        exit(EXIT_FAILURE);
     }
     for (n = 0; n < 2; ++n) {
         int eidx[3];
         double value;
 
-        eidx[0] = idx[0];
-        eidx[1] = idx[1];
-        eidx[2] = idx[2];
-        eidx[dir] = edge_base + n;
+        eidx[0] = send_idx[0];
+        eidx[1] = send_idx[1];
+        eidx[2] = send_idx[2];
+        eidx[dir] = send_idx[dir] + n;
         if (!prj_mpi_edge_storage_index_ok(dir, eidx[0], eidx[1], eidx[2])) {
-            fprintf(stderr, "prj_mpi_restrict_emf_value: fine edge index out of storage\n");
+            fprintf(stderr, "prj_mpi_pack_emf_edge_value: fine edge index out of storage\n");
             exit(EXIT_FAILURE);
         }
         value = fine->emf[dir][EDGE_IDX(dir, eidx[0], eidx[1], eidx[2])];
         if (!isfinite(value)) {
-            fprintf(stderr, "prj_mpi_restrict_emf_value: non-finite emf\n");
+            fprintf(stderr, "prj_mpi_pack_emf_edge_value: non-finite emf\n");
             exit(EXIT_FAILURE);
         }
         sum += value;
     }
-    return 0.5 * sum;
+    if (prj_mpi_append_triplet(idx_send, count, idx_capacity,
+            coarse_id, prj_mpi_encode_cell_index(recv_idx[0], recv_idx[1], recv_idx[2]), dir) != 0 ||
+        prj_mpi_append_double(value_send, value_count, value_capacity, 0.5 * sum) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static int prj_mpi_pack_emf_restriction(const prj_block *fine,
+    const prj_block *coarse, int **idx_send, double **value_send,
+    int *count, int *idx_capacity, int *value_count, int *value_capacity)
+{
+    int axis[3] = {0, 0, 0};
+    int it_recv[3] = {-100, -100, -100};
+    int it_send[3] = {-100, -100, -100};
+    int touch = 0;
+    int dir;
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        if (fabs(fine->xmax[d] - coarse->xmin[d]) < 1.0e-12 * fine->dx[d]) {
+            axis[d] = 1;
+            touch += 1;
+        } else if (fabs(coarse->xmax[d] - fine->xmin[d]) < 1.0e-12 * fine->dx[d]) {
+            axis[d] = -1;
+            touch += 1;
+        }
+    }
+    if (touch == 0 || touch > 2) {
+        return 0;
+    }
+
+    for (d = 0; d < 3; ++d) {
+        if (axis[d] == 1) {
+            it_send[d] = PRJ_BLOCK_SIZE;
+            it_recv[d] = 0;
+        } else if (axis[d] == -1) {
+            it_send[d] = 0;
+            it_recv[d] = PRJ_BLOCK_SIZE;
+        }
+    }
+
+    for (dir = 0; dir < 3; ++dir) {
+        int tan0;
+        int tan1;
+        int i_offset;
+        int i;
+
+        if (axis[dir] != 0) {
+            continue;
+        }
+        i_offset = ((fine->xmin[dir] + fine->xmax[dir]) <
+            (coarse->xmin[dir] + coarse->xmax[dir])) ? 0 : PRJ_BLOCK_SIZE / 2;
+        tan0 = (dir + 1) % 3;
+        tan1 = (dir + 2) % 3;
+
+        if (axis[tan0] != 0 && axis[tan1] != 0) {
+            for (i = 0; i < PRJ_BLOCK_SIZE; i += 2) {
+                it_send[dir] = i;
+                it_recv[dir] = i / 2 + i_offset;
+                if (prj_mpi_pack_emf_edge_value(fine, coarse->id, dir,
+                        it_send, it_recv, idx_send, value_send, count,
+                        idx_capacity, value_count, value_capacity) != 0) {
+                    return 1;
+                }
+            }
+        } else if (axis[tan0] != 0) {
+            int j;
+            int j_offset = ((fine->xmin[tan1] + fine->xmax[tan1]) <
+                (coarse->xmin[tan1] + coarse->xmax[tan1])) ? 0 : PRJ_BLOCK_SIZE / 2;
+
+            for (i = 0; i < PRJ_BLOCK_SIZE; i += 2) {
+                for (j = 0; j <= PRJ_BLOCK_SIZE; j += 2) {
+                    it_send[tan1] = j;
+                    it_recv[tan1] = j / 2 + j_offset;
+                    it_send[dir] = i;
+                    it_recv[dir] = i / 2 + i_offset;
+                    if (prj_mpi_pack_emf_edge_value(fine, coarse->id, dir,
+                            it_send, it_recv, idx_send, value_send, count,
+                            idx_capacity, value_count, value_capacity) != 0) {
+                        return 1;
+                    }
+                }
+            }
+        } else if (axis[tan1] != 0) {
+            int j;
+            int j_offset = ((fine->xmin[tan0] + fine->xmax[tan0]) <
+                (coarse->xmin[tan0] + coarse->xmax[tan0])) ? 0 : PRJ_BLOCK_SIZE / 2;
+
+            for (i = 0; i < PRJ_BLOCK_SIZE; i += 2) {
+                for (j = 0; j <= PRJ_BLOCK_SIZE; j += 2) {
+                    it_send[tan0] = j;
+                    it_recv[tan0] = j / 2 + j_offset;
+                    it_send[dir] = i;
+                    it_recv[dir] = i / 2 + i_offset;
+                    if (prj_mpi_pack_emf_edge_value(fine, coarse->id, dir,
+                            it_send, it_recv, idx_send, value_send, count,
+                            idx_capacity, value_count, value_capacity) != 0) {
+                        return 1;
+                    }
+                }
+            }
+        } else {
+            fprintf(stderr, "prj_mpi_pack_emf_restriction: unknown emf edge type\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+    return 0;
 }
 
 static int prj_mpi_pack_emf_records(prj_mesh *mesh, prj_mpi *mpi,
@@ -1913,48 +1963,24 @@ static int prj_mpi_pack_emf_records(prj_mesh *mesh, prj_mpi *mpi,
         for (slot = 0; slot < 56; ++slot) {
             int nid = block->slot[slot].id;
             const prj_block *coarse;
-            int dir;
 
             if (nid < 0 || nid >= mesh->nblocks || block->slot[slot].rel_level >= 0 ||
                 mesh->blocks[nid].rank != receiver_rank) {
                 continue;
             }
             coarse = &mesh->blocks[nid];
-            for (dir = 0; dir < 3; ++dir) {
-                int i;
-                int j;
-                int k;
-
-                for (i = 0; i <= prj_mpi_edge_axis_active_max(dir, 0); ++i) {
-                    for (j = 0; j <= prj_mpi_edge_axis_active_max(dir, 1); ++j) {
-                        for (k = 0; k <= prj_mpi_edge_axis_active_max(dir, 2); ++k) {
-                            double x[3];
-                            double value;
-
-                            x[0] = prj_mpi_edge_coord(coarse, 0, dir, i);
-                            x[1] = prj_mpi_edge_coord(coarse, 1, dir, j);
-                            x[2] = prj_mpi_edge_coord(coarse, 2, dir, k);
-                            if (!prj_mpi_edge_point_inside(block, x)) {
-                                continue;
-                            }
-                            value = prj_mpi_restrict_emf_value(block, dir, x);
-                            if (prj_mpi_append_triplet(idx_send, count, &idx_capacity,
-                                    nid, prj_mpi_encode_cell_index(i, j, k), dir) != 0 ||
-                                prj_mpi_append_double(value_send, &value_count, &value_capacity, value) != 0) {
-                                free(idx_send[0]);
-                                free(idx_send[1]);
-                                free(idx_send[2]);
-                                free(*value_send);
-                                idx_send[0] = 0;
-                                idx_send[1] = 0;
-                                idx_send[2] = 0;
-                                *value_send = 0;
-                                *count = 0;
-                                return 1;
-                            }
-                        }
-                    }
-                }
+            if (prj_mpi_pack_emf_restriction(block, coarse, idx_send, value_send,
+                    count, &idx_capacity, &value_count, &value_capacity) != 0) {
+                free(idx_send[0]);
+                free(idx_send[1]);
+                free(idx_send[2]);
+                free(*value_send);
+                idx_send[0] = 0;
+                idx_send[1] = 0;
+                idx_send[2] = 0;
+                *value_send = 0;
+                *count = 0;
+                return 1;
             }
         }
     }
@@ -2035,7 +2061,7 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
                 fprintf(stderr, "prj_mpi_exchange_emf: received edge index out of storage\n");
                 exit(EXIT_FAILURE);
             }
-            flat = FACE_IDX(dir, ii, jj, kk);
+            flat = EDGE_IDX(dir, ii, jj, kk);
             if (PRJ_MHD_FIDELITY_FINER < block->edge_fidelity[dir][flat]) {
                 continue;
             }
