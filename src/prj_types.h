@@ -251,6 +251,47 @@ struct prj_mpi_buffer {
     int *face_data_size_recv;
     int *face_data_idx_recv[3];
     double *face_buffer_recv;
+    int flux_send_count;
+    int flux_recv_count;
+    int *flux_idx_send;
+    double *flux_value_send;
+    int *flux_idx_recv;
+    double *flux_value_recv;
+#if PRJ_MHD
+    int bf_send_record_count[6];
+    int bf_send_value_count[6];
+    int bf_recv_record_count[6];
+    int bf_recv_value_count[6];
+    int bf_send_record_capacity;
+    int bf_send_value_capacity;
+    int bf_recv_record_capacity;
+    int bf_recv_value_capacity;
+    int *bf_headers_send;
+    double *bf_values_send;
+    int *bf_headers_recv;
+    double *bf_values_recv;
+    int emf_send_count;
+    int emf_recv_count;
+    int *emf_idx_send[3];
+    int *emf_idx_recv[3];
+    double *emf_value_send;
+    double *emf_value_recv;
+    int *emf_src_block;
+    int *emf_src_dir;
+    int *emf_src_idx[3];
+    int amr_bf_send_record_count;
+    int amr_bf_send_value_count;
+    int amr_bf_recv_record_count;
+    int amr_bf_recv_value_count;
+    int amr_bf_send_record_capacity;
+    int amr_bf_send_value_capacity;
+    int amr_bf_recv_record_capacity;
+    int amr_bf_recv_value_capacity;
+    int *amr_bf_headers_send;
+    double *amr_bf_values_send;
+    int *amr_bf_headers_recv;
+    double *amr_bf_values_recv;
+#endif
 };
 
 struct prj_mpi {
@@ -258,6 +299,16 @@ struct prj_mpi {
     int rank;
     int neighbor_number;
     prj_mpi_buffer *neighbor_buffer;
+    void *request_buffer;
+    int request_capacity;
+#if PRJ_MHD
+    int *amr_bf_headers;
+    double *amr_bf_values;
+    int amr_bf_record_count;
+    int amr_bf_value_count;
+    int amr_bf_record_capacity;
+    int amr_bf_value_capacity;
+#endif
 };
 
 #endif
