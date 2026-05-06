@@ -12,7 +12,7 @@
 - **prj_boundary** - Physical BCs (outflow, reflect), fill ghost zones, MPI receive.
 - **prj_eos** - Ideal gas or table lookup (rty, rey), prim↔cons conversion, fill mesh.
 - **prj_reconstruct** - Slope limiting (minmod-like) for primitive variables.
-- **prj_riemann** - HLLE/HLLC solvers, shock detection, flux communication.
+- **prj_riemann** - HLLC/HLLD solvers, flux communication.
 - **prj_flux** - Compute interface fluxes, divergence to update.
 - **prj_src** - Source terms: geometry, monopole gravity, radiation velocity gradient.
 - **prj_timeint** - SSP RK2: calc_dt, stage1, stage2, step.

@@ -5,6 +5,17 @@
 
 #include "prj.h"
 
+static double prj_riemann_theta_limiter(double cfmax,
+    double deltau, double deltav, double deltaw)
+{
+    double theta_r;
+
+    theta_r = (-PRJ_MIN(deltau, 0.0) + cfmax) /
+        (-PRJ_MIN(PRJ_MIN(deltav, deltaw), 0.0) + cfmax);
+    theta_r *= theta_r;
+    return PRJ_MIN(1.0, theta_r * theta_r);
+}
+
 #if PRJ_MHD
 #define PRJ_HLLD_SMALL_NUMBER 1.0e-8
 #ifndef PRJ_RIEMANN_DEBUG
@@ -360,9 +371,7 @@ void prj_riemann_hlld(const double *WL, const double *WR,
         prj_riemann_hlld_fail("degenerate contact-speed denominator");
     }
     double cfmax = PRJ_MAX(cfL,cfR);
-    double theta_r = (-PRJ_MIN(deltau,0)+cfmax)/(-PRJ_MIN(PRJ_MIN(deltav,deltaw),0)+cfmax);
-    theta_r *= theta_r;
-    double theta = PRJ_MIN(1.0, theta_r * theta_r);
+    double theta = prj_riemann_theta_limiter(cfmax, deltau, deltav, deltaw);
     SM = (R.rho * R.vx * (SR - R.vx) -
         L.rho * L.vx * (SL - L.vx) + theta*(L.pt - R.pt)) / denom;
     prj_hlld_require_finite(SM, "contact speed");
@@ -438,76 +447,10 @@ static void prj_riemann_state(const double *W, double pressure, double gamma,
     F[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE] * v1;
 }
 
-void prj_riemann_hlle(const double *WL, const double *WR,
-    double pL, double pR, double gL, double gR,
-    const prj_eos *eos, double *flux, double v_face[3])
-{
-    double UL[PRJ_NVAR_CONS];
-    double UR[PRJ_NVAR_CONS];
-    double FL[PRJ_NVAR_CONS];
-    double FR[PRJ_NVAR_CONS];
-    double csL;
-    double csR;
-    double SL;
-    double SR;
-    int v;
-
-    prj_riemann_state(WL, pL, gL, eos, UL, FL, &csL);
-    prj_riemann_state(WR, pR, gR, eos, UR, FR, &csR);
-
-    SL = PRJ_MIN(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
-    SR = PRJ_MAX(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
-
-    if (0.0 <= SL) {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-            flux[v] = FL[v];
-        }
-        if (v_face != 0) {
-            v_face[0] = WL[PRJ_PRIM_V1];
-            v_face[1] = WL[PRJ_PRIM_V2];
-            v_face[2] = WL[PRJ_PRIM_V3];
-        }
-        return;
-    }
-    if (SR <= 0.0) {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-            flux[v] = FR[v];
-        }
-        if (v_face != 0) {
-            v_face[0] = WR[PRJ_PRIM_V1];
-            v_face[1] = WR[PRJ_PRIM_V2];
-            v_face[2] = WR[PRJ_PRIM_V3];
-        }
-        return;
-    }
-
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        flux[v] = (SR * FL[v] - SL * FR[v] + SL * SR * (UR[v] - UL[v])) / (SR - SL);
-    }
-    if (v_face != 0) {
-        double rho_hll = (SR * UR[PRJ_CONS_RHO] - SL * UL[PRJ_CONS_RHO] -
-            (FR[PRJ_CONS_RHO] - FL[PRJ_CONS_RHO])) / (SR - SL);
-        double mom1_hll = (SR * UR[PRJ_CONS_MOM1] - SL * UL[PRJ_CONS_MOM1] -
-            (FR[PRJ_CONS_MOM1] - FL[PRJ_CONS_MOM1])) / (SR - SL);
-        double mom2_hll = (SR * UR[PRJ_CONS_MOM2] - SL * UL[PRJ_CONS_MOM2] -
-            (FR[PRJ_CONS_MOM2] - FL[PRJ_CONS_MOM2])) / (SR - SL);
-        double mom3_hll = (SR * UR[PRJ_CONS_MOM3] - SL * UL[PRJ_CONS_MOM3] -
-            (FR[PRJ_CONS_MOM3] - FL[PRJ_CONS_MOM3])) / (SR - SL);
-        if (rho_hll != 0.0) {
-            v_face[0] = mom1_hll / rho_hll;
-            v_face[1] = mom2_hll / rho_hll;
-            v_face[2] = mom3_hll / rho_hll;
-        } else {
-            v_face[0] = 0.0;
-            v_face[1] = 0.0;
-            v_face[2] = 0.0;
-        }
-    }
-}
-
 void prj_riemann_hllc(const double *WL, const double *WR,
     double pL, double pR, double gL, double gR,
-    const prj_eos *eos, double *flux, double v_face[3])
+    const prj_eos *eos, double *flux, double v_face[3],
+    double deltau, double deltav, double deltaw)
 {
     double UL[PRJ_NVAR_CONS];
     double UR[PRJ_NVAR_CONS];
@@ -519,6 +462,8 @@ void prj_riemann_hllc(const double *WL, const double *WR,
     double SL;
     double SR;
     double SM;
+    double cfmax;
+    double theta;
     double rho_star;
     double e_over_rho;
     int v;
@@ -528,9 +473,11 @@ void prj_riemann_hllc(const double *WL, const double *WR,
 
     SL = PRJ_MIN(WL[PRJ_PRIM_V1] - csL, WR[PRJ_PRIM_V1] - csR);
     SR = PRJ_MAX(WL[PRJ_PRIM_V1] + csL, WR[PRJ_PRIM_V1] + csR);
+    cfmax = PRJ_MAX(csL, csR);
+    theta = prj_riemann_theta_limiter(cfmax, deltau, deltav, deltaw);
 
-    /* Toro (2009), Eq. 10.37: contact wave speed from Rankine-Hugoniot conditions. */
-    SM = (pR - pL +
+    /* Toro (2009), Eq. 10.37 with the HLLD theta pressure-jump limiter. */
+    SM = (theta * (pR - pL) +
         UL[PRJ_CONS_MOM1] * (SL - WL[PRJ_PRIM_V1]) -
         UR[PRJ_CONS_MOM1] * (SR - WR[PRJ_PRIM_V1])) /
         (UL[PRJ_CONS_RHO] * (SL - WL[PRJ_PRIM_V1]) -
@@ -624,41 +571,6 @@ double prj_overlap_length(double amin, double amax, double bmin, double bmax)
 void prj_riemann_set_mesh(prj_mesh *mesh)
 {
     (void)mesh;
-}
-
-int prj_riemann_detect_shock(const double *WL, const double *WR, double pL, double pR)
-{
-    double pressure_ratio;
-    double compression[3];
-    int best_dir;
-
-    if (WL[PRJ_PRIM_EINT] <= 0.0 || WR[PRJ_PRIM_EINT] <= 0.0 ||
-        WL[PRJ_PRIM_RHO] <= 0.0 || WR[PRJ_PRIM_RHO] <= 0.0) {
-        return -1;
-    }
-
-    pressure_ratio = PRJ_MAX(pL, pR) /
-        PRJ_MAX(PRJ_MIN(pL, pR), 1.0e-12);
-    if (pressure_ratio < 1.5 || WR[PRJ_PRIM_V1] - WL[PRJ_PRIM_V1] >= 0.0) {
-        return -1;
-    }
-
-    compression[0] = fabs(WR[PRJ_PRIM_V1] - WL[PRJ_PRIM_V1]);
-    compression[1] = fabs(WR[PRJ_PRIM_V2] - WL[PRJ_PRIM_V2]);
-    compression[2] = fabs(WR[PRJ_PRIM_V3] - WL[PRJ_PRIM_V3]);
-    best_dir = X1DIR;
-    if (compression[X2DIR] > compression[best_dir]) {
-        best_dir = X2DIR;
-    }
-    if (compression[X3DIR] > compression[best_dir]) {
-        best_dir = X3DIR;
-    }
-    if (compression[best_dir] < 2.0 * PRJ_MAX(
-            compression[(best_dir + 1) % 3],
-            compression[(best_dir + 2) % 3])) {
-        return -1;
-    }
-    return best_dir;
 }
 
 /*
