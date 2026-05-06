@@ -2,8 +2,18 @@ CC ?= $(shell command -v mpicc >/dev/null 2>&1 && echo mpicc || echo cc)
 STD := -std=c99
 WARN := -Wall -Wextra -pedantic
 
--include machine.mk
--include setup.mk
+MACHINE_MK := machine.mk
+SETUP_MK := setup.mk
+
+ifeq ($(wildcard $(MACHINE_MK)),)
+$(error $(MACHINE_MK) is required; link or copy one from machines/*.mk)
+endif
+ifeq ($(wildcard $(SETUP_MK)),)
+$(error $(SETUP_MK) is required; link or copy one from setups/*.mk)
+endif
+
+include $(MACHINE_MK)
+include $(SETUP_MK)
 
 GRAVITY ?= 1
 GRAV_DEBUG ?= 0
