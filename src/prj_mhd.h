@@ -8,7 +8,7 @@ void prj_mhd_init(prj_sim *sim);
 void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1);
 void prj_mhd_bf2bc_all(prj_eos *eos, prj_block *block, int use_bf1);
 void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
-    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
+    int buf_lo[3][3], int buf_n[3][3], const double coarse_dx[3],
     prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
     int use_bf1, int use_BJ);
 double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
@@ -37,7 +37,7 @@ static inline void prj_mhd_bf2bc_all(prj_eos *eos, prj_block *block, int use_bf1
 }
 
 static inline void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
-    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
+    int buf_lo[3][3], int buf_n[3][3], const double coarse_dx[3],
     prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
     int use_bf1, int use_BJ)
 {

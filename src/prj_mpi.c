@@ -1423,7 +1423,7 @@ static inline void prj_mpi_bf_compute_inner_fluxes(double u[3][2][2],
 }
 
 static void prj_mpi_bf_prolong_from_buffer(const double *buf[3],
-    const int buf_lo[3][3], const int buf_n[3][3], const double coarse_dx[3],
+    int buf_lo[3][3], int buf_n[3][3], const double coarse_dx[3],
     prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
     int use_bf1, int use_BJ)
 {
