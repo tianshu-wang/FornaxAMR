@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
 
-# User settings
+# User settings. Choose a dump dataset name, or derived variables "pressure", "B", or "vr".
 VARIABLE = "B1"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
@@ -47,6 +47,10 @@ def pressure_from_state(density: np.ndarray, eint: np.ndarray) -> np.ndarray:
     return (gamma - 1.0) * density * eint
 
 
+def magnetic_field_strength(B1: np.ndarray, B2: np.ndarray, B3: np.ndarray) -> np.ndarray:
+    return np.sqrt(B1 * B1 + B2 * B2 + B3 * B3)
+
+
 def block_extent(xmin: np.ndarray, level: int, coord: np.ndarray, root_nx: np.ndarray) -> np.ndarray:
     root_dx = np.array(
         [
@@ -56,6 +60,48 @@ def block_extent(xmin: np.ndarray, level: int, coord: np.ndarray, root_nx: np.nd
         ]
     )
     return root_dx / (2 ** level)
+
+
+def radial_velocity_from_state(
+    coords: np.ndarray,
+    levels: np.ndarray,
+    v1: np.ndarray,
+    v2: np.ndarray,
+    v3: np.ndarray,
+    coord: np.ndarray,
+    root_nx: np.ndarray,
+) -> np.ndarray:
+    vr = np.empty_like(v1, dtype=np.result_type(v1, v2, v3, float))
+    for bid, xmin in enumerate(coords):
+        block_vr = vr[bid]
+        block_v1 = v1[bid]
+        block_v2 = v2[bid]
+        block_v3 = v3[bid]
+        n = block_v1.shape[0]
+        extent = block_extent(xmin, int(levels[bid]), coord, root_nx)
+        dx = extent / n
+        x = xmin[0] + (np.arange(n) + 0.5) * dx[0]
+        y = xmin[1] + (np.arange(n) + 0.5) * dx[1]
+        z = xmin[2] + (np.arange(n) + 0.5) * dx[2]
+        x3d = x[:, None, None]
+        y3d = y[None, :, None]
+        z3d = z[None, None, :]
+        radius = np.sqrt(x3d * x3d + y3d * y3d + z3d * z3d)
+        numerator = block_v1 * x3d + block_v2 * y3d + block_v3 * z3d
+
+        np.divide(numerator, radius, out=block_vr, where=radius > 0.0)
+        block_vr[radius <= 0.0] = 0.0
+    return vr
+
+
+def read_values(h5, variable: str, coords: np.ndarray, levels: np.ndarray, coord: np.ndarray, root_nx: np.ndarray) -> np.ndarray:
+    if variable == "pressure":
+        return pressure_from_state(h5["density"][...], h5["eint"][...])
+    if variable == "B":
+        return magnetic_field_strength(h5["B1"][...], h5["B2"][...], h5["B3"][...])
+    if variable == "vr":
+        return radial_velocity_from_state(coords, levels, h5["v1"][...], h5["v2"][...], h5["v3"][...], coord, root_nx)
+    return h5[variable][...]
 
 
 def plane_axes(plane: str):
@@ -182,10 +228,7 @@ def main() -> None:
             levels = h5["level"][...]
             coord = np.asarray(h5.attrs["coord"], dtype=float) / CM_PER_KM
             root_nx = h5.attrs["root_nx"]
-            if variable == "pressure":
-                values = pressure_from_state(h5["density"][...], h5["eint"][...])
-            else:
-                values = h5[variable][...]
+            values = read_values(h5, variable, coords, levels, coord, root_nx)
         for plane in PLANES:
             plot_plane(output_dir, dump_id, dump_time, coords, levels, values, variable, plane, coord, root_nx)
 
