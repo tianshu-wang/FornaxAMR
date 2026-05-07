@@ -5,15 +5,16 @@ WARN := -Wall -Wextra -pedantic
 MACHINE_MK := machine.mk
 SETUP_MK := setup.mk
 
+ifneq ($(MAKECMDGOALS),clean)
 ifeq ($(wildcard $(MACHINE_MK)),)
 $(error $(MACHINE_MK) is required; link or copy one from machines/*.mk)
 endif
 ifeq ($(wildcard $(SETUP_MK)),)
 $(error $(SETUP_MK) is required; link or copy one from setups/*.mk)
 endif
-
 include $(MACHINE_MK)
 include $(SETUP_MK)
+endif
 
 GRAVITY ?= 1
 GRAV_DEBUG ?= 0

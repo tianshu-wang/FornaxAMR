@@ -555,18 +555,20 @@ void prj_mesh_update_cell_derived_mask(prj_mesh *mesh)
         prj_block *block = &mesh->blocks[bidx];
         int n;
 
-        if (block->id < 0 || block->active != 1 || block->cell_derived_done == 0) {
+        if (block->id < 0 || block->active != 1) {
             continue;
         }
         for (n = 0; n < 56; ++n) {
             const prj_neighbor *slot = &block->slot[n];
             int nid = slot->id;
+            prj_block *neighbor;
 
             if (slot->rel_level != 0 || nid < 0 || nid >= mesh->nblocks ||
                 mesh->blocks[nid].active != 1) {
                 continue;
             }
-            prj_mesh_mark_cell_derived_range(block, slot, 1);
+            neighbor = &mesh->blocks[nid];
+            prj_mesh_mark_cell_derived_range(neighbor, slot, 1);
         }
     }
 
@@ -574,18 +576,20 @@ void prj_mesh_update_cell_derived_mask(prj_mesh *mesh)
         prj_block *block = &mesh->blocks[bidx];
         int n;
 
-        if (block->id < 0 || block->active != 1 || block->cell_derived_done == 0) {
+        if (block->id < 0 || block->active != 1) {
             continue;
         }
         for (n = 0; n < 56; ++n) {
             const prj_neighbor *slot = &block->slot[n];
             int nid = slot->id;
+            prj_block *neighbor;
 
             if (slot->rel_level == 0 || nid < 0 || nid >= mesh->nblocks ||
                 mesh->blocks[nid].active != 1) {
                 continue;
             }
-            prj_mesh_mark_cell_derived_range(block, slot, 0);
+            neighbor = &mesh->blocks[nid];
+            prj_mesh_mark_cell_derived_range(neighbor, slot, 0);
         }
     }
 }
