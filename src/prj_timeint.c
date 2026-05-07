@@ -344,13 +344,15 @@ static void prj_timeint_mhd_set_cons_b_from_bf(const prj_block *block,
     }
 }
 
-static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_array)(prj_block *))
+static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_array)(prj_block *),
+    prj_timer *timer)
 {
     int bidx;
 
     if (mesh == 0 || stage_array == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_update_mesh_emf: invalid input");
     }
+    PRJ_TIMER_START(timer, "mhd_emf_local");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -358,10 +360,17 @@ static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_arra
             prj_timeint_mhd_update_emf(block, stage_array(block));
         }
     }
+    PRJ_TIMER_STOP(timer, "mhd_emf_local");
+    PRJ_TIMER_START(timer, "mhd_emf_send");
     prj_mhd_emf_send(mesh);
+    PRJ_TIMER_STOP(timer, "mhd_emf_send");
+    PRJ_TIMER_START(timer, "mpi_exchange_emf");
     prj_mpi_exchange_emf(mesh, prj_mpi_current());
+    PRJ_TIMER_STOP(timer, "mpi_exchange_emf");
 #if PRJ_MHD_DEBUG
+    PRJ_TIMER_START(timer, "mhd_debug_emf");
     prj_mhd_debug_check_emf(mesh);
+    PRJ_TIMER_STOP(timer, "mhd_debug_emf");
 #endif
 }
 
@@ -532,6 +541,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     (void)bc;
     PRJ_TIMER_START(timer, "stage1");
     PRJ_TIMER_START(timer, "flux_stage1");
+    PRJ_TIMER_START(timer, "flux_local_stage1");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -539,11 +549,14 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             prj_flux_update(eos, rad, block, block->W, block->eosvar, block->flux, 0);
         }
     }
+    PRJ_TIMER_STOP(timer, "flux_local_stage1");
+    PRJ_TIMER_START(timer, "flux_exchange_stage1");
     prj_riemann_flux_send(mesh);
+    PRJ_TIMER_STOP(timer, "flux_exchange_stage1");
     PRJ_TIMER_STOP(timer, "flux_stage1");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_emf_stage1");
-    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage1_array);
+    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage1_array, timer);
     PRJ_TIMER_STOP(timer, "mhd_emf_stage1");
     PRJ_TIMER_START(timer, "mhd_update_bf_stage1");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -564,7 +577,10 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int j;
             int k;
 
+            PRJ_TIMER_START(timer, "src_update_stage1");
             prj_src_update(eos, block, block->W, block->dUdt);
+            PRJ_TIMER_STOP(timer, "src_update_stage1");
+            PRJ_TIMER_START(timer, "cell_update_stage1");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -604,13 +620,20 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     }
                 }
             }
+            PRJ_TIMER_STOP(timer, "cell_update_stage1");
         }
     }
     PRJ_TIMER_STOP(timer, "update_stage1");
     PRJ_TIMER_START(timer, "ghost_fill_stage1");
+    PRJ_TIMER_START(timer, "eos_active_stage1");
     prj_eos_fill_active_cells(mesh, eos, 2);
+    PRJ_TIMER_STOP(timer, "eos_active_stage1");
+    PRJ_TIMER_START(timer, "boundary_ghost_stage1");
     prj_boundary_fill_ghosts(mesh, bc, 2);
+    PRJ_TIMER_STOP(timer, "boundary_ghost_stage1");
+    PRJ_TIMER_START(timer, "eos_mesh_stage1");
     prj_eos_fill_mesh(mesh, eos, 2);
+    PRJ_TIMER_STOP(timer, "eos_mesh_stage1");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_fill_bf_stage1");
     prj_boundary_fill_bf(mesh, bc, 1, eos);
@@ -618,8 +641,12 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 #endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage1");
 #if PRJ_USE_GRAVITY
+    PRJ_TIMER_START(timer, "gravity_reduce_stage1");
     prj_gravity_monopole_reduce(mesh, 2);
+    PRJ_TIMER_STOP(timer, "gravity_reduce_stage1");
+    PRJ_TIMER_START(timer, "gravity_integrate_stage1");
     prj_gravity_monopole_integrate(mesh);
+    PRJ_TIMER_STOP(timer, "gravity_integrate_stage1");
 #endif
     PRJ_TIMER_STOP(timer, "stage1");
 }
@@ -632,6 +659,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     (void)coord;
     PRJ_TIMER_START(timer, "stage2");
     PRJ_TIMER_START(timer, "flux_stage2");
+    PRJ_TIMER_START(timer, "flux_local_stage2");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -639,11 +667,14 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             prj_flux_update(eos, rad, block, block->W1, block->eosvar, block->flux, 1);
         }
     }
+    PRJ_TIMER_STOP(timer, "flux_local_stage2");
+    PRJ_TIMER_START(timer, "flux_exchange_stage2");
     prj_riemann_flux_send(mesh);
+    PRJ_TIMER_STOP(timer, "flux_exchange_stage2");
     PRJ_TIMER_STOP(timer, "flux_stage2");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_emf_stage2");
-    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage2_array);
+    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage2_array, timer);
     PRJ_TIMER_STOP(timer, "mhd_emf_stage2");
     PRJ_TIMER_START(timer, "mhd_update_bf_stage2");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -664,7 +695,10 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int j;
             int k;
 
+            PRJ_TIMER_START(timer, "src_update_stage2");
             prj_src_update(eos, block, block->W1, block->dUdt);
+            PRJ_TIMER_STOP(timer, "src_update_stage2");
+            PRJ_TIMER_START(timer, "cell_update_stage2");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -706,13 +740,20 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     }
                 }
             }
+            PRJ_TIMER_STOP(timer, "cell_update_stage2");
         }
     }
     PRJ_TIMER_STOP(timer, "update_stage2");
     PRJ_TIMER_START(timer, "ghost_fill_stage2");
+    PRJ_TIMER_START(timer, "eos_active_stage2");
     prj_eos_fill_active_cells(mesh, eos, 1);
+    PRJ_TIMER_STOP(timer, "eos_active_stage2");
+    PRJ_TIMER_START(timer, "boundary_ghost_stage2");
     prj_boundary_fill_ghosts(mesh, bc, 1);
+    PRJ_TIMER_STOP(timer, "boundary_ghost_stage2");
+    PRJ_TIMER_START(timer, "eos_mesh_stage2");
     prj_eos_fill_mesh(mesh, eos, 1);
+    PRJ_TIMER_STOP(timer, "eos_mesh_stage2");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_fill_bf_stage2");
     prj_boundary_fill_bf(mesh, bc, 0, eos);
@@ -720,8 +761,12 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 #endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage2");
 #if PRJ_USE_GRAVITY
+    PRJ_TIMER_START(timer, "gravity_reduce_stage2");
     prj_gravity_monopole_reduce(mesh, 1);
+    PRJ_TIMER_STOP(timer, "gravity_reduce_stage2");
+    PRJ_TIMER_START(timer, "gravity_integrate_stage2");
     prj_gravity_monopole_integrate(mesh);
+    PRJ_TIMER_STOP(timer, "gravity_integrate_stage2");
 #endif
     PRJ_TIMER_STOP(timer, "stage2");
 }

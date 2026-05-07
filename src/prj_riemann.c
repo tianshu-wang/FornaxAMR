@@ -5,6 +5,14 @@
 
 #include "prj.h"
 
+#if PRJ_TIMER
+#define PRJ_TIMER_CURRENT_START(name) prj_timer_start(prj_timer_current(), (name))
+#define PRJ_TIMER_CURRENT_STOP(name) prj_timer_stop(prj_timer_current(), (name))
+#else
+#define PRJ_TIMER_CURRENT_START(name) ((void)(name))
+#define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
+#endif
+
 static double prj_riemann_theta_limiter(double cfmax,
     double deltau, double deltav, double deltaw)
 {
@@ -665,6 +673,7 @@ void prj_riemann_flux_send(prj_mesh *mesh)
     my_rank = (mpi != 0) ? mpi->rank : 0;
 
     /* ---- Phase 1: local (same-rank) coarse-fine correction ---- */
+    PRJ_TIMER_CURRENT_START("riemann_flux_local_correction");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
         int n;
@@ -723,6 +732,9 @@ void prj_riemann_flux_send(prj_mesh *mesh)
             }
         }
     }
+    PRJ_TIMER_CURRENT_STOP("riemann_flux_local_correction");
 
+    PRJ_TIMER_CURRENT_START("riemann_flux_mpi_exchange");
     prj_mpi_exchange_fluxes(mesh, mpi);
+    PRJ_TIMER_CURRENT_STOP("riemann_flux_mpi_exchange");
 }

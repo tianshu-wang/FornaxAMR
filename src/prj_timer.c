@@ -3,6 +3,8 @@
 
 #include "prj.h"
 
+static prj_timer *prj_timer_active = 0;
+
 double prj_timer_now(void)
 {
     struct timeval tv;
@@ -32,6 +34,16 @@ void prj_timer_reset(prj_timer *timer)
         timer->entry[i].count = 0;
         timer->entry[i].active = 0;
     }
+}
+
+void prj_timer_set_current(prj_timer *timer)
+{
+    prj_timer_active = timer;
+}
+
+prj_timer *prj_timer_current(void)
+{
+    return prj_timer_active;
 }
 
 static int prj_timer_find(const prj_timer *timer, const char *name)

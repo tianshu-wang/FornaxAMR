@@ -11,6 +11,14 @@
 #include <mpi.h>
 #endif
 
+#if PRJ_TIMER
+#define PRJ_TIMER_CURRENT_START(name) prj_timer_start(prj_timer_current(), (name))
+#define PRJ_TIMER_CURRENT_STOP(name) prj_timer_stop(prj_timer_current(), (name))
+#else
+#define PRJ_TIMER_CURRENT_START(name) ((void)(name))
+#define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
+#endif
+
 static prj_mpi *prj_mpi_active = 0;
 
 #define PRJ_MPI_GHOST_NVAR (PRJ_NVAR_PRIM + PRJ_NVAR_EOSVAR)
@@ -1917,6 +1925,7 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
             fill_kind);
         exit(EXIT_FAILURE);
     }
+    PRJ_TIMER_CURRENT_START("mpi_exchange_bf");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
         int send_record_count = 0;
@@ -1924,6 +1933,7 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
         int recv_record_count = buffer->bf_recv_record_count[fill_kind];
         int recv_value_count = buffer->bf_recv_value_count[fill_kind];
 
+        PRJ_TIMER_CURRENT_START("mpi_bf_pack");
         if (prj_mpi_pack_bf_records(mesh, mpi, buffer->receiver_rank, use_bf1,
                 fill_kind, buffer->bf_headers_send,
                 buffer->bf_send_record_capacity, &send_record_count,
@@ -1934,6 +1944,8 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
             fprintf(stderr, "prj_mpi_exchange_bf: failed to pack Bf records\n");
             exit(EXIT_FAILURE);
         }
+        PRJ_TIMER_CURRENT_STOP("mpi_bf_pack");
+        PRJ_TIMER_CURRENT_START("mpi_bf_sendrecv");
         MPI_Sendrecv(buffer->bf_headers_send,
             send_record_count * PRJ_MPI_BF_HEADER_NINT, MPI_INT,
             buffer->receiver_rank, 301,
@@ -1946,7 +1958,9 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
             recv_value_count, MPI_DOUBLE,
             buffer->receiver_rank, 302,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        PRJ_TIMER_CURRENT_STOP("mpi_bf_sendrecv");
 
+        PRJ_TIMER_CURRENT_START("mpi_bf_apply");
         if (prj_mpi_apply_bf_records(mesh, use_bf1, fill_kind,
                 buffer->bf_headers_recv, recv_record_count,
                 buffer->bf_values_recv,
@@ -1954,7 +1968,9 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
             fprintf(stderr, "prj_mpi_exchange_bf: failed to unpack Bf records\n");
             exit(EXIT_FAILURE);
         }
+        PRJ_TIMER_CURRENT_STOP("mpi_bf_apply");
     }
+    PRJ_TIMER_CURRENT_STOP("mpi_exchange_bf");
 #else
     (void)mesh;
     (void)mpi;
@@ -2322,11 +2338,13 @@ void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi)
     {
         int nb;
 
+        PRJ_TIMER_CURRENT_START("mpi_exchange_amr_mhd_prolongate_bf");
         for (nb = 0; nb < mpi->neighbor_number; ++nb) {
             prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
             int send_counts[2] = {0, 0};
             int recv_counts[2] = {0, 0};
 
+            PRJ_TIMER_CURRENT_START("mpi_amr_bf_pack");
             if (prj_mpi_amr_bf_pack_records(mesh, buffer->receiver_rank,
                     1, buffer->amr_bf_headers_send,
                     buffer->amr_bf_send_record_capacity, &send_counts[0],
@@ -2336,8 +2354,10 @@ void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi)
                     "prj_mpi_exchange_amr_mhd_prolongate_bf: failed to pack Bf records\n");
                 exit(EXIT_FAILURE);
             }
+            PRJ_TIMER_CURRENT_STOP("mpi_amr_bf_pack");
             buffer->amr_bf_send_record_count = send_counts[0];
             buffer->amr_bf_send_value_count = send_counts[1];
+            PRJ_TIMER_CURRENT_START("mpi_amr_bf_sendrecv");
             MPI_Sendrecv(send_counts, 2, MPI_INT, buffer->receiver_rank, 500,
                 recv_counts, 2, MPI_INT, buffer->receiver_rank, 500,
                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
@@ -2367,6 +2387,8 @@ void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi)
                 MPI_DOUBLE,
                 buffer->receiver_rank, 502,
                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            PRJ_TIMER_CURRENT_STOP("mpi_amr_bf_sendrecv");
+            PRJ_TIMER_CURRENT_START("mpi_amr_bf_cache");
             if (prj_mpi_amr_bf_cache_append(mpi,
                     buffer->amr_bf_headers_recv,
                     buffer->amr_bf_recv_record_count,
@@ -2376,7 +2398,9 @@ void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi)
                     "prj_mpi_exchange_amr_mhd_prolongate_bf: failed to cache Bf records\n");
                 exit(EXIT_FAILURE);
             }
+            PRJ_TIMER_CURRENT_STOP("mpi_amr_bf_cache");
         }
+        PRJ_TIMER_CURRENT_STOP("mpi_exchange_amr_mhd_prolongate_bf");
     }
 #else
     (void)mesh;
@@ -2782,15 +2806,19 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
     if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
         return;
     }
+    PRJ_TIMER_CURRENT_START("mpi_exchange_emf_detail");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
         int axis;
         int i;
 
+        PRJ_TIMER_CURRENT_START("mpi_emf_pack");
         if (prj_mpi_pack_emf_values_for_neighbor(mesh, buffer) != 0) {
             fprintf(stderr, "prj_mpi_exchange_emf: failed to pack emf records\n");
             exit(EXIT_FAILURE);
         }
+        PRJ_TIMER_CURRENT_STOP("mpi_emf_pack");
+        PRJ_TIMER_CURRENT_START("mpi_emf_sendrecv");
         for (axis = 0; axis < 3; ++axis) {
             MPI_Sendrecv(buffer->emf_idx_send[axis], buffer->emf_send_count,
                 MPI_INT, buffer->receiver_rank, 401 + axis,
@@ -2802,7 +2830,9 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
             MPI_DOUBLE, buffer->receiver_rank, 404, buffer->emf_value_recv,
             buffer->emf_recv_count, MPI_DOUBLE, buffer->receiver_rank, 404,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        PRJ_TIMER_CURRENT_STOP("mpi_emf_sendrecv");
 
+        PRJ_TIMER_CURRENT_START("mpi_emf_apply");
         for (i = 0; i < buffer->emf_recv_count; ++i) {
             int block_id = buffer->emf_idx_recv[0][i];
             int code = buffer->emf_idx_recv[1][i];
@@ -2837,7 +2867,9 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
             block->emf[dir][flat] = buffer->emf_value_recv[i];
             block->edge_fidelity[dir][flat] = PRJ_MHD_FIDELITY_FINER;
         }
+        PRJ_TIMER_CURRENT_STOP("mpi_emf_apply");
     }
+    PRJ_TIMER_CURRENT_STOP("mpi_exchange_emf_detail");
 #else
     (void)mesh;
     (void)mpi;
@@ -3080,8 +3112,12 @@ void prj_mpi_init(int *argc, char ***argv, prj_mpi *mpi)
 
 void prj_mpi_decompose(prj_mesh *mesh)
 {
+    PRJ_TIMER_CURRENT_START("mpi_decompose_compute");
     prj_mpi_compute_decomposition(mesh);
+    PRJ_TIMER_CURRENT_STOP("mpi_decompose_compute");
+    PRJ_TIMER_CURRENT_START("mpi_decompose_assign_storage");
     prj_mpi_assign_block_storage(mesh);
+    PRJ_TIMER_CURRENT_STOP("mpi_decompose_assign_storage");
 }
 
 void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
@@ -3094,9 +3130,11 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
     if (mesh == 0 || mpi == 0) {
         return;
     }
+    PRJ_TIMER_CURRENT_START("mpi_prepare");
     prj_mpi_clear_neighbors(mpi);
     rank_seen = (int *)calloc((size_t)mpi->totrank, sizeof(*rank_seen));
     if (rank_seen == 0) {
+        PRJ_TIMER_CURRENT_STOP("mpi_prepare");
         return;
     }
     count = 0;
@@ -3127,6 +3165,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
     if (count > 0 && mpi->neighbor_buffer == 0) {
         mpi->neighbor_number = 0;
         free(rank_seen);
+        PRJ_TIMER_CURRENT_STOP("mpi_prepare");
         return;
     }
     count = 0;
@@ -3203,6 +3242,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
     }
 #endif
     free(rank_seen);
+    PRJ_TIMER_CURRENT_STOP("mpi_prepare");
 }
 
 void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind)
@@ -3222,6 +3262,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
         fprintf(stderr, "prj_mpi_exchange_ghosts: missing MPI request buffer\n");
         exit(EXIT_FAILURE);
     }
+    PRJ_TIMER_CURRENT_START("mpi_exchange_ghosts");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
         int record_count;
@@ -3231,7 +3272,9 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
         record_count = prj_mpi_buffer_record_total(buffer->cell_data_size_send, buffer->number);
         recv_count = prj_mpi_buffer_recv_count(buffer);
         cell_size_total = prj_mpi_buffer_record_total(buffer->cell_data_size_recv, recv_count);
+        PRJ_TIMER_CURRENT_START("mpi_ghost_pack");
         prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
+        PRJ_TIMER_CURRENT_STOP("mpi_ghost_pack");
 
         MPI_Irecv(buffer->cell_buffer_recv, cell_size_total * PRJ_MPI_GHOST_NVAR, MPI_DOUBLE, buffer->receiver_rank, 120,
             MPI_COMM_WORLD, &requests[request_count++]);
@@ -3239,8 +3282,11 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
             MPI_COMM_WORLD, &requests[request_count++]);
     }
     if (request_count > 0) {
+        PRJ_TIMER_CURRENT_START("mpi_ghost_wait");
         MPI_Waitall(request_count, requests, MPI_STATUSES_IGNORE);
+        PRJ_TIMER_CURRENT_STOP("mpi_ghost_wait");
     }
+    PRJ_TIMER_CURRENT_START("mpi_ghost_unpack");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
         int total = 0;
@@ -3289,6 +3335,8 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
             }
         }
     }
+    PRJ_TIMER_CURRENT_STOP("mpi_ghost_unpack");
+    PRJ_TIMER_CURRENT_STOP("mpi_exchange_ghosts");
 #else
     (void)mesh;
     (void)mpi;
@@ -3315,14 +3363,17 @@ void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)
         exit(EXIT_FAILURE);
     }
 
+    PRJ_TIMER_CURRENT_START("mpi_exchange_fluxes");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
         int rk = buffer->receiver_rank;
 
+        PRJ_TIMER_CURRENT_START("mpi_flux_pack");
         if (prj_mpi_pack_flux_records_for_neighbor(mesh, mpi, buffer) != 0) {
             fprintf(stderr, "prj_mpi_exchange_fluxes: failed to pack flux records\n");
             exit(EXIT_FAILURE);
         }
+        PRJ_TIMER_CURRENT_STOP("mpi_flux_pack");
         if (buffer->flux_recv_count > 0) {
             MPI_Irecv(buffer->flux_idx_recv, 5 * buffer->flux_recv_count,
                 MPI_INT, rk, 201, MPI_COMM_WORLD, &reqs[req_count++]);
@@ -3338,8 +3389,13 @@ void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)
                 202, MPI_COMM_WORLD, &reqs[req_count++]);
         }
     }
-    if (req_count > 0) MPI_Waitall(req_count, reqs, MPI_STATUSES_IGNORE);
+    if (req_count > 0) {
+        PRJ_TIMER_CURRENT_START("mpi_flux_wait");
+        MPI_Waitall(req_count, reqs, MPI_STATUSES_IGNORE);
+        PRJ_TIMER_CURRENT_STOP("mpi_flux_wait");
+    }
 
+    PRJ_TIMER_CURRENT_START("mpi_flux_unpack");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
         int e;
@@ -3363,6 +3419,8 @@ void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)
                     buffer->flux_value_recv[(size_t)e * PRJ_NVAR_CONS + (size_t)v];
         }
     }
+    PRJ_TIMER_CURRENT_STOP("mpi_flux_unpack");
+    PRJ_TIMER_CURRENT_STOP("mpi_exchange_fluxes");
 #else
     (void)mesh;
     (void)mpi;
@@ -3376,7 +3434,9 @@ double prj_mpi_min_dt(double local_dt)
     double global_dt = local_dt;
 
     if (prj_mpi_active != 0 && prj_mpi_active->totrank > 1) {
+        PRJ_TIMER_CURRENT_START("mpi_allreduce_min_dt");
         MPI_Allreduce(&local_dt, &global_dt, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        PRJ_TIMER_CURRENT_STOP("mpi_allreduce_min_dt");
     }
     return global_dt;
 #else
@@ -3390,7 +3450,9 @@ double prj_mpi_global_sum(double local_val)
     double global_val = local_val;
 
     if (prj_mpi_active != 0 && prj_mpi_active->totrank > 1) {
+        PRJ_TIMER_CURRENT_START("mpi_allreduce_sum");
         MPI_Allreduce(&local_val, &global_val, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        PRJ_TIMER_CURRENT_STOP("mpi_allreduce_sum");
     }
     return global_val;
 #else
@@ -3410,6 +3472,7 @@ void prj_mpi_rebalance(prj_mesh *mesh)
     if (mesh == 0 || prj_mpi_active == 0) {
         return;
     }
+    PRJ_TIMER_CURRENT_START("mpi_rebalance");
     old_ranks = (int *)calloc((size_t)mesh->nblocks, sizeof(*old_ranks));
     counts_before = (int *)calloc((size_t)prj_mpi_active->totrank, sizeof(*counts_before));
     counts_after = (int *)calloc((size_t)prj_mpi_active->totrank, sizeof(*counts_after));
@@ -3417,27 +3480,37 @@ void prj_mpi_rebalance(prj_mesh *mesh)
         free(counts_after);
         free(counts_before);
         free(old_ranks);
+        PRJ_TIMER_CURRENT_STOP("mpi_rebalance");
         return;
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         old_ranks[bidx] = mesh->blocks[bidx].rank;
     }
     prj_mpi_collect_active_counts(mesh, counts_before);
+    PRJ_TIMER_CURRENT_START("mpi_rebalance_decompose");
     prj_mpi_compute_decomposition(mesh);
+    PRJ_TIMER_CURRENT_STOP("mpi_rebalance_decompose");
     did_rebalance = prj_mpi_has_rebalanced(mesh, old_ranks);
     prj_mpi_collect_active_counts(mesh, counts_after);
     if (did_rebalance) {
+        PRJ_TIMER_CURRENT_START("mpi_rebalance_migrate");
         prj_mpi_migrate_active_blocks(mesh, old_ranks);
+        PRJ_TIMER_CURRENT_STOP("mpi_rebalance_migrate");
     }
+    PRJ_TIMER_CURRENT_START("mpi_rebalance_assign_storage");
     prj_mpi_assign_block_storage(mesh);
+    PRJ_TIMER_CURRENT_STOP("mpi_rebalance_assign_storage");
     prj_mpi_prepare(mesh, prj_mpi_active);
     if (did_rebalance &&
             prj_mpi_counts_changed(counts_before, counts_after, prj_mpi_active->totrank)) {
+        PRJ_TIMER_CURRENT_START("mpi_rebalance_print_balance");
         prj_mpi_print_balance(mesh);
+        PRJ_TIMER_CURRENT_STOP("mpi_rebalance_print_balance");
     }
     free(counts_after);
     free(counts_before);
     free(old_ranks);
+    PRJ_TIMER_CURRENT_STOP("mpi_rebalance");
 #else
     if (mesh != 0) {
         prj_mpi_decompose(mesh);

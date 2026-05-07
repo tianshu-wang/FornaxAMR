@@ -12,6 +12,14 @@
 #include <mpi.h>
 #endif
 
+#if PRJ_TIMER
+#define PRJ_TIMER_CURRENT_START(name) prj_timer_start(prj_timer_current(), (name))
+#define PRJ_TIMER_CURRENT_STOP(name) prj_timer_stop(prj_timer_current(), (name))
+#else
+#define PRJ_TIMER_CURRENT_START(name) ((void)(name))
+#define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
+#endif
+
 #define PRJ_GRAVITY_DEFAULT_NBINS 1024
 #define PRJ_GRAVITY_CACHE_INVALID (-1)
 #define PRJ_GRAVITY_CACHE_LAST_VALUE 2.0
@@ -514,6 +522,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
         return;
     }
 
+    PRJ_TIMER_CURRENT_START("gravity_reduce_zero");
     for (idx = 0; idx < grav_mono->nbins; ++idx) {
         grav_mono->ms[idx] = 0.0;
         grav_mono->vol[idx] = 0.0;
@@ -525,7 +534,9 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
         grav_mono->prad_avg[idx] = 0.0;
         grav_mono->vdotF_avg[idx] = 0.0;
     }
+    PRJ_TIMER_CURRENT_STOP("gravity_reduce_zero");
 
+    PRJ_TIMER_CURRENT_START("gravity_reduce_local");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
         int i;
@@ -604,6 +615,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
             }
         }
     }
+    PRJ_TIMER_CURRENT_STOP("gravity_reduce_local");
 
 #if defined(PRJ_ENABLE_MPI)
     {
@@ -620,6 +632,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
             double *restrict global_prad_avg;
             double *restrict global_vdotF_avg;
 
+            PRJ_TIMER_CURRENT_START("gravity_reduce_mpi_allreduce");
             global_ms = (double *)calloc((size_t)grav_mono->nbins, sizeof(*global_ms));
             global_vol = (double *)calloc((size_t)grav_mono->nbins, sizeof(*global_vol));
             global_rho_avg = (double *)calloc((size_t)grav_mono->nbins, sizeof(*global_rho_avg));
@@ -641,6 +654,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
                 free(global_rho_avg);
                 free(global_vol);
                 free(global_ms);
+                PRJ_TIMER_CURRENT_STOP("gravity_reduce_mpi_allreduce");
                 return;
             }
             MPI_Allreduce(grav_mono->ms, global_ms, grav_mono->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
@@ -672,10 +686,12 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
             free(global_rho_avg);
             free(global_vol);
             free(global_ms);
+            PRJ_TIMER_CURRENT_STOP("gravity_reduce_mpi_allreduce");
         }
     }
 #endif
 
+    PRJ_TIMER_CURRENT_START("gravity_reduce_normalize");
     for (idx = 0; idx < grav_mono->nbins; ++idx) {
         double r0 = grav_mono->rf[idx];
         double r1 = grav_mono->rf[idx + 1];
@@ -691,6 +707,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
             grav_mono->vdotF_avg[idx] /= shell_vol;
         }
     }
+    PRJ_TIMER_CURRENT_STOP("gravity_reduce_normalize");
 }
 
 void prj_gravity_monopole_integrate(prj_mesh *mesh)
@@ -707,6 +724,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh)
         return;
     }
 
+    PRJ_TIMER_CURRENT_START("gravity_integrate");
     enclosed_face = (double *)calloc((size_t)grav_mono->nbins + 1U, sizeof(*enclosed_face));
     baryon_mass_face = (double *)calloc((size_t)grav_mono->nbins + 1U, sizeof(*baryon_mass_face));
     gamma_face = (double *)calloc((size_t)grav_mono->nbins + 1U, sizeof(*gamma_face));
@@ -714,6 +732,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh)
         free(gamma_face);
         free(baryon_mass_face);
         free(enclosed_face);
+        PRJ_TIMER_CURRENT_STOP("gravity_integrate");
         return;
     }
 
@@ -861,6 +880,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh)
     free(gamma_face);
     free(baryon_mass_face);
     free(enclosed_face);
+    PRJ_TIMER_CURRENT_STOP("gravity_integrate");
 }
 
 int prj_gravity_apply(void)

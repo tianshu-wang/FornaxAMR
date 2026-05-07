@@ -4,7 +4,45 @@
 
 #include "prj.h"
 
+#if PRJ_TIMER
+#define PRJ_TIMER_CURRENT_START(name) prj_timer_start(prj_timer_current(), (name))
+#define PRJ_TIMER_CURRENT_STOP(name) prj_timer_stop(prj_timer_current(), (name))
+#else
+#define PRJ_TIMER_CURRENT_START(name) ((void)(name))
+#define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
+#endif
+
 static prj_mesh *prj_boundary_active_mesh = 0;
+
+#if PRJ_MHD
+static const char *prj_boundary_bf_local_timer_name(int fill_kind)
+{
+    switch (fill_kind) {
+    case PRJ_BOUNDARY_FILL_SAME_LEVEL:
+        return "boundary_bf_local_same";
+    case PRJ_BOUNDARY_FILL_RESTRICTION:
+        return "boundary_bf_local_restrict";
+    case PRJ_BOUNDARY_FILL_PROLONGATION:
+        return "boundary_bf_local_prolong";
+    default:
+        return "boundary_bf_local_other";
+    }
+}
+
+static const char *prj_boundary_bf_mpi_timer_name(int fill_kind)
+{
+    switch (fill_kind) {
+    case PRJ_BOUNDARY_FILL_SAME_LEVEL:
+        return "boundary_bf_mpi_same";
+    case PRJ_BOUNDARY_FILL_RESTRICTION:
+        return "boundary_bf_mpi_restrict";
+    case PRJ_BOUNDARY_FILL_PROLONGATION:
+        return "boundary_bf_mpi_prolong";
+    default:
+        return "boundary_bf_mpi_other";
+    }
+}
+#endif
 
 static double prj_abs_double(double x)
 {
@@ -969,32 +1007,46 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
         exit(EXIT_FAILURE);
     }
     prj_boundary_active_mesh = mesh;
+    PRJ_TIMER_CURRENT_START("boundary_bf_init_fidelity");
     prj_boundary_init_face_fidelity(mesh);
+    PRJ_TIMER_CURRENT_STOP("boundary_bf_init_fidelity");
+    PRJ_TIMER_CURRENT_START("boundary_bf_physical_pre");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
         }
     }
+    PRJ_TIMER_CURRENT_STOP("boundary_bf_physical_pre");
     for (pass = 0; pass < 3; ++pass) {
         int fill_kind = fill_passes[pass];
+        const char *local_name = prj_boundary_bf_local_timer_name(fill_kind);
+        const char *mpi_name = prj_boundary_bf_mpi_timer_name(fill_kind);
 
+        PRJ_TIMER_CURRENT_START(local_name);
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(&mesh->blocks[i])) {
                 prj_boundary_send_bf(&mesh->blocks[i], use_bf1, fill_kind);
             }
         }
+        PRJ_TIMER_CURRENT_STOP(local_name);
+        PRJ_TIMER_CURRENT_START(mpi_name);
         prj_mpi_exchange_bf(mesh, mpi, use_bf1, fill_kind);
+        PRJ_TIMER_CURRENT_STOP(mpi_name);
     }
+    PRJ_TIMER_CURRENT_START("boundary_bf_physical_post");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
         }
     }
+    PRJ_TIMER_CURRENT_STOP("boundary_bf_physical_post");
+    PRJ_TIMER_CURRENT_START("mhd_bf2bc");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_mhd_bf2bc(eos, &mesh->blocks[i], use_bf1);
         }
     }
+    PRJ_TIMER_CURRENT_STOP("mhd_bf2bc");
 }
 #endif
 
@@ -1013,26 +1065,38 @@ void prj_boundary_fill_ghosts(prj_mesh *mesh, const prj_bc *bc, int stage)
     int i;
 
     prj_boundary_active_mesh = mesh;
+    PRJ_TIMER_CURRENT_START("boundary_physical_face");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_physical(bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
         }
     }
+    PRJ_TIMER_CURRENT_STOP("boundary_physical_face");
+    PRJ_TIMER_CURRENT_START("boundary_local_nonrecon");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_send(&mesh->blocks[i], stage, PRJ_BOUNDARY_FILL_NONRECON);
         }
     }
+    PRJ_TIMER_CURRENT_STOP("boundary_local_nonrecon");
+    PRJ_TIMER_CURRENT_START("boundary_mpi_nonrecon");
     prj_boundary_mpi_recv(mesh, stage, PRJ_BOUNDARY_FILL_NONRECON);
+    PRJ_TIMER_CURRENT_STOP("boundary_mpi_nonrecon");
+    PRJ_TIMER_CURRENT_START("boundary_local_recon");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_send(&mesh->blocks[i], stage, PRJ_BOUNDARY_FILL_RECON);
         }
     }
+    PRJ_TIMER_CURRENT_STOP("boundary_local_recon");
+    PRJ_TIMER_CURRENT_START("boundary_mpi_recon");
     prj_boundary_mpi_recv(mesh, stage, PRJ_BOUNDARY_FILL_RECON);
+    PRJ_TIMER_CURRENT_STOP("boundary_mpi_recon");
+    PRJ_TIMER_CURRENT_START("boundary_physical_all");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(&mesh->blocks[i])) {
             prj_boundary_physical(bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
         }
     }
+    PRJ_TIMER_CURRENT_STOP("boundary_physical_all");
 }

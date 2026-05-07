@@ -23,6 +23,8 @@ typedef struct prj_timer {
 double prj_timer_now(void);
 void prj_timer_init(prj_timer *timer);
 void prj_timer_reset(prj_timer *timer);
+void prj_timer_set_current(prj_timer *timer);
+prj_timer *prj_timer_current(void);
 int prj_timer_start(prj_timer *timer, const char *name);
 int prj_timer_stop(prj_timer *timer, const char *name);
 double prj_timer_total(const prj_timer *timer, const char *name);
