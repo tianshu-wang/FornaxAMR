@@ -14,6 +14,7 @@ OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
 # Set these to None to show the full domain.
+# Ranges are in km.
 X_RANGE = [-2,2]
 Y_RANGE = [-2,2]
 
@@ -23,6 +24,8 @@ COLOR_VMIN = None #1e7
 COLOR_VMAX = None #1e15
 SYMLOG_LINTHRESH = 1.0e-6
 SYMLOG_LINSCALE = 1.0
+CM_PER_KM = 1.0e5
+AXIS_NAMES = ("x", "y", "z")
 
 
 def load_dump_files(output_dir: Path):
@@ -134,10 +137,10 @@ def build_norm(vmin: float, vmax: float):
     raise ValueError(f"unknown COLOR_SCALE '{COLOR_SCALE}'")
 
 
-def plot_plane(output_dir: Path, step: int, coords: np.ndarray, levels: np.ndarray, values: np.ndarray, variable: str, plane: str, coord: np.ndarray, root_nx: np.ndarray) -> None:
+def plot_plane(output_dir: Path, dump_id: str, dump_time: float, coords: np.ndarray, levels: np.ndarray, values: np.ndarray, variable: str, plane: str, coord: np.ndarray, root_nx: np.ndarray) -> None:
     plot_dir = output_dir / "plots" / variable
     plot_dir.mkdir(parents=True, exist_ok=True)
-    plot_path = plot_dir / f"{plane}-{step:05d}.png"
+    plot_path = plot_dir / f"{plane}-{dump_id}.png"
 
     if plot_path.exists():
         return
@@ -153,7 +156,10 @@ def plot_plane(output_dir: Path, step: int, coords: np.ndarray, levels: np.ndarr
         pcm = ax.pcolormesh(xedges, yedges, plane_values.T, shading="flat", cmap="viridis", norm=norm)
         draw_block_grid(ax, xmin, xmax, plane)
     fig.colorbar(pcm, ax=ax, label=variable)
-    ax.set_title(f"{variable} {plane} step {step:05d}")
+    _, axis_a, axis_b = plane_axes(plane)
+    ax.set_title(f"{variable} at time = {dump_time:g} s")
+    ax.set_xlabel(f"{AXIS_NAMES[axis_a]} [km]")
+    ax.set_ylabel(f"{AXIS_NAMES[axis_b]} [km]")
     ax.set_aspect("equal")
     if X_RANGE is not None:
         ax.set_xlim(X_RANGE)
@@ -170,17 +176,18 @@ def main() -> None:
 
     for dump_path in dump_files:
         with h5py.File(dump_path, "r") as h5:
-            step = int(h5.attrs["step"]) if "step" in h5.attrs else int(dump_path.stem.split("_")[-1])
-            coords = h5["coordinate"][...]
+            dump_id = dump_path.stem.split("_")[-1]
+            dump_time = float(h5.attrs["time"])
+            coords = h5["coordinate"][...] / CM_PER_KM
             levels = h5["level"][...]
-            coord = h5.attrs["coord"]
+            coord = np.asarray(h5.attrs["coord"], dtype=float) / CM_PER_KM
             root_nx = h5.attrs["root_nx"]
             if variable == "pressure":
                 values = pressure_from_state(h5["density"][...], h5["eint"][...])
             else:
                 values = h5[variable][...]
         for plane in PLANES:
-            plot_plane(output_dir, step, coords, levels, values, variable, plane, coord, root_nx)
+            plot_plane(output_dir, dump_id, dump_time, coords, levels, values, variable, plane, coord, root_nx)
 
 
 if __name__ == "__main__":
