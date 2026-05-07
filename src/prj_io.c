@@ -1168,7 +1168,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
                     }
                 }
                 free(bf_buffer);
-                prj_mhd_bf2bc((prj_eos *)eos, block, 0);
+                prj_mhd_bf2bc_all((prj_eos *)eos, block, 0);
             }
 #endif
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {

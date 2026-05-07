@@ -1008,6 +1008,7 @@ void prj_amr_init_neighbors(prj_mesh *mesh)
             }
         }
     }
+    prj_mesh_update_cell_derived_mask(mesh);
 }
 
 void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)

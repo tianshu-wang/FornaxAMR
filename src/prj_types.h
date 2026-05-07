@@ -70,7 +70,7 @@ struct prj_block {
     double *W;
     double *W1;
     double *eosvar;
-    int *eos_done;
+    int *cell_derived_done;
     double *U;
     double *dUdt;
     double *flux[3];

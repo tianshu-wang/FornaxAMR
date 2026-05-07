@@ -256,8 +256,6 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                     continue;
                 }
 
-                int eos_done = (slot->rel_level==0) ? 1 : 0;
-
                 for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; ++i) {
                     for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; ++j) {
                         for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; ++k) {
@@ -358,7 +356,6 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                               fprintf(stderr,"slot->rel_level unrecognized: %d\n", slot->rel_level);
                               exit(1);
                             }
-                            neighbor->eos_done[IDX(i,j,k)] = eos_done;
                         }
                     }
                 }

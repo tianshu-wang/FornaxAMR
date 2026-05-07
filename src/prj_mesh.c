@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 #if defined(PRJ_ENABLE_MPI)
 #include <mpi.h>
@@ -171,7 +172,7 @@ static void prj_block_init_empty(prj_block *b)
     b->W = 0;
     b->W1 = 0;
     b->eosvar = 0;
-    b->eos_done = 0;
+    b->cell_derived_done = 0;
     b->U = 0;
     b->dUdt = 0;
     b->flux[0] = 0;
@@ -225,7 +226,7 @@ int prj_block_alloc_data(prj_block *b)
     size_t cons_count;
     size_t total_count;
     double *base;
-    int *eos_done;
+    int *cell_derived_done;
 #if PRJ_MHD
     int *face_fidelity[3] = {0, 0, 0};
     int *edge_fidelity[3] = {0, 0, 0};
@@ -251,7 +252,7 @@ int prj_block_alloc_data(prj_block *b)
     if (base == 0) {
         return 2;
     }
-    eos_done = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eos_done));
+    cell_derived_done = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*cell_derived_done));
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         face_fidelity[d] = (int *)calloc((size_t)PRJ_BLOCK_NFACES, sizeof(*face_fidelity[d]));
@@ -260,7 +261,7 @@ int prj_block_alloc_data(prj_block *b)
 #endif
     ridx = (int *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
     fr = (double *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
-    if (eos_done == 0 ||
+    if (cell_derived_done == 0 ||
 #if PRJ_MHD
         face_fidelity[0] == 0 || face_fidelity[1] == 0 || face_fidelity[2] == 0 ||
         edge_fidelity[0] == 0 || edge_fidelity[1] == 0 || edge_fidelity[2] == 0 ||
@@ -274,7 +275,7 @@ int prj_block_alloc_data(prj_block *b)
             free(face_fidelity[d]);
         }
 #endif
-        free(eos_done);
+        free(cell_derived_done);
         free(base);
         return 2;
     }
@@ -285,7 +286,7 @@ int prj_block_alloc_data(prj_block *b)
     base += prim_count;
     b->eosvar = base;
     base += eosvar_count;
-    b->eos_done = eos_done;
+    b->cell_derived_done = cell_derived_done;
     b->U = base;
     base += cons_count;
     b->dUdt = base;
@@ -339,7 +340,7 @@ void prj_block_free_data(prj_block *b)
     }
 
     free(b->W);
-    free(b->eos_done);
+    free(b->cell_derived_done);
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         free(b->face_fidelity[d]);
@@ -351,7 +352,7 @@ void prj_block_free_data(prj_block *b)
     b->W = 0;
     b->W1 = 0;
     b->eosvar = 0;
-    b->eos_done = 0;
+    b->cell_derived_done = 0;
     b->U = 0;
     b->dUdt = 0;
     b->flux[0] = 0;
@@ -500,6 +501,92 @@ void prj_mesh_mark_base_blocks(prj_mesh *mesh)
         prj_block *block = &mesh->blocks[i];
 
         block->base_block = (block->id >= 0 && block->active == 1) ? 1 : 0;
+    }
+}
+
+static void prj_mesh_mark_cell_derived_range(prj_block *block,
+    const prj_neighbor *slot, int value)
+{
+    int i;
+    int j;
+    int k;
+
+    if (block == 0 || slot == 0 || block->cell_derived_done == 0) {
+        return;
+    }
+    for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
+        for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
+            for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
+                block->cell_derived_done[IDX(i, j, k)] = value;
+            }
+        }
+    }
+}
+
+void prj_mesh_update_cell_derived_mask(prj_mesh *mesh)
+{
+    int bidx;
+
+    if (mesh == 0) {
+        return;
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int i;
+        int j;
+        int k;
+
+        if (block->id < 0 || block->active != 1 || block->cell_derived_done == 0) {
+            continue;
+        }
+        memset(block->cell_derived_done, 0,
+            (size_t)PRJ_BLOCK_NCELLS * sizeof(*block->cell_derived_done));
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    block->cell_derived_done[IDX(i, j, k)] = 1;
+                }
+            }
+        }
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int n;
+
+        if (block->id < 0 || block->active != 1 || block->cell_derived_done == 0) {
+            continue;
+        }
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
+
+            if (slot->rel_level != 0 || nid < 0 || nid >= mesh->nblocks ||
+                mesh->blocks[nid].active != 1) {
+                continue;
+            }
+            prj_mesh_mark_cell_derived_range(block, slot, 1);
+        }
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int n;
+
+        if (block->id < 0 || block->active != 1 || block->cell_derived_done == 0) {
+            continue;
+        }
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
+
+            if (slot->rel_level == 0 || nid < 0 || nid >= mesh->nblocks ||
+                mesh->blocks[nid].active != 1) {
+                continue;
+            }
+            prj_mesh_mark_cell_derived_range(block, slot, 0);
+        }
     }
 }
 
@@ -663,6 +750,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     }
 
 
+    prj_mesh_update_cell_derived_mask(mesh);
     return 0;
 }
 

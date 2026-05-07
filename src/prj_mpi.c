@@ -193,11 +193,6 @@ static int prj_mpi_sample_kind_from_code(int sample_code)
     return sample_code;
 }
 
-static int prj_mpi_sample_is_same_level(int sample_code)
-{
-    return sample_code >= PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET;
-}
-
 static void prj_mpi_assign_block_storage(prj_mesh *mesh)
 {
     int bidx;
@@ -218,6 +213,7 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh)
             prj_block_alloc_data(block);
         }
     }
+    prj_mesh_update_cell_derived_mask(mesh);
 }
 
 static size_t prj_mpi_block_data_count(void)
@@ -3301,7 +3297,6 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
             int code = buffer->cell_data_idx_recv[1][i];
             int sample_code = buffer->cell_data_idx_recv[2][i];
             int sample_kind = prj_mpi_sample_kind_from_code(sample_code);
-            int same_level = prj_mpi_sample_is_same_level(sample_code);
             int ii;
             int jj;
             int kk;
@@ -3329,9 +3324,6 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
             }
             for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
                 block->eosvar[EIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
-            }
-            if (block->eos_done != 0) {
-                block->eos_done[IDX(ii, jj, kk)] = same_level ? 1 : 0;
             }
         }
     }
