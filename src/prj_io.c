@@ -658,6 +658,20 @@ static hid_t prj_io_dump_real_hdf5_type(void)
 #endif
 }
 
+static void prj_io_write_hyperslab(hid_t dset, hid_t mem_type, int ndims,
+    const hsize_t *start, const hsize_t *count, const void *buffer)
+{
+    hid_t mem_space = H5Screate_simple(ndims, count, count);
+    hid_t file_space = H5Dget_space(dset);
+    hid_t dxpl = prj_io_data_xfer_plist();
+
+    H5Sselect_hyperslab(file_space, H5S_SELECT_SET, start, 0, count, 0);
+    H5Dwrite(dset, mem_type, mem_space, file_space, dxpl, buffer);
+    prj_io_close_dxpl(dxpl);
+    H5Sclose(file_space);
+    H5Sclose(mem_space);
+}
+
 static void prj_io_write_attr_double(hid_t obj, const char *name, double value)
 {
     hid_t space = H5Screate(H5S_SCALAR);
@@ -1237,6 +1251,12 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
     int nactive = 0;
     int bidx;
     int active_idx = 0;
+    int local_idx;
+    int var;
+    const prj_block **active_blocks = 0;
+    int *level_buffer = 0;
+    double *coord_buffer = 0;
+    size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
     hid_t dump_real_type = prj_io_dump_real_hdf5_type();
 
     snprintf(filename, sizeof(filename), "%s_%05d.h5", basename, dump_index);
@@ -1313,174 +1333,198 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
 #endif
         active_idx = offset;
     }
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        const prj_block *block = &mesh->blocks[bidx];
-        int var;
+    if (local_active > 0) {
+        active_blocks = (const prj_block **)calloc((size_t)local_active, sizeof(*active_blocks));
+        level_buffer = (int *)calloc((size_t)local_active, sizeof(*level_buffer));
+        coord_buffer = (double *)calloc((size_t)local_active * 3U, sizeof(*coord_buffer));
 
-        if (block->id < 0 || block->active != 1 || !prj_io_is_local_owner(block) || block->W == 0) {
-            continue;
+        if (active_blocks == 0 || level_buffer == 0 || coord_buffer == 0) {
+            prj_io_fail("prj_io_write_dump: metadata allocation failed");
+        }
+        local_idx = 0;
+        for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+            const prj_block *block = &mesh->blocks[bidx];
+
+            if (block->id < 0 || block->active != 1 || !prj_io_is_local_owner(block)) {
+                continue;
+            }
+            if (block->W == 0) {
+                prj_io_fail("prj_io_write_dump: missing W storage");
+            }
+            active_blocks[local_idx] = block;
+            level_buffer[local_idx] = block->level;
+            coord_buffer[(size_t)local_idx * 3U + 0U] = block->xmin[0];
+            coord_buffer[(size_t)local_idx * 3U + 1U] = block->xmin[1];
+            coord_buffer[(size_t)local_idx * 3U + 2U] = block->xmin[2];
+            local_idx += 1;
+        }
+        if (local_idx != local_active) {
+            prj_io_fail("prj_io_write_dump: active block count changed");
         }
         {
             hsize_t start_level[1] = {(hsize_t)active_idx};
-            hsize_t count_level[1] = {1};
-            hid_t mem_level = H5Screate_simple(1, count_level, count_level);
-            hid_t file_level = H5Dget_space(dset_level);
-            int level_value = block->level;
-            hid_t dxpl = prj_io_data_xfer_plist();
+            hsize_t count_level[1] = {(hsize_t)local_active};
 
-            H5Sselect_hyperslab(file_level, H5S_SELECT_SET, start_level, 0, count_level, 0);
-            H5Dwrite(dset_level, H5T_NATIVE_INT, mem_level, file_level, dxpl, &level_value);
-            prj_io_close_dxpl(dxpl);
-            H5Sclose(file_level);
-            H5Sclose(mem_level);
+            prj_io_write_hyperslab(dset_level, H5T_NATIVE_INT, 1, start_level, count_level, level_buffer);
         }
         {
             hsize_t start_coord[2] = {(hsize_t)active_idx, 0};
-            hsize_t count_coord[2] = {1, 3};
-            hid_t mem_coord = H5Screate_simple(2, count_coord, count_coord);
-            hid_t file_coord = H5Dget_space(dset_coord);
-            double coord_value[3];
-            hid_t dxpl = prj_io_data_xfer_plist();
+            hsize_t count_coord[2] = {(hsize_t)local_active, 3};
 
-            coord_value[0] = block->xmin[0];
-            coord_value[1] = block->xmin[1];
-            coord_value[2] = block->xmin[2];
-            H5Sselect_hyperslab(file_coord, H5S_SELECT_SET, start_coord, 0, count_coord, 0);
-            H5Dwrite(dset_coord, H5T_NATIVE_DOUBLE, mem_coord, file_coord, dxpl, coord_value);
-            prj_io_close_dxpl(dxpl);
-            H5Sclose(file_coord);
-            H5Sclose(mem_coord);
+            prj_io_write_hyperslab(dset_coord, H5T_NATIVE_DOUBLE, 2, start_coord, count_coord, coord_buffer);
         }
-        for (var = 0; var < PRJ_NVAR_PRIM; ++var) {
-            hsize_t start_var[4] = {(hsize_t)active_idx, 0, 0, 0};
-            hsize_t count_var[4] = {1, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE};
-            hid_t mem_var = H5Screate_simple(4, count_var, count_var);
-            hid_t file_var = H5Dget_space(dset_var[var]);
-            hid_t dxpl = prj_io_data_xfer_plist();
-            int i;
-            int j;
-            int k;
-            size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
-
 #if PRJ_DUMP_SINGLE_PRECISION
-            float *buffer = (float *)calloc(ncells, sizeof(*buffer));
+        {
+            float *buffer = (float *)calloc((size_t)local_active * ncells, sizeof(*buffer));
 
             if (buffer == 0) {
                 prj_io_fail("prj_io_write_dump: allocation failed");
             }
-            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                        size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
-                        double value = block->W[VIDX(var, i, j, k)];
+            for (var = 0; var < PRJ_NVAR_PRIM; ++var) {
+                hsize_t start_var[4] = {(hsize_t)active_idx, 0, 0, 0};
+                hsize_t count_var[4] = {(hsize_t)local_active, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE};
+
+                for (local_idx = 0; local_idx < local_active; ++local_idx) {
+                    const prj_block *block = active_blocks[local_idx];
+                    int i;
+                    int j;
+                    int k;
+
+                    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                                size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                                double value = block->W[VIDX(var, i, j, k)];
 
 #if PRJ_MHD
-                        if (var == PRJ_PRIM_B1 || var == PRJ_PRIM_B2 || var == PRJ_PRIM_B3) {
-                            value *= mhd_dump_scale;
-                        }
+                                if (var == PRJ_PRIM_B1 || var == PRJ_PRIM_B2 || var == PRJ_PRIM_B3) {
+                                    value *= mhd_dump_scale;
+                                }
 #endif
-                        buffer[cell] = (float)value;
+                                buffer[(size_t)local_idx * ncells + cell] = (float)value;
+                            }
+                        }
                     }
                 }
+                prj_io_write_hyperslab(dset_var[var], H5T_NATIVE_FLOAT, 4, start_var, count_var, buffer);
             }
-            H5Sselect_hyperslab(file_var, H5S_SELECT_SET, start_var, 0, count_var, 0);
-            H5Dwrite(dset_var[var], H5T_NATIVE_FLOAT, mem_var, file_var, dxpl, buffer);
-            #else
-            double *buffer = (double *)calloc(ncells, sizeof(*buffer));
-
-            if (buffer == 0) {
-                prj_io_fail("prj_io_write_dump: allocation failed");
-            }
-            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                        size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
-                        double value = block->W[VIDX(var, i, j, k)];
-
-#if PRJ_MHD
-                        if (var == PRJ_PRIM_B1 || var == PRJ_PRIM_B2 || var == PRJ_PRIM_B3) {
-                            value *= mhd_dump_scale;
-                        }
-#endif
-                        buffer[cell] = value;
-                    }
-                }
-            }
-            H5Sselect_hyperslab(file_var, H5S_SELECT_SET, start_var, 0, count_var, 0);
-            H5Dwrite(dset_var[var], H5T_NATIVE_DOUBLE, mem_var, file_var, dxpl, buffer);
-            #endif
-            prj_io_close_dxpl(dxpl);
             free(buffer);
-            H5Sclose(file_var);
-            H5Sclose(mem_var);
         }
+#else
+        {
+            double *buffer = (double *)calloc((size_t)local_active * ncells, sizeof(*buffer));
+
+            if (buffer == 0) {
+                prj_io_fail("prj_io_write_dump: allocation failed");
+            }
+            for (var = 0; var < PRJ_NVAR_PRIM; ++var) {
+                hsize_t start_var[4] = {(hsize_t)active_idx, 0, 0, 0};
+                hsize_t count_var[4] = {(hsize_t)local_active, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE};
+
+                for (local_idx = 0; local_idx < local_active; ++local_idx) {
+                    const prj_block *block = active_blocks[local_idx];
+                    int i;
+                    int j;
+                    int k;
+
+                    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                                size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                                double value = block->W[VIDX(var, i, j, k)];
+
+#if PRJ_MHD
+                                if (var == PRJ_PRIM_B1 || var == PRJ_PRIM_B2 || var == PRJ_PRIM_B3) {
+                                    value *= mhd_dump_scale;
+                                }
+#endif
+                                buffer[(size_t)local_idx * ncells + cell] = value;
+                            }
+                        }
+                    }
+                }
+                prj_io_write_hyperslab(dset_var[var], H5T_NATIVE_DOUBLE, 4, start_var, count_var, buffer);
+            }
+            free(buffer);
+        }
+#endif
 #if PRJ_MHD
         {
             int dir;
 
             for (dir = 0; dir < 3; ++dir) {
                 hsize_t start_bf[4] = {(hsize_t)active_idx, 0, 0, 0};
-                hsize_t count_bf[4] = {1, dims_bf[dir][1], dims_bf[dir][2], dims_bf[dir][3]};
-                hid_t mem_bf = H5Screate_simple(4, count_bf, count_bf);
-                hid_t file_bf = H5Dget_space(dset_bf[dir]);
-                hid_t dxpl = prj_io_data_xfer_plist();
+                hsize_t count_bf[4] = {(hsize_t)local_active, dims_bf[dir][1], dims_bf[dir][2], dims_bf[dir][3]};
                 int imax = prj_io_mhd_face_axis_max(dir, 0);
                 int jmax = prj_io_mhd_face_axis_max(dir, 1);
                 int kmax = prj_io_mhd_face_axis_max(dir, 2);
-                int i;
-                int j;
-                int k;
                 size_t nfaces = (size_t)(imax + 1) * (size_t)(jmax + 1) * (size_t)(kmax + 1);
-                size_t pos = 0;
-
-                if (block->Bf[dir] == 0) {
-                    prj_io_fail("prj_io_write_dump: missing Bf storage");
-                }
 #if PRJ_DUMP_SINGLE_PRECISION
                 {
-                    float *buffer = (float *)calloc(nfaces, sizeof(*buffer));
+                    float *buffer = (float *)calloc((size_t)local_active * nfaces, sizeof(*buffer));
 
                     if (buffer == 0) {
                         prj_io_fail("prj_io_write_dump: Bf allocation failed");
                     }
-                    for (i = 0; i <= imax; ++i) {
-                        for (j = 0; j <= jmax; ++j) {
-                            for (k = 0; k <= kmax; ++k) {
-                                buffer[pos++] = (float)(block->Bf[dir][FACE_IDX(dir, i, j, k)] * mhd_dump_scale);
+                    for (local_idx = 0; local_idx < local_active; ++local_idx) {
+                        const prj_block *block = active_blocks[local_idx];
+                        int i;
+                        int j;
+                        int k;
+                        size_t pos = 0;
+
+                        if (block->Bf[dir] == 0) {
+                            prj_io_fail("prj_io_write_dump: missing Bf storage");
+                        }
+                        for (i = 0; i <= imax; ++i) {
+                            for (j = 0; j <= jmax; ++j) {
+                                for (k = 0; k <= kmax; ++k) {
+                                    buffer[(size_t)local_idx * nfaces + pos] = (float)(block->Bf[dir][FACE_IDX(dir, i, j, k)] * mhd_dump_scale);
+                                    pos += 1;
+                                }
                             }
                         }
                     }
-                    H5Sselect_hyperslab(file_bf, H5S_SELECT_SET, start_bf, 0, count_bf, 0);
-                    H5Dwrite(dset_bf[dir], H5T_NATIVE_FLOAT, mem_bf, file_bf, dxpl, buffer);
+                    prj_io_write_hyperslab(dset_bf[dir], H5T_NATIVE_FLOAT, 4, start_bf, count_bf, buffer);
                     free(buffer);
                 }
 #else
                 {
-                    double *buffer = (double *)calloc(nfaces, sizeof(*buffer));
+                    double *buffer = (double *)calloc((size_t)local_active * nfaces, sizeof(*buffer));
 
                     if (buffer == 0) {
                         prj_io_fail("prj_io_write_dump: Bf allocation failed");
                     }
-                    for (i = 0; i <= imax; ++i) {
-                        for (j = 0; j <= jmax; ++j) {
-                            for (k = 0; k <= kmax; ++k) {
-                                buffer[pos++] = block->Bf[dir][FACE_IDX(dir, i, j, k)] * mhd_dump_scale;
+                    for (local_idx = 0; local_idx < local_active; ++local_idx) {
+                        const prj_block *block = active_blocks[local_idx];
+                        int i;
+                        int j;
+                        int k;
+                        size_t pos = 0;
+
+                        if (block->Bf[dir] == 0) {
+                            prj_io_fail("prj_io_write_dump: missing Bf storage");
+                        }
+                        for (i = 0; i <= imax; ++i) {
+                            for (j = 0; j <= jmax; ++j) {
+                                for (k = 0; k <= kmax; ++k) {
+                                    buffer[(size_t)local_idx * nfaces + pos] = block->Bf[dir][FACE_IDX(dir, i, j, k)] * mhd_dump_scale;
+                                    pos += 1;
+                                }
                             }
                         }
                     }
-                    H5Sselect_hyperslab(file_bf, H5S_SELECT_SET, start_bf, 0, count_bf, 0);
-                    H5Dwrite(dset_bf[dir], H5T_NATIVE_DOUBLE, mem_bf, file_bf, dxpl, buffer);
+                    prj_io_write_hyperslab(dset_bf[dir], H5T_NATIVE_DOUBLE, 4, start_bf, count_bf, buffer);
                     free(buffer);
                 }
 #endif
-                prj_io_close_dxpl(dxpl);
-                H5Sclose(file_bf);
-                H5Sclose(mem_bf);
             }
         }
 #endif
-        active_idx += 1;
     }
+    free(coord_buffer);
+    free(level_buffer);
+    free(active_blocks);
     H5Dclose(dset_level);
     H5Sclose(space_level);
     H5Dclose(dset_coord);
