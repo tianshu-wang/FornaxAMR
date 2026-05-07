@@ -24,9 +24,12 @@ output_dt = -1
 restart_dt = -1
 
 amr_interval = 1
-amr_estimator = pressure_scale_height
-amr_refine_thresh = 0.4
+amr_estimator = lohner
+amr_lohner_var = pressure
+amr_lohner_eps = 0.01
+amr_refine_thresh = 0.5
 amr_derefine_thresh = 0.1
+
 amr_estimator2 = velocity
 amr_refine_thresh2 = 0.4
 amr_derefine_thresh2 = 0.1
