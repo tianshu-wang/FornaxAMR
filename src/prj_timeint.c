@@ -4,6 +4,10 @@
 
 #include "prj.h"
 
+#ifndef PRJ_FAST_MHD_RAD_CELL_UPDATE
+#define PRJ_FAST_MHD_RAD_CELL_UPDATE 1
+#endif
+
 #if PRJ_TIMER
 #define PRJ_TIMER_START(timer, name) prj_timer_start((timer), (name))
 #define PRJ_TIMER_STOP(timer, name) prj_timer_stop((timer), (name))
@@ -36,6 +40,7 @@ static void prj_timeint_cell_prim(const double *src, int i, int j, int k, double
     }
 }
 
+#if !(PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE)
 static void prj_timeint_cell_cons_store(double *dst, int i, int j, int k, const double *u)
 {
     int v;
@@ -86,6 +91,7 @@ static void prj_timeint_apply_eint_floor(const prj_mesh *mesh, double *u, double
 #endif
         ;
 }
+#endif
 
 #if PRJ_MHD
 static void prj_timeint_mhd_fail(const char *message)
@@ -385,7 +391,9 @@ static double *prj_timeint_stage2_array(prj_block *block)
 }
 #endif
 
-static void prj_timeint_update_dt_src(const prj_block *block, const double *u, int i, int j, int k, double *dt_src)
+static void prj_timeint_update_dt_src_values(const prj_block *block,
+    double rho, double mom1, double mom2, double mom3, double etot,
+    int i, int j, int k, double *dt_src)
 {
     double dt_src_local;
 
@@ -393,16 +401,21 @@ static void prj_timeint_update_dt_src(const prj_block *block, const double *u, i
         return;
     }
 
-    dt_src_local = 0.02 * u[PRJ_CONS_ETOT] /
+    dt_src_local = 0.02 * etot /
         (fabs(block->dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)]) + 1.0e-50);
     if (dt_src_local < *dt_src) {
         *dt_src = dt_src_local;
     }
+#if !PRJ_GRAV_DEBUG
+    (void)rho;
+    (void)mom1;
+    (void)mom2;
+    (void)mom3;
+#endif
 #if PRJ_GRAV_DEBUG
     if (dt_src_local<1e-7) {
         prj_mpi *mpi = prj_mpi_current();
         int rank = mpi != 0 ? mpi->rank : 0;
-        double rho = u[PRJ_CONS_RHO];
         double inv_rho = rho != 0.0 ? 1.0 / rho : 0.0;
         double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
         double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
@@ -413,12 +426,290 @@ static void prj_timeint_update_dt_src(const prj_block *block, const double *u, i
             "[grav debug] shortest dt_src rank=%d block=%d cell=(%d,%d,%d) "
             "x=(%.17e,%.17e,%.17e) rho=%.17e etot=%.17e "
             "v=(%.17e,%.17e,%.17e) accel=%.17e dt_src=%.17e\n",
-            rank, block->id, i, j, k, x1, x2, x3, rho, u[PRJ_CONS_ETOT],
-            u[PRJ_CONS_MOM1] * inv_rho, u[PRJ_CONS_MOM2] * inv_rho,
-            u[PRJ_CONS_MOM3] * inv_rho, accel, dt_src_local);
+            rank, block->id, i, j, k, x1, x2, x3, rho, etot,
+            mom1 * inv_rho, mom2 * inv_rho, mom3 * inv_rho, accel, dt_src_local);
     }
 #endif
 }
+
+#if !(PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE)
+static void prj_timeint_update_dt_src(const prj_block *block, const double *u,
+    int i, int j, int k, double *dt_src)
+{
+    if (u == 0) {
+        return;
+    }
+    prj_timeint_update_dt_src_values(block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
+        u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, dt_src);
+}
+#endif
+
+#if PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE
+static inline double prj_timeint_flux_div_var(const prj_block *block,
+    int v, int i, int j, int k)
+{
+    return -(block->area[X1DIR] *
+            (block->flux[X1DIR][VIDX(v, i + 1, j, k)] -
+                block->flux[X1DIR][VIDX(v, i, j, k)]) +
+        block->area[X2DIR] *
+            (block->flux[X2DIR][VIDX(v, i, j + 1, k)] -
+                block->flux[X2DIR][VIDX(v, i, j, k)]) +
+        block->area[X3DIR] *
+            (block->flux[X3DIR][VIDX(v, i, j, k + 1)] -
+                block->flux[X3DIR][VIDX(v, i, j, k)])) / block->vol;
+}
+
+static inline void prj_timeint_mhd_hydro_cons_from_prim(const double *W,
+    int i, int j, int k, double *rho, double *mom1, double *mom2, double *mom3,
+    double *etot, double *ye, double *b1, double *b2, double *b3)
+{
+    double r = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+    double v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
+    double v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
+    double v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
+    double eint = W[VIDX(PRJ_PRIM_EINT, i, j, k)];
+    double cb1 = W[VIDX(PRJ_PRIM_B1, i, j, k)];
+    double cb2 = W[VIDX(PRJ_PRIM_B2, i, j, k)];
+    double cb3 = W[VIDX(PRJ_PRIM_B3, i, j, k)];
+
+    *rho = r;
+    *mom1 = r * v1;
+    *mom2 = r * v2;
+    *mom3 = r * v3;
+    *etot = r * eint + 0.5 * r * (v1 * v1 + v2 * v2 + v3 * v3) +
+        0.5 * (cb1 * cb1 + cb2 * cb2 + cb3 * cb3);
+    *ye = r * W[VIDX(PRJ_PRIM_YE, i, j, k)];
+    *b1 = cb1;
+    *b2 = cb2;
+    *b3 = cb3;
+}
+
+static void prj_timeint_cell_cons_from_prim_mhd_rad(const double *W,
+    int i, int j, int k, double *u)
+{
+    int field;
+    int group;
+
+    prj_timeint_mhd_hydro_cons_from_prim(W, i, j, k,
+        &u[PRJ_CONS_RHO], &u[PRJ_CONS_MOM1], &u[PRJ_CONS_MOM2],
+        &u[PRJ_CONS_MOM3], &u[PRJ_CONS_ETOT], &u[PRJ_CONS_YE],
+        &u[PRJ_CONS_B1], &u[PRJ_CONS_B2], &u[PRJ_CONS_B3]);
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            u[PRJ_CONS_RAD_E(field, group)] =
+                W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
+            u[PRJ_CONS_RAD_F1(field, group)] =
+                W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
+            u[PRJ_CONS_RAD_F2(field, group)] =
+                W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
+            u[PRJ_CONS_RAD_F3(field, group)] =
+                W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
+        }
+    }
+}
+
+static void prj_timeint_store_mhd_rad_cell(const prj_mesh *mesh, prj_block *block,
+    double *Wdst, int i, int j, int k, double *u)
+{
+    double rho = u[PRJ_CONS_RHO];
+    int field;
+    int group;
+
+    if (rho == 0.0) {
+        Wdst[VIDX(PRJ_PRIM_RHO, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_V1, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_V2, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_V3, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_EINT, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_YE, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_B1, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_B2, i, j, k)] = 0.0;
+        Wdst[VIDX(PRJ_PRIM_B3, i, j, k)] = 0.0;
+    } else {
+        double v1 = u[PRJ_CONS_MOM1] / rho;
+        double v2 = u[PRJ_CONS_MOM2] / rho;
+        double v3 = u[PRJ_CONS_MOM3] / rho;
+        double kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
+        double magnetic_density = 0.5 * (u[PRJ_CONS_B1] * u[PRJ_CONS_B1] +
+            u[PRJ_CONS_B2] * u[PRJ_CONS_B2] + u[PRJ_CONS_B3] * u[PRJ_CONS_B3]);
+        double magnetic = magnetic_density / rho;
+        double eint = u[PRJ_CONS_ETOT] / rho - kinetic - magnetic;
+
+        if (mesh != 0 && mesh->E_floor > 0.0 && eint < mesh->E_floor) {
+            eint = mesh->E_floor;
+            u[PRJ_CONS_ETOT] = rho * (mesh->E_floor + kinetic) + magnetic_density;
+        }
+
+        Wdst[VIDX(PRJ_PRIM_RHO, i, j, k)] = rho;
+        Wdst[VIDX(PRJ_PRIM_V1, i, j, k)] = v1;
+        Wdst[VIDX(PRJ_PRIM_V2, i, j, k)] = v2;
+        Wdst[VIDX(PRJ_PRIM_V3, i, j, k)] = v3;
+        Wdst[VIDX(PRJ_PRIM_EINT, i, j, k)] = eint;
+        Wdst[VIDX(PRJ_PRIM_YE, i, j, k)] = u[PRJ_CONS_YE] / rho;
+        Wdst[VIDX(PRJ_PRIM_B1, i, j, k)] = u[PRJ_CONS_B1];
+        Wdst[VIDX(PRJ_PRIM_B2, i, j, k)] = u[PRJ_CONS_B2];
+        Wdst[VIDX(PRJ_PRIM_B3, i, j, k)] = u[PRJ_CONS_B3];
+    }
+
+    block->U[VIDX(PRJ_CONS_RHO, i, j, k)] = u[PRJ_CONS_RHO];
+    block->U[VIDX(PRJ_CONS_MOM1, i, j, k)] = u[PRJ_CONS_MOM1];
+    block->U[VIDX(PRJ_CONS_MOM2, i, j, k)] = u[PRJ_CONS_MOM2];
+    block->U[VIDX(PRJ_CONS_MOM3, i, j, k)] = u[PRJ_CONS_MOM3];
+    block->U[VIDX(PRJ_CONS_ETOT, i, j, k)] = u[PRJ_CONS_ETOT];
+    block->U[VIDX(PRJ_CONS_YE, i, j, k)] = u[PRJ_CONS_YE];
+    block->U[VIDX(PRJ_CONS_B1, i, j, k)] = u[PRJ_CONS_B1];
+    block->U[VIDX(PRJ_CONS_B2, i, j, k)] = u[PRJ_CONS_B2];
+    block->U[VIDX(PRJ_CONS_B3, i, j, k)] = u[PRJ_CONS_B3];
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int e = PRJ_CONS_RAD_E(field, group);
+            int f1 = PRJ_CONS_RAD_F1(field, group);
+            int f2 = PRJ_CONS_RAD_F2(field, group);
+            int f3 = PRJ_CONS_RAD_F3(field, group);
+
+            block->U[VIDX(e, i, j, k)] = u[e];
+            block->U[VIDX(f1, i, j, k)] = u[f1];
+            block->U[VIDX(f2, i, j, k)] = u[f2];
+            block->U[VIDX(f3, i, j, k)] = u[f3];
+            Wdst[VIDX(e, i, j, k)] = u[e];
+            Wdst[VIDX(f1, i, j, k)] = u[f1];
+            Wdst[VIDX(f2, i, j, k)] = u[f2];
+            Wdst[VIDX(f3, i, j, k)] = u[f3];
+        }
+    }
+}
+
+static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh,
+    prj_rad *rad, prj_eos *eos, prj_block *block, int i, int j, int k,
+    double dt, double *dt_src)
+{
+    double u[PRJ_NVAR_CONS];
+    int field;
+    int group;
+
+    prj_timeint_cell_cons_from_prim_mhd_rad(block->W, i, j, k, u);
+    prj_timeint_update_dt_src_values(block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
+        u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, dt_src);
+
+#define PRJ_STAGE1_UPDATE(v) do { \
+        int vv = (v); \
+        u[vv] += dt * (block->dUdt[VIDX(vv, i, j, k)] + \
+            prj_timeint_flux_div_var(block, vv, i, j, k)); \
+    } while (0)
+
+    PRJ_STAGE1_UPDATE(PRJ_CONS_RHO);
+    PRJ_STAGE1_UPDATE(PRJ_CONS_MOM1);
+    PRJ_STAGE1_UPDATE(PRJ_CONS_MOM2);
+    PRJ_STAGE1_UPDATE(PRJ_CONS_MOM3);
+    PRJ_STAGE1_UPDATE(PRJ_CONS_ETOT);
+    PRJ_STAGE1_UPDATE(PRJ_CONS_YE);
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            PRJ_STAGE1_UPDATE(PRJ_CONS_RAD_E(field, group));
+            PRJ_STAGE1_UPDATE(PRJ_CONS_RAD_F1(field, group));
+            PRJ_STAGE1_UPDATE(PRJ_CONS_RAD_F2(field, group));
+            PRJ_STAGE1_UPDATE(PRJ_CONS_RAD_F3(field, group));
+        }
+    }
+
+#undef PRJ_STAGE1_UPDATE
+
+    prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf1, i, j, k, u);
+    {
+        double T_cell;
+        double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
+
+        prj_rad_freq_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt);
+        prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
+        prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
+    }
+    prj_timeint_store_mhd_rad_cell(mesh, block, block->W1, i, j, k, u);
+}
+
+static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh,
+    prj_rad *rad, prj_eos *eos, prj_block *block, int i, int j, int k,
+    double dt, double *dt_src)
+{
+    double u[PRJ_NVAR_CONS];
+    double rho0;
+    double mom10;
+    double mom20;
+    double mom30;
+    double etot0;
+    double ye0;
+    double b10;
+    double b20;
+    double b30;
+    double rho1;
+    double mom11;
+    double mom21;
+    double mom31;
+    double etot1;
+    double ye1;
+    double b11;
+    double b21;
+    double b31;
+    int field;
+    int group;
+
+    prj_timeint_mhd_hydro_cons_from_prim(block->W, i, j, k,
+        &rho0, &mom10, &mom20, &mom30, &etot0, &ye0, &b10, &b20, &b30);
+    prj_timeint_mhd_hydro_cons_from_prim(block->W1, i, j, k,
+        &rho1, &mom11, &mom21, &mom31, &etot1, &ye1, &b11, &b21, &b31);
+    prj_timeint_update_dt_src_values(block, rho0, mom10, mom20, mom30, etot0,
+        i, j, k, dt_src);
+
+#define PRJ_STAGE2_UPDATE(v, u0v, u1v) do { \
+        int vv = (v); \
+        u[vv] = 0.5 * (u0v) + 0.5 * ((u1v) + dt * \
+            (block->dUdt[VIDX(vv, i, j, k)] + \
+                prj_timeint_flux_div_var(block, vv, i, j, k))); \
+    } while (0)
+
+    PRJ_STAGE2_UPDATE(PRJ_CONS_RHO, rho0, rho1);
+    PRJ_STAGE2_UPDATE(PRJ_CONS_MOM1, mom10, mom11);
+    PRJ_STAGE2_UPDATE(PRJ_CONS_MOM2, mom20, mom21);
+    PRJ_STAGE2_UPDATE(PRJ_CONS_MOM3, mom30, mom31);
+    PRJ_STAGE2_UPDATE(PRJ_CONS_ETOT, etot0, etot1);
+    PRJ_STAGE2_UPDATE(PRJ_CONS_YE, ye0, ye1);
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int e = PRJ_CONS_RAD_E(field, group);
+            int f1 = PRJ_CONS_RAD_F1(field, group);
+            int f2 = PRJ_CONS_RAD_F2(field, group);
+            int f3 = PRJ_CONS_RAD_F3(field, group);
+
+            PRJ_STAGE2_UPDATE(e, block->W[VIDX(e, i, j, k)], block->W1[VIDX(e, i, j, k)]);
+            PRJ_STAGE2_UPDATE(f1, block->W[VIDX(f1, i, j, k)], block->W1[VIDX(f1, i, j, k)]);
+            PRJ_STAGE2_UPDATE(f2, block->W[VIDX(f2, i, j, k)], block->W1[VIDX(f2, i, j, k)]);
+            PRJ_STAGE2_UPDATE(f3, block->W[VIDX(f3, i, j, k)], block->W1[VIDX(f3, i, j, k)]);
+        }
+    }
+
+#undef PRJ_STAGE2_UPDATE
+
+    (void)b10;
+    (void)b20;
+    (void)b30;
+    (void)b11;
+    (void)b21;
+    (void)b31;
+    prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
+    {
+        double T_cell;
+        double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
+
+        prj_rad_freq_flux_apply(rad, block, block->W1, u, i, j, k, lapse_cell, 0.5 * dt);
+        prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
+        prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
+    }
+    prj_timeint_store_mhd_rad_cell(mesh, block, block->W, i, j, k, u);
+}
+#endif
 
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
@@ -584,6 +875,10 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+#if PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE
+                        prj_timeint_update_cell_stage1_mhd_rad(mesh, rad, eos, block,
+                            i, j, k, dt, dt_src);
+#else
                         double w[PRJ_NVAR_PRIM];
                         double u[PRJ_NVAR_CONS];
                         double u1[PRJ_NVAR_CONS];
@@ -617,6 +912,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         prj_timeint_apply_eint_floor(mesh, u1, w);
                         prj_timeint_cell_cons_store(block->U, i, j, k, u1);
                         prj_timeint_cell_prim_store(block->W1, i, j, k, w);
+#endif
                     }
                 }
             }
@@ -702,6 +998,10 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+#if PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE
+                        prj_timeint_update_cell_stage2_mhd_rad(mesh, rad, eos, block,
+                            i, j, k, dt, dt_src);
+#else
                         double w[PRJ_NVAR_PRIM];
                         double u[PRJ_NVAR_CONS];
                         double u1[PRJ_NVAR_CONS];
@@ -737,6 +1037,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         prj_timeint_apply_eint_floor(mesh, u, w);
                         prj_timeint_cell_cons_store(block->U, i, j, k, u);
                         prj_timeint_cell_prim_store(block->W, i, j, k, w);
+#endif
                     }
                 }
             }

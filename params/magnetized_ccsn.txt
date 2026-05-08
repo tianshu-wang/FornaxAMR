@@ -11,7 +11,7 @@ x2max = 3.0e9
 x3min = -3.0e9
 x3max = 3.0e9
 
-root_nx = 2
+root_nx = 4
 max_level = 0
 min_dx = 5e4
 

@@ -43,8 +43,8 @@ typedef struct prj_hlld_state {
     double ye;
     double e;
     double pt;
-    double U[PRJ_NVAR_CONS];
-    double F[PRJ_NVAR_CONS];
+    double U[PRJ_NHYDRO];
+    double F[PRJ_NHYDRO];
 } prj_hlld_state;
 
 typedef struct prj_hlld_star {
@@ -57,7 +57,7 @@ typedef struct prj_hlld_star {
     double bz;
     double ye;
     double e;
-    double U[PRJ_NVAR_CONS];
+    double U[PRJ_NHYDRO];
 } prj_hlld_star;
 
 static void prj_riemann_hlld_fail(const char *message)
@@ -286,7 +286,7 @@ static void prj_hlld_flux_from_jump(const double *F0, double S,
 {
     int v;
 
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
         F[v] = F0[v] + S * (U1[v] - U0[v]);
     }
 }
@@ -297,7 +297,7 @@ static void prj_hlld_flux_from_double_jump(const double *F0, double S0,
 {
     int v;
 
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
         F[v] = F0[v] + S0 * (Ustar[v] - U0[v]) + Sstar * (Uss[v] - Ustar[v]);
     }
 }
@@ -342,6 +342,7 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     int v;
     int bn_small;
 
+    /* HLLD owns only hydro/MHD fluxes; radiation fluxes are built separately. */
     (void)eos;
 
     if (WL == 0 || WR == 0 || flux == 0) {
@@ -359,14 +360,14 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     }
 
     if (0.0 <= SL) {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             flux[v] = L.F[v];
         }
         prj_hlld_face_outputs(L.vx, L.vy, L.vz, L.bx, L.by, L.bz, v_face, Bv1, Bv2);
         return;
     }
     if (SR <= 0.0) {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             flux[v] = R.F[v];
         }
         prj_hlld_face_outputs(R.vx, R.vy, R.vz, R.bx, R.by, R.bz, v_face, Bv1, Bv2);
@@ -429,21 +430,49 @@ static void prj_riemann_state(const double *W, double pressure, double gamma,
     double v1;
     double v2;
     double v3;
+    double eint;
     double etot;
+#if PRJ_MHD
+    double b1;
+    double b2;
+    double b3;
+#endif
     int v;
 
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
         U[v] = 0.0;
         F[v] = 0.0;
     }
 
-    prj_eos_prim2cons((prj_eos *)eos, (double *)W, U);
-
+    /* HLLC owns only hydro/MHD fluxes; radiation fluxes are built separately. */
+    (void)eos;
     rho = W[PRJ_PRIM_RHO];
     v1 = W[PRJ_PRIM_V1];
     v2 = W[PRJ_PRIM_V2];
     v3 = W[PRJ_PRIM_V3];
-    etot = U[PRJ_CONS_ETOT];
+    eint = W[PRJ_PRIM_EINT];
+#if PRJ_MHD
+    b1 = W[PRJ_PRIM_B1];
+    b2 = W[PRJ_PRIM_B2];
+    b3 = W[PRJ_PRIM_B3];
+#endif
+    etot = rho * eint + 0.5 * rho * (v1 * v1 + v2 * v2 + v3 * v3)
+#if PRJ_MHD
+        + 0.5 * (b1 * b1 + b2 * b2 + b3 * b3)
+#endif
+        ;
+
+    U[PRJ_CONS_RHO] = rho;
+    U[PRJ_CONS_MOM1] = rho * v1;
+    U[PRJ_CONS_MOM2] = rho * v2;
+    U[PRJ_CONS_MOM3] = rho * v3;
+    U[PRJ_CONS_ETOT] = etot;
+    U[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE];
+#if PRJ_MHD
+    U[PRJ_CONS_B1] = b1;
+    U[PRJ_CONS_B2] = b2;
+    U[PRJ_CONS_B3] = b3;
+#endif
 
     *cs = sqrt(gamma * pressure / rho);
 
@@ -460,11 +489,11 @@ void prj_riemann_hllc(const double *WL, const double *WR,
     const prj_eos *eos, double *flux, double v_face[3],
     double deltau, double deltav, double deltaw)
 {
-    double UL[PRJ_NVAR_CONS];
-    double UR[PRJ_NVAR_CONS];
-    double FL[PRJ_NVAR_CONS];
-    double FR[PRJ_NVAR_CONS];
-    double Ustar[PRJ_NVAR_CONS];
+    double UL[PRJ_NHYDRO];
+    double UR[PRJ_NHYDRO];
+    double FL[PRJ_NHYDRO];
+    double FR[PRJ_NHYDRO];
+    double Ustar[PRJ_NHYDRO];
     double csL;
     double csR;
     double SL;
@@ -492,7 +521,7 @@ void prj_riemann_hllc(const double *WL, const double *WR,
             UR[PRJ_CONS_RHO] * (SR - WR[PRJ_PRIM_V1]));
 
     if (0.0 <= SL) {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             flux[v] = FL[v];
         }
         if (v_face != 0) {
@@ -503,7 +532,7 @@ void prj_riemann_hllc(const double *WL, const double *WR,
         return;
     }
     if (SR <= 0.0) {
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             flux[v] = FR[v];
         }
         if (v_face != 0) {
@@ -527,7 +556,7 @@ void prj_riemann_hllc(const double *WL, const double *WR,
     }
     if (0.0 <= SM) {
         /* Toro (2009), Eqs. 10.33-10.36: left star state. */
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             Ustar[v] = UL[v];
         }
         rho_star = UL[PRJ_CONS_RHO] * (SL - WL[PRJ_PRIM_V1]) / (SL - SM);
@@ -539,12 +568,12 @@ void prj_riemann_hllc(const double *WL, const double *WR,
             (SM - WL[PRJ_PRIM_V1]) * (SM + pL / (UL[PRJ_CONS_RHO] * (SL - WL[PRJ_PRIM_V1])));
         Ustar[PRJ_CONS_ETOT] = rho_star * e_over_rho;
         Ustar[PRJ_CONS_YE] = rho_star * WL[PRJ_PRIM_YE];
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             flux[v] = FL[v] + SL * (Ustar[v] - UL[v]);
         }
     } else {
         /* Toro (2009), Eqs. 10.33-10.36 with right star state. */
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             Ustar[v] = UR[v];
         }
         rho_star = UR[PRJ_CONS_RHO] * (SR - WR[PRJ_PRIM_V1]) / (SR - SM);
@@ -556,7 +585,7 @@ void prj_riemann_hllc(const double *WL, const double *WR,
             (SM - WR[PRJ_PRIM_V1]) * (SM + pR / (UR[PRJ_CONS_RHO] * (SR - WR[PRJ_PRIM_V1])));
         Ustar[PRJ_CONS_ETOT] = rho_star * e_over_rho;
         Ustar[PRJ_CONS_YE] = rho_star * WR[PRJ_PRIM_YE];
-        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
             flux[v] = FR[v] + SR * (Ustar[v] - UR[v]);
         }
     }
