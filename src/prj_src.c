@@ -187,8 +187,8 @@ static void prj_src_rad_m1_pressure(double E, double F1, double F2, double F3,
  * once the energy-space-flux divergence has been split off, and they appear as
  * pure cell-local sources:
  *
- *     ∂_t E_g   += (∂_j v_i) P^{ji}_g                          (Eq. 12a piece)
- *     ∂_t F_{gj} += (∂_j v_i) F_{gi}                            (Eq. 12b piece)
+ *     ∂_t E_g   -= (∂_j v_i) P^{ji}_g                          (Eq. 12a piece)
+ *     ∂_t F_{gj} -= (∂_j v_i) F_{gi}                            (Eq. 12b piece)
  *
  * Indices: i,j ∈ {1,2,3}; sums over i (and i,j for the energy term).  ∂_j v_i is
  * built by central differencing the face-centred Riemann velocities stored in
@@ -286,7 +286,7 @@ void prj_src_radiation_vel_grad(const prj_block *block,
                         }
                         /* GR lapse: same α(r) factor that multiplies the
                          * spatial radiation flux and the gravity source. */
-                        dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] += lapse * dE_src;
+                        dUdt[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] -= lapse * dE_src;
 
                         /* Flux: dF_j/dt += sum_i (∂_j v_i) F_i. */
                         {
@@ -301,7 +301,7 @@ void prj_src_radiation_vel_grad(const prj_block *block,
                                 for (ii = 0; ii < 3; ++ii) {
                                     dFj += dvdx[jj][ii] * F[ii];
                                 }
-                                dUdt[VIDX(fi[jj], i, j, k)] += lapse * dFj;
+                                dUdt[VIDX(fi[jj], i, j, k)] -= lapse * dFj;
                             }
                         }
                     }
