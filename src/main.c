@@ -389,17 +389,12 @@ int main(int argc, char *argv[])
     PRJ_TIMER_START(&timer, "initial_eos_active");
     prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
     PRJ_TIMER_STOP(&timer, "initial_eos_active");
-    PRJ_TIMER_START(&timer, "initial_ghost_fill");
-    prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-    PRJ_TIMER_STOP(&timer, "initial_ghost_fill");
+    PRJ_TIMER_START(&timer, "initial_ghost_bf_fill");
+    prj_boundary_fill_ghosts_and_bf(&sim.mesh, &sim.bc, 1, 0, &sim.eos);
+    PRJ_TIMER_STOP(&timer, "initial_ghost_bf_fill");
     PRJ_TIMER_START(&timer, "initial_eos_mesh");
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
     PRJ_TIMER_STOP(&timer, "initial_eos_mesh");
-#if PRJ_MHD
-    PRJ_TIMER_START(&timer, "initial_mhd_fill_bf");
-    prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0, &sim.eos);
-    PRJ_TIMER_STOP(&timer, "initial_mhd_fill_bf");
-#endif
 #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(&timer, "initial_gravity_reduce");
     prj_gravity_monopole_reduce(&sim.mesh, 1);
@@ -521,17 +516,12 @@ int main(int argc, char *argv[])
                 PRJ_TIMER_START(&timer, "post_amr_eos_active");
                 prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
                 PRJ_TIMER_STOP(&timer, "post_amr_eos_active");
-                PRJ_TIMER_START(&timer, "post_amr_boundary_ghosts");
-                prj_boundary_fill_ghosts(&sim.mesh, &sim.bc, 1);
-                PRJ_TIMER_STOP(&timer, "post_amr_boundary_ghosts");
+                PRJ_TIMER_START(&timer, "post_amr_ghost_bf_fill");
+                prj_boundary_fill_ghosts_and_bf(&sim.mesh, &sim.bc, 1, 0, &sim.eos);
+                PRJ_TIMER_STOP(&timer, "post_amr_ghost_bf_fill");
                 PRJ_TIMER_START(&timer, "post_amr_eos_mesh");
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
                 PRJ_TIMER_STOP(&timer, "post_amr_eos_mesh");
-            #if PRJ_MHD
-                PRJ_TIMER_START(&timer, "post_amr_mhd_fill_bf");
-                prj_boundary_fill_bf(&sim.mesh, &sim.bc, 0, &sim.eos);
-                PRJ_TIMER_STOP(&timer, "post_amr_mhd_fill_bf");
-            #endif
                 PRJ_TIMER_STOP(&timer, "ghost_fill_post_amr");
             #if PRJ_USE_GRAVITY
                 PRJ_TIMER_START(&timer, "post_amr_gravity_reduce");

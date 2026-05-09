@@ -921,17 +921,12 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_START(timer, "eos_active_stage1");
     prj_eos_fill_active_cells(mesh, eos, 2);
     PRJ_TIMER_STOP(timer, "eos_active_stage1");
-    PRJ_TIMER_START(timer, "boundary_ghost_stage1");
-    prj_boundary_fill_ghosts(mesh, bc, 2);
-    PRJ_TIMER_STOP(timer, "boundary_ghost_stage1");
+    PRJ_TIMER_START(timer, "boundary_ghost_bf_stage1");
+    prj_boundary_fill_ghosts_and_bf(mesh, bc, 2, 1, eos);
+    PRJ_TIMER_STOP(timer, "boundary_ghost_bf_stage1");
     PRJ_TIMER_START(timer, "eos_mesh_stage1");
     prj_eos_fill_mesh(mesh, eos, 2);
     PRJ_TIMER_STOP(timer, "eos_mesh_stage1");
-#if PRJ_MHD
-    PRJ_TIMER_START(timer, "mhd_fill_bf_stage1");
-    prj_boundary_fill_bf(mesh, bc, 1, eos);
-    PRJ_TIMER_STOP(timer, "mhd_fill_bf_stage1");
-#endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage1");
 #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(timer, "gravity_reduce_stage1");
@@ -1051,17 +1046,12 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_START(timer, "eos_active_stage2");
     prj_eos_fill_active_cells(mesh, eos, 1);
     PRJ_TIMER_STOP(timer, "eos_active_stage2");
-    PRJ_TIMER_START(timer, "boundary_ghost_stage2");
-    prj_boundary_fill_ghosts(mesh, bc, 1);
-    PRJ_TIMER_STOP(timer, "boundary_ghost_stage2");
+    PRJ_TIMER_START(timer, "boundary_ghost_bf_stage2");
+    prj_boundary_fill_ghosts_and_bf(mesh, bc, 1, 0, eos);
+    PRJ_TIMER_STOP(timer, "boundary_ghost_bf_stage2");
     PRJ_TIMER_START(timer, "eos_mesh_stage2");
     prj_eos_fill_mesh(mesh, eos, 1);
     PRJ_TIMER_STOP(timer, "eos_mesh_stage2");
-#if PRJ_MHD
-    PRJ_TIMER_START(timer, "mhd_fill_bf_stage2");
-    prj_boundary_fill_bf(mesh, bc, 0, eos);
-    PRJ_TIMER_STOP(timer, "mhd_fill_bf_stage2");
-#endif
     PRJ_TIMER_STOP(timer, "ghost_fill_stage2");
 #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(timer, "gravity_reduce_stage2");

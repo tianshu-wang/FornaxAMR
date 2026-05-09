@@ -180,16 +180,8 @@ static void prj_mpi_decode_cell_index(int code, int *i, int *j, int *k)
     *i = code - PRJ_NGHOST;
 }
 
-static int prj_mpi_sample_code(int sample_kind, int same_level)
-{
-    return sample_kind + (same_level != 0 ? PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET : 0);
-}
-
 static int prj_mpi_sample_kind_from_code(int sample_code)
 {
-    if (sample_code >= PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET) {
-        return sample_code - PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET;
-    }
     return sample_code;
 }
 
@@ -607,7 +599,6 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
         for (n = 0; n < 56; ++n) {
             const prj_neighbor *slot = &block->slot[n];
             int nid = slot->id;
-            const prj_block *neighbor;
             int i;
             int j;
             int k;
@@ -617,14 +608,14 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != buffer->receiver_rank) {
                 continue;
             }
-            neighbor = &mesh->blocks[nid];
-            if (slot->rel_level <= 0) {
-                sample_kind = PRJ_BOUNDARY_FILL_NONRECON;
+            if (slot->rel_level == 0) {
+                sample_kind = PRJ_BOUNDARY_FILL_SAME_LEVEL;
+            } else if (slot->rel_level < 0) {
+                sample_kind = PRJ_BOUNDARY_FILL_RESTRICTION;
             } else {
-                sample_kind = PRJ_BOUNDARY_FILL_RECON;
+                sample_kind = PRJ_BOUNDARY_FILL_PROLONGATION;
             }
-            sample_code = prj_mpi_sample_code(sample_kind,
-                block->level == neighbor->level);
+            sample_code = sample_kind;
 
             for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
                 for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
@@ -762,8 +753,9 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
             int v;
 
             int sample_kind;
-            if(slot->rel_level<=0){sample_kind=PRJ_BOUNDARY_FILL_NONRECON;}
-            else{sample_kind=PRJ_BOUNDARY_FILL_RECON;}
+            if (slot->rel_level == 0) { sample_kind = PRJ_BOUNDARY_FILL_SAME_LEVEL; }
+            else if (slot->rel_level < 0) { sample_kind = PRJ_BOUNDARY_FILL_RESTRICTION; }
+            else { sample_kind = PRJ_BOUNDARY_FILL_PROLONGATION; }
 
             if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != buffer->receiver_rank) {
                 continue;
@@ -772,7 +764,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
             for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; ++i) {
                 for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; ++j) {
                     for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; ++k) {
-                        if (fill_kind != PRJ_BOUNDARY_FILL_ALL && sample_kind != fill_kind) {
+                        if (sample_kind != fill_kind) {
                             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                                 buffer->cell_buffer_send[pos++] = 0.0;
                             }
@@ -3308,7 +3300,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
                 pos += PRJ_MPI_GHOST_NVAR;
                 continue;
             }
-            if (sample_kind < 0 || (fill_kind != 2 && sample_kind != fill_kind)) {
+            if (sample_kind < 0 || sample_kind != fill_kind) {
                 pos += PRJ_MPI_GHOST_NVAR;
                 continue;
             }
@@ -3334,6 +3326,135 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
     (void)mpi;
     (void)stage;
     (void)fill_kind;
+#endif
+}
+
+void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
+{
+#if defined(PRJ_ENABLE_MPI)
+    int nb;
+    MPI_Request *requests;
+    int request_count;
+
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1 || mpi->neighbor_number == 0) {
+        return;
+    }
+    requests = (MPI_Request *)mpi->request_buffer;
+    request_count = 0;
+    if (requests == 0 || mpi->request_capacity < 6 * mpi->neighbor_number) {
+        fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: missing MPI request buffer\n");
+        exit(EXIT_FAILURE);
+    }
+    PRJ_TIMER_CURRENT_START("mpi_exchange_ghosts_and_bf");
+    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+        int record_count = prj_mpi_buffer_record_total(buffer->cell_data_size_send, buffer->number);
+        int recv_count = prj_mpi_buffer_recv_count(buffer);
+        int cell_size_total = prj_mpi_buffer_record_total(buffer->cell_data_size_recv, recv_count);
+
+        prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
+        MPI_Irecv(buffer->cell_buffer_recv, cell_size_total * PRJ_MPI_GHOST_NVAR, MPI_DOUBLE,
+            buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
+        MPI_Isend(buffer->cell_buffer_send, record_count * PRJ_MPI_GHOST_NVAR, MPI_DOUBLE,
+            buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
+#if PRJ_MHD
+        {
+            int send_record_count = 0;
+            int send_value_count = 0;
+            int recv_record_count = buffer->bf_recv_record_count[fill_kind];
+            int recv_value_count = buffer->bf_recv_value_count[fill_kind];
+
+            if (prj_mpi_pack_bf_records(mesh, mpi, buffer->receiver_rank, use_bf1,
+                    fill_kind, buffer->bf_headers_send,
+                    buffer->bf_send_record_capacity, &send_record_count,
+                    buffer->bf_values_send, buffer->bf_send_value_capacity,
+                    &send_value_count) != 0 ||
+                send_record_count != buffer->bf_send_record_count[fill_kind] ||
+                send_value_count != buffer->bf_send_value_count[fill_kind]) {
+                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to pack Bf records\n");
+                exit(EXIT_FAILURE);
+            }
+            MPI_Irecv(buffer->bf_headers_recv,
+                recv_record_count * PRJ_MPI_BF_HEADER_NINT, MPI_INT,
+                buffer->receiver_rank, 301, MPI_COMM_WORLD, &requests[request_count++]);
+            MPI_Isend(buffer->bf_headers_send,
+                send_record_count * PRJ_MPI_BF_HEADER_NINT, MPI_INT,
+                buffer->receiver_rank, 301, MPI_COMM_WORLD, &requests[request_count++]);
+            MPI_Irecv(buffer->bf_values_recv, recv_value_count, MPI_DOUBLE,
+                buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
+            MPI_Isend(buffer->bf_values_send, send_value_count, MPI_DOUBLE,
+                buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
+        }
+#else
+        (void)use_bf1;
+#endif
+    }
+    if (request_count > 0) {
+        MPI_Waitall(request_count, requests, MPI_STATUSES_IGNORE);
+    }
+    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+        int total = 0;
+        int pos = 0;
+        int i;
+
+        for (i = 0; buffer->cell_data_size_recv != 0 && buffer->cell_data_size_recv[i] >= 0; ++i) {
+            total += buffer->cell_data_size_recv[i];
+        }
+        for (i = 0; i < total; ++i) {
+            int block_id = buffer->cell_data_idx_recv[0][i];
+            int code = buffer->cell_data_idx_recv[1][i];
+            int sample_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv[2][i]);
+            int ii;
+            int jj;
+            int kk;
+            int v;
+            prj_block *block;
+            double *dst;
+
+            if (block_id < 0 || block_id >= mesh->nblocks) {
+                pos += PRJ_MPI_GHOST_NVAR;
+                continue;
+            }
+            if (sample_kind < 0 || sample_kind != fill_kind) {
+                pos += PRJ_MPI_GHOST_NVAR;
+                continue;
+            }
+            block = &mesh->blocks[block_id];
+            if (block->rank != mpi->rank || block->W == 0 || block->eosvar == 0) {
+                pos += PRJ_MPI_GHOST_NVAR;
+                continue;
+            }
+            dst = prj_mpi_stage_array(block, stage);
+            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
+            for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                dst[VIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
+            }
+            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+                block->eosvar[EIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
+            }
+        }
+#if PRJ_MHD
+        {
+            int recv_record_count = buffer->bf_recv_record_count[fill_kind];
+            int recv_value_count = buffer->bf_recv_value_count[fill_kind];
+
+            if (prj_mpi_apply_bf_records(mesh, use_bf1, fill_kind,
+                    buffer->bf_headers_recv, recv_record_count,
+                    buffer->bf_values_recv, recv_value_count) != 0) {
+                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to apply Bf records\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+#endif
+    }
+    PRJ_TIMER_CURRENT_STOP("mpi_exchange_ghosts_and_bf");
+#else
+    (void)mesh;
+    (void)mpi;
+    (void)stage;
+    (void)fill_kind;
+    (void)use_bf1;
 #endif
 }
 

@@ -5,6 +5,7 @@ void prj_mpi_init(int *argc, char ***argv, prj_mpi *mpi);
 void prj_mpi_decompose(prj_mesh *mesh);
 void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi);
 void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind);
+void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1);
 void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi);
 void prj_mpi_exchange_fluxes_and_emf(prj_mesh *mesh, prj_mpi *mpi);
 #if PRJ_MHD
