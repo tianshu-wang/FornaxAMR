@@ -16,7 +16,7 @@ max_level = 3
 
 cfl = 0.4
 t_end = 10.0
-max_steps = 1000
+max_steps = 5
 output_interval = 1
 restart_interval = -1
 output_dt = -1
@@ -30,7 +30,7 @@ mhd_init = uniform
 B_norm = 1.0
 B_scale = 1.0
 
-output_dir = output/dump
+output_dir = output/dump1
 
 bc_x1_inner = outflow
 bc_x1_outer = outflow

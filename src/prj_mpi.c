@@ -3071,10 +3071,10 @@ static int prj_mpi_prepare_request_buffer(prj_mpi *mpi)
     if (mpi->neighbor_number <= 0) {
         return 0;
     }
-    if (mpi->neighbor_number > INT_MAX / 4) {
+    if (mpi->neighbor_number > INT_MAX / 12) {
         return 1;
     }
-    capacity = 4 * mpi->neighbor_number;
+    capacity = 12 * mpi->neighbor_number;
     mpi->request_buffer = calloc((size_t)capacity, sizeof(MPI_Request));
     if (mpi->request_buffer == 0) {
         return 1;
@@ -3413,6 +3413,170 @@ void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)
     }
     PRJ_TIMER_CURRENT_STOP("mpi_flux_unpack");
     PRJ_TIMER_CURRENT_STOP("mpi_exchange_fluxes");
+#else
+    (void)mesh;
+    (void)mpi;
+#endif
+}
+
+void prj_mpi_exchange_fluxes_and_emf(prj_mesh *mesh, prj_mpi *mpi)
+{
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Request *reqs;
+    int req_count;
+    int nb;
+
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1 || mpi->neighbor_number == 0) {
+        return;
+    }
+    reqs = (MPI_Request *)mpi->request_buffer;
+    req_count = 0;
+    if (reqs == 0 || mpi->request_capacity < 12 * mpi->neighbor_number) {
+        fprintf(stderr, "prj_mpi_exchange_fluxes_and_emf: missing MPI request buffer\n");
+        exit(EXIT_FAILURE);
+    }
+
+    PRJ_TIMER_CURRENT_START("mpi_exchange_flux_emf");
+
+    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+        int rk = buffer->receiver_rank;
+
+        PRJ_TIMER_CURRENT_START("mpi_flux_pack");
+        if (prj_mpi_pack_flux_records_for_neighbor(mesh, mpi, buffer) != 0) {
+            fprintf(stderr, "prj_mpi_exchange_fluxes_and_emf: failed to pack flux records\n");
+            exit(EXIT_FAILURE);
+        }
+        PRJ_TIMER_CURRENT_STOP("mpi_flux_pack");
+
+        if (buffer->flux_recv_count > 0) {
+            MPI_Irecv(buffer->flux_idx_recv, 5 * buffer->flux_recv_count,
+                MPI_INT, rk, 201, MPI_COMM_WORLD, &reqs[req_count++]);
+            MPI_Irecv(buffer->flux_value_recv,
+                buffer->flux_recv_count * PRJ_NVAR_CONS, MPI_DOUBLE, rk,
+                202, MPI_COMM_WORLD, &reqs[req_count++]);
+        }
+        if (buffer->flux_send_count > 0) {
+            MPI_Isend(buffer->flux_idx_send, 5 * buffer->flux_send_count,
+                MPI_INT, rk, 201, MPI_COMM_WORLD, &reqs[req_count++]);
+            MPI_Isend(buffer->flux_value_send,
+                buffer->flux_send_count * PRJ_NVAR_CONS, MPI_DOUBLE, rk,
+                202, MPI_COMM_WORLD, &reqs[req_count++]);
+        }
+
+#if PRJ_MHD
+        {
+            int axis;
+
+            PRJ_TIMER_CURRENT_START("mpi_emf_pack");
+            if (prj_mpi_pack_emf_values_for_neighbor(mesh, buffer) != 0) {
+                fprintf(stderr, "prj_mpi_exchange_fluxes_and_emf: failed to pack emf records\n");
+                exit(EXIT_FAILURE);
+            }
+            PRJ_TIMER_CURRENT_STOP("mpi_emf_pack");
+
+            for (axis = 0; axis < 3; ++axis) {
+                if (buffer->emf_recv_count > 0) {
+                    MPI_Irecv(buffer->emf_idx_recv[axis], buffer->emf_recv_count,
+                        MPI_INT, rk, 401 + axis, MPI_COMM_WORLD, &reqs[req_count++]);
+                }
+                if (buffer->emf_send_count > 0) {
+                    MPI_Isend(buffer->emf_idx_send[axis], buffer->emf_send_count,
+                        MPI_INT, rk, 401 + axis, MPI_COMM_WORLD, &reqs[req_count++]);
+                }
+            }
+            if (buffer->emf_recv_count > 0) {
+                MPI_Irecv(buffer->emf_value_recv, buffer->emf_recv_count,
+                    MPI_DOUBLE, rk, 404, MPI_COMM_WORLD, &reqs[req_count++]);
+            }
+            if (buffer->emf_send_count > 0) {
+                MPI_Isend(buffer->emf_value_send, buffer->emf_send_count,
+                    MPI_DOUBLE, rk, 404, MPI_COMM_WORLD, &reqs[req_count++]);
+            }
+        }
+#endif
+    }
+
+    if (req_count > 0) {
+        PRJ_TIMER_CURRENT_START("mpi_flux_emf_wait");
+        MPI_Waitall(req_count, reqs, MPI_STATUSES_IGNORE);
+        PRJ_TIMER_CURRENT_STOP("mpi_flux_emf_wait");
+    }
+
+    PRJ_TIMER_CURRENT_START("mpi_flux_unpack");
+    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+        int e;
+
+        for (e = 0; e < buffer->flux_recv_count; ++e) {
+            int blk_id = buffer->flux_idx_recv[5*e+0];
+            int ci     = buffer->flux_idx_recv[5*e+1];
+            int cj     = buffer->flux_idx_recv[5*e+2];
+            int ck     = buffer->flux_idx_recv[5*e+3];
+            int faxis  = buffer->flux_idx_recv[5*e+4];
+            prj_block *coarse;
+            int v;
+
+            if (blk_id < 0 || blk_id >= mesh->nblocks) continue;
+            if (faxis < 0 || faxis >= 3) continue;
+            coarse = &mesh->blocks[blk_id];
+            if (coarse->id < 0 || coarse->active != 1 || coarse->rank != mpi->rank) continue;
+            if (coarse->flux[faxis] == 0) continue;
+            for (v = 0; v < PRJ_NVAR_CONS; ++v)
+                coarse->flux[faxis][VIDX(v, ci, cj, ck)] =
+                    buffer->flux_value_recv[(size_t)e * PRJ_NVAR_CONS + (size_t)v];
+        }
+    }
+    PRJ_TIMER_CURRENT_STOP("mpi_flux_unpack");
+
+#if PRJ_MHD
+    PRJ_TIMER_CURRENT_START("mpi_emf_apply");
+    for (nb = 0; nb < mpi->neighbor_number; ++nb) {
+        prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
+        int i;
+
+        for (i = 0; i < buffer->emf_recv_count; ++i) {
+            int block_id = buffer->emf_idx_recv[0][i];
+            int code = buffer->emf_idx_recv[1][i];
+            int dir = buffer->emf_idx_recv[2][i];
+            int ii;
+            int jj;
+            int kk;
+            prj_block *block;
+            int flat;
+
+            if (block_id < 0 || block_id >= mesh->nblocks || dir < 0 || dir >= 3) {
+                continue;
+            }
+            block = &mesh->blocks[block_id];
+            if (!prj_mpi_block_is_local(block) || block->edge_fidelity[dir] == 0 ||
+                block->emf[dir] == 0) {
+                continue;
+            }
+            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
+            if (!prj_mpi_edge_storage_index_ok(dir, ii, jj, kk)) {
+                fprintf(stderr, "prj_mpi_exchange_fluxes_and_emf: received edge index out of storage\n");
+                exit(EXIT_FAILURE);
+            }
+            flat = EDGE_IDX(dir, ii, jj, kk);
+            if (PRJ_MHD_FIDELITY_FINER < block->edge_fidelity[dir][flat]) {
+                continue;
+            }
+            if (!isfinite(buffer->emf_value_recv[i])) {
+                fprintf(stderr, "prj_mpi_exchange_fluxes_and_emf: received non-finite emf\n");
+                exit(EXIT_FAILURE);
+            }
+            block->emf[dir][flat] = buffer->emf_value_recv[i];
+            block->edge_fidelity[dir][flat] = PRJ_MHD_FIDELITY_FINER;
+        }
+    }
+    PRJ_TIMER_CURRENT_STOP("mpi_emf_apply");
+#if PRJ_MHD_DEBUG
+    prj_mhd_debug_check_emf(mesh);
+#endif
+#endif
+
+    PRJ_TIMER_CURRENT_STOP("mpi_exchange_flux_emf");
 #else
     (void)mesh;
     (void)mpi;

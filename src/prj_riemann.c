@@ -762,8 +762,4 @@ void prj_riemann_flux_send(prj_mesh *mesh)
         }
     }
     PRJ_TIMER_CURRENT_STOP("riemann_flux_local_correction");
-
-    PRJ_TIMER_CURRENT_START("riemann_flux_mpi_exchange");
-    prj_mpi_exchange_fluxes(mesh, mpi);
-    PRJ_TIMER_CURRENT_STOP("riemann_flux_mpi_exchange");
 }

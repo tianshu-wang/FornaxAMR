@@ -370,14 +370,6 @@ static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_arra
     PRJ_TIMER_START(timer, "mhd_emf_send");
     prj_mhd_emf_send(mesh);
     PRJ_TIMER_STOP(timer, "mhd_emf_send");
-    PRJ_TIMER_START(timer, "mpi_exchange_emf");
-    prj_mpi_exchange_emf(mesh, prj_mpi_current());
-    PRJ_TIMER_STOP(timer, "mpi_exchange_emf");
-#if PRJ_MHD_DEBUG
-    PRJ_TIMER_START(timer, "mhd_debug_emf");
-    prj_mhd_debug_check_emf(mesh);
-    PRJ_TIMER_STOP(timer, "mhd_debug_emf");
-#endif
 }
 
 static double *prj_timeint_stage1_array(prj_block *block)
@@ -849,6 +841,11 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_START(timer, "mhd_emf_stage1");
     prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage1_array, timer);
     PRJ_TIMER_STOP(timer, "mhd_emf_stage1");
+#endif
+    PRJ_TIMER_START(timer, "mpi_exchange_flux_emf_stage1");
+    prj_mpi_exchange_fluxes_and_emf(mesh, prj_mpi_current());
+    PRJ_TIMER_STOP(timer, "mpi_exchange_flux_emf_stage1");
+#if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_update_bf_stage1");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -972,6 +969,11 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_START(timer, "mhd_emf_stage2");
     prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage2_array, timer);
     PRJ_TIMER_STOP(timer, "mhd_emf_stage2");
+#endif
+    PRJ_TIMER_START(timer, "mpi_exchange_flux_emf_stage2");
+    prj_mpi_exchange_fluxes_and_emf(mesh, prj_mpi_current());
+    PRJ_TIMER_STOP(timer, "mpi_exchange_flux_emf_stage2");
+#if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_update_bf_stage2");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
