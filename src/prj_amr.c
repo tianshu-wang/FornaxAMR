@@ -1807,6 +1807,8 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
             child->v_riemann[0] = 0;
             child->v_riemann[1] = 0;
             child->v_riemann[2] = 0;
+            child->kappa_cell = 0;
+            child->sigma_cell = 0;
             child->ridx = 0;
             child->fr = 0;
             prj_block_setup_geometry(child, &mesh->coord);

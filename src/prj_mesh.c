@@ -181,6 +181,8 @@ static void prj_block_init_empty(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+    b->kappa_cell = 0;
+    b->sigma_cell = 0;
 #if PRJ_MHD
     for (n = 0; n < 3; ++n) {
         b->face_fidelity[n] = 0;
@@ -247,6 +249,9 @@ int prj_block_alloc_data(prj_block *b)
 #if PRJ_MHD
     total_count += 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
 #endif
+#if PRJ_NRAD > 0
+    total_count += 2U * (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
+#endif
 
     base = (double *)malloc(total_count * sizeof(*base));
     if (base == 0) {
@@ -302,8 +307,8 @@ int prj_block_alloc_data(prj_block *b)
     b->v_riemann[1] = base;
     base += 3U * (size_t)PRJ_BLOCK_NCELLS;
     b->v_riemann[2] = base;
-#if PRJ_MHD
     base += 3U * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = face_fidelity[d];
         b->edge_fidelity[d] = edge_fidelity[d];
@@ -326,6 +331,12 @@ int prj_block_alloc_data(prj_block *b)
         b->emf[d] = base;
         base += (size_t)PRJ_BLOCK_NEDGES;
     }
+#endif
+#if PRJ_NRAD > 0
+    b->kappa_cell = base;
+    base += (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
+    b->sigma_cell = base;
+    base += (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
 #endif
     b->ridx = ridx;
     b->fr = fr;
@@ -361,6 +372,8 @@ void prj_block_free_data(prj_block *b)
     b->v_riemann[0] = 0;
     b->v_riemann[1] = 0;
     b->v_riemann[2] = 0;
+    b->kappa_cell = 0;
+    b->sigma_cell = 0;
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = 0;

@@ -358,6 +358,31 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     (void)use_bf1;
 #endif
 
+#if PRJ_NRAD > 0
+    if (block->kappa_cell != 0 && block->sigma_cell != 0) {
+        int ii;
+        int jj;
+        int kk;
+        const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+
+        for (ii = -1; ii <= PRJ_BLOCK_SIZE; ++ii) {
+            for (jj = -1; jj <= PRJ_BLOCK_SIZE; ++jj) {
+                for (kk = -1; kk <= PRJ_BLOCK_SIZE; ++kk) {
+                    double rho = W[VIDX(PRJ_PRIM_RHO, ii, jj, kk)];
+                    double ye = W[VIDX(PRJ_PRIM_YE, ii, jj, kk)];
+                    double T = (eosvar != 0)
+                        ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ii, jj, kk)]
+                        : 0.0;
+                    size_t off = (size_t)IDX(ii, jj, kk) * stride;
+
+                    prj_rad3_opac_lookup(rad, rho, T, ye,
+                        &block->kappa_cell[off], &block->sigma_cell[off], 0, 0);
+                }
+            }
+        }
+    }
+#endif
+
     for (dir = 0; dir < 3; ++dir) {
         int i;
         int j;
@@ -454,16 +479,13 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         double x_face[3];
                         double dx_dir;
                         double chi_face[PRJ_NRAD * PRJ_NEGROUP];
-                        double kappa_L[PRJ_NRAD * PRJ_NEGROUP];
-                        double sigma_L[PRJ_NRAD * PRJ_NEGROUP];
-                        double kappa_R[PRJ_NRAD * PRJ_NEGROUP];
-                        double sigma_R[PRJ_NRAD * PRJ_NEGROUP];
-                        double rho_L = W[VIDX(PRJ_PRIM_RHO, il, jl, kl)];
-                        double ye_L = W[VIDX(PRJ_PRIM_YE, il, jl, kl)];
-                        double rho_R = W[VIDX(PRJ_PRIM_RHO, ir, jr, kr)];
-                        double ye_R = W[VIDX(PRJ_PRIM_YE, ir, jr, kr)];
-                        double T_L = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, il, jl, kl)] : 0.0;
-                        double T_R = eosvar != 0 ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ir, jr, kr)] : 0.0;
+                        const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+                        size_t off_L = (size_t)IDX(il, jl, kl) * stride;
+                        size_t off_R = (size_t)IDX(ir, jr, kr) * stride;
+                        const double *kappa_L = &block->kappa_cell[off_L];
+                        const double *sigma_L = &block->sigma_cell[off_L];
+                        const double *kappa_R = &block->kappa_cell[off_R];
+                        const double *sigma_R = &block->sigma_cell[off_R];
                         int idx;
 
                         x_face[0] = block->xmin[0] + ((dir == X1DIR) ? (double)i : ((double)i + 0.5)) * block->dx[0];
@@ -471,8 +493,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         x_face[2] = block->xmin[2] + ((dir == X3DIR) ? (double)k : ((double)k + 0.5)) * block->dx[2];
                         dx_dir = block->dx[dir];
 
-                        prj_rad3_opac_lookup(rad, rho_L, T_L, ye_L, kappa_L, sigma_L, 0, 0);
-                        prj_rad3_opac_lookup(rad, rho_R, T_R, ye_R, kappa_R, sigma_R, 0, 0);
                         for (idx = 0; idx < PRJ_NRAD * PRJ_NEGROUP; ++idx) {
                             double kL = kappa_L[idx];
                             double kR = kappa_R[idx];

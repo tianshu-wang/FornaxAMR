@@ -26,7 +26,7 @@ amr_interval = 1
 eos_type = ideal
 E_floor = 1e-10
 
-mhd_init = uniform
+mhd_init = dipole
 B_norm = 1.0
 B_scale = 1.0
 
