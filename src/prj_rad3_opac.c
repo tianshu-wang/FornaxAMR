@@ -84,8 +84,13 @@ static void prj_rad3_build_egroups(prj_rad *rad)
             rad->log_egroup[nu][g] = log(ec);
             rad->egroup_erg[nu][g] = erg;
             rad->degroup_erg[nu][g] = derg;
-            rad->spec_factor[nu][g] = pow(PRJ_CLIGHT * PRJ_HPLANCK, 3)
-                / (4.0 * M_PI * derg * erg * erg * erg);
+            if (nu == 2) {
+                rad->spec_factor[nu][g] = 0.25 * pow(PRJ_CLIGHT * PRJ_HPLANCK, 3)
+                    / (4.0 * M_PI * derg * erg * erg * erg);
+            } else {
+                rad->spec_factor[nu][g] = pow(PRJ_CLIGHT * PRJ_HPLANCK, 3)
+                    / (4.0 * M_PI * derg * erg * erg * erg);
+            }
             if (nu == 0) {
                 rad->x_e[nu][g] = 1.0 / (PRJ_AVOGADRO * erg);
             } else if (nu == 1) {
