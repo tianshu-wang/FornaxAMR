@@ -374,11 +374,10 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
     for (nu = 0; nu < PRJ_NRAD; nu++) {
         for (g = 0; g < PRJ_NEGROUP; g++) {
             int idx = nu * PRJ_NEGROUP + g;
-            double degroup_MeV = rad->degroup_erg[nu][g] / PRJ_MEV_TO_ERG;
             double E_g = u[PRJ_CONS_RAD_E(nu, g)];
             double he_mag = 0.0;
 
-            je[idx] = PRJ_CLIGHT * E_g * eta_factor * PRJ_MEV_TO_ERG / degroup_MeV;
+            je[idx] = PRJ_CLIGHT * E_g * eta_factor * PRJ_MEV_TO_ERG / rad->degroup_erg[nu][g];
             if (je[idx] < 0.0) je[idx] = 0.0;
 
             for (d = 0; d < PRJ_NDIM; d++) {
@@ -389,7 +388,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
                 case 1: F_gd = u[PRJ_CONS_RAD_F2(nu, g)]; break;
                 default: F_gd = u[PRJ_CONS_RAD_F3(nu, g)]; break;
                 }
-                he[fidx] = F_gd * eta_factor * PRJ_MEV_TO_ERG / degroup_MeV;
+                he[fidx] = F_gd * eta_factor * PRJ_MEV_TO_ERG / rad->degroup_erg[nu][g];
                 he_mag += (he[fidx] / (je[idx] + 1.0e-15))
                     * (he[fidx] / (je[idx] + 1.0e-15));
             }
@@ -410,8 +409,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
     for (nu = 0; nu < PRJ_NRAD; nu++) {
         for (g = 0; g < PRJ_NEGROUP; g++) {
             int idx = nu * PRJ_NEGROUP + g;
-            double degroup_MeV = rad->degroup_erg[nu][g] / PRJ_MEV_TO_ERG;
-            double source_phys = source_arr[idx] * degroup_MeV
+            double source_phys = source_arr[idx] * rad->degroup_erg[nu][g]
                 / (PRJ_MEV_TO_ERG * eta_factor);
             double E_old = u[PRJ_CONS_RAD_E(nu, g)];
             double E_new = (E_old + dt * source_phys)

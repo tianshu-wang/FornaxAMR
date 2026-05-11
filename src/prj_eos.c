@@ -502,7 +502,7 @@ double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye)
 
         prj_eos_table_interp_base(eos, rho, T, ye,
             &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp);
-        eta_raw = prj_eos_table_interp_trilinear(eos, 14,
+        eta_raw = prj_eos_table_interp_trilinear(eos, 15,
             jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp);
         if (T > 0.0) {
             return eta_raw / T;
