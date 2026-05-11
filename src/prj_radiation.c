@@ -9,6 +9,7 @@ void prj_rad_init(prj_rad *rad)
 {
 #if PRJ_NRAD > 0
     prj_rad3_opac_init(rad);
+    prj_rad_eleinel_init(rad);
 #else
     (void)rad;
 #endif

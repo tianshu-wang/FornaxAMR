@@ -39,7 +39,7 @@
 #define PRJ_NRAD 0
 #endif
 #ifndef PRJ_NEGROUP
-#define PRJ_NEGROUP 3
+#define PRJ_NEGROUP 12
 #endif
 #if PRJ_MHD
 #define PRJ_NHYDRO 9

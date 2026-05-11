@@ -250,6 +250,18 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->eos.filename[0] = '\0';
     sim->rad.maxiter = 20;
     sim->rad.implicit_err_tol = 1.0e-6;
+#if PRJ_NRAD > 0
+    sim->rad.kom_epsilon = 0.1;
+    sim->rad.kom_delta = 0.01;
+    sim->rad.kom_dtmin = 1.0e-20;
+    sim->rad.kom_rhocut = 1.0e13;
+    {
+        int nu_i;
+        for (nu_i = 0; nu_i < PRJ_NRAD; ++nu_i) {
+            sim->rad.kom_Ecut[nu_i] = 300.0;
+        }
+    }
+#endif
 #if PRJ_MHD
     sim->mhd_init_type = PRJ_MHD_INIT_UNIFORM;
     sim->mhd_B_norm = 0.0;
@@ -446,6 +458,10 @@ void prj_io_parser(prj_sim *sim, char *filename)
             strncpy(sim->rad.table_file, value, sizeof(sim->rad.table_file) - 1);
             sim->rad.table_file[sizeof(sim->rad.table_file) - 1] = '\0';
             endptr = value + strlen(value);
+        } else if (strcmp(key, "eleinel_table_dir") == 0) {
+            strncpy(sim->rad.eleinel_table_dir, value, sizeof(sim->rad.eleinel_table_dir) - 1);
+            sim->rad.eleinel_table_dir[sizeof(sim->rad.eleinel_table_dir) - 1] = '\0';
+            endptr = value + strlen(value);
         } else if (strncmp(key, "rad_emin_", 9) == 0) {
             char *kend;
             long idx = strtol(key + 9, &kend, 10);
@@ -466,6 +482,24 @@ void prj_io_parser(prj_sim *sim, char *filename)
                 exit(1);
             }
             sim->rad.emax[idx] = strtod(value, &endptr);
+        } else if (strcmp(key, "kom_epsilon") == 0) {
+            sim->rad.kom_epsilon = strtod(value, &endptr);
+        } else if (strcmp(key, "kom_delta") == 0) {
+            sim->rad.kom_delta = strtod(value, &endptr);
+        } else if (strcmp(key, "kom_dtmin") == 0) {
+            sim->rad.kom_dtmin = strtod(value, &endptr);
+        } else if (strcmp(key, "kom_rhocut") == 0) {
+            sim->rad.kom_rhocut = strtod(value, &endptr);
+        } else if (strncmp(key, "kom_Ecut_", 9) == 0) {
+            char *kend;
+            long idx = strtol(key + 9, &kend, 10);
+
+            if (*kend != '\0' || idx < 0 || idx >= PRJ_NRAD) {
+                fprintf(stderr, "prj_io_parser: bad kom_Ecut index '%s' in %s:%d\n", key, filename, lineno);
+                fclose(fp);
+                exit(1);
+            }
+            sim->rad.kom_Ecut[idx] = strtod(value, &endptr);
 #endif
         } else if (strcmp(key, "eos_type") == 0) {
             if (prj_io_parse_eos_kind(value, &sim->eos.kind) != 0) {

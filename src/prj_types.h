@@ -204,6 +204,16 @@ struct prj_rad {
     double *scaopac[PRJ_NRAD];
     double *emis[PRJ_NRAD];
     double *sdelta[PRJ_NRAD];
+    char eleinel_table_dir[PRJ_PATH_MAX];
+    int eleinel_table_loaded;
+    double *eleinel_phi_ee[PRJ_NRAD];
+
+    double *spec_factor[PRJ_NRAD];
+    double kom_epsilon;
+    double kom_delta;
+    double kom_dtmin;
+    double kom_rhocut;
+    double kom_Ecut[PRJ_NRAD];
 #endif
 };
 

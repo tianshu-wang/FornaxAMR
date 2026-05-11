@@ -60,8 +60,10 @@ static void prj_rad3_build_egroups(prj_rad *rad)
         rad->degroup_erg[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
         rad->x_e[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
         rad->log_egroup[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->spec_factor[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
         if (rad->egroup[nu] == 0 || rad->eedge[nu] == 0 || rad->egroup_erg[nu] == 0 ||
-            rad->degroup_erg[nu] == 0 || rad->x_e[nu] == 0 || rad->log_egroup[nu] == 0) {
+            rad->degroup_erg[nu] == 0 || rad->x_e[nu] == 0 || rad->log_egroup[nu] == 0 ||
+            rad->spec_factor[nu] == 0) {
             fprintf(stderr, "prj_rad3_opac: allocation failed for egroup field %d\n", nu);
             exit(1);
         }
@@ -82,6 +84,8 @@ static void prj_rad3_build_egroups(prj_rad *rad)
             rad->log_egroup[nu][g] = log(ec);
             rad->egroup_erg[nu][g] = erg;
             rad->degroup_erg[nu][g] = derg;
+            rad->spec_factor[nu][g] = pow(PRJ_CLIGHT * PRJ_HPLANCK, 3)
+                / (4.0 * M_PI * derg * erg * erg * erg);
             if (nu == 0) {
                 rad->x_e[nu][g] = 1.0 / (PRJ_AVOGADRO * erg);
             } else if (nu == 1) {
@@ -330,6 +334,7 @@ void prj_rad3_opac_free(prj_rad *rad)
         free(rad->degroup_erg[nu]);
         free(rad->x_e[nu]);
         free(rad->log_egroup[nu]);
+        free(rad->spec_factor[nu]);
         free(rad->absopac[nu]);
         free(rad->scaopac[nu]);
         free(rad->emis[nu]);
@@ -340,6 +345,7 @@ void prj_rad3_opac_free(prj_rad *rad)
         rad->degroup_erg[nu] = 0;
         rad->x_e[nu] = 0;
         rad->log_egroup[nu] = 0;
+        rad->spec_factor[nu] = 0;
         rad->absopac[nu] = 0;
         rad->scaopac[nu] = 0;
         rad->emis[nu] = 0;

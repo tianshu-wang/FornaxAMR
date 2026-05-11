@@ -2,6 +2,7 @@
 #define PRJ_RADIATION_H
 
 #define PRJ_CLIGHT 2.99792458e10
+#define PRJ_HPLANCK 6.62607015e-27
 
 void prj_rad_init(prj_rad *rad);
 void prj_rad_prim2cons(const double *W, double *U);

@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #include "prj.h"
+#include "prj_rad_inel.h"
 
 #ifndef PRJ_FAST_MHD_RAD_CELL_UPDATE
 #define PRJ_FAST_MHD_RAD_CELL_UPDATE 1
@@ -617,6 +618,8 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh,
         prj_rad_freq_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt);
         prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
         prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
+        prj_rad_nucinel_step(rad, eos, u, dt);
+        prj_rad_eleinel_step(rad, eos, u, dt);
     }
     prj_timeint_store_mhd_rad_cell(mesh, block, block->W1, i, j, k, u);
 }
@@ -698,6 +701,8 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh,
         prj_rad_freq_flux_apply(rad, block, block->W1, u, i, j, k, lapse_cell, 0.5 * dt);
         prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
         prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
+        prj_rad_nucinel_step(rad, eos, u, dt);
+        prj_rad_eleinel_step(rad, eos, u, dt);
     }
     prj_timeint_store_mhd_rad_cell(mesh, block, block->W, i, j, k, u);
 }
@@ -903,6 +908,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                             prj_rad_freq_flux_apply(rad, block, block->W, u1, i, j, k, lapse_cell, dt);
                             prj_rad_energy_update(rad, eos, u1, dt, lapse_cell, &T_cell);
                             prj_rad_momentum_update(rad, eos, u1, dt, lapse_cell, T_cell);
+                            prj_rad_nucinel_step(rad, eos, u1, dt);
+                            prj_rad_eleinel_step(rad, eos, u1, dt);
                         }
 #endif
                         prj_eos_cons2prim(eos, u1, w);
@@ -1028,6 +1035,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                             prj_rad_freq_flux_apply(rad, block, block->W1, u, i, j, k, lapse_cell, 0.5 * dt);
                             prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
                             prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
+                            prj_rad_nucinel_step(rad, eos, u, dt);
+                            prj_rad_eleinel_step(rad, eos, u, dt);
                         }
 #endif
                         prj_eos_cons2prim(eos, u, w);

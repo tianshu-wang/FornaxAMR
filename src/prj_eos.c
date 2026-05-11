@@ -492,6 +492,27 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }
 
+double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye)
+{
+    if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
+        eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
+        int jy, jyp, jr, jrp, jt, jtp;
+        double dye, drho, dtemp;
+        double eta_raw;
+
+        prj_eos_table_interp_base(eos, rho, T, ye,
+            &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp);
+        eta_raw = prj_eos_table_interp_trilinear(eos, 14,
+            jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp);
+        if (T > 0.0) {
+            return eta_raw / T;
+        }
+        return 0.0;
+    }
+
+    return 0.0;
+}
+
 void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_quantities)
 {
     double gamma;
