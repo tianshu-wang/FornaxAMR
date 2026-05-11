@@ -110,15 +110,9 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     double T, double etael,
     double *srce, double *sinke, double *scatte)
 {
-    double hbar = 6.582122e-22;
-    double bigG = 3.937e-17;
-    double clt = 2.99792458e10;
-    double fourpi = 12.56637061e0;
-    double pi = 3.1415926535898e0;
-    double hc2pi = 2.0 * pi * hbar * clt;
-    double factf = (hc2pi * hc2pi * hc2pi) / clt / 1.60217733e-6;
-    double constin = fourpi * (bigG * bigG) / (hc2pi * hc2pi * hc2pi * hc2pi * hc2pi * hc2pi) * 1.60217733e-6;
-    double constout = fourpi * (bigG * bigG) / (hc2pi * hc2pi * hc2pi) / clt;
+    double factf = rad->eleinel_factf;
+    double constin = rad->eleinel_constin;
+    double constout = rad->eleinel_constout;
     double cut;
     double czero;
     double xje;
@@ -130,6 +124,8 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     int id;
     double enu;
     double log10t;
+    int nu_offset = nutype * PRJ_NEGROUP;
+    double factf_over_freqe3_nf = rad->eleinel_factf_over_freqe3[nu_offset + nf];
 
     cut = 1.0;
     czero = 1.0;
@@ -138,9 +134,9 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
         czero = 0.0;
     }
 
-    xje = PRJ_MAX(0.0, PRJ_MIN(je[nf] * factf / (freqe[nf] * freqe[nf] * freqe[nf]) / cut, 1.0));
+    xje = PRJ_MAX(0.0, PRJ_MIN(je[nf] * factf_over_freqe3_nf / cut, 1.0));
     for (id = 0; id < PRJ_NDIM; id++) {
-        xhe[id] = he[nf * PRJ_NDIM + id] * factf / (freqe[nf] * freqe[nf] * freqe[nf]) / cut;
+        xhe[id] = he[nf * PRJ_NDIM + id] * factf_over_freqe3_nf / cut;
     }
 
     sumin = 0.0;
@@ -153,7 +149,8 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
         int nfpp = PRJ_MIN(nfp + 1, nfreq - 1);
         int nfpm = PRJ_MAX(nfp - 1, 0);
         double dnue = (freqe[nfpp] - freqe[nfpm]) / 2.0;
-        double xjpe = PRJ_MAX(0.0, PRJ_MIN(je[nfp] * factf / (freqe[nfp] * freqe[nfp] * freqe[nfp]) / cut, 1.0));
+        double factf_over_freqe3_nfp = rad->eleinel_factf_over_freqe3[nu_offset + nfp];
+        double xjpe = PRJ_MAX(0.0, PRJ_MIN(je[nfp] * factf_over_freqe3_nfp / cut, 1.0));
         double fdotf = 0.0;
         double omegae;
         double expe;
@@ -165,7 +162,7 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
         int did;
 
         for (did = 0; did < PRJ_NDIM; did++) {
-            double xhpe = he[nfp * PRJ_NDIM + did] * factf / (freqe[nfp] * freqe[nfp] * freqe[nfp]) / cut;
+            double xhpe = he[nfp * PRJ_NDIM + did] * factf_over_freqe3_nfp / cut;
             fdotf += xhe[did] * xhpe;
         }
         omegae = enu - freqe[nfp];
@@ -256,6 +253,29 @@ void prj_rad_eleinel_init(prj_rad *rad)
             rad->eleinel_table_dir);
     }
     rad->eleinel_table_loaded = 1;
+
+    {
+        double hbar = 6.582122e-22;
+        double bigG = 3.937e-17;
+        double clt = 2.99792458e10;
+        double fourpi = 12.56637061e0;
+        double pi = 3.1415926535898e0;
+        double hc2pi = 2.0 * pi * hbar * clt;
+
+        rad->eleinel_factf = (hc2pi * hc2pi * hc2pi) / clt / 1.60217733e-6;
+        rad->eleinel_constin = fourpi * (bigG * bigG) / (hc2pi * hc2pi * hc2pi * hc2pi * hc2pi * hc2pi) * 1.60217733e-6;
+        rad->eleinel_constout = fourpi * (bigG * bigG) / (hc2pi * hc2pi * hc2pi) / clt;
+    }
+
+    for (nu = 0; nu < PRJ_NRAD; nu++) {
+        int g;
+        for (g = 0; g < PRJ_NEGROUP; g++) {
+            int idx = nu * PRJ_NEGROUP + g;
+            double f3 = rad->egroup[nu][g] * rad->egroup[nu][g] * rad->egroup[nu][g];
+            rad->eleinel_freqe3[idx] = f3;
+            rad->eleinel_factf_over_freqe3[idx] = rad->eleinel_factf / f3;
+        }
+    }
 }
 
 void prj_rad_eleinel_free(prj_rad *rad)
@@ -302,7 +322,7 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             double xxj = je[idx];
             double cut;
 
-            if (rho > 1e8 && xxj > 0.0) {
+            if (rho > rad->min_inel_density && xxj > 0.0) {
                 prj_rad_eleinel_resourcesink(rad, nu, nfreq, g,
                     &je[nu * PRJ_NEGROUP], &he[nu * PRJ_NEGROUP * PRJ_NDIM],
                     freqe, T, etael,
@@ -696,6 +716,9 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
     double Uint_new;
 
     rho = u[PRJ_CONS_RHO];
+    if (rho < rad->min_inel_density) {
+        return 1;
+    }
     KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
         u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;

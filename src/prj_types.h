@@ -214,6 +214,12 @@ struct prj_rad {
     double kom_dtmin;
     double kom_rhocut;
     double kom_Ecut[PRJ_NRAD];
+    double min_inel_density;
+    double eleinel_factf;
+    double eleinel_constin;
+    double eleinel_constout;
+    double eleinel_freqe3[PRJ_NRAD * PRJ_NEGROUP];
+    double eleinel_factf_over_freqe3[PRJ_NRAD * PRJ_NEGROUP];
 #endif
 };
 

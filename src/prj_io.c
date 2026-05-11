@@ -255,6 +255,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->rad.kom_delta = 0.01;
     sim->rad.kom_dtmin = 1.0e-20;
     sim->rad.kom_rhocut = 1.0e13;
+    sim->rad.min_inel_density = 1.0e8;
     {
         int nu_i;
         for (nu_i = 0; nu_i < PRJ_NRAD; ++nu_i) {
@@ -490,6 +491,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->rad.kom_dtmin = strtod(value, &endptr);
         } else if (strcmp(key, "kom_rhocut") == 0) {
             sim->rad.kom_rhocut = strtod(value, &endptr);
+        } else if (strcmp(key, "min_inel_density") == 0) {
+            sim->rad.min_inel_density = strtod(value, &endptr);
         } else if (strncmp(key, "kom_Ecut_", 9) == 0) {
             char *kend;
             long idx = strtol(key + 9, &kend, 10);
