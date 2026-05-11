@@ -44,6 +44,7 @@ progenitor_file = ../s9.0.swbj15.fornax
 # Radiation: three species, 12 energy groups each (MeV).
 rad_table_param_file = ../opacbin.extendT.param
 rad_table_file = ../opacity.SFHo.juo.horo.brem1.extendedT.bin
+eleinel_table_dir = ../300.mixed/
 rad_emin_0 = 1.0
 rad_emax_0 = 300.0
 rad_emin_1 = 1.0
