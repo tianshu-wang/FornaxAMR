@@ -865,23 +865,8 @@ static double prj_rad_koren_phi(double r)
  * forced to zero by the caller, so the choice has no effect on the update. */
 static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int side)
 {
-    double dqp;
-    double dqm;
-    double r;
-    double slope;
-
-    if (gcell <= 0 || gcell >= PRJ_NEGROUP - 1) {
-        return q[gcell];
-    }
-    dqp = q[gcell + 1] - q[gcell];
-    dqm = q[gcell] - q[gcell - 1];
-    if (dqp == 0.0) {
-        slope = 0.0;
-    } else {
-        r = dqm / dqp;
-        slope = prj_rad_koren_phi(r) * dqp;
-    }
-    return q[gcell] + 0.5 * (double)side * slope;
+    (void)side;
+    return q[gcell];
 }
 
 /* Apply the per-cell energy-space-flux part of the SR redshift terms
@@ -954,6 +939,25 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         }
     }
     PRJ_TIMER_CURRENT_STOP("rad_ff_dvdx");
+
+    const prj_grav_mono *gm = prj_gravity_active_monopole();
+    double xc1 = block->xmin[0] + ((double)ic + 0.5) * block->dx[0];
+    double xc2 = block->xmin[1] + ((double)jc + 0.5) * block->dx[1];
+    double xc3 = block->xmin[2] + ((double)kc + 0.5) * block->dx[2];
+    double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
+    double grad_phi[3];
+    double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
+
+    grad_phi[0] = 0.0;
+    grad_phi[1] = 0.0;
+    grad_phi[2] = 0.0;
+    if (gm != 0 && r_cell > 0.0) {
+        double accel = prj_gravity_interp_accel(gm, r_cell);
+
+        grad_phi[0] = -accel * xc1 / r_cell;
+        grad_phi[1] = -accel * xc2 / r_cell;
+        grad_phi[2] = -accel * xc3 / r_cell;
+    }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         double Eg[PRJ_NEGROUP];
@@ -1070,25 +1074,6 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
          * gravitational acceleration a_i = accel(r) · x_i/r, and ∇φ = −a. */
         PRJ_TIMER_CURRENT_START("rad_ff_grav");
         {
-            const prj_grav_mono *gm = prj_gravity_active_monopole();
-            double xc1 = block->xmin[0] + ((double)ic + 0.5) * block->dx[0];
-            double xc2 = block->xmin[1] + ((double)jc + 0.5) * block->dx[1];
-            double xc3 = block->xmin[2] + ((double)kc + 0.5) * block->dx[2];
-            double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
-            double grad_phi[3];
-            double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
-
-            grad_phi[0] = 0.0;
-            grad_phi[1] = 0.0;
-            grad_phi[2] = 0.0;
-            if (gm != 0 && r_cell > 0.0) {
-                double accel = prj_gravity_interp_accel(gm, r_cell);
-
-                grad_phi[0] = -accel * xc1 / r_cell;
-                grad_phi[1] = -accel * xc2 / r_cell;
-                grad_phi[2] = -accel * xc3 / r_cell;
-            }
-
             /* Energy: per i, scalar q[g] = F^i_g, coef = −(∇_i φ)/c². */
             for (ii = 0; ii < 3; ++ii) {
                 double coef = -grad_phi[ii] * inv_c2;

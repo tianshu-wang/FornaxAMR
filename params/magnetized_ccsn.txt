@@ -4,12 +4,12 @@ problem = magnetized_ccsn
 restart_from_file = 0
 restart_file_name = output/final.h5
 
-x1min = -3.0e9
-x1max = 3.0e9
-x2min = -3.0e9
-x2max = 3.0e9
-x3min = -3.0e9
-x3max = 3.0e9
+x1min = -3.0e7
+x1max = 3.0e7
+x2min = -3.0e7
+x2max = 3.0e7
+x3min = -3.0e7
+x3max = 3.0e7
 
 root_nx = 4
 max_level = 0
