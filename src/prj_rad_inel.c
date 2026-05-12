@@ -346,16 +346,13 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
     }
 }
 
-void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
+void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
 {
     double KE;
     double Emag = 0.0;
     double Uint_old;
     double rho;
     double Ye;
-    double eint;
-    double T;
-    double eos_q[PRJ_EOS_NQUANT];
     double je[PRJ_NRAD * PRJ_NEGROUP];
     double he[PRJ_NRAD * PRJ_NEGROUP * PRJ_NDIM];
     double source_arr[PRJ_NRAD * PRJ_NEGROUP];
@@ -383,12 +380,8 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
 #endif
     Uint_old = u[PRJ_CONS_ETOT] - KE - Emag;
     Ye = u[PRJ_CONS_YE] / rho;
-    eint = Uint_old / rho;
 
-    prj_eos_rey(eos, rho, eint, Ye, eos_q);
-    T = eos_q[PRJ_EOS_TEMPERATURE];
-
-    etael = prj_eos_rty_geteta(eos, rho, T, Ye);
+    etael = prj_eos_rty_geteta(eos, rho, T_cell, Ye);
     if (etael < -20.0) etael = -20.0;
 
     for (nu = 0; nu < PRJ_NRAD; nu++) {
@@ -421,7 +414,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
         }
     }
 
-    prj_rad_eleinel_lookup(rad, rho, T, Ye, etael, je, he,
+    prj_rad_eleinel_lookup(rad, rho, T_cell, Ye, etael, je, he,
         source_arr, sink_arr, scatt_arr);
 
     du = 0.0;
@@ -444,10 +437,6 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
     Uint_new = Uint_old - du;
     u[PRJ_CONS_ETOT] = Uint_new + KE + Emag;
     u[PRJ_CONS_YE] += dy;
-
-    Ye = u[PRJ_CONS_YE] / rho;
-    eint = Uint_new / rho;
-    prj_eos_rey(eos, rho, eint, Ye, eos_q);
 }
 
 /* ================================================================== */
@@ -687,16 +676,13 @@ static int prj_nucinel_compute_step(const prj_rad *rad,
     return status;
 }
 
-int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
+int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
 {
     double KE;
     double Emag = 0.0;
     double Uint_old;
     double rho;
     double Ye;
-    double eint;
-    double T;
-    double eos_q[PRJ_EOS_NQUANT];
     double xs1[PRJ_NEGROUP];
     double xs2[PRJ_NEGROUP];
     double xs3[PRJ_NEGROUP];
@@ -729,10 +715,6 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
 #endif
     Uint_old = u[PRJ_CONS_ETOT] - KE - Emag;
     Ye = u[PRJ_CONS_YE] / rho;
-    eint = Uint_old / rho;
-
-    prj_eos_rey(eos, rho, eint, Ye, eos_q);
-    T = eos_q[PRJ_EOS_TEMPERATURE];
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
@@ -747,7 +729,7 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
         if (rad->egroup[0][g] > rad->kom_Ecut[0] && ncut1 == PRJ_NEGROUP) {
             ncut1 = g;
         }
-        xs1[g] = rad->egroup[0][g] / T;
+        xs1[g] = rad->egroup[0][g] / T_cell;
         Js1[g] = u[PRJ_CONS_RAD_E(0, g)] * sf;
         if (Js1[g] > 1.0) Js1[g] = 1.0;
         if (Js1[g] < 0.0) Js1[g] = 0.0;
@@ -757,7 +739,7 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
         if (rad->egroup[1][g] > rad->kom_Ecut[1] && ncut2 == PRJ_NEGROUP) {
             ncut2 = g;
         }
-        xs2[g] = rad->egroup[1][g] / T;
+        xs2[g] = rad->egroup[1][g] / T_cell;
         Js2[g] = u[PRJ_CONS_RAD_E(1, g)] * sf;
         if (Js2[g] > 1.0) Js2[g] = 1.0;
         if (Js2[g] < 0.0) Js2[g] = 0.0;
@@ -767,19 +749,19 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
         if (rad->egroup[2][g] > rad->kom_Ecut[2] && ncut3 == PRJ_NEGROUP) {
             ncut3 = g;
         }
-        xs3[g] = rad->egroup[2][g] / T;
+        xs3[g] = rad->egroup[2][g] / T_cell;
         Js3[g] = u[PRJ_CONS_RAD_E(2, g)] * sf;
         if (Js3[g] > 1.0) Js3[g] = 1.0;
         if (Js3[g] < 0.0) Js3[g] = 0.0;
         u_res[2 * PRJ_NEGROUP + g] = u[PRJ_CONS_RAD_E(2, g)] - Js3[g] / sf;
     }
 
-    status = prj_nucinel_compute_step(rad, T, rho, Ye, xs1, Js1, ncut1, dt);
+    status = prj_nucinel_compute_step(rad, T_cell, rho, Ye, xs1, Js1, ncut1, dt);
     if (status == 1) {
-        status = prj_nucinel_compute_step(rad, T, rho, Ye, xs2, Js2, ncut2, dt);
+        status = prj_nucinel_compute_step(rad, T_cell, rho, Ye, xs2, Js2, ncut2, dt);
     }
     if (status == 1) {
-        status = prj_nucinel_compute_step(rad, T, rho, Ye, xs3, Js3, ncut3, dt);
+        status = prj_nucinel_compute_step(rad, T_cell, rho, Ye, xs3, Js3, ncut3, dt);
     }
 
     if (status == 1) {
@@ -807,10 +789,6 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt)
         Uint_new = Uint_old - du;
         u[PRJ_CONS_ETOT] = Uint_new + KE + Emag;
         u[PRJ_CONS_YE] += dy;
-
-        Ye = u[PRJ_CONS_YE] / rho;
-        eint = Uint_new / rho;
-        prj_eos_rey(eos, rho, eint, Ye, eos_q);
     }
 
     return status;
