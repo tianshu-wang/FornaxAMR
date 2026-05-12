@@ -5,14 +5,6 @@
 
 #include "prj.h"
 
-#if PRJ_TIMER
-#define PRJ_TIMER_CURRENT_START(name) prj_timer_start(prj_timer_current(), (name))
-#define PRJ_TIMER_CURRENT_STOP(name) prj_timer_stop(prj_timer_current(), (name))
-#else
-#define PRJ_TIMER_CURRENT_START(name) ((void)(name))
-#define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
-#endif
-
 void prj_rad_init(prj_rad *rad)
 {
 #if PRJ_NRAD > 0
@@ -788,13 +780,16 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     v[2] = u[PRJ_CONS_MOM3] / rho;
     inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
 
+    PRJ_TIMER_CURRENT_START("rad_mu_opac_lookup");
     prj_rad3_opac_lookup(rad, rho, temperature, Ye, kappa, sigma, delta, 0);
+    PRJ_TIMER_CURRENT_STOP("rad_mu_opac_lookup");
 
     dmom[0] = 0.0;
     dmom[1] = 0.0;
     dmom[2] = 0.0;
     detot = 0.0;
 
+    PRJ_TIMER_CURRENT_START("rad_mu_group_loop");
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             int idx = nu * PRJ_NEGROUP + g;
@@ -819,7 +814,9 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     u[PRJ_CONS_MOM2] -= dmom[1];
     u[PRJ_CONS_MOM3] -= dmom[2];
     u[PRJ_CONS_ETOT] -= detot;
+    PRJ_TIMER_CURRENT_STOP("rad_mu_group_loop");
 
+    PRJ_TIMER_CURRENT_START("rad_mu_flux_limit");
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             double E = u[PRJ_CONS_RAD_E(nu, g)];
@@ -837,6 +834,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
             }
         }
     }
+    PRJ_TIMER_CURRENT_STOP("rad_mu_flux_limit");
 }
 
 /* Koren slope-limiter function φ(r) = max(0, min(2r, (2+r)/3, 2)). */

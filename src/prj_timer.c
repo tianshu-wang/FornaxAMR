@@ -1,5 +1,6 @@
 #include <string.h>
 #include <sys/time.h>
+#include <time.h>
 
 #include "prj.h"
 
@@ -7,6 +8,13 @@ static prj_timer *prj_timer_active = 0;
 
 double prj_timer_now(void)
 {
+#if defined(CLOCK_MONOTONIC)
+    struct timespec ts;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        return (double)ts.tv_sec + 1.0e-9 * (double)ts.tv_nsec;
+    }
+#endif
     struct timeval tv;
 
     gettimeofday(&tv, 0);
@@ -94,9 +102,58 @@ int prj_timer_start(prj_timer *timer, const char *name)
     return 0;
 }
 
+static int prj_timer_cache_lookup(prj_timer *timer, const char *name, int *cache_idx, int add)
+{
+    int idx;
+
+    if (timer == 0 || name == 0) {
+        return -1;
+    }
+    if (cache_idx != 0 && *cache_idx >= 0 && *cache_idx < timer->nentry) {
+        const char *cached_name = timer->entry[*cache_idx].name;
+
+        if (cached_name == name || (cached_name != 0 && strcmp(cached_name, name) == 0)) {
+            return *cache_idx;
+        }
+    }
+    idx = add != 0 ? prj_timer_find_or_add(timer, name) : prj_timer_find(timer, name);
+    if (cache_idx != 0) {
+        *cache_idx = idx;
+    }
+    return idx;
+}
+
+int prj_timer_start_cached(prj_timer *timer, const char *name, int *cache_idx)
+{
+    int idx = prj_timer_cache_lookup(timer, name, cache_idx, 1);
+
+    if (idx < 0 || timer->entry[idx].active != 0) {
+        return -1;
+    }
+    timer->entry[idx].start = prj_timer_now();
+    timer->entry[idx].active = 1;
+    return 0;
+}
+
 int prj_timer_stop(prj_timer *timer, const char *name)
 {
     int idx = prj_timer_find(timer, name);
+    double now;
+
+    if (idx < 0 || timer->entry[idx].active == 0) {
+        return -1;
+    }
+    now = prj_timer_now();
+    timer->entry[idx].total += now - timer->entry[idx].start;
+    timer->entry[idx].start = 0.0;
+    timer->entry[idx].count += 1;
+    timer->entry[idx].active = 0;
+    return 0;
+}
+
+int prj_timer_stop_cached(prj_timer *timer, const char *name, int *cache_idx)
+{
+    int idx = prj_timer_cache_lookup(timer, name, cache_idx, 0);
     double now;
 
     if (idx < 0 || timer->entry[idx].active == 0) {

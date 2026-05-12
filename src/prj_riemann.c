@@ -5,14 +5,6 @@
 
 #include "prj.h"
 
-#if PRJ_TIMER
-#define PRJ_TIMER_CURRENT_START(name) prj_timer_start(prj_timer_current(), (name))
-#define PRJ_TIMER_CURRENT_STOP(name) prj_timer_stop(prj_timer_current(), (name))
-#else
-#define PRJ_TIMER_CURRENT_START(name) ((void)(name))
-#define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
-#endif
-
 static double prj_riemann_theta_limiter(double cfmax,
     double deltau, double deltav, double deltaw)
 {

@@ -9,14 +9,6 @@
 #define PRJ_FAST_MHD_RAD_CELL_UPDATE 1
 #endif
 
-#if PRJ_TIMER
-#define PRJ_TIMER_START(timer, name) prj_timer_start((timer), (name))
-#define PRJ_TIMER_STOP(timer, name) prj_timer_stop((timer), (name))
-#else
-#define PRJ_TIMER_START(timer, name) ((void)(timer), (void)(name))
-#define PRJ_TIMER_STOP(timer, name) ((void)(timer), (void)(name))
-#endif
-
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_lapse(const prj_block *block, int i, int j, int k)
 {

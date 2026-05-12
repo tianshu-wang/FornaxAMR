@@ -14,14 +14,6 @@
 #include <mpi.h>
 #endif
 
-#if PRJ_TIMER
-#define PRJ_TIMER_CURRENT_START(name) prj_timer_start(prj_timer_current(), (name))
-#define PRJ_TIMER_CURRENT_STOP(name) prj_timer_stop(prj_timer_current(), (name))
-#else
-#define PRJ_TIMER_CURRENT_START(name) ((void)(name))
-#define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
-#endif
-
 #define PRJ_EOS_NUMEL 16
 #define PRJ_EOS_EXT_NT 500
 #define PRJ_EOS_EXT_NR 500

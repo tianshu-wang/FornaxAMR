@@ -394,6 +394,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
 
     if (!rad->eleinel_table_loaded) return;
 
+    PRJ_TIMER_CURRENT_START("rad_eleinel_state");
     rho = u[PRJ_CONS_RHO];
     KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
@@ -438,10 +439,14 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
             }
         }
     }
+    PRJ_TIMER_CURRENT_STOP("rad_eleinel_state");
 
+    PRJ_TIMER_CURRENT_START("rad_eleinel_lookup");
     prj_rad_eleinel_lookup(rad, rho, T_cell, Ye, etael, je, he,
         source_arr, sink_arr, scatt_arr);
+    PRJ_TIMER_CURRENT_STOP("rad_eleinel_lookup");
 
+    PRJ_TIMER_CURRENT_START("rad_eleinel_apply");
     du = 0.0;
     dy = 0.0;
     for (nu = 0; nu < PRJ_NRAD; nu++) {
@@ -462,6 +467,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     Uint_new = Uint_old - du;
     u[PRJ_CONS_ETOT] = Uint_new + KE + Emag;
     u[PRJ_CONS_YE] += dy;
+    PRJ_TIMER_CURRENT_STOP("rad_eleinel_apply");
 }
 
 /* ================================================================== */
@@ -730,6 +736,7 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
     if (rho < rad->min_inel_density) {
         return 1;
     }
+    PRJ_TIMER_CURRENT_START("rad_nucinel_state");
     KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
         u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
@@ -780,7 +787,9 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
         if (Js3[g] < 0.0) Js3[g] = 0.0;
         u_res[2 * PRJ_NEGROUP + g] = u[PRJ_CONS_RAD_E(2, g)] - Js3[g] / sf;
     }
+    PRJ_TIMER_CURRENT_STOP("rad_nucinel_state");
 
+    PRJ_TIMER_CURRENT_START("rad_nucinel_solve");
     status = prj_nucinel_compute_step(rad, T_cell, rho, Ye, xs1, Js1, ncut1, dt);
     if (status == 1) {
         status = prj_nucinel_compute_step(rad, T_cell, rho, Ye, xs2, Js2, ncut2, dt);
@@ -788,7 +797,9 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
     if (status == 1) {
         status = prj_nucinel_compute_step(rad, T_cell, rho, Ye, xs3, Js3, ncut3, dt);
     }
+    PRJ_TIMER_CURRENT_STOP("rad_nucinel_solve");
 
+    PRJ_TIMER_CURRENT_START("rad_nucinel_apply");
     if (status == 1) {
         du = 0.0;
         dy = 0.0;
@@ -815,6 +826,7 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
         u[PRJ_CONS_ETOT] = Uint_new + KE + Emag;
         u[PRJ_CONS_YE] += dy;
     }
+    PRJ_TIMER_CURRENT_STOP("rad_nucinel_apply");
 
     return status;
 }

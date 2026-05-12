@@ -29,14 +29,6 @@ static void prj_write_timer_report(const prj_timer *timer, int rank)
 }
 #endif
 
-#if PRJ_TIMER
-#define PRJ_TIMER_START(timer, name) prj_timer_start((timer), (name))
-#define PRJ_TIMER_STOP(timer, name) prj_timer_stop((timer), (name))
-#else
-#define PRJ_TIMER_START(timer, name) ((void)(timer), (void)(name))
-#define PRJ_TIMER_STOP(timer, name) ((void)(timer), (void)(name))
-#endif
-
 static prj_problem_init_fn prj_select_problem(const char *name)
 {
     if (strcmp(name, "sedov") == 0) {
