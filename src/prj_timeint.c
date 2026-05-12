@@ -616,8 +616,12 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh,
         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
 
         prj_rad_freq_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt);
+        PRJ_TIMER_START(prj_timer_current(), "rad_nucinel");
         prj_rad_nucinel_step(rad, eos, u, dt, T_cell);
+        PRJ_TIMER_STOP(prj_timer_current(), "rad_nucinel");
+        PRJ_TIMER_START(prj_timer_current(), "rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
+        PRJ_TIMER_STOP(prj_timer_current(), "rad_eleinel");
         prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell);
         prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell);
     }
@@ -699,8 +703,12 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh,
         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
 
         prj_rad_freq_flux_apply(rad, block, block->W1, u, i, j, k, lapse_cell, 0.5 * dt);
+        PRJ_TIMER_START(prj_timer_current(), "rad_nucinel");
         prj_rad_nucinel_step(rad, eos, u, 0.5 * dt, T_cell);
+        PRJ_TIMER_STOP(prj_timer_current(), "rad_nucinel");
+        PRJ_TIMER_START(prj_timer_current(), "rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
+        PRJ_TIMER_STOP(prj_timer_current(), "rad_eleinel");
         prj_rad_energy_update(rad, eos, u, 0.5 * dt, lapse_cell, &T_cell);
         prj_rad_momentum_update(rad, eos, u, 0.5 * dt, lapse_cell, T_cell);
     }
@@ -902,8 +910,12 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                             double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
                             double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
                              prj_rad_freq_flux_apply(rad, block, block->W, u1, i, j, k, lapse_cell, dt);
+                             PRJ_TIMER_START(prj_timer_current(), "rad_nucinel");
                              prj_rad_nucinel_step(rad, eos, u1, dt, T_cell);
+                             PRJ_TIMER_STOP(prj_timer_current(), "rad_nucinel");
+                             PRJ_TIMER_START(prj_timer_current(), "rad_eleinel");
                              prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
+                             PRJ_TIMER_STOP(prj_timer_current(), "rad_eleinel");
                              prj_rad_energy_update(rad, eos, u1, dt, lapse_cell, &T_cell);
                              prj_rad_momentum_update(rad, eos, u1, dt, lapse_cell, T_cell);
                         }
@@ -1025,8 +1037,12 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                             double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
                             double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
                             prj_rad_freq_flux_apply(rad, block, block->W1, u, i, j, k, lapse_cell, 0.5 * dt);
+                            PRJ_TIMER_START(prj_timer_current(), "rad_nucinel");
                             prj_rad_nucinel_step(rad, eos, u, 0.5 * dt, T_cell);
+                            PRJ_TIMER_STOP(prj_timer_current(), "rad_nucinel");
+                            PRJ_TIMER_START(prj_timer_current(), "rad_eleinel");
                             prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
+                            PRJ_TIMER_STOP(prj_timer_current(), "rad_eleinel");
                             prj_rad_energy_update(rad, eos, u, 0.5 * dt, lapse_cell, &T_cell);
                             prj_rad_momentum_update(rad, eos, u, 0.5 * dt, lapse_cell, T_cell);
                         }

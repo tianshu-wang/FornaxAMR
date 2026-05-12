@@ -41,6 +41,9 @@
 #ifndef PRJ_NEGROUP
 #define PRJ_NEGROUP 12
 #endif
+#ifndef INEL_PHI_NT
+#define INEL_PHI_NT 30
+#endif
 #if PRJ_MHD
 #define PRJ_NHYDRO 9
 #else

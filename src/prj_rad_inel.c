@@ -21,7 +21,9 @@
 /* ================================================================== */
 
 #define INEL_PHI_NETA 30
+#ifndef INEL_PHI_NT
 #define INEL_PHI_NT 30
+#endif
 
 #define INEL_ELEM_ELE(table, m, ke, le, jeta, jq, ng) \
     (table)[((((m) * (ng) + (ke)) * (ng) + (le)) * INEL_PHI_NETA + (jeta)) * INEL_PHI_NT + (jq)]
@@ -110,7 +112,6 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     double T, double etael,
     double *srce, double *sinke, double *scatte)
 {
-    double factf = rad->eleinel_factf;
     double constin = rad->eleinel_constin;
     double constout = rad->eleinel_constout;
     double cut;
@@ -152,7 +153,6 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
         double factf_over_freqe3_nfp = rad->eleinel_factf_over_freqe3[nu_offset + nfp];
         double xjpe = PRJ_MAX(0.0, PRJ_MIN(je[nfp] * factf_over_freqe3_nfp / cut, 1.0));
         double fdotf = 0.0;
-        double omegae;
         double expe;
         double phi0;
         double phi1;
@@ -165,8 +165,16 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
             double xhpe = he[nfp * PRJ_NDIM + did] * factf_over_freqe3_nfp / cut;
             fdotf += xhe[did] * xhpe;
         }
-        omegae = enu - freqe[nfp];
-        expe = exp(PRJ_MAX(PRJ_MIN(-omegae / T, 207.0), -207.0));
+        {
+            double ql = (log10t + 1.0) / 2.5;
+            int jq = (int)((double)INEL_PHI_NT * ql);
+            double sq;
+            if (jq < 0) jq = 0;
+            if (jq > INEL_PHI_NT - 2) jq = INEL_PHI_NT - 2;
+            sq = (double)INEL_PHI_NT * ql - (double)jq;
+            expe = (1.0 - sq) * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq]
+                 + sq * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq + 1];
+        }
         prj_rad_eleinel_phifind_interp(rad, nutype, nf, nfp, log10t, etael, &phi0ee, &phi1ee);
         phi0 = phi0ee;
         phi1 = phi1ee;
@@ -274,6 +282,23 @@ void prj_rad_eleinel_init(prj_rad *rad)
             double f3 = rad->egroup[nu][g] * rad->egroup[nu][g] * rad->egroup[nu][g];
             rad->eleinel_freqe3[idx] = f3;
             rad->eleinel_factf_over_freqe3[idx] = rad->eleinel_factf / f3;
+        }
+    }
+
+    for (nu = 0; nu < PRJ_NRAD; nu++) {
+        int nf;
+        for (nf = 0; nf < PRJ_NEGROUP; nf++) {
+            int nfp;
+            for (nfp = 0; nfp < PRJ_NEGROUP; nfp++) {
+                double omegae = rad->egroup[nu][nf] - rad->egroup[nu][nfp];
+                int jq;
+                for (jq = 0; jq < INEL_PHI_NT; jq++) {
+                    double log10t_jq = -1.0 + 2.5 * (double)jq / (double)INEL_PHI_NT;
+                    double T_jq = pow(10.0, log10t_jq);
+                    rad->expe[nu][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq] =
+                        exp(PRJ_MAX(PRJ_MIN(-omegae / T_jq, 207.0), -207.0));
+                }
+            }
         }
     }
 }
