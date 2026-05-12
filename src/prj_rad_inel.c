@@ -44,9 +44,10 @@ static int prj_rad_inel_mpi_rank(void)
 #endif
 }
 
-static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
-    int nf, int nfp, double log10xtemp, double etalep,
-    double *phi0e, double *phi1e)
+static void prj_rad_eleinel_phi_interp_make(double log10xtemp, double etalep,
+    int *jeta_out, int *jq_out,
+    double *coeff0_out, double *coeff1_out, double *coeff2_out,
+    double *coeff3_out, double *coeff4_out, double *coeff5_out)
 {
     double t1 = -1.0;
     double t2 = 1.5;
@@ -64,14 +65,6 @@ static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
     int jq = (int)((double)INEL_PHI_NT * ql);
     double sp;
     double sq;
-    double coeff0;
-    double coeff1;
-    double coeff2;
-    double coeff3;
-    double coeff4;
-    double coeff5;
-    const double *table = rad->eleinel_phi_ee[nutype];
-    int ng = PRJ_NEGROUP;
 
     if (jeta < 1)
         jeta = 1;
@@ -85,12 +78,24 @@ static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
     sp = delta - jeta;
     sq = (double)INEL_PHI_NT * ql - jq;
 
-    coeff0 = 0.5 * sq * (sq - 1.0);
-    coeff1 = 0.5 * sp * (sp - 1.0);
-    coeff2 = 1.0 + sp * sq - sp * sp - sq * sq;
-    coeff3 = 0.5 * sp * (sp - 2.0 * sq + 1.0);
-    coeff4 = 0.5 * sq * (sq - 2.0 * sp + 1.0);
-    coeff5 = sp * sq;
+    *jeta_out = jeta;
+    *jq_out = jq;
+    *coeff0_out = 0.5 * sq * (sq - 1.0);
+    *coeff1_out = 0.5 * sp * (sp - 1.0);
+    *coeff2_out = 1.0 + sp * sq - sp * sp - sq * sq;
+    *coeff3_out = 0.5 * sp * (sp - 2.0 * sq + 1.0);
+    *coeff4_out = 0.5 * sq * (sq - 2.0 * sp + 1.0);
+    *coeff5_out = sp * sq;
+}
+
+static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
+    int nf, int nfp, int jeta, int jq,
+    double coeff0, double coeff1, double coeff2,
+    double coeff3, double coeff4, double coeff5,
+    double *phi0e, double *phi1e)
+{
+    const double *table = rad->eleinel_phi_ee[nutype];
+    int ng = PRJ_NEGROUP;
 
     *phi0e = coeff0 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta, jq - 1, ng)
         + coeff1 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta - 1, jq, ng)
@@ -109,7 +114,9 @@ static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
 static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     int nutype, int nfreq, int nf,
     const double *je, const double *he, const double *freqe,
-    double T, double etael,
+    double log10t, int jeta, int jq,
+    double coeff0, double coeff1, double coeff2,
+    double coeff3, double coeff4, double coeff5,
     double *srce, double *sinke, double *scatte)
 {
     double constin = rad->eleinel_constin;
@@ -124,7 +131,6 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     int nfp;
     int id;
     double enu;
-    double log10t;
     int nu_offset = nutype * PRJ_NEGROUP;
     double factf_over_freqe3_nf = rad->eleinel_factf_over_freqe3[nu_offset + nf];
 
@@ -143,7 +149,6 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     sumin = 0.0;
     sumout = 0.0;
     ssum = 0.0;
-    log10t = log10(T);
     enu = freqe[nf];
 
     for (nfp = 0; nfp < nfreq; nfp++) {
@@ -175,7 +180,9 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
             expe = (1.0 - sq) * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq]
                  + sq * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq + 1];
         }
-        prj_rad_eleinel_phifind_interp(rad, nutype, nf, nfp, log10t, etael, &phi0ee, &phi1ee);
+        prj_rad_eleinel_phifind_interp(rad, nutype, nf, nfp,
+            jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
+            &phi0ee, &phi1ee);
         phi0 = phi0ee;
         phi1 = phi1ee;
         term = freqe[nfp] * freqe[nfp] * dnue;
@@ -325,6 +332,15 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
 {
     int nu;
     int g;
+    int jeta;
+    int jq;
+    double log10t;
+    double coeff0;
+    double coeff1;
+    double coeff2;
+    double coeff3;
+    double coeff4;
+    double coeff5;
 
     (void)Ye;
 
@@ -338,6 +354,10 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         return;
     }
 
+    log10t = log10(T);
+    prj_rad_eleinel_phi_interp_make(log10t, etael,
+        &jeta, &jq, &coeff0, &coeff1, &coeff2, &coeff3, &coeff4, &coeff5);
+
     for (nu = 0; nu < PRJ_NRAD; nu++) {
         const double *freqe = rad->egroup[nu];
         int nfreq = PRJ_NEGROUP;
@@ -350,7 +370,8 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             if (rho > rad->min_inel_density && xxj > 0.0) {
                 prj_rad_eleinel_resourcesink(rad, nu, nfreq, g,
                     &je[nu * PRJ_NEGROUP], &he[nu * PRJ_NEGROUP * PRJ_NDIM],
-                    freqe, T, etael,
+                    freqe, log10t,
+                    jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
                     &source[idx], &sink[idx], &scatt[idx]);
             } else {
                 source[idx] = 0.0;
