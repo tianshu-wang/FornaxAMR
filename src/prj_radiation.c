@@ -199,11 +199,10 @@ static void prj_rad_m1_third_moment(double E, double F1, double F2, double F3,
     }
 }
 
-static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
+static void prj_rad_m1_phys_flux_with_fluxmag(double E, double F1, double F2, double F3,
+    double Fmag, double f,
     double *fE, double *fF1, double *fF2, double *fF3)
 {
-    double Fmag;
-    double f;
     double chi;
     double n1;
     double n2;
@@ -212,13 +211,10 @@ static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
     double D12;
     double D13;
     double c2;
-    double cE;
 
     c2 = PRJ_CLIGHT * PRJ_CLIGHT;
-    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
-    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
 
-    if (cE <= 0.0 || Fmag <= 0.0) {
+    if (E <= 0.0 || Fmag <= 0.0) {
         /* isotropic: P = (E/3) I */
         *fE = F1;
         *fF1 = c2 * E / 3.0;
@@ -227,10 +223,6 @@ static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
         return;
     }
 
-    f = Fmag / cE;
-    if (f > 1.0) {
-        f = 1.0;
-    }
     chi = (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
 
     n1 = F1 / Fmag;
@@ -251,10 +243,12 @@ static void prj_rad_m1_phys_flux(double E, double F1, double F2, double F3,
     *fF3 = c2 * E * D13;
 }
 
-static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double *F3)
+static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double *F3,
+    double *Fmag_out, double *f_out)
 {
     double Fmag;
     double cE;
+    double f;
     double scale;
 
     if (*E < 0.0) {
@@ -267,33 +261,34 @@ static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double
         *F1 *= scale;
         *F2 *= scale;
         *F3 *= scale;
+        Fmag = cE;
     }
+    if (cE > 0.0) {
+        f = Fmag / cE;
+        if (f > 1.0) {
+            f = 1.0;
+        }
+    } else {
+        f = 0.0;
+    }
+    *Fmag_out = Fmag;
+    *f_out = f;
 }
 
-void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
+static void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double f,
     double *lam_min, double *lam_max)
 {
-    double Fmag;
-    double cE;
-    double f;
     double mu;
     double fsq;
     double ffac;
     double lterm;
 
-    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
-    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
-
-    if (cE <= 0.0 || Fmag <= 0.0) {
+    if (E <= 0.0 || Fmag <= 0.0) {
         *lam_min = -1.0 / sqrt(3.0);
         *lam_max = 1.0 / sqrt(3.0);
         return;
     }
 
-    f = Fmag / cE;
-    if (f > 1.0) {
-        f = 1.0;
-    }
     mu = F1 / Fmag;
     if (mu > 1.0) {
         mu = 1.0;
@@ -312,6 +307,26 @@ void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
     if (*lam_max > 1.0) {
         *lam_max = 1.0;
     }
+}
+
+void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
+    double *lam_min, double *lam_max)
+{
+    double Fmag;
+    double cE;
+    double f;
+
+    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+    if (cE > 0.0) {
+        f = Fmag / cE;
+        if (f > 1.0) {
+            f = 1.0;
+        }
+    } else {
+        f = 0.0;
+    }
+    prj_rad_m1_wavespeeds_with_fluxmag(E, F1, Fmag, f, lam_min, lam_max);
 }
 #endif
 
@@ -347,9 +362,10 @@ void prj_rad_flux(const double *WL, const double *WR,
                 double F1R = WR[PRJ_PRIM_RAD_F1(field, group)];
                 double F2R = WR[PRJ_PRIM_RAD_F2(field, group)];
                 double F3R = WR[PRJ_PRIM_RAD_F3(field, group)];
-
-                prj_rad_enforce_flux_limit(&EL, &F1L, &F2L, &F3L);
-                prj_rad_enforce_flux_limit(&ER, &F1R, &F2R, &F3R);
+                double Fmag_L;
+                double f_L;
+                double Fmag_R;
+                double f_R;
                 double fLE;
                 double fLF1;
                 double fLF2;
@@ -369,11 +385,18 @@ void prj_rad_flux(const double *WL, const double *WR,
                 double tau;
                 double eps;
 
-                prj_rad_m1_phys_flux(EL, F1L, F2L, F3L, &fLE, &fLF1, &fLF2, &fLF3);
-                prj_rad_m1_phys_flux(ER, F1R, F2R, F3R, &fRE, &fRF1, &fRF2, &fRF3);
+                prj_rad_enforce_flux_limit(&EL, &F1L, &F2L, &F3L, &Fmag_L, &f_L);
+                prj_rad_enforce_flux_limit(&ER, &F1R, &F2R, &F3R, &Fmag_R, &f_R);
 
-                prj_rad_m1_wavespeeds(EL, F1L, F2L, F3L, &lamL_min, &lamL_max);
-                prj_rad_m1_wavespeeds(ER, F1R, F2R, F3R, &lamR_min, &lamR_max);
+                prj_rad_m1_phys_flux_with_fluxmag(EL, F1L, F2L, F3L, Fmag_L, f_L,
+                    &fLE, &fLF1, &fLF2, &fLF3);
+                prj_rad_m1_phys_flux_with_fluxmag(ER, F1R, F2R, F3R, Fmag_R, f_R,
+                    &fRE, &fRF1, &fRF2, &fRF3);
+
+                prj_rad_m1_wavespeeds_with_fluxmag(EL, F1L, Fmag_L, f_L,
+                    &lamL_min, &lamL_max);
+                prj_rad_m1_wavespeeds_with_fluxmag(ER, F1R, Fmag_R, f_R,
+                    &lamR_min, &lamR_max);
                 sL = PRJ_CLIGHT * (lamL_min < lamR_min ? lamL_min : lamR_min);
                 sR = PRJ_CLIGHT * (lamL_max > lamR_max ? lamL_max : lamR_max);
                 if (sL > 0.0) {

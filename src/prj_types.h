@@ -220,6 +220,7 @@ struct prj_rad {
     double eleinel_constout;
     double eleinel_freqe3[PRJ_NRAD * PRJ_NEGROUP];
     double eleinel_factf_over_freqe3[PRJ_NRAD * PRJ_NEGROUP];
+    double eleinel_freqe2_dnue[PRJ_NRAD * PRJ_NEGROUP];
     double expe[PRJ_NRAD][PRJ_NEGROUP * PRJ_NEGROUP * INEL_PHI_NT];
 #endif
 };

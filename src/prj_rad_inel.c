@@ -113,38 +113,24 @@ static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
 
 static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     int nutype, int nfreq, int nf,
-    const double *je, const double *he, const double *freqe,
-    double log10t, int jeta, int jq,
+    const double *xj, const double xh[PRJ_NEGROUP][PRJ_NDIM],
+    const double *freqe, const double *freqe2_dnue,
+    double species_cut, double czero, int jeta, int jq,
+    int expe_jq, double expe_coeff0, double expe_coeff1,
     double coeff0, double coeff1, double coeff2,
     double coeff3, double coeff4, double coeff5,
     double *srce, double *sinke, double *scatte)
 {
     double constin = rad->eleinel_constin;
     double constout = rad->eleinel_constout;
-    double cut;
-    double czero;
     double xje;
-    double xhe[PRJ_NDIM];
     double sumin;
     double sumout;
     double ssum;
     int nfp;
-    int id;
     double enu;
-    int nu_offset = nutype * PRJ_NEGROUP;
-    double factf_over_freqe3_nf = rad->eleinel_factf_over_freqe3[nu_offset + nf];
 
-    cut = 1.0;
-    czero = 1.0;
-    if (nutype == 2) {
-        cut = 4.0;
-        czero = 0.0;
-    }
-
-    xje = PRJ_MAX(0.0, PRJ_MIN(je[nf] * factf_over_freqe3_nf / cut, 1.0));
-    for (id = 0; id < PRJ_NDIM; id++) {
-        xhe[id] = he[nf * PRJ_NDIM + id] * factf_over_freqe3_nf / cut;
-    }
+    xje = xj[nf];
 
     sumin = 0.0;
     sumout = 0.0;
@@ -152,46 +138,32 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     enu = freqe[nf];
 
     for (nfp = 0; nfp < nfreq; nfp++) {
-        int nfpp = PRJ_MIN(nfp + 1, nfreq - 1);
-        int nfpm = PRJ_MAX(nfp - 1, 0);
-        double dnue = (freqe[nfpp] - freqe[nfpm]) / 2.0;
-        double factf_over_freqe3_nfp = rad->eleinel_factf_over_freqe3[nu_offset + nfp];
-        double xjpe = PRJ_MAX(0.0, PRJ_MIN(je[nfp] * factf_over_freqe3_nfp / cut, 1.0));
+        double xjpe = xj[nfp];
         double fdotf = 0.0;
         double expe;
         double phi0;
         double phi1;
-        double term;
+        double term = freqe2_dnue[nfp];
         double phi0ee;
         double phi1ee;
         int did;
 
         for (did = 0; did < PRJ_NDIM; did++) {
-            double xhpe = he[nfp * PRJ_NDIM + did] * factf_over_freqe3_nfp / cut;
-            fdotf += xhe[did] * xhpe;
+            fdotf += xh[nf][did] * xh[nfp][did];
         }
-        {
-            double ql = (log10t + 1.0) / 2.5;
-            int jq = (int)((double)INEL_PHI_NT * ql);
-            double sq;
-            if (jq < 0) jq = 0;
-            if (jq > INEL_PHI_NT - 2) jq = INEL_PHI_NT - 2;
-            sq = (double)INEL_PHI_NT * ql - (double)jq;
-            expe = (1.0 - sq) * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq]
-                 + sq * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq + 1];
-        }
+        expe = expe_coeff0 * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq]
+             + expe_coeff1 * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq + 1];
         prj_rad_eleinel_phifind_interp(rad, nutype, nf, nfp,
             jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
             &phi0ee, &phi1ee);
         phi0 = phi0ee;
         phi1 = phi1ee;
-        term = freqe[nfp] * freqe[nfp] * dnue;
         sumin += term * expe * (0.5 * phi0 * xjpe * (1.0 - xje) - czero * 3.0 * 0.5 * phi1 * fdotf);
         sumout += term * (0.5 * phi0 * (1.0 - xjpe) - czero * 3.0 * 0.5 * phi1 * fdotf / xje);
         ssum += term * (0.5 * phi0 * (1.0 - xjpe + expe * xjpe));
     }
 
-    sumin *= cut;
+    sumin *= species_cut;
     *srce = constin * (enu * enu * enu) * sumin;
     *sinke = constout * sumout;
     *scatte = constout * ssum;
@@ -287,8 +259,13 @@ void prj_rad_eleinel_init(prj_rad *rad)
         for (g = 0; g < PRJ_NEGROUP; g++) {
             int idx = nu * PRJ_NEGROUP + g;
             double f3 = rad->egroup[nu][g] * rad->egroup[nu][g] * rad->egroup[nu][g];
+            int gp = PRJ_MIN(g + 1, PRJ_NEGROUP - 1);
+            int gm = PRJ_MAX(g - 1, 0);
+            double dnue = (rad->egroup[nu][gp] - rad->egroup[nu][gm]) / 2.0;
+
             rad->eleinel_freqe3[idx] = f3;
             rad->eleinel_factf_over_freqe3[idx] = rad->eleinel_factf / f3;
+            rad->eleinel_freqe2_dnue[idx] = rad->egroup[nu][g] * rad->egroup[nu][g] * dnue;
         }
     }
 
@@ -335,43 +312,78 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
     int jeta;
     int jq;
     double log10t;
+    int expe_jq;
+    double expe_coeff0;
+    double expe_coeff1;
+    double rho_cut;
     double coeff0;
     double coeff1;
     double coeff2;
     double coeff3;
     double coeff4;
     double coeff5;
+    const size_t total = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
 
     (void)Ye;
 
-    if (rad == 0 || !rad->eleinel_table_loaded) {
-        int total = PRJ_NRAD * PRJ_NEGROUP;
-        for (g = 0; g < total; g++) {
-            source[g] = 0.0;
-            sink[g] = 0.0;
-            scatt[g] = 0.0;
-        }
+    if (rad == 0 || !rad->eleinel_table_loaded || rho <= rad->min_inel_density) {
+        memset(source, 0, total * sizeof(*source));
+        memset(sink, 0, total * sizeof(*sink));
+        memset(scatt, 0, total * sizeof(*scatt));
         return;
     }
 
     log10t = log10(T);
     prj_rad_eleinel_phi_interp_make(log10t, etael,
         &jeta, &jq, &coeff0, &coeff1, &coeff2, &coeff3, &coeff4, &coeff5);
+    {
+        double ql = (log10t + 1.0) / 2.5;
+        double sq;
+
+        expe_jq = (int)((double)INEL_PHI_NT * ql);
+        if (expe_jq < 0) expe_jq = 0;
+        if (expe_jq > INEL_PHI_NT - 2) expe_jq = INEL_PHI_NT - 2;
+        sq = (double)INEL_PHI_NT * ql - (double)expe_jq;
+        expe_coeff0 = 1.0 - sq;
+        expe_coeff1 = sq;
+    }
+
+    rho_cut = 1.0;
+    if (rho > 1e13) {
+        rho_cut = rho / 1e13;
+    }
 
     for (nu = 0; nu < PRJ_NRAD; nu++) {
         const double *freqe = rad->egroup[nu];
+        const double *freqe2_dnue = &rad->eleinel_freqe2_dnue[nu * PRJ_NEGROUP];
+        const double *factf_over_freqe3 = &rad->eleinel_factf_over_freqe3[nu * PRJ_NEGROUP];
+        const double *je_nu = &je[nu * PRJ_NEGROUP];
+        const double *he_nu = &he[nu * PRJ_NEGROUP * PRJ_NDIM];
+        double xj[PRJ_NEGROUP];
+        double xh[PRJ_NEGROUP][PRJ_NDIM];
+        double species_cut = (nu == 2) ? 4.0 : 1.0;
+        double czero = (nu == 2) ? 0.0 : 1.0;
         int nfreq = PRJ_NEGROUP;
 
         for (g = 0; g < PRJ_NEGROUP; g++) {
-            int idx = nu * PRJ_NEGROUP + g;
-            double xxj = je[idx];
-            double cut;
+            double fac = factf_over_freqe3[g] / species_cut;
+            int d;
 
-            if (rho > rad->min_inel_density && xxj > 0.0) {
+            xj[g] = PRJ_MAX(0.0, PRJ_MIN(je_nu[g] * fac, 1.0));
+            for (d = 0; d < PRJ_NDIM; d++) {
+                xh[g][d] = he_nu[g * PRJ_NDIM + d] * fac;
+            }
+        }
+
+        for (g = 0; g < PRJ_NEGROUP; g++) {
+            int idx = nu * PRJ_NEGROUP + g;
+            double xxj = je_nu[g];
+
+            if (xxj > 0.0) {
                 prj_rad_eleinel_resourcesink(rad, nu, nfreq, g,
-                    &je[nu * PRJ_NEGROUP], &he[nu * PRJ_NEGROUP * PRJ_NDIM],
-                    freqe, log10t,
-                    jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
+                    xj, xh, freqe, freqe2_dnue, species_cut, czero,
+                    jeta, jq, expe_jq, expe_coeff0, expe_coeff1,
+                    coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
                     &source[idx], &sink[idx], &scatt[idx]);
             } else {
                 source[idx] = 0.0;
@@ -379,12 +391,9 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
                 scatt[idx] = 0.0;
             }
 
-            cut = 1.0;
-            if (rho > 1e13)
-                cut = rho / 1e13;
-            source[idx] /= cut;
-            sink[idx] /= cut;
-            scatt[idx] /= cut;
+            source[idx] /= rho_cut;
+            sink[idx] /= rho_cut;
+            scatt[idx] /= rho_cut;
 
             source[idx] = PRJ_MAX(source[idx], 0.0);
             sink[idx] = PRJ_MAX(sink[idx], 0.0);
