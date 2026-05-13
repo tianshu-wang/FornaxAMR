@@ -499,6 +499,10 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     double err_scale_1;
     double err_scale_2;
     double res_cur;
+    double cached_F1 = 0.0;
+    double cached_F2 = 0.0;
+    double cached_res = 0.0;
+    int have_cached_residual = 0;
     int iter;
     int nu;
     int g;
@@ -568,15 +572,25 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         double Ttrial;
         double Ytrial;
         double res_trial;
+        double F1_trial;
+        double F2_trial;
         int inner_iter;
+        int accepted_trial;
 
-        PRJ_TIMER_CURRENT_START("rad_eu_resid_base");
-        prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-            E_nu_old, T, Ye, &F1, &F2, E_nu_new);
-        PRJ_TIMER_CURRENT_STOP("rad_eu_resid_base");
-        f1 = F1 / err_scale_1;
-        f2 = F2 / err_scale_2;
-        res_cur = 0.5 * (f1 * f1 + f2 * f2);
+        if (have_cached_residual) {
+            F1 = cached_F1;
+            F2 = cached_F2;
+            res_cur = cached_res;
+            have_cached_residual = 0;
+        } else {
+            PRJ_TIMER_CURRENT_START("rad_eu_resid_base");
+            prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+                E_nu_old, T, Ye, &F1, &F2, E_nu_new);
+            PRJ_TIMER_CURRENT_STOP("rad_eu_resid_base");
+            f1 = F1 / err_scale_1;
+            f2 = F2 / err_scale_2;
+            res_cur = 0.5 * (f1 * f1 + f2 * f2);
+        }
 
         /* Jacobian via finite differences with power-of-2 step. */
         PRJ_TIMER_CURRENT_START("rad_eu_jacobian");
@@ -662,22 +676,25 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         lam = 1.0;
         lamold = 0.0;
         resold = 0.0;
+        accepted_trial = 0;
+        F1_trial = F1;
+        F2_trial = F2;
+        res_trial = res_cur;
         for (inner_iter = 0; inner_iter < 6; ++inner_iter) {
-            double F1t;
-            double F2t;
             double ft1;
             double ft2;
 
             Ttrial = T + lam * dT;
             Ytrial = Ye + lam * dY;
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, Ttrial, Ytrial, &F1t, &F2t, E_nu_new);
-            ft1 = F1t / err_scale_1;
-            ft2 = F2t / err_scale_2;
+                E_nu_old, Ttrial, Ytrial, &F1_trial, &F2_trial, E_nu_new);
+            ft1 = F1_trial / err_scale_1;
+            ft2 = F2_trial / err_scale_2;
             res_trial = 0.5 * (ft1 * ft1 + ft2 * ft2);
 
             if (res_trial < rad->implicit_err_tol * rad->implicit_err_tol ||
                 res_trial < res_cur + alpha_ls * lam * gradfdx) {
+                accepted_trial = 1;
                 break;
             }
 
@@ -714,6 +731,13 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         Ye = Ye + lam * dY;
         if (T <= 0.0) {
             T = 0.5 * (T - lam * dT);
+            accepted_trial = 0;
+        }
+        if (accepted_trial) {
+            cached_F1 = F1_trial;
+            cached_F2 = F2_trial;
+            cached_res = res_trial;
+            have_cached_residual = 1;
         }
 
         /* Convergence: residual norm AND step-size test. */
@@ -730,15 +754,19 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         exit(1);
     }
 
-    /* Final pass at converged (T, Ye) to populate E_nu_new. */
+    /* Final pass at converged (T, Ye) to populate E_nu_new if the accepted
+     * line-search residual was not already evaluated at the final state. */
     PRJ_TIMER_CURRENT_START("rad_eu_final");
     {
-        double F1_final;
-        double F2_final;
         double eint_new;
 
-        prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-            E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new);
+        if (!have_cached_residual) {
+            double F1_final;
+            double F2_final;
+
+            prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+                E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new);
+        }
         prj_eos_rty(eos, rho, T, Ye, eos_q);
         eint_new = eos_q[PRJ_EOS_EINT];
         u[PRJ_CONS_ETOT] = rho * eint_new + KE + Emag;
