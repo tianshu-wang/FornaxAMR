@@ -16,8 +16,14 @@
 #include <mpi.h>
 #endif
 
+/* Runtime opacity tables are corner-major with energy groups contiguous:
+ * (rho index, temperature index, Ye index) -> group. */
+#define OPAC_CELL_IDX(i, j, k, NG, NR, NT, NYE) \
+    ((((((size_t)(i) * (size_t)(NT)) + (size_t)(j)) * (size_t)(NYE) + \
+        (size_t)(k)) * (size_t)(NG)))
+
 #define OPAC_IDX(ng, i, j, k, NG, NR, NT, NYE) \
-    ((((ng) * (NR) + (i)) * (NT) + (j)) * (NYE) + (k))
+    (OPAC_CELL_IDX(i, j, k, NG, NR, NT, NYE) + (size_t)(ng))
 
 #define TEMP_IDX(i, j, k, ng, NR, NT, NYE) \
     ((((ng) * (NYE) + (k)) * (NT) + (j)) * (NR) + (i))
@@ -388,6 +394,7 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     double ye2i;
     double dyei;
     double coff[8];
+    size_t corner[8];
     int nu;
     int ng;
 
@@ -433,6 +440,15 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     coff[6] = (1.0 - dri) * dti * dyei;
     coff[7] = dri * dti * dyei;
 
+    corner[0] = OPAC_CELL_IDX(jr,     jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[1] = OPAC_CELL_IDX(jr + 1, jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[2] = OPAC_CELL_IDX(jr,     jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[3] = OPAC_CELL_IDX(jr + 1, jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[4] = OPAC_CELL_IDX(jr,     jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[5] = OPAC_CELL_IDX(jr + 1, jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[6] = OPAC_CELL_IDX(jr,     jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[7] = OPAC_CELL_IDX(jr + 1, jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         const double *absopac = rad->absopac[nu];
         const double *scaopac = rad->scaopac[nu];
@@ -447,14 +463,14 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
             double j_val;
 
 #define SAMPLE(ARR) \
-            (coff[0] * (ARR)[OPAC_IDX(ng, jr,     jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
-             coff[1] * (ARR)[OPAC_IDX(ng, jr + 1, jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
-             coff[2] * (ARR)[OPAC_IDX(ng, jr,     jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
-             coff[3] * (ARR)[OPAC_IDX(ng, jr + 1, jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
-             coff[4] * (ARR)[OPAC_IDX(ng, jr,     jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
-             coff[5] * (ARR)[OPAC_IDX(ng, jr + 1, jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
-             coff[6] * (ARR)[OPAC_IDX(ng, jr,     jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax)] + \
-             coff[7] * (ARR)[OPAC_IDX(ng, jr + 1, jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax)])
+            (coff[0] * (ARR)[corner[0] + (size_t)ng] + \
+             coff[1] * (ARR)[corner[1] + (size_t)ng] + \
+             coff[2] * (ARR)[corner[2] + (size_t)ng] + \
+             coff[3] * (ARR)[corner[3] + (size_t)ng] + \
+             coff[4] * (ARR)[corner[4] + (size_t)ng] + \
+             coff[5] * (ARR)[corner[5] + (size_t)ng] + \
+             coff[6] * (ARR)[corner[6] + (size_t)ng] + \
+             coff[7] * (ARR)[corner[7] + (size_t)ng])
 
             if (kappa != 0) {
                 k_val = SAMPLE(absopac);
