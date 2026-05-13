@@ -503,6 +503,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     double cached_F2 = 0.0;
     double cached_res = 0.0;
     int have_cached_residual = 0;
+    int have_final_residual = 0;
     int iter;
     int nu;
     int g;
@@ -582,6 +583,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             F2 = cached_F2;
             res_cur = cached_res;
             have_cached_residual = 0;
+            have_final_residual = 1;
         } else {
             PRJ_TIMER_CURRENT_START("rad_eu_resid_base");
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
@@ -590,6 +592,10 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             f1 = F1 / err_scale_1;
             f2 = F2 / err_scale_2;
             res_cur = 0.5 * (f1 * f1 + f2 * f2);
+            have_final_residual = 1;
+        }
+        if (res_cur < rad->implicit_err_tol * rad->implicit_err_tol) {
+            break;
         }
 
         /* Jacobian via finite differences with power-of-2 step. */
@@ -732,18 +738,20 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         if (T <= 0.0) {
             T = 0.5 * (T - lam * dT);
             accepted_trial = 0;
+            have_final_residual = 0;
         }
         if (accepted_trial) {
             cached_F1 = F1_trial;
             cached_F2 = F2_trial;
             cached_res = res_trial;
             have_cached_residual = 1;
+            have_final_residual = 1;
+        } else {
+            have_final_residual = 0;
         }
 
-        /* Convergence: residual norm AND step-size test. */
-        if (res_trial < rad->implicit_err_tol * rad->implicit_err_tol &&
-            fabs(lam * dT / T) < rad->implicit_err_tol &&
-            fabs(lam * dY / Ye) < rad->implicit_err_tol) {
+        /* Convergence: residual norm only. */
+        if (res_trial < rad->implicit_err_tol * rad->implicit_err_tol) {
             res_cur = res_trial;
             break;
         }
@@ -760,7 +768,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     {
         double eint_new;
 
-        if (!have_cached_residual) {
+        if (!have_final_residual) {
             double F1_final;
             double F2_final;
 
