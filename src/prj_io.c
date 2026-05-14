@@ -208,6 +208,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->bc.bc_x3_outer = PRJ_BC_OUTFLOW;
     sim->cfl = 0.8;
     sim->dt_factor = 1.2;
+    sim->x_com_err_tol = 0.5;
     sim->t_end = 0.1;
     sim->output_dt = -1.0;
     sim->restart_dt = -1.0;
@@ -338,6 +339,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->coord.x3max = strtod(value, &endptr);
         } else if (strcmp(key, "cfl") == 0) {
             sim->cfl = strtod(value, &endptr);
+        } else if (strcmp(key, "x_com_err_tol") == 0) {
+            sim->x_com_err_tol = strtod(value, &endptr);
         } else if (strcmp(key, "t_end") == 0) {
             sim->t_end = strtod(value, &endptr);
         } else if (strcmp(key, "dt_factor") == 0) {

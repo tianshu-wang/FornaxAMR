@@ -244,6 +244,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "use_BJ: %s\n", sim->mesh.use_BJ != 0 ? "on" : "off");
     fprintf(stderr, "max_level: %d\n", sim->mesh.max_level);
     fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
+    fprintf(stderr, "x_com_err_tol: %.6e\n", sim->x_com_err_tol);
 }
 
 int main(int argc, char *argv[])
@@ -428,6 +429,11 @@ int main(int argc, char *argv[])
         double dt_src = 1.0e100;
 
         PRJ_TIMER_START(&timer, "main_loop");
+#if PRJ_USE_GRAVITY
+        PRJ_TIMER_START(&timer, "gravity_update_x_com");
+        prj_gravity_update_center_of_mass(&sim.mesh, sim.x_com_err_tol);
+        PRJ_TIMER_STOP(&timer, "gravity_update_x_com");
+#endif
         {
             double dt_new;
 

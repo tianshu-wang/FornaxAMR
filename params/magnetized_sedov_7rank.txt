@@ -15,6 +15,7 @@ root_nx = 3
 max_level = 3
 
 cfl = 0.4
+x_com_err_tol = 0.5
 t_end = 10.0
 max_steps = 5
 output_interval = 1

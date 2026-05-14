@@ -17,6 +17,7 @@ max_level = 0
 min_dx = 5e4
 
 cfl = 0.4
+x_com_err_tol = 0.5
 t_end = 1.0e9
 max_steps = 3
 output_interval = -1

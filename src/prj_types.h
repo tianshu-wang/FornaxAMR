@@ -155,6 +155,7 @@ struct prj_grav {
     int nbins;
     double dr_min;
     double x_com[3];
+    double x_com_new[3];
     double *rf;
     double *ms;
     double *phi;
@@ -242,6 +243,7 @@ struct prj_sim {
     int step;
     double cfl;
     double dt_factor;
+    double x_com_err_tol;
     double t_end;
     double output_dt;
     double restart_dt;
