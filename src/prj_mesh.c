@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -168,6 +169,7 @@ static void prj_block_init_empty(prj_block *b)
     b->level = 0;
     b->active = 1;
     b->refine_flag = 0;
+    b->can_refine = 1;
     b->base_block = 0;
     b->W = 0;
     b->W1 = 0;
@@ -402,6 +404,63 @@ void prj_block_setup_geometry(prj_block *b, const prj_coord *coord)
     b->area[1] = b->dx[0] * b->dx[2];
     b->area[2] = b->dx[0] * b->dx[1];
     prj_gravity_cache_block(b);
+}
+
+static double prj_block_corner_pair_angle(const double a[3], const double b[3])
+{
+    double cx = a[1] * b[2] - a[2] * b[1];
+    double cy = a[2] * b[0] - a[0] * b[2];
+    double cz = a[0] * b[1] - a[1] * b[0];
+    double cross_norm = sqrt(cx * cx + cy * cy + cz * cz);
+    double dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
+    return atan2(cross_norm, dot);
+}
+
+static double prj_block_max_corner_angle(const prj_block *b)
+{
+    double corner[8][3];
+    double max_angle = 0.0;
+    int n;
+    int m;
+
+    if (b == 0) {
+        return 0.0;
+    }
+    for (n = 0; n < 8; ++n) {
+        corner[n][0] = (n & 1) != 0 ? b->xmax[0] : b->xmin[0];
+        corner[n][1] = (n & 2) != 0 ? b->xmax[1] : b->xmin[1];
+        corner[n][2] = (n & 4) != 0 ? b->xmax[2] : b->xmin[2];
+    }
+    for (n = 0; n < 8; ++n) {
+        for (m = n + 1; m < 8; ++m) {
+            double angle = prj_block_corner_pair_angle(corner[n], corner[m]);
+
+            if (angle > max_angle) {
+                max_angle = angle;
+            }
+        }
+    }
+    return max_angle;
+}
+
+void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
+{
+    double angle;
+
+    if (b == 0) {
+        return;
+    }
+    b->can_refine = 1;
+    if (mesh == 0 || mesh->use_amr_angle_resolution == 0 ||
+        mesh->amr_angle_resolution_limit <= 0.0) {
+        return;
+    }
+
+    angle = prj_block_max_corner_angle(b);
+    if (angle < mesh->amr_angle_resolution_limit) {
+        b->can_refine = 0;
+    }
 }
 
 int prj_block_cache_index(int i, int j, int k)
@@ -701,6 +760,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                 b->level = 0;
                 b->active = 1;
                 b->refine_flag = 0;
+                b->can_refine = 1;
                 b->base_block = 0;
                 b->xmin[0] = coord->x1min + (double)i * block_dx[0];
                 b->xmax[0] = b->xmin[0] + block_dx[0];
@@ -712,6 +772,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                 b->dx[1] = block_dx[1] / (double)PRJ_BLOCK_SIZE;
                 b->dx[2] = block_dx[2] / (double)PRJ_BLOCK_SIZE;
                 prj_block_setup_geometry(b, coord);
+                prj_block_update_can_refine(b, mesh);
                 if (prj_block_alloc_data(b) != 0) {
                     prj_mesh_destroy(mesh);
                     return 3;

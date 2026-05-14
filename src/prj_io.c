@@ -1195,6 +1195,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
 
         prj_io_unpack_metadata(block, meta_row);
         prj_block_setup_geometry(block, &coord);
+        prj_block_update_can_refine(block, mesh);
     }
 
     for (bidx = 0; bidx < nblocks; ++bidx) {

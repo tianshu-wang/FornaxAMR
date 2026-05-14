@@ -150,7 +150,7 @@ static void prj_amr_sync_refine_flags(prj_mesh *mesh)
         return;
     }
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (mesh->blocks[i].refine_flag > 0) {
+        if (mesh->blocks[i].refine_flag > 0 && mesh->blocks[i].can_refine != 0) {
             if (prj_is_active_block(&mesh->blocks[i])) {
                 local_pos[i] = 1;
             }
@@ -168,7 +168,7 @@ static void prj_amr_sync_refine_flags(prj_mesh *mesh)
     MPI_Allreduce(local_pos, global_pos, mesh->nblocks, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     MPI_Allreduce(local_neg, global_neg, mesh->nblocks, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (global_pos[i] > 0) {
+        if (global_pos[i] > 0 && mesh->blocks[i].can_refine != 0) {
             mesh->blocks[i].refine_flag = 1;
         } else if (global_neg[i] < 0) {
             mesh->blocks[i].refine_flag = -1;
@@ -818,6 +818,9 @@ static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *bloc
         if (mesh->min_dx > 0.0 && prj_block_cell_size(neighbor) < mesh->min_dx) {
             continue;
         }
+        if (neighbor->can_refine == 0) {
+            continue;
+        }
         for (axis = 0; axis < 3; ++axis) {
             int offset = prj_block_neighbor_touch_offset(block, neighbor, axis);
 
@@ -936,7 +939,7 @@ void prj_amr_enforce_two_to_one(prj_mesh *mesh)
                 int id = b->slot[n].id;
 
                 if (id >= 0 && id < mesh->nblocks && prj_is_active_block(&mesh->blocks[id]) &&
-                    mesh->blocks[id].level < b->level) {
+                    mesh->blocks[id].level < b->level && mesh->blocks[id].can_refine != 0) {
                     if (mesh->blocks[id].refine_flag != 1) {
                         mesh->blocks[id].refine_flag = 1;
                         changed = 1;
@@ -959,7 +962,7 @@ int prj_amr_refine_marked_blocks(prj_mesh *mesh)
 
     for (i = 0; i < mesh->nblocks; ++i) {
         if (i < mesh->nblocks && prj_is_active_block(&mesh->blocks[i]) &&
-            mesh->blocks[i].refine_flag > 0) {
+            mesh->blocks[i].refine_flag > 0 && mesh->blocks[i].can_refine != 0) {
             int was_active = mesh->blocks[i].active;
 
             prj_amr_refine_block(mesh, i);
@@ -1092,7 +1095,8 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             derefine = 0;
         }
 
-        if (refine != 0 && (mesh->max_level < 0 || b->level < mesh->max_level) &&
+        if (refine != 0 && b->can_refine != 0 &&
+            (mesh->max_level < 0 || b->level < mesh->max_level) &&
             (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx)) {
             if (prj_has_face_neighbor_coarser_than(mesh, b, b->level - 1)) {
                 b->refine_flag = 0;
@@ -1683,40 +1687,6 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
 #endif
 }
 
-static int prj_amr_all_cells_meet_angle_resolution_limit(const prj_mesh *mesh, const prj_block *block)
-{
-    int i;
-    int j;
-    int k;
-
-    if (mesh == 0 || block == 0 || mesh->use_amr_angle_resolution == 0 ||
-        mesh->amr_angle_resolution_limit <= 0.0) {
-        return 0;
-    }
-
-    double cell_size = prj_block_cell_size(block);
-
-    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                double x = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-                double y = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-                double z = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                double radius = sqrt(x * x + y * y + z * z);
-
-                if (radius <= 0.0) {
-                    return 0;
-                }
-                if (cell_size / radius >= mesh->amr_angle_resolution_limit) {
-                    return 0;
-                }
-            }
-        }
-    }
-
-    return 1;
-}
-
 void prj_amr_refine_block(prj_mesh *mesh, int block_id)
 {
     prj_block *parent;
@@ -1732,11 +1702,11 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         (mesh->max_level >= 0 && parent->level >= mesh->max_level)) {
         return;
     }
-    if (mesh->min_dx > 0.0 && prj_block_cell_size(parent) < mesh->min_dx) {
+    if (parent->can_refine == 0) {
         parent->refine_flag = 0;
         return;
     }
-    if (prj_amr_all_cells_meet_angle_resolution_limit(mesh, parent)) {
+    if (mesh->min_dx > 0.0 && prj_block_cell_size(parent) < mesh->min_dx) {
         parent->refine_flag = 0;
         return;
     }
@@ -1763,6 +1733,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         child->level = parent->level + 1;
         child->active = 1;
         child->refine_flag = 0;
+        child->can_refine = 1;
         child->base_block = 0;
         child->parent = parent->id;
         prj_reset_children(child);
@@ -1779,6 +1750,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         child->dx[0] = parent->dx[0] * 0.5;
         child->dx[1] = parent->dx[1] * 0.5;
         child->dx[2] = parent->dx[2] * 0.5;
+        prj_block_update_can_refine(child, mesh);
         if (owner_local) {
             if (prj_block_alloc_data(child) != 0) {
                 child->id = -1;
@@ -1873,6 +1845,7 @@ int prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
         child->id = -1;
         child->active = 0;
         child->base_block = 0;
+        child->can_refine = 1;
         child->parent = -1;
         prj_reset_children(child);
         prj_clear_neighbors(child);
