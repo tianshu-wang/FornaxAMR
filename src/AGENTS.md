@@ -3,7 +3,7 @@
 ## Core Data Structures
 
 - **prj_defs.h** - Constants: `PRJ_BLOCK_SIZE=16`, `PRJ_NGHOST=2`, `PRJ_NDIM=3`. Enums: cons/prim vars, BC types, AMR estimators, EOS kinds.
-- **prj_types.h** - Structures: `prj_block`, `prj_mesh`, `prj_sim`, `prj_eos`, `prj_rad`, `prj_grav_mono`, `prj_mpi`, `prj_coord`, `prj_neighbor`, `prj_bc`.
+- **prj_types.h** - Structures: `prj_block`, `prj_mesh`, `prj_sim`, `prj_eos`, `prj_rad`, `prj_grav`, `prj_mpi`, `prj_coord`, `prj_neighbor`, `prj_bc`.
 
 ## Modules
 

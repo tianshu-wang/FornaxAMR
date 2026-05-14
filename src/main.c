@@ -615,7 +615,7 @@ int main(int argc, char *argv[])
     prj_write_timer_report(&timer, mpi.rank);
 #endif
 #if PRJ_USE_GRAVITY
-    prj_gravity_free(&sim.monopole_grav);
+    prj_gravity_free(&sim.grav);
 #endif
     prj_mesh_destroy(&sim.mesh);
     prj_mpi_finalize();

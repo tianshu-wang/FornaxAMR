@@ -12,7 +12,7 @@ typedef struct prj_eos prj_eos;
 typedef struct prj_coord prj_coord;
 typedef struct prj_neighbor prj_neighbor;
 typedef struct prj_bc prj_bc;
-typedef struct prj_grav_mono prj_grav_mono;
+typedef struct prj_grav prj_grav;
 typedef struct prj_rad prj_rad;
 typedef struct prj_mpi_buffer prj_mpi_buffer;
 typedef struct prj_mpi prj_mpi;
@@ -148,7 +148,7 @@ struct prj_eos {
     double *table;
 };
 
-struct prj_grav_mono {
+struct prj_grav {
     int nbins;
     double dr_min;
     double *rf;
@@ -230,7 +230,7 @@ struct prj_sim {
     prj_mesh mesh;
     prj_eos eos;
     prj_rad rad;
-    prj_grav_mono monopole_grav;
+    prj_grav grav;
     prj_coord coord;
     prj_bc bc;
     double time;

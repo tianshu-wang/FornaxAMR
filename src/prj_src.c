@@ -3,27 +3,27 @@
 #include "prj.h"
 
 #if PRJ_NRAD > 0
-static double prj_src_interp_lapse(const prj_grav_mono *grav_mono, double r)
+static double prj_src_interp_lapse(const prj_grav *grav, double r)
 {
     int idx;
 
-    if (grav_mono == 0 || grav_mono->nbins <= 0 || grav_mono->lapse == 0) {
+    if (grav == 0 || grav->nbins <= 0 || grav->lapse == 0) {
         return 1.0;
     }
-    if (r <= grav_mono->rf[0]) {
-        return grav_mono->lapse[0];
+    if (r <= grav->rf[0]) {
+        return grav->lapse[0];
     }
-    for (idx = 0; idx < grav_mono->nbins; ++idx) {
-        double r0 = grav_mono->rf[idx];
-        double r1 = grav_mono->rf[idx + 1];
+    for (idx = 0; idx < grav->nbins; ++idx) {
+        double r0 = grav->rf[idx];
+        double r1 = grav->rf[idx + 1];
 
         if (r <= r1) {
             double weight = (r - r0) / (r1 - r0);
 
-            return (1.0 - weight) * grav_mono->lapse[idx] + weight * grav_mono->lapse[idx + 1];
+            return (1.0 - weight) * grav->lapse[idx] + weight * grav->lapse[idx + 1];
         }
     }
-    return grav_mono->lapse[grav_mono->nbins];
+    return grav->lapse[grav->nbins];
 }
 #endif
 
@@ -41,7 +41,7 @@ void prj_src_user(prj_eos *eos, double *W, double *dUdt)
     (void)dUdt;
 }
 
-void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_mono,
+void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
     double *restrict W, double *restrict dUdt)
 {
     int i;
@@ -49,7 +49,7 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
     int k;
 
     if (block == 0 || block->id < 0 || block->active != 1 ||
-        grav_mono == 0 || W == 0 || dUdt == 0) {
+        grav == 0 || W == 0 || dUdt == 0) {
         return;
     }
     if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
@@ -102,7 +102,7 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav_mono *grav_
                 }
 #if PRJ_NRAD > 0
                 {
-                    double lapse = prj_src_interp_lapse(grav_mono, r);
+                    double lapse = prj_src_interp_lapse(grav, r);
                     int field;
                     int group;
 
@@ -198,7 +198,7 @@ void prj_src_radiation_vel_grad(const prj_block *block,
     double *restrict W, double *restrict dUdt)
 {
 #if PRJ_NRAD > 0
-    const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+    const prj_grav *grav = prj_gravity_active_monopole();
     int i;
     int j;
     int k;
@@ -224,8 +224,8 @@ void prj_src_radiation_vel_grad(const prj_block *block,
                 double xc2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                 double xc3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
                 double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
-                double lapse = (grav_mono != 0)
-                    ? prj_src_interp_lapse(grav_mono, r_cell)
+                double lapse = (grav != 0)
+                    ? prj_src_interp_lapse(grav, r_cell)
                     : 1.0;
 
                 inv_dx[0] = 1.0 / block->dx[0];

@@ -331,7 +331,7 @@ void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
 #endif
 
 void prj_rad_flux(const double *WL, const double *WR,
-    const prj_grav_mono *grav_mono, const double *x_face, const double *chi_face,
+    const prj_grav *grav, const double *x_face, const double *chi_face,
     double dx_dir, double v_face, double *flux)
 {
     int field;
@@ -342,9 +342,9 @@ void prj_rad_flux(const double *WL, const double *WR,
         return;
     }
 
-    if (grav_mono != 0 && x_face != 0) {
+    if (grav != 0 && x_face != 0) {
         double r = sqrt(x_face[0] * x_face[0] + x_face[1] * x_face[1] + x_face[2] * x_face[2]);
-        lapse = prj_gravity_interp_lapse(grav_mono, r);
+        lapse = prj_gravity_interp_lapse(grav, r);
     } else {
         lapse = 1.0;
     }
@@ -997,7 +997,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     }
     PRJ_TIMER_CURRENT_STOP("rad_ff_dvdx");
 
-    const prj_grav_mono *gm = prj_gravity_active_monopole();
+    const prj_grav *gm = prj_gravity_active_monopole();
     double xc1 = block->xmin[0] + ((double)ic + 0.5) * block->dx[0];
     double xc2 = block->xmin[1] + ((double)jc + 0.5) * block->dx[1];
     double xc3 = block->xmin[2] + ((double)kc + 0.5) * block->dx[2];

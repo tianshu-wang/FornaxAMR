@@ -350,7 +350,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 {
     int dir;
 #if PRJ_NRAD > 0
-    const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+    const prj_grav *grav = prj_gravity_active_monopole();
 #else
     (void)rad;
 #endif
@@ -513,7 +513,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                             chi_face[idx] = k_face + s_face;
                         }
 
-                        prj_rad_flux(WL, WR, grav_mono, x_face, chi_face, dx_dir, v_face_loc[0], Fl);
+                        prj_rad_flux(WL, WR, grav, x_face, chi_face, dx_dir, v_face_loc[0], Fl);
                     }
 #endif
                     prj_flux_store_local_flux(flux[dir], dir, i, j, k, Fl);

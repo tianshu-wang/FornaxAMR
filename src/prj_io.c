@@ -1672,11 +1672,11 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
     }
 #endif
     {
-        const prj_grav_mono *grav_mono = prj_gravity_active_monopole();
+        const prj_grav *grav = prj_gravity_active_monopole();
 
-        if (grav_mono != 0 && grav_mono->nbins > 0 && grav_mono->accel != 0 && grav_mono->lapse != 0) {
-            hsize_t dims_accel[1] = {(hsize_t)grav_mono->nbins};
-            hsize_t dims_lapse[1] = {(hsize_t)grav_mono->nbins + 1};
+        if (grav != 0 && grav->nbins > 0 && grav->accel != 0 && grav->lapse != 0) {
+            hsize_t dims_accel[1] = {(hsize_t)grav->nbins};
+            hsize_t dims_lapse[1] = {(hsize_t)grav->nbins + 1};
             hid_t space_accel = H5Screate_simple(1, dims_accel, dims_accel);
             hid_t space_lapse = H5Screate_simple(1, dims_lapse, dims_lapse);
             hid_t dset_accel = H5Dcreate2(file, "accel", H5T_NATIVE_DOUBLE, space_accel,
@@ -1688,8 +1688,8 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
                 hid_t dxpl_accel = prj_io_data_xfer_plist();
                 hid_t dxpl_lapse = prj_io_data_xfer_plist();
 
-                H5Dwrite(dset_accel, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_accel, grav_mono->accel);
-                H5Dwrite(dset_lapse, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_lapse, grav_mono->lapse);
+                H5Dwrite(dset_accel, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_accel, grav->accel);
+                H5Dwrite(dset_lapse, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_lapse, grav->lapse);
                 prj_io_close_dxpl(dxpl_accel);
                 prj_io_close_dxpl(dxpl_lapse);
             }
