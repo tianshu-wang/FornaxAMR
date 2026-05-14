@@ -189,6 +189,7 @@ static void prj_block_init_empty(prj_block *b)
     for (n = 0; n < 3; ++n) {
         b->grav[n] = 0;
     }
+    b->r_com = 0;
 #if PRJ_MHD
     for (n = 0; n < 3; ++n) {
         b->face_fidelity[n] = 0;
@@ -252,7 +253,7 @@ int prj_block_alloc_data(prj_block *b)
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     total_count = 2U * prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
-    total_count += 4U * (size_t)PRJ_BLOCK_NCELLS;
+    total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
     total_count += 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
 #endif
@@ -321,6 +322,8 @@ int prj_block_alloc_data(prj_block *b)
         b->grav[d] = base;
         base += (size_t)PRJ_BLOCK_NCELLS;
     }
+    b->r_com = base;
+    base += (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = face_fidelity[d];
@@ -357,6 +360,7 @@ int prj_block_alloc_data(prj_block *b)
     for (int d = 0; d < 3; ++d) {
         prj_fill(b->grav[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
     }
+    prj_fill(b->r_com, (size_t)PRJ_BLOCK_NCELLS, 0.0);
     prj_gravity_cache_block(b);
     return 0;
 }
@@ -395,6 +399,7 @@ void prj_block_free_data(prj_block *b)
     for (int d = 0; d < 3; ++d) {
         b->grav[d] = 0;
     }
+    b->r_com = 0;
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = 0;

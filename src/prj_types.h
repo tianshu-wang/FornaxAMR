@@ -80,6 +80,7 @@ struct prj_block {
     double *sigma_cell;
     double *lapse;
     double *grav[3];
+    double *r_com;
 #if PRJ_MHD
     int *face_fidelity[3];
     int *edge_fidelity[3];
@@ -153,6 +154,7 @@ struct prj_eos {
 struct prj_grav {
     int nbins;
     double dr_min;
+    double x_com[3];
     double *rf;
     double *ms;
     double *phi;

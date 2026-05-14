@@ -166,6 +166,9 @@ static void prj_gravity_cache_block_clear(prj_block *block)
     for (i = 0; i < PRJ_BLOCK_NCELLS; ++i) {
         block->ridx[i] = PRJ_GRAVITY_CACHE_INVALID;
         block->fr[i] = 0.0;
+        if (block->r_com != 0) {
+            block->r_com[i] = 0.0;
+        }
     }
 }
 
@@ -232,11 +235,12 @@ static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh)
 
 void prj_gravity_cache_block(prj_block *block)
 {
+    const prj_grav *grav = prj_gravity_active;
     int i;
     int j;
     int k;
 
-    if (block == 0 || block->ridx == 0 || block->fr == 0) {
+    if (block == 0 || block->ridx == 0 || block->fr == 0 || block->r_com == 0) {
         return;
     }
     if (block->id < 0 || block->dx[0] <= 0.0 || block->dx[1] <= 0.0 || block->dx[2] <= 0.0) {
@@ -250,10 +254,14 @@ void prj_gravity_cache_block(prj_block *block)
                 double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                 double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                 double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
+                double dx1 = x1 - (grav != 0 ? grav->x_com[0] : 0.0);
+                double dx2 = x2 - (grav != 0 ? grav->x_com[1] : 0.0);
+                double dx3 = x3 - (grav != 0 ? grav->x_com[2] : 0.0);
                 int cache_idx = prj_block_cache_index(i, j, k);
 
-                prj_gravity_cache_entry(prj_gravity_active, r, &block->ridx[cache_idx], &block->fr[cache_idx]);
+                block->r_com[cache_idx] = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+                prj_gravity_cache_entry(prj_gravity_active, block->r_com[cache_idx],
+                    &block->ridx[cache_idx], &block->fr[cache_idx]);
             }
         }
     }
@@ -277,6 +285,9 @@ void prj_gravity_rebuild_grid(prj_sim *sim)
 
     if (sim == 0) {
         return;
+    }
+    for (i = 0; i < 3; ++i) {
+        sim->grav.x_com[i] = 0.0;
     }
     prj_gravity_build_rf(&sim->grav, &sim->mesh);
     if (sim->grav.accel != 0) {
@@ -327,6 +338,9 @@ void prj_gravity_free(prj_grav *grav)
     grav->vdotF_avg = 0;
     grav->nbins = 0;
     grav->dr_min = 0.0;
+    grav->x_com[0] = 0.0;
+    grav->x_com[1] = 0.0;
+    grav->x_com[2] = 0.0;
     if (prj_gravity_active == grav) {
         prj_gravity_active = 0;
         prj_gravity_rmax = 0.0;
@@ -354,6 +368,9 @@ void prj_gravity_init(prj_sim *sim)
     prj_gravity_rmax = 0.5 * prj_gravity_min_double(span1, prj_gravity_min_double(span2, span3));
 
     grav->nbins = PRJ_GRAVITY_DEFAULT_NBINS;
+    for (i = 0; i < 3; ++i) {
+        grav->x_com[i] = 0.0;
+    }
 
     grav->rf = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*grav->rf));
     grav->ms = (double *)calloc((size_t)grav->nbins, sizeof(*grav->ms));
@@ -515,16 +532,21 @@ static double prj_gravity_block_cached_lapse_at(const prj_block *block, int i, i
 double prj_gravity_block_accel_at(const prj_block *block, int i, int j, int k)
 {
     if (block != 0 && block->grav[0] != 0 && block->grav[1] != 0 && block->grav[2] != 0) {
+        const prj_grav *grav = prj_gravity_active;
         int cache_idx = prj_block_cache_index(i, j, k);
         double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
         double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
         double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-        double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
+        double dx1 = x1 - (grav != 0 ? grav->x_com[0] : 0.0);
+        double dx2 = x2 - (grav != 0 ? grav->x_com[1] : 0.0);
+        double dx3 = x3 - (grav != 0 ? grav->x_com[2] : 0.0);
+        double r = block->r_com != 0 ? block->r_com[cache_idx] :
+            sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
 
         if (r > 0.0) {
-            return (block->grav[0][cache_idx] * x1 +
-                block->grav[1][cache_idx] * x2 +
-                block->grav[2][cache_idx] * x3) / r;
+            return (block->grav[0][cache_idx] * dx1 +
+                block->grav[1][cache_idx] * dx2 +
+                block->grav[2][cache_idx] * dx3) / r;
         }
         return 0.0;
     }
@@ -547,6 +569,7 @@ static void prj_gravity_fill_block_field_defaults(prj_block *block)
         return;
     }
     prj_fill(block->lapse, (size_t)PRJ_BLOCK_NCELLS, 1.0);
+    prj_fill(block->r_com, (size_t)PRJ_BLOCK_NCELLS, 0.0);
     for (d = 0; d < 3; ++d) {
         prj_fill(block->grav[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
     }
@@ -558,7 +581,7 @@ static void prj_gravity_fill_block_fields(prj_block *block)
     int j;
     int k;
 
-    if (block == 0 || block->lapse == 0 ||
+    if (block == 0 || block->lapse == 0 || block->r_com == 0 ||
         block->grav[0] == 0 || block->grav[1] == 0 || block->grav[2] == 0) {
         return;
     }
@@ -574,17 +597,20 @@ static void prj_gravity_fill_block_fields(prj_block *block)
                 double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                 double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                 double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
-                double accel = prj_gravity_block_cached_accel_at(block, i, j, k);
+                double dx1 = x1 - prj_gravity_active->x_com[0];
+                double dx2 = x2 - prj_gravity_active->x_com[1];
+                double dx3 = x3 - prj_gravity_active->x_com[2];
                 int cache_idx = prj_block_cache_index(i, j, k);
+                double r = block->r_com[cache_idx];
+                double accel = prj_gravity_block_cached_accel_at(block, i, j, k);
 
                 block->lapse[cache_idx] = prj_gravity_block_cached_lapse_at(block, i, j, k);
                 if (r > 0.0) {
                     double accel_over_r = accel / r;
 
-                    block->grav[0][cache_idx] = accel_over_r * x1;
-                    block->grav[1][cache_idx] = accel_over_r * x2;
-                    block->grav[2][cache_idx] = accel_over_r * x3;
+                    block->grav[0][cache_idx] = accel_over_r * dx1;
+                    block->grav[1][cache_idx] = accel_over_r * dx2;
+                    block->grav[2][cache_idx] = accel_over_r * dx3;
                 } else {
                     block->grav[0][cache_idx] = 0.0;
                     block->grav[1][cache_idx] = 0.0;
@@ -653,7 +679,11 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
                     double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                     double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                     double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                    double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
+                    double dx1 = x1 - grav->x_com[0];
+                    double dx2 = x2 - grav->x_com[1];
+                    double dx3 = x3 - grav->x_com[2];
+                    double r = block->r_com != 0 ? block->r_com[cache_idx] :
+                        sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
                     double fr = block->fr != 0 ? block->fr[cache_idx] : 0.0;
                     double rho;
                     double v1;
@@ -674,7 +704,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
                         v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
                         v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
                         eint = W[VIDX(PRJ_PRIM_EINT, i, j, k)];
-                        vr = r > 0.0 ? (v1 * x1 + v2 * x2 + v3 * x3) / r : 0.0;
+                        vr = r > 0.0 ? (v1 * dx1 + v2 * dx2 + v3 * dx3) / r : 0.0;
                         pgas = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
                         erad = 0.0;
                         prad = 0.0;
@@ -690,7 +720,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
                                     double f1 = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
                                     double f2 = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
                                     double f3 = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
-                                    double fr = r > 0.0 ? (f1 * x1 + f2 * x2 + f3 * x3) / r : 0.0;
+                                    double fr = r > 0.0 ? (f1 * dx1 + f2 * dx2 + f3 * dx3) / r : 0.0;
 
                                     erad += e_rad / (PRJ_CLIGHT * PRJ_CLIGHT);
                                     prad += (e_rad / 3.0) / (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);

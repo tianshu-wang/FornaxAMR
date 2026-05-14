@@ -1773,6 +1773,11 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
             child->v_riemann[2] = 0;
             child->kappa_cell = 0;
             child->sigma_cell = 0;
+            child->lapse = 0;
+            child->grav[0] = 0;
+            child->grav[1] = 0;
+            child->grav[2] = 0;
+            child->r_com = 0;
             child->ridx = 0;
             child->fr = 0;
             prj_block_setup_geometry(child, &mesh->coord);
