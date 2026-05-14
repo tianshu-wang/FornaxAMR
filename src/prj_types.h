@@ -78,6 +78,8 @@ struct prj_block {
     double *v_riemann[3];
     double *kappa_cell;
     double *sigma_cell;
+    double *lapse;
+    double *grav[3];
 #if PRJ_MHD
     int *face_fidelity[3];
     int *edge_fidelity[3];

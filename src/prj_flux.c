@@ -349,9 +349,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     double *eosvar, double *flux[3], int use_bf1)
 {
     int dir;
-#if PRJ_NRAD > 0
-    const prj_grav *grav = prj_gravity_active_monopole();
-#else
+#if PRJ_NRAD == 0
     (void)rad;
 #endif
 #if !PRJ_MHD
@@ -484,8 +482,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     prj_flux_store_face_velocity(block, dir, i, j, k, v_face_loc);
 #if PRJ_NRAD > 0
                     {
-                        double x_face[3];
                         double dx_dir;
+                        double lapse_face = 1.0;
                         double chi_face[PRJ_NRAD * PRJ_NEGROUP];
                         const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
                         size_t off_L = (size_t)IDX(il, jl, kl) * stride;
@@ -496,9 +494,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         const double *sigma_R = &block->sigma_cell[off_R];
                         int idx;
 
-                        x_face[0] = block->xmin[0] + ((dir == X1DIR) ? (double)i : ((double)i + 0.5)) * block->dx[0];
-                        x_face[1] = block->xmin[1] + ((dir == X2DIR) ? (double)j : ((double)j + 0.5)) * block->dx[1];
-                        x_face[2] = block->xmin[2] + ((dir == X3DIR) ? (double)k : ((double)k + 0.5)) * block->dx[2];
+                        if (block->lapse != 0) {
+                            lapse_face = 0.5 *
+                                (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
+                        }
                         dx_dir = block->dx[dir];
 
                         for (idx = 0; idx < PRJ_NRAD * PRJ_NEGROUP; ++idx) {
@@ -513,7 +512,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                             chi_face[idx] = k_face + s_face;
                         }
 
-                        prj_rad_flux(WL, WR, grav, x_face, chi_face, dx_dir, v_face_loc[0], Fl);
+                        prj_rad_flux(WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
                     }
 #endif
                     prj_flux_store_local_flux(flux[dir], dir, i, j, k, Fl);

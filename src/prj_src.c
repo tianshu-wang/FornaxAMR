@@ -2,31 +2,6 @@
 
 #include "prj.h"
 
-#if PRJ_NRAD > 0
-static double prj_src_interp_lapse(const prj_grav *grav, double r)
-{
-    int idx;
-
-    if (grav == 0 || grav->nbins <= 0 || grav->lapse == 0) {
-        return 1.0;
-    }
-    if (r <= grav->rf[0]) {
-        return grav->lapse[0];
-    }
-    for (idx = 0; idx < grav->nbins; ++idx) {
-        double r0 = grav->rf[idx];
-        double r1 = grav->rf[idx + 1];
-
-        if (r <= r1) {
-            double weight = (r - r0) / (r1 - r0);
-
-            return (1.0 - weight) * grav->lapse[idx] + weight * grav->lapse[idx + 1];
-        }
-    }
-    return grav->lapse[grav->nbins];
-}
-#endif
-
 void prj_src_geom(prj_eos *eos, double *W, double *dUdt)
 {
     (void)eos;
@@ -52,6 +27,10 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
         grav == 0 || W == 0 || dUdt == 0) {
         return;
     }
+    if (block->lapse == 0 || block->grav[0] == 0 || block->grav[1] == 0 ||
+        block->grav[2] == 0) {
+        return;
+    }
     if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
         return;
     }
@@ -59,24 +38,15 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-                double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-                double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
-                double accel;
+                int cell_idx = IDX(i, j, k);
                 double g1;
                 double g2;
                 double g3;
                 double rho;
 
-                if (r <= 0.0) {
-                    continue;
-                }
-
-                accel = prj_gravity_block_accel_at(block, i, j, k);
-                g1 = accel * x1 / r;
-                g2 = accel * x2 / r;
-                g3 = accel * x3 / r;
+                g1 = block->grav[0][cell_idx];
+                g2 = block->grav[1][cell_idx];
+                g3 = block->grav[2][cell_idx];
                 rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
                 dUdt[VIDX(PRJ_CONS_MOM1, i, j, k)] += rho * g1;
                 dUdt[VIDX(PRJ_CONS_MOM2, i, j, k)] += rho * g2;
@@ -102,7 +72,7 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
                 }
 #if PRJ_NRAD > 0
                 {
-                    double lapse = prj_src_interp_lapse(grav, r);
+                    double lapse = block->lapse[cell_idx];
                     int field;
                     int group;
 
@@ -198,7 +168,6 @@ void prj_src_radiation_vel_grad(const prj_block *block,
     double *restrict W, double *restrict dUdt)
 {
 #if PRJ_NRAD > 0
-    const prj_grav *grav = prj_gravity_active_monopole();
     int i;
     int j;
     int k;
@@ -219,14 +188,7 @@ void prj_src_radiation_vel_grad(const prj_block *block,
                 int field;
                 int group;
                 double inv_dx[3];
-                /* Cell-centred lapse α(r) for the GR proper-time slowdown. */
-                double xc1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-                double xc2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-                double xc3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
-                double lapse = (grav != 0)
-                    ? prj_src_interp_lapse(grav, r_cell)
-                    : 1.0;
+                double lapse = block->lapse != 0 ? block->lapse[IDX(i, j, k)] : 1.0;
 
                 inv_dx[0] = 1.0 / block->dx[0];
                 inv_dx[1] = 1.0 / block->dx[1];

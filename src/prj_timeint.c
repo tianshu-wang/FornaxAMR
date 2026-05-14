@@ -12,7 +12,10 @@
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_lapse(const prj_block *block, int i, int j, int k)
 {
-    return prj_gravity_block_lapse_at(block, i, j, k);
+    if (block != 0 && block->lapse != 0) {
+        return block->lapse[IDX(i, j, k)];
+    }
+    return 1.0;
 }
 #endif
 

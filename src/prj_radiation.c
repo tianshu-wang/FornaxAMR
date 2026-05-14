@@ -331,22 +331,14 @@ void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
 #endif
 
 void prj_rad_flux(const double *WL, const double *WR,
-    const prj_grav *grav, const double *x_face, const double *chi_face,
+    double lapse, const double *chi_face,
     double dx_dir, double v_face, double *flux)
 {
     int field;
     int group;
-    double lapse;
 
     if (WL == 0 || WR == 0 || flux == 0) {
         return;
-    }
-
-    if (grav != 0 && x_face != 0) {
-        double r = sqrt(x_face[0] * x_face[0] + x_face[1] * x_face[1] + x_face[2] * x_face[2]);
-        lapse = prj_gravity_interp_lapse(grav, r);
-    } else {
-        lapse = 1.0;
     }
 
 #if PRJ_NRAD > 0
@@ -997,23 +989,17 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     }
     PRJ_TIMER_CURRENT_STOP("rad_ff_dvdx");
 
-    const prj_grav *gm = prj_gravity_active_monopole();
-    double xc1 = block->xmin[0] + ((double)ic + 0.5) * block->dx[0];
-    double xc2 = block->xmin[1] + ((double)jc + 0.5) * block->dx[1];
-    double xc3 = block->xmin[2] + ((double)kc + 0.5) * block->dx[2];
-    double r_cell = sqrt(xc1 * xc1 + xc2 * xc2 + xc3 * xc3);
+    int cell_idx = IDX(ic, jc, kc);
     double grad_phi[3];
     double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
 
     grad_phi[0] = 0.0;
     grad_phi[1] = 0.0;
     grad_phi[2] = 0.0;
-    if (gm != 0 && r_cell > 0.0) {
-        double accel = prj_gravity_interp_accel(gm, r_cell);
-
-        grad_phi[0] = -accel * xc1 / r_cell;
-        grad_phi[1] = -accel * xc2 / r_cell;
-        grad_phi[2] = -accel * xc3 / r_cell;
+    if (block->grav[0] != 0 && block->grav[1] != 0 && block->grav[2] != 0) {
+        grad_phi[0] = -block->grav[0][cell_idx];
+        grad_phi[1] = -block->grav[1][cell_idx];
+        grad_phi[2] = -block->grav[2][cell_idx];
     }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
