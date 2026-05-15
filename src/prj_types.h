@@ -186,6 +186,8 @@ struct prj_rad {
     int maxiter;
     double implicit_err_tol;
 #if PRJ_NRAD > 0
+    double chi[NCLOSURE + 1];
+    double q[NCLOSURE + 1];
     double emin[PRJ_NRAD];
     double emax[PRJ_NRAD];
     double *egroup[PRJ_NRAD];

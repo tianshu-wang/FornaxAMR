@@ -7,12 +7,12 @@
 void prj_rad_init(prj_rad *rad);
 void prj_rad_prim2cons(const double *W, double *U);
 void prj_rad_cons2prim(const double *U, double *W);
-void prj_rad_flux(const double *WL, const double *WR,
+void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
     double lapse, const double *chi_face,
     double dx_dir, double v_face, double *flux);
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature);
 void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature);
-void prj_rad_m1_pressure(double E, double F1, double F2, double F3, double P[3][3]);
+void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, double F3, double P[3][3]);
 #if PRJ_NRAD > 0
 void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
     double *lam_min, double *lam_max);

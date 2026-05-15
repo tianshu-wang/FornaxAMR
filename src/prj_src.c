@@ -98,60 +98,6 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
     }
 }
 
-#if PRJ_NRAD > 0
-/* Build the M1 radiation pressure tensor P^{ij} = E * D^{ij} for a single
- * (species, group), where D^{ij} = a δ^{ij} + b n^i n^j with the Levermore
- * closure χ(f) and n = F/|F|, f = |F|/(c E).  Falls back to the isotropic
- * limit P^{ij} = (E/3) δ^{ij} when |F| or E vanishes. */
-static void prj_src_rad_m1_pressure(double E, double F1, double F2, double F3,
-    double P[3][3])
-{
-    double F[3];
-    double Fmag;
-    double cE;
-    double f;
-    double chi;
-    double a_c;
-    double b_c;
-    double n[3];
-    int a;
-    int b;
-
-    F[0] = F1;
-    F[1] = F2;
-    F[2] = F3;
-    Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
-    cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
-
-    if (cE <= 0.0 || Fmag <= 0.0) {
-        double third = (E > 0.0 ? E : 0.0) / 3.0;
-
-        for (a = 0; a < 3; ++a) {
-            for (b = 0; b < 3; ++b) {
-                P[a][b] = (a == b) ? third : 0.0;
-            }
-        }
-        return;
-    }
-
-    f = Fmag / cE;
-    if (f > 1.0) {
-        f = 1.0;
-    }
-    chi = (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
-    a_c = 0.5 * (1.0 - chi);
-    b_c = 0.5 * (3.0 * chi - 1.0);
-    n[0] = F[0] / Fmag;
-    n[1] = F[1] / Fmag;
-    n[2] = F[2] / Fmag;
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            P[a][b] = E * (a_c * (a == b ? 1.0 : 0.0) + b_c * n[a] * n[b]);
-        }
-    }
-}
-#endif
-
 /* O(v/c) "source-like" piece of the SR redshift (Eq. 12a/12b of the
  * comoving-frame mixed-frame moment equations).  These are the bits left over
  * once the energy-space-flux divergence has been split off, and they appear as
@@ -164,7 +110,7 @@ static void prj_src_rad_m1_pressure(double E, double F1, double F2, double F3,
  * built by central differencing the face-centred Riemann velocities stored in
  * block->v_riemann[face_dir][component, ...] during the most recent flux update,
  * so the velocity field used here is the same one the hydro fluxes saw. */
-void prj_src_radiation_vel_grad(const prj_block *block,
+void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
     double *restrict W, double *restrict dUdt)
 {
 #if PRJ_NRAD > 0
@@ -236,7 +182,7 @@ void prj_src_radiation_vel_grad(const prj_block *block,
                         F[2] = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
 
                         /* Closure: P^{ij} from the cell-centred (E, F). */
-                        prj_src_rad_m1_pressure(E, F[0], F[1], F[2], P);
+                        prj_rad_m1_pressure(rad, E, F[0], F[1], F[2], P);
 
                         /* Energy: dE/dt += sum_{ij} (∂_j v_i) P^{ji}.
                          * P is symmetric in M1 so P^{ji} = P^{ij}. */
@@ -272,14 +218,15 @@ void prj_src_radiation_vel_grad(const prj_block *block,
         }
     }
 #else
+    (void)rad;
     (void)block;
     (void)W;
     (void)dUdt;
 #endif
 }
 
-void prj_src_update(prj_eos *eos, const prj_block *block, double *restrict W,
-    double *restrict dUdt)
+void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_block *block,
+    double *restrict W, double *restrict dUdt)
 {
     int v;
     int i;
@@ -298,5 +245,5 @@ void prj_src_update(prj_eos *eos, const prj_block *block, double *restrict W,
     prj_src_geom(eos, W, dUdt);
     prj_src_user(eos, W, dUdt);
     prj_src_monopole_gravity(block, prj_gravity_active_monopole(), W, dUdt);
-    prj_src_radiation_vel_grad(block, W, dUdt);
+    prj_src_radiation_vel_grad(rad, block, W, dUdt);
 }

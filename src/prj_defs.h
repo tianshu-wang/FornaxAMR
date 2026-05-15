@@ -38,6 +38,14 @@
 #undef PRJ_NRAD
 #define PRJ_NRAD 0
 #endif
+#if PRJ_NRAD > 0
+#ifndef NCLOSURE
+#define NCLOSURE 100
+#endif
+#if NCLOSURE < 1
+#error "NCLOSURE must be at least 1"
+#endif
+#endif
 #ifndef PRJ_NEGROUP
 #define PRJ_NEGROUP 12
 #endif

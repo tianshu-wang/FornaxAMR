@@ -874,7 +874,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int k;
 
             PRJ_TIMER_START(timer, "src_update_stage1");
-            prj_src_update(eos, block, block->W, block->dUdt);
+            prj_src_update(eos, rad, block, block->W, block->dUdt);
             PRJ_TIMER_STOP(timer, "src_update_stage1");
             PRJ_TIMER_START(timer, "cell_update_stage1");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -999,7 +999,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int k;
 
             PRJ_TIMER_START(timer, "src_update_stage2");
-            prj_src_update(eos, block, block->W1, block->dUdt);
+            prj_src_update(eos, rad, block, block->W1, block->dUdt);
             PRJ_TIMER_STOP(timer, "src_update_stage2");
             PRJ_TIMER_START(timer, "cell_update_stage2");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {

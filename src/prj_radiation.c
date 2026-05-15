@@ -5,9 +5,119 @@
 
 #include "prj.h"
 
+static double prj_rad_m1_chi_exact(double f)
+{
+    if (f <= 0.0) {
+        return 1.0 / 3.0;
+    }
+    if (f >= 1.0) {
+        return 1.0;
+    }
+    return (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
+}
+
+#if PRJ_NRAD > 0
+/* Levermore/Vaytet third-moment scalar q(f), evaluated through the equivalent
+ * boost parameter beta = 3f / (2 + sqrt(4 - 3f^2)). */
+static double prj_rad_levermore_q_factor_exact(double f)
+{
+    double a;
+    double beta;
+    double beta2;
+    double beta4;
+    double one_minus_beta2;
+
+    if (f <= 0.0) {
+        return 0.0;
+    }
+    if (f >= 1.0) {
+        return 1.0;
+    }
+
+    a = sqrt(fmax(0.0, 4.0 - 3.0 * f * f));
+    beta = 3.0 * f / (2.0 + a);
+    if (beta < 5.0e-2) {
+        beta2 = beta * beta;
+        return 4.0 * beta * (1.0 / 5.0 + beta2 * (1.0 / 21.0 - beta2 / 315.0));
+    }
+
+    beta2 = beta * beta;
+    beta4 = beta2 * beta2;
+    one_minus_beta2 = 1.0 - beta2;
+    return (9.0 * beta - 8.0 / beta + 3.0 / (beta2 * beta) -
+        3.0 * one_minus_beta2 * one_minus_beta2 * one_minus_beta2 *
+        atanh(beta) / beta4) / (3.0 + beta2);
+}
+
+static void prj_rad_init_closure(prj_rad *rad)
+{
+    int i;
+
+    if (rad == 0) {
+        return;
+    }
+    for (i = 0; i <= NCLOSURE; ++i) {
+        double f = (double)i / (double)NCLOSURE;
+
+        rad->chi[i] = prj_rad_m1_chi_exact(f);
+        rad->q[i] = prj_rad_levermore_q_factor_exact(f);
+    }
+}
+
+static int prj_rad_closure_ready(const prj_rad *rad)
+{
+    return rad != 0 && rad->chi[0] > 0.0 && rad->chi[NCLOSURE] > 0.0 &&
+        rad->q[NCLOSURE] > 0.0;
+}
+
+static double prj_rad_closure_lookup(const double values[NCLOSURE + 1], double f)
+{
+    double scaled;
+    double w;
+    int idx;
+
+    if (f <= 0.0) {
+        return values[0];
+    }
+    if (f >= 1.0) {
+        return values[NCLOSURE];
+    }
+    scaled = f * (double)NCLOSURE;
+    idx = (int)scaled;
+    if (idx >= NCLOSURE) {
+        return values[NCLOSURE];
+    }
+    w = scaled - (double)idx;
+    return values[idx] + w * (values[idx + 1] - values[idx]);
+}
+#endif
+
+static double prj_rad_m1_chi(const prj_rad *rad, double f)
+{
+#if PRJ_NRAD > 0
+    if (prj_rad_closure_ready(rad)) {
+        return prj_rad_closure_lookup(rad->chi, f);
+    }
+#else
+    (void)rad;
+#endif
+    return prj_rad_m1_chi_exact(f);
+}
+
+#if PRJ_NRAD > 0
+static double prj_rad_levermore_q_factor(const prj_rad *rad, double f)
+{
+    if (prj_rad_closure_ready(rad)) {
+        return prj_rad_closure_lookup(rad->q, f);
+    }
+    return prj_rad_levermore_q_factor_exact(f);
+}
+#endif
+
 void prj_rad_init(prj_rad *rad)
 {
 #if PRJ_NRAD > 0
+    prj_rad_init_closure(rad);
     prj_rad3_opac_init(rad);
     prj_rad_eleinel_init(rad);
 #else
@@ -57,7 +167,8 @@ void prj_rad_cons2prim(const double *U, double *W)
  * Levermore Eddington tensor D^{ij} = a δ^{ij} + b n^i n^j, n = F/|F|, and
  * χ(f) = (3 + 4f²)/(5 + 2√(4 - 3f²)), f = |F|/(c E).  Falls back to the
  * isotropic limit P^{ij} = (E/3) δ^{ij} when |F| or E vanishes. */
-void prj_rad_m1_pressure(double E, double F1, double F2, double F3, double P[3][3])
+void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, double F3,
+    double P[3][3])
 {
     double Fmag;
     double cE;
@@ -87,7 +198,7 @@ void prj_rad_m1_pressure(double E, double F1, double F2, double F3, double P[3][
     if (f > 1.0) {
         f = 1.0;
     }
-    chi = (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
+    chi = prj_rad_m1_chi(rad, f);
     a_c = 0.5 * (1.0 - chi);
     b_c = 0.5 * (3.0 * chi - 1.0);
     n[0] = F1 / Fmag;
@@ -101,44 +212,6 @@ void prj_rad_m1_pressure(double E, double F1, double F2, double F3, double P[3][
 }
 
 #if PRJ_NRAD > 0
-/* Levermore/Vaytet third-moment scalar q(f), evaluated through the equivalent
- * boost parameter β = 3f / (2 + √(4 - 3f²)).  This form is numerically stable
- * at moderate and large f; for very small β we switch to the series expansion
- *
- *   q = 4β/5 + 4β^3/21 - 4β^5/315 + O(β^7),
- *
- * which matches the exact boosted-isotropic closure and avoids catastrophic
- * cancellation in the raw closed form. */
-static double prj_rad_levermore_q_factor(double f)
-{
-    double a;
-    double beta;
-    double beta2;
-    double beta4;
-    double one_minus_beta2;
-
-    if (f <= 0.0) {
-        return 0.0;
-    }
-    if (f >= 1.0) {
-        return 1.0;
-    }
-
-    a = sqrt(fmax(0.0, 4.0 - 3.0 * f * f));
-    beta = 3.0 * f / (2.0 + a);
-    if (beta < 5.0e-2) {
-        beta2 = beta * beta;
-        return 4.0 * beta * (1.0 / 5.0 + beta2 * (1.0 / 21.0 - beta2 / 315.0));
-    }
-
-    beta2 = beta * beta;
-    beta4 = beta2 * beta2;
-    one_minus_beta2 = 1.0 - beta2;
-    return (9.0 * beta - 8.0 / beta + 3.0 / (beta2 * beta) -
-        3.0 * one_minus_beta2 * one_minus_beta2 * one_minus_beta2 *
-        atanh(beta) / beta4) / (3.0 + beta2);
-}
-
 /* Levermore third moment Q^{ijk} = c E H^{ijk}, with
  *
  *   H^{ijk} = (5q - 3f)/2 n^i n^j n^k
@@ -146,8 +219,8 @@ static double prj_rad_levermore_q_factor(double f)
  *
  * where f = |F|/(cE), n = F/|F|, and q = q(f) above.  The tensor is fully
  * symmetric in its three indices. */
-static void prj_rad_m1_third_moment(double E, double F1, double F2, double F3,
-    double Q[3][3][3])
+static void prj_rad_m1_third_moment(const prj_rad *rad, double E, double F1, double F2,
+    double F3, double Q[3][3][3])
 {
     double E_pos;
     double Fmag;
@@ -180,7 +253,7 @@ static void prj_rad_m1_third_moment(double E, double F1, double F2, double F3,
     if (f > 1.0) {
         f = 1.0;
     }
-    q_fac = prj_rad_levermore_q_factor(f);
+    q_fac = prj_rad_levermore_q_factor(rad, f);
     n[0] = F1 / Fmag;
     n[1] = F2 / Fmag;
     n[2] = F3 / Fmag;
@@ -199,8 +272,8 @@ static void prj_rad_m1_third_moment(double E, double F1, double F2, double F3,
     }
 }
 
-static void prj_rad_m1_phys_flux_with_fluxmag(double E, double F1, double F2, double F3,
-    double Fmag, double f,
+static void prj_rad_m1_phys_flux_with_fluxmag(const prj_rad *rad, double E, double F1,
+    double F2, double F3, double Fmag, double f,
     double *fE, double *fF1, double *fF2, double *fF3)
 {
     double chi;
@@ -223,7 +296,7 @@ static void prj_rad_m1_phys_flux_with_fluxmag(double E, double F1, double F2, do
         return;
     }
 
-    chi = (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
+    chi = prj_rad_m1_chi(rad, f);
 
     n1 = F1 / Fmag;
     n2 = F2 / Fmag;
@@ -330,7 +403,7 @@ void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
 }
 #endif
 
-void prj_rad_flux(const double *WL, const double *WR,
+void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
     double lapse, const double *chi_face,
     double dx_dir, double v_face, double *flux)
 {
@@ -380,9 +453,9 @@ void prj_rad_flux(const double *WL, const double *WR,
                 prj_rad_enforce_flux_limit(&EL, &F1L, &F2L, &F3L, &Fmag_L, &f_L);
                 prj_rad_enforce_flux_limit(&ER, &F1R, &F2R, &F3R, &Fmag_R, &f_R);
 
-                prj_rad_m1_phys_flux_with_fluxmag(EL, F1L, F2L, F3L, Fmag_L, f_L,
+                prj_rad_m1_phys_flux_with_fluxmag(rad, EL, F1L, F2L, F3L, Fmag_L, f_L,
                     &fLE, &fLF1, &fLF2, &fLF3);
-                prj_rad_m1_phys_flux_with_fluxmag(ER, F1R, F2R, F3R, Fmag_R, f_R,
+                prj_rad_m1_phys_flux_with_fluxmag(rad, ER, F1R, F2R, F3R, Fmag_R, f_R,
                     &fRE, &fRF1, &fRF2, &fRF3);
 
                 prj_rad_m1_wavespeeds_with_fluxmag(EL, F1L, Fmag_L, f_L,
@@ -435,6 +508,7 @@ void prj_rad_flux(const double *WL, const double *WR,
         }
     }
 #else
+    (void)rad;
     (void)chi_face;
     (void)dx_dir;
     (void)v_face;
@@ -1022,8 +1096,8 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             Fg[g][0] = W_state[VIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
             Fg[g][1] = W_state[VIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
             Fg[g][2] = W_state[VIDX(PRJ_PRIM_RAD_F3(field, g), ic, jc, kc)];
-            prj_rad_m1_pressure(Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
-            prj_rad_m1_third_moment(Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Qg[g]);
+            prj_rad_m1_pressure(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
+            prj_rad_m1_third_moment(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Qg[g]);
             dE_acc[g] = 0.0;
             dF_acc[g][0] = 0.0;
             dF_acc[g][1] = 0.0;
