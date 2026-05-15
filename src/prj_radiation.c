@@ -95,22 +95,16 @@ static double prj_rad_closure_lookup(const double values[NCLOSURE + 1], double f
 static double prj_rad_m1_chi(const prj_rad *rad, double f)
 {
 #if PRJ_NRAD > 0
-    if (prj_rad_closure_ready(rad)) {
-        return prj_rad_closure_lookup(rad->chi, f);
-    }
+    return prj_rad_closure_lookup(rad->chi, f);
 #else
     (void)rad;
 #endif
-    return prj_rad_m1_chi_exact(f);
 }
 
 #if PRJ_NRAD > 0
 static double prj_rad_levermore_q_factor(const prj_rad *rad, double f)
 {
-    if (prj_rad_closure_ready(rad)) {
-        return prj_rad_closure_lookup(rad->q, f);
-    }
-    return prj_rad_levermore_q_factor_exact(f);
+    return prj_rad_closure_lookup(rad->q, f);
 }
 #endif
 
@@ -130,10 +124,6 @@ void prj_rad_prim2cons(const double *W, double *U)
     int field;
     int group;
 
-    if (W == 0 || U == 0) {
-        return;
-    }
-
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             U[PRJ_CONS_RAD_E(field, group)] = W[PRJ_PRIM_RAD_E(field, group)];
@@ -148,10 +138,6 @@ void prj_rad_cons2prim(const double *U, double *W)
 {
     int field;
     int group;
-
-    if (U == 0 || W == 0) {
-        return;
-    }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -409,10 +395,6 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
 {
     int field;
     int group;
-
-    if (WL == 0 || WR == 0 || flux == 0) {
-        return;
-    }
 
 #if PRJ_NRAD > 0
     {
