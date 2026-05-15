@@ -26,6 +26,9 @@
 #endif
 
 #define INEL_ELEM_ELE(table, m, ke, le, jeta, jq, ng) \
+    (table)[(((((le) * INEL_PHI_NETA + (jeta)) * INEL_PHI_NT + (jq)) * 2 + (m)) * (ng) + (ke))]
+
+#define INEL_ELEM_ELE_FILE(table, m, ke, le, jeta, jq, ng) \
     (table)[((((m) * (ng) + (ke)) * (ng) + (le)) * INEL_PHI_NETA + (jeta)) * INEL_PHI_NT + (jq)]
 
 static int prj_rad_inel_mpi_rank(void)
@@ -205,6 +208,39 @@ static void prj_rad_eleinel_read_table(const prj_rad *rad, int nu,
 #endif
 }
 
+static double *prj_rad_eleinel_relayout_table(double *old_table, size_t count, int nu)
+{
+    double *new_table = (double *)malloc(count * sizeof(*new_table));
+    int ng = PRJ_NEGROUP;
+    int m;
+    int ke;
+    int le;
+    int jeta;
+    int jq;
+
+    if (new_table == 0) {
+        fprintf(stderr, "prj_rad_inel: relayout allocation failed for species %d\n", nu);
+        free(old_table);
+        exit(1);
+    }
+
+    for (m = 0; m < 2; m++) {
+        for (ke = 0; ke < ng; ke++) {
+            for (le = 0; le < ng; le++) {
+                for (jeta = 0; jeta < INEL_PHI_NETA; jeta++) {
+                    for (jq = 0; jq < INEL_PHI_NT; jq++) {
+                        INEL_ELEM_ELE(new_table, m, ke, le, jeta, jq, ng) =
+                            INEL_ELEM_ELE_FILE(old_table, m, ke, le, jeta, jq, ng);
+                    }
+                }
+            }
+        }
+    }
+
+    free(old_table);
+    return new_table;
+}
+
 void prj_rad_eleinel_init(prj_rad *rad)
 {
     int rank = prj_rad_inel_mpi_rank();
@@ -224,15 +260,14 @@ void prj_rad_eleinel_init(prj_rad *rad)
         * (size_t)INEL_PHI_NETA * (size_t)INEL_PHI_NT;
 
     for (nu = 0; nu < PRJ_NRAD; nu++) {
-        rad->eleinel_phi_ee[nu] = (double *)malloc(ee_count * sizeof(double));
-        if (rad->eleinel_phi_ee[nu] == 0) {
+        double *old_table = (double *)malloc(ee_count * sizeof(*old_table));
+
+        if (old_table == 0) {
             fprintf(stderr, "prj_rad_inel: allocation failed for species %d\n", nu);
             exit(1);
         }
-    }
-
-    for (nu = 0; nu < PRJ_NRAD; nu++) {
-        prj_rad_eleinel_read_table(rad, nu, rad->eleinel_phi_ee[nu], ee_count);
+        prj_rad_eleinel_read_table(rad, nu, old_table, ee_count);
+        rad->eleinel_phi_ee[nu] = prj_rad_eleinel_relayout_table(old_table, ee_count, nu);
     }
 
     if (rank == 0) {
