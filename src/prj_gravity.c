@@ -725,12 +725,13 @@ static double prj_gravity_block_multipole_phi_at(const prj_block *block, int i, 
     for (l = 1; l < LMAX; ++l) {
         double r_l = prj_gravity_pow_int(r, l);
         double inv_r_l1 = 1.0 / (r_l * r);
+        int cidx = fr < PRJ_GRAVITY_CACHE_SKIP_REDUCE ? idx - 1 : idx;
         int m;
 
         for (m = -l; m <= l; ++m) {
             int yidx = PRJ_YLM_INDEX(l, m);
             double ylm = block->Ylm[yidx] != 0 ? block->Ylm[yidx][cache_idx] : 0.0;
-            double coeff = grav->Clm[yidx][idx] * inv_r_l1;
+            double coeff = cidx >= 0 ? grav->Clm[yidx][cidx] * inv_r_l1 : 0.0;
 
             if (fr < PRJ_GRAVITY_CACHE_SKIP_REDUCE) {
                 coeff += grav->Dlm[yidx][idx] * r_l;
