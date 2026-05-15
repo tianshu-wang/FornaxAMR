@@ -91,7 +91,7 @@ static void prj_rad_eleinel_phi_interp_make(double log10xtemp, double etalep,
     *coeff5_out = sp * sq;
 }
 
-static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
+static inline void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
     int nf, int nfp, int jeta, int jq,
     double coeff0, double coeff1, double coeff2,
     double coeff3, double coeff4, double coeff5,
@@ -114,7 +114,7 @@ static void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
         + coeff5 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta + 1, jq + 1, ng);
 }
 
-static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
+static inline void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     int nutype, int nfreq, int nf,
     const double *xj, const double xh[PRJ_NEGROUP][PRJ_NDIM],
     const double *freqe, const double *freqe2_dnue,
@@ -132,6 +132,7 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     double ssum;
     int nfp;
     double enu;
+    double enu3;
 
     xje = xj[nf];
 
@@ -139,6 +140,7 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     sumout = 0.0;
     ssum = 0.0;
     enu = freqe[nf];
+    enu3 = enu * enu * enu;
 
     for (nfp = 0; nfp < nfreq; nfp++) {
         double xjpe = xj[nfp];
@@ -167,7 +169,7 @@ static void prj_rad_eleinel_resourcesink(const prj_rad *rad,
     }
 
     sumin *= species_cut;
-    *srce = constin * (enu * enu * enu) * sumin;
+    *srce = constin * enu3 * sumin;
     *sinke = constout * sumout;
     *scatte = constout * ssum;
 }
