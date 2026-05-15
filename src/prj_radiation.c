@@ -458,7 +458,7 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
                 }
                 denom = sR - sL;
 
-                chi_ext = chi_face != 0 ? chi_face[idx] : 0.0;
+                chi_ext = chi_face[idx];
                 tau = chi_ext * dx_dir;
                 eps = 3.0 / (5.0 * tau + 1.0e-10);
                 if (eps > 1.0) {
