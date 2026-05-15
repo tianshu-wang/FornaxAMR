@@ -5,6 +5,13 @@
 
 #include "prj_defs.h"
 
+#ifndef LMAX
+#define LMAX 4
+#endif
+#if LMAX < 1
+#error "LMAX must be at least 1"
+#endif
+
 typedef struct prj_block prj_block;
 typedef struct prj_mesh prj_mesh;
 typedef struct prj_sim prj_sim;
@@ -81,6 +88,7 @@ struct prj_block {
     double *lapse;
     double *grav[3];
     double *r_com;
+    double *Ylm[LMAX*LMAX];
 #if PRJ_MHD
     int *face_fidelity[3];
     int *edge_fidelity[3];
@@ -161,6 +169,8 @@ struct prj_grav {
     double *phi;
     double *accel;
     double *lapse;
+    double *Clm[LMAX*LMAX];
+    double *Dlm[LMAX*LMAX];
     double *vol;
     double *rho_avg;
     double *vr_avg;
