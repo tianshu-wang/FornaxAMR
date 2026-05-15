@@ -258,6 +258,22 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->rad.kom_rhocut = 1.0e13;
     sim->rad.min_inel_density = 1.0e8;
     {
+        double kom_c = 299792458.0;
+        double kom_e_unit = 1e6 * 1.60217662e-19;
+        double kom_t_unit = 1.0545718e-34 / kom_e_unit;
+        double kom_l_unit = kom_t_unit * kom_c;
+        double kom_G2 = 1.327817e-22;
+        double kom_m = 939.0;
+        double kom_prot = (-0.5 * (1.0 - 4.0 * 0.23122)) * (-0.5 * (1.0 - 4.0 * 0.23122))
+            + 5.0 * (-1.2723 / 2.0) * (-1.2723 / 2.0);
+        double kom_neut = (-0.5) * (-0.5) + 5.0 * (1.2723 / 2.0) * (1.2723 / 2.0);
+        sim->rad.kom_nucinel_const = 2.0 * kom_G2 * 1e3 * kom_c * kom_c
+            * kom_l_unit * kom_l_unit * kom_l_unit
+            / (kom_m * kom_e_unit * 3.0 * M_PI * kom_m * kom_t_unit);
+        sim->rad.kom_nucinel_prot = kom_prot;
+        sim->rad.kom_nucinel_neut = kom_neut;
+    }
+    {
         int nu_i;
         for (nu_i = 0; nu_i < PRJ_NRAD; ++nu_i) {
             sim->rad.kom_Ecut[nu_i] = 300.0;

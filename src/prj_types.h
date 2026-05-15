@@ -231,6 +231,9 @@ struct prj_rad {
     double kom_delta;
     double kom_dtmin;
     double kom_rhocut;
+    double kom_nucinel_const;
+    double kom_nucinel_prot;
+    double kom_nucinel_neut;
     double kom_Ecut[PRJ_NRAD];
     double min_inel_density;
     double eleinel_factf;

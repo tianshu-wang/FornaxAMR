@@ -541,48 +541,12 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
 /* Nucleon inelastic scattering (Kompaneets solver)                   */
 /* ================================================================== */
 
-static double prj_nucinel_compute_coeff(double kT, double rho_N, double Ye)
+static double prj_nucinel_compute_coeff(const prj_rad *rad, double kT, double rho_N, double Ye)
 {
-    double kom_hbar = 1.0545718e-34;
-    double kom_c = 299792458.0;
-    double kom_e = 1.60217662e-19;
-    double kom_m_n = 939.0;
-    double kom_Vp = -0.5 * (1.0 - 4.0 * 0.23122);
-    double kom_Ap = -1.2723 / 2.0;
-    double kom_Vn = -0.5;
-    double kom_An = 1.2723 / 2.0;
-    double kom_e_unit = 1e6 * 1.60217662e-19;
-    double kom_t_unit = 1.0545718e-34 / (1e6 * 1.60217662e-19);
-    double kom_l_unit = 1.0545718e-34 / (1e6 * 1.60217662e-19) * 299792458.0;
-    double kom_G2 = 1.327817e-22;
-    double kom_m = 939.0;
-    double kom_prot = (-0.5 * (1.0 - 4.0 * 0.23122)) * (-0.5 * (1.0 - 4.0 * 0.23122))
-        + 5.0 * (-1.2723 / 2.0) * (-1.2723 / 2.0);
-    double kom_neut = (-0.5) * (-0.5) + 5.0 * (1.2723 / 2.0) * (1.2723 / 2.0);
-
     double beta = 1.0 / kT;
-    double nN = rho_N * 1e3 * kom_c * kom_c / (kom_m * kom_e_unit)
-        * kom_l_unit * kom_l_unit * kom_l_unit;
-    double coeff_p;
-    double coeff_n;
-    double coeff;
-
-    (void)kom_hbar;
-    (void)kom_e;
-    (void)kom_m_n;
-    (void)kom_Vp;
-    (void)kom_Ap;
-    (void)kom_Vn;
-    (void)kom_An;
-    (void)kom_e_unit;
-    (void)kom_t_unit;
-    (void)kom_l_unit;
-
-    coeff = 2.0 * kom_G2 * nN / (3.0 * M_PI * beta * beta * beta * kom_m) / kom_t_unit;
-    coeff_p = kom_prot * Ye;
-    coeff_n = kom_neut * (1.0 - Ye);
-    coeff *= (coeff_p + coeff_n);
-    return coeff;
+    double beta3 = beta * beta * beta;
+    double nN = rad->kom_nucinel_const * rho_N / beta3;
+    return nN * (rad->kom_nucinel_prot * Ye + rad->kom_nucinel_neut * (1.0 - Ye));
 }
 
 static int prj_nucinel_tdma(double *A, double *B, double *C, double *D, int n)
@@ -644,7 +608,7 @@ static int prj_nucinel_compute_step(const prj_rad *rad,
         totx3J += x3J[i];
     }
     dlogxs = log(xs[1]) - log(xs[0]);
-    coeff = prj_nucinel_compute_coeff(kT, rho_N, Ye) / dlogxs;
+    coeff = prj_nucinel_compute_coeff(rad, kT, rho_N, Ye) / dlogxs;
 
     ratio = xs[1] / xs[0];
     exph[0] = 1.0 / (exp(xs[0] * (1.0 - 1.0 / ratio)) - 1.0);

@@ -449,6 +449,11 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     corner[6] = OPAC_CELL_IDX(jr,     jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
     corner[7] = OPAC_CELL_IDX(jr + 1, jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
 
+    double factor;
+    if (eta != 0) {
+        factor = 4.0 * M_PI / PRJ_MEV_TO_ERG;
+    }
+
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         const double *absopac = rad->absopac[nu];
         const double *scaopac = rad->scaopac[nu];
@@ -474,11 +479,11 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
 
             if (kappa != 0) {
                 k_val = SAMPLE(absopac);
-                kappa[base] = exp(k_val) * rho;
+                kappa[base] = exp(k_val+rl);
             }
             if (sigma != 0) {
                 s_val = SAMPLE(scaopac);
-                sigma[base] = exp(s_val) * rho;
+                sigma[base] = exp(s_val+rl);
             }
             if (delta != 0) {
                 d_val = SAMPLE(sdelta);
@@ -486,8 +491,7 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
             }
             if (eta != 0) {
                 j_val = SAMPLE(emis);
-                eta[base] = exp(j_val) * rho * 4.0 * M_PI *
-                    rad->degroup_erg[nu][ng] / PRJ_MEV_TO_ERG;
+                eta[base] = exp(j_val+rl) * factor * rad->degroup_erg[nu][ng];
             }
 
 #undef SAMPLE

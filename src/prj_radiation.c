@@ -510,7 +510,7 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
 static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     double dt, double lapse, double rho, double Uint_old, double Ye_old,
     const double *E_nu_old, double T, double Ye, double *F1, double *F2,
-    double *E_nu_new_out)
+    double *E_nu_new_out, double *kappa_out)
 {
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
     double eta[PRJ_NRAD * PRJ_NEGROUP];
@@ -552,12 +552,20 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
 
     *F1 = Uint_new - Uint_old + sum_dE;
     *F2 = rho * Ye - rho * Ye_old + sum_dE_xe;
+
+    if (kappa_out != 0) {
+        int i;
+        for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
+            kappa_out[i] = kappa[i];
+        }
+    }
 }
 
-void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
+void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out)
 {
     double E_nu_old[PRJ_NRAD * PRJ_NEGROUP];
     double E_nu_new[PRJ_NRAD * PRJ_NEGROUP];
+    double last_kappa[PRJ_NRAD * PRJ_NEGROUP];
     double rho;
     double KE;
     double Emag = 0.0;
@@ -658,7 +666,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         } else {
             PRJ_TIMER_CURRENT_START("rad_eu_resid_base");
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, T, Ye, &F1, &F2, E_nu_new);
+                E_nu_old, T, Ye, &F1, &F2, E_nu_new, last_kappa);
             PRJ_TIMER_CURRENT_STOP("rad_eu_resid_base");
             f1 = F1 / err_scale_1;
             f2 = F2 / err_scale_2;
@@ -672,17 +680,17 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         /* Jacobian via finite differences with power-of-2 step. */
         PRJ_TIMER_CURRENT_START("rad_eu_jacobian");
         hT = 3.0e-8 * T;
-        hT = pow(2.0, round(log(hT) / log(2.0)));
+        // hT = pow(2.0, round(log(hT) / log(2.0)));
         hY = 3.0e-8 * Ye;
-        hY = pow(2.0, round(log(hY) / log(2.0)));
+        // hY = pow(2.0, round(log(hY) / log(2.0)));
 
         prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-            E_nu_old, T + hT, Ye, &F1_p, &F2_p, 0);
+            E_nu_old, T + hT, Ye, &F1_p, &F2_p, 0, 0);
         dFdT_1 = (F1_p - F1) / hT;
         dFdT_2 = (F2_p - F2) / hT;
 
         prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-            E_nu_old, T, Ye + hY, &F1_p, &F2_p, 0);
+            E_nu_old, T, Ye + hY, &F1_p, &F2_p, 0, 0);
         dFdY_1 = (F1_p - F1) / hY;
         dFdY_2 = (F2_p - F2) / hY;
         PRJ_TIMER_CURRENT_STOP("rad_eu_jacobian");
@@ -764,7 +772,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             Ttrial = T + lam * dT;
             Ytrial = Ye + lam * dY;
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, Ttrial, Ytrial, &F1_trial, &F2_trial, E_nu_new);
+                E_nu_old, Ttrial, Ytrial, &F1_trial, &F2_trial, E_nu_new, 0);
             ft1 = F1_trial / err_scale_1;
             ft2 = F2_trial / err_scale_2;
             res_trial = 0.5 * (ft1 * ft1 + ft2 * ft2);
@@ -844,7 +852,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             double F2_final;
 
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new);
+                E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa);
         }
         prj_eos_rty(eos, rho, T, Ye, eos_q);
         eint_new = eos_q[PRJ_EOS_EINT];
@@ -861,11 +869,16 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     if (final_temperature != 0) {
         *final_temperature = T;
     }
+    if (kappa_out != 0) {
+        int i;
+        for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
+            kappa_out[i] = last_kappa[i];
+        }
+    }
 }
 
-void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
+void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature, const double *kappa_in)
 {
-    double kappa[PRJ_NRAD * PRJ_NEGROUP];
     double sigma[PRJ_NRAD * PRJ_NEGROUP];
     double delta[PRJ_NRAD * PRJ_NEGROUP];
     double rho;
@@ -888,7 +901,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
 
     PRJ_TIMER_CURRENT_START("rad_mu_opac_lookup");
-    prj_rad3_opac_lookup(rad, rho, temperature, Ye, kappa, sigma, delta, 0);
+    prj_rad3_opac_lookup(rad, rho, temperature, Ye, 0, sigma, delta, 0);
     PRJ_TIMER_CURRENT_STOP("rad_mu_opac_lookup");
 
     dmom[0] = 0.0;
@@ -900,7 +913,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             int idx = nu * PRJ_NEGROUP + g;
-            double chi = kappa[idx] + sigma[idx] * (1.0 - delta[idx] / 3.0);
+            double chi = kappa_in[idx] + sigma[idx] * (1.0 - delta[idx] / 3.0);
             double factor = 1.0 / (1.0 + dt * lapse * PRJ_CLIGHT * chi) - 1.0;
             int fi[3];
 
@@ -1256,7 +1269,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
 }
 
 #else
-void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature)
+void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out)
 {
     (void)rad;
     (void)eos;
@@ -1264,9 +1277,10 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     (void)dt;
     (void)final_temperature;
     (void)lapse;
+    (void)kappa_out;
 }
 
-void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature)
+void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature, const double *kappa_in)
 {
     (void)rad;
     (void)eos;
@@ -1274,6 +1288,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     (void)dt;
     (void)lapse;
     (void)temperature;
+    (void)kappa_in;
 }
 
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
