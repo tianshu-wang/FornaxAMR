@@ -455,20 +455,17 @@ static double prj_block_corner_pair_angle(const double a[3], const double b[3])
     return atan2(cross_norm, dot);
 }
 
-static double prj_block_max_corner_angle(const prj_block *b)
+static double prj_box_max_corner_angle(const double box_min[3], const double box_max[3])
 {
     double corner[8][3];
     double max_angle = 0.0;
     int n;
     int m;
 
-    if (b == 0) {
-        return 0.0;
-    }
     for (n = 0; n < 8; ++n) {
-        corner[n][0] = (n & 1) != 0 ? b->xmax[0] : b->xmin[0];
-        corner[n][1] = (n & 2) != 0 ? b->xmax[1] : b->xmin[1];
-        corner[n][2] = (n & 4) != 0 ? b->xmax[2] : b->xmin[2];
+        corner[n][0] = (n & 1) != 0 ? box_max[0] : box_min[0];
+        corner[n][1] = (n & 2) != 0 ? box_max[1] : box_min[1];
+        corner[n][2] = (n & 4) != 0 ? box_max[2] : box_min[2];
     }
     for (n = 0; n < 8; ++n) {
         for (m = n + 1; m < 8; ++m) {
@@ -477,6 +474,37 @@ static double prj_block_max_corner_angle(const prj_block *b)
             if (angle > max_angle) {
                 max_angle = angle;
             }
+        }
+    }
+    return max_angle;
+}
+
+static double prj_block_max_corner_cell_angle(const prj_block *b)
+{
+    double max_angle = 0.0;
+    int n;
+
+    if (b == 0) {
+        return 0.0;
+    }
+    for (n = 0; n < 8; ++n) {
+        double cell_min[3];
+        double cell_max[3];
+        double angle;
+        int d;
+
+        for (d = 0; d < 3; ++d) {
+            if ((n & (1 << d)) != 0) {
+                cell_min[d] = b->xmax[d] - b->dx[d];
+                cell_max[d] = b->xmax[d];
+            } else {
+                cell_min[d] = b->xmin[d];
+                cell_max[d] = b->xmin[d] + b->dx[d];
+            }
+        }
+        angle = prj_box_max_corner_angle(cell_min, cell_max);
+        if (angle > max_angle) {
+            max_angle = angle;
         }
     }
     return max_angle;
@@ -495,7 +523,7 @@ void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
         return;
     }
 
-    angle = prj_block_max_corner_angle(b);
+    angle = prj_block_max_corner_cell_angle(b);
     if (angle < mesh->amr_angle_resolution_limit) {
         b->can_refine = 0;
     }
