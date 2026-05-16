@@ -98,6 +98,7 @@ static double prj_rad_m1_chi(const prj_rad *rad, double f)
     return prj_rad_closure_lookup(rad->chi, f);
 #else
     (void)rad;
+    return 0;
 #endif
 }
 
