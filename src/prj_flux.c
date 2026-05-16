@@ -103,8 +103,8 @@ static void prj_flux_face_states_local(double *W, int dir, int i, int j, int k,
     int ir;
     int jr;
     int kr;
-    int field;
-    int group;
+    int field=0;
+    int group=0;
 
     prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
 
@@ -200,8 +200,8 @@ static void prj_flux_store_face_velocity(prj_block *block, int dir, int i, int j
 static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
     const double *Fl)
 {
-    int field;
-    int group;
+    int field=0;
+    int group=0;
 
     dst[VIDX(PRJ_CONS_RHO, i, j, k)] = Fl[PRJ_CONS_RHO];
     dst[VIDX(PRJ_CONS_ETOT, i, j, k)] = Fl[PRJ_CONS_ETOT];
