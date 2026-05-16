@@ -180,9 +180,7 @@ static const char *prj_amr_estimator_label(const prj_sim *sim)
             } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_VELOCITY) {
                 name = "velocity";
             } else {
-                if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_LOG_DENSITY) {
-                    name = "lohner_log_density";
-                } else if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_DENSITY) {
+                if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_DENSITY) {
                     name = "lohner_density";
                 } else if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_TEMPERATURE) {
                     name = "lohner_temperature";

@@ -112,10 +112,6 @@ static int prj_io_parse_lohner_var(const char *value, int *lohner_var)
         *lohner_var = PRJ_LOHNER_VAR_DENSITY;
         return 0;
     }
-    if (strcmp(value, "log_density") == 0) {
-        *lohner_var = PRJ_LOHNER_VAR_LOG_DENSITY;
-        return 0;
-    }
     if (strcmp(value, "pressure") == 0) {
         *lohner_var = PRJ_LOHNER_VAR_PRESSURE;
         return 0;
@@ -617,6 +613,19 @@ static void prj_io_dataset_name(int var, char *name, size_t size)
         } else {
             snprintf(name, size, "rad%d_g%02d_F%d", field, group, component);
         }
+    }
+}
+
+static void prj_io_eosvar_dataset_name(int var, char *name, size_t size)
+{
+    if (var == PRJ_EOSVAR_PRESSURE) {
+        snprintf(name, size, "pressure");
+    } else if (var == PRJ_EOSVAR_TEMPERATURE) {
+        snprintf(name, size, "temperature");
+    } else if (var == PRJ_EOSVAR_GAMMA) {
+        snprintf(name, size, "gamma");
+    } else {
+        snprintf(name, size, "eosvar%d", var);
     }
 }
 
@@ -1382,6 +1391,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
     hid_t dset_level;
     hid_t dset_coord;
     hid_t dset_var[PRJ_NVAR_PRIM];
+    hid_t dset_eosvar[PRJ_NVAR_EOSVAR];
 #if PRJ_MHD
     hid_t dset_bf[3];
 #endif
@@ -1460,6 +1470,12 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
         prj_io_dataset_name(bidx, name, sizeof(name));
         dset_var[bidx] = H5Dcreate2(file, name, dump_real_type, space_var, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
     }
+    for (bidx = 0; bidx < PRJ_NVAR_EOSVAR; ++bidx) {
+        char name[32];
+
+        prj_io_eosvar_dataset_name(bidx, name, sizeof(name));
+        dset_eosvar[bidx] = H5Dcreate2(file, name, dump_real_type, space_var, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    }
 #if PRJ_MHD
     for (bidx = 0; bidx < 3; ++bidx) {
         char name[8];
@@ -1501,6 +1517,9 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
             }
             if (block->W == 0) {
                 prj_io_fail("prj_io_write_dump: missing W storage");
+            }
+            if (block->eosvar == 0) {
+                prj_io_fail("prj_io_write_dump: missing eosvar storage");
             }
             active_blocks[local_idx] = block;
             level_buffer[local_idx] = block->level;
@@ -1559,6 +1578,29 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
                 }
                 prj_io_write_hyperslab(dset_var[var], H5T_NATIVE_FLOAT, 4, start_var, count_var, buffer);
             }
+            for (var = 0; var < PRJ_NVAR_EOSVAR; ++var) {
+                hsize_t start_var[4] = {(hsize_t)active_idx, 0, 0, 0};
+                hsize_t count_var[4] = {(hsize_t)local_active, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE};
+
+                for (local_idx = 0; local_idx < local_active; ++local_idx) {
+                    const prj_block *block = active_blocks[local_idx];
+                    int i;
+                    int j;
+                    int k;
+
+                    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                                size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+
+                                buffer[(size_t)local_idx * ncells + cell] =
+                                    (float)block->eosvar[EIDX(var, i, j, k)];
+                            }
+                        }
+                    }
+                }
+                prj_io_write_hyperslab(dset_eosvar[var], H5T_NATIVE_FLOAT, 4, start_var, count_var, buffer);
+            }
             free(buffer);
         }
 #else
@@ -1595,6 +1637,29 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
                     }
                 }
                 prj_io_write_hyperslab(dset_var[var], H5T_NATIVE_DOUBLE, 4, start_var, count_var, buffer);
+            }
+            for (var = 0; var < PRJ_NVAR_EOSVAR; ++var) {
+                hsize_t start_var[4] = {(hsize_t)active_idx, 0, 0, 0};
+                hsize_t count_var[4] = {(hsize_t)local_active, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE, PRJ_BLOCK_SIZE};
+
+                for (local_idx = 0; local_idx < local_active; ++local_idx) {
+                    const prj_block *block = active_blocks[local_idx];
+                    int i;
+                    int j;
+                    int k;
+
+                    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                                size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+
+                                buffer[(size_t)local_idx * ncells + cell] =
+                                    block->eosvar[EIDX(var, i, j, k)];
+                            }
+                        }
+                    }
+                }
+                prj_io_write_hyperslab(dset_eosvar[var], H5T_NATIVE_DOUBLE, 4, start_var, count_var, buffer);
             }
             free(buffer);
         }
@@ -1682,6 +1747,9 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
     H5Sclose(space_coord);
     for (bidx = 0; bidx < PRJ_NVAR_PRIM; ++bidx) {
         H5Dclose(dset_var[bidx]);
+    }
+    for (bidx = 0; bidx < PRJ_NVAR_EOSVAR; ++bidx) {
+        H5Dclose(dset_eosvar[bidx]);
     }
     H5Sclose(space_var);
 #if PRJ_MHD

@@ -510,14 +510,6 @@ static double prj_loehner_cell_value(const prj_mesh *mesh, const prj_block *b, i
     if (b == 0) {
         return 0.0;
     }
-    if (lohner_var == PRJ_LOHNER_VAR_LOG_DENSITY) {
-        double rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
-
-        if (rho <= 0.0) {
-            return 0.0;
-        }
-        return log(rho);
-    }
     if (lohner_var == PRJ_LOHNER_VAR_DENSITY) {
         return prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
     }
@@ -734,8 +726,7 @@ int prj_amr_criteria_need_eosvar(const prj_mesh *mesh)
             return 1;
         }
         if (estimator == PRJ_AMR_ESTIMATOR_LOEHNER &&
-            mesh->amr_lohner_var[amr_idx] != PRJ_LOHNER_VAR_DENSITY &&
-            mesh->amr_lohner_var[amr_idx] != PRJ_LOHNER_VAR_LOG_DENSITY) {
+            mesh->amr_lohner_var[amr_idx] != PRJ_LOHNER_VAR_DENSITY) {
             return 1;
         }
     }

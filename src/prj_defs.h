@@ -170,8 +170,7 @@ enum prj_mhd_fidelity {
 enum prj_lohner_var {
     PRJ_LOHNER_VAR_DENSITY = 0,
     PRJ_LOHNER_VAR_PRESSURE = 1,
-    PRJ_LOHNER_VAR_TEMPERATURE = 2,
-    PRJ_LOHNER_VAR_LOG_DENSITY = 3
+    PRJ_LOHNER_VAR_TEMPERATURE = 2
 };
 
 enum prj_fractional_jump_var {
