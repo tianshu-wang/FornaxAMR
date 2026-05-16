@@ -598,19 +598,27 @@ static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int 
 
 static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i, int j, int k)
 {
+    int cache_idx;
     double rho;
     double pressure;
     double accel;
+    double g1;
+    double g2;
+    double g3;
     double cell_size;
     double Hp;
 
-    if (b == 0) {
+    if (b == 0 || b->grav[0] == 0 || b->grav[1] == 0 || b->grav[2] == 0) {
         return 0.0;
     }
 
+    cache_idx = prj_block_cache_index(i, j, k);
     rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
     pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
-    accel = prj_abs_double(prj_gravity_block_accel_at(b, i, j, k));
+    g1 = b->grav[0][cache_idx];
+    g2 = b->grav[1][cache_idx];
+    g3 = b->grav[2][cache_idx];
+    accel = prj_sqrt_double(g1 * g1 + g2 * g2 + g3 * g3);
     cell_size = b->dx[0];
     if (b->dx[1] > cell_size) {
         cell_size = b->dx[1];
