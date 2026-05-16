@@ -9,7 +9,7 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
 
 # User settings. Choose a dump dataset name, or derived variables "pressure", "B", or "vr".
-VARIABLE = "B1"
+VARIABLE = "temperature"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
@@ -28,18 +28,15 @@ CM_PER_KM = 1.0e5
 AXIS_NAMES = ("x", "y", "z")
 
 
+def plot_path_for(output_dir: Path, variable: str, plane: str, dump_id: str) -> Path:
+    return output_dir / "plots" / variable / f"{plane}-{dump_id}.png"
+
+
 def load_dump_files(output_dir: Path):
-    compatible = []
     dumps = sorted(output_dir.glob("dump_*.h5"))
     if not dumps:
         raise FileNotFoundError("no dump files found in output/")
-    for dump in dumps:
-        with h5py.File(dump, "r") as h5:
-            if "coord" in h5.attrs and "root_nx" in h5.attrs:
-                compatible.append(dump)
-    if not compatible:
-        raise FileNotFoundError("no compatible dump files with geometry metadata found in output/")
-    return compatible
+    return dumps
 
 
 def pressure_from_state(density: np.ndarray, eint: np.ndarray) -> np.ndarray:
@@ -62,48 +59,6 @@ def block_extent(xmin: np.ndarray, level: int, coord: np.ndarray, root_nx: np.nd
     return root_dx / (2 ** level)
 
 
-def radial_velocity_from_state(
-    coords: np.ndarray,
-    levels: np.ndarray,
-    v1: np.ndarray,
-    v2: np.ndarray,
-    v3: np.ndarray,
-    coord: np.ndarray,
-    root_nx: np.ndarray,
-) -> np.ndarray:
-    vr = np.empty_like(v1, dtype=np.result_type(v1, v2, v3, float))
-    for bid, xmin in enumerate(coords):
-        block_vr = vr[bid]
-        block_v1 = v1[bid]
-        block_v2 = v2[bid]
-        block_v3 = v3[bid]
-        n = block_v1.shape[0]
-        extent = block_extent(xmin, int(levels[bid]), coord, root_nx)
-        dx = extent / n
-        x = xmin[0] + (np.arange(n) + 0.5) * dx[0]
-        y = xmin[1] + (np.arange(n) + 0.5) * dx[1]
-        z = xmin[2] + (np.arange(n) + 0.5) * dx[2]
-        x3d = x[:, None, None]
-        y3d = y[None, :, None]
-        z3d = z[None, None, :]
-        radius = np.sqrt(x3d * x3d + y3d * y3d + z3d * z3d)
-        numerator = block_v1 * x3d + block_v2 * y3d + block_v3 * z3d
-
-        np.divide(numerator, radius, out=block_vr, where=radius > 0.0)
-        block_vr[radius <= 0.0] = 0.0
-    return vr
-
-
-def read_values(h5, variable: str, coords: np.ndarray, levels: np.ndarray, coord: np.ndarray, root_nx: np.ndarray) -> np.ndarray:
-    if variable == "pressure":
-        return pressure_from_state(h5["density"][...], h5["eint"][...])
-    if variable == "B":
-        return magnetic_field_strength(h5["B1"][...], h5["B2"][...], h5["B3"][...])
-    if variable == "vr":
-        return radial_velocity_from_state(coords, levels, h5["v1"][...], h5["v2"][...], h5["v3"][...], coord, root_nx)
-    return h5[variable][...]
-
-
 def plane_axes(plane: str):
     if plane == "yz":
         return 0, 1, 2
@@ -112,14 +67,115 @@ def plane_axes(plane: str):
     return 2, 0, 1
 
 
-def collect_plane_blocks(coords: np.ndarray, levels: np.ndarray, values: np.ndarray, plane: str, coord: np.ndarray, root_nx: np.ndarray):
+def reference_dataset_name(h5, variable: str) -> str:
+    if variable == "pressure":
+        return "pressure" if "pressure" in h5 else "density"
+    if variable == "B":
+        return "B1"
+    if variable == "vr":
+        return "v1"
+    return variable
+
+
+def read_dataset_plane(h5, dataset_name: str, bid: int, plane: str, cell: int) -> np.ndarray:
+    dataset = h5[dataset_name]
+    if plane == "yz":
+        return dataset[bid, cell, :, :]
+    if plane == "xz":
+        return dataset[bid, :, cell, :]
+    return dataset[bid, :, :, cell]
+
+
+def orient_plane_coordinate(values, axis: int, normal_axis: int, axis_a: int):
+    if axis == normal_axis:
+        return values
+    if axis == axis_a:
+        return values[:, None]
+    return values[None, :]
+
+
+def radial_velocity_from_plane(
+    xmin: np.ndarray,
+    level: int,
+    plane: str,
+    cell: int,
+    coord: np.ndarray,
+    root_nx: np.ndarray,
+    v1: np.ndarray,
+    v2: np.ndarray,
+    v3: np.ndarray,
+) -> np.ndarray:
+    normal_axis, axis_a, axis_b = plane_axes(plane)
+    extent = block_extent(xmin, level, coord, root_nx)
+    n = v1.shape[0]
+    dx = extent / n
+    axes = [None, None, None]
+
+    axes[normal_axis] = xmin[normal_axis] + (cell + 0.5) * dx[normal_axis]
+    axes[axis_a] = xmin[axis_a] + (np.arange(v1.shape[0]) + 0.5) * dx[axis_a]
+    axes[axis_b] = xmin[axis_b] + (np.arange(v1.shape[1]) + 0.5) * dx[axis_b]
+
+    x = orient_plane_coordinate(axes[0], 0, normal_axis, axis_a)
+    y = orient_plane_coordinate(axes[1], 1, normal_axis, axis_a)
+    z = orient_plane_coordinate(axes[2], 2, normal_axis, axis_a)
+    radius = np.sqrt(x * x + y * y + z * z)
+    numerator = v1 * x + v2 * y + v3 * z
+    vr = np.empty_like(v1, dtype=np.result_type(v1, v2, v3, float))
+
+    np.divide(numerator, radius, out=vr, where=radius > 0.0)
+    vr[radius <= 0.0] = 0.0
+    return vr
+
+
+def read_plane_values(
+    h5,
+    variable: str,
+    bid: int,
+    plane: str,
+    cell: int,
+    xmin: np.ndarray,
+    level: int,
+    coord: np.ndarray,
+    root_nx: np.ndarray,
+) -> np.ndarray:
+    if variable == "pressure":
+        if "pressure" in h5:
+            return read_dataset_plane(h5, "pressure", bid, plane, cell)
+        return pressure_from_state(
+            read_dataset_plane(h5, "density", bid, plane, cell),
+            read_dataset_plane(h5, "eint", bid, plane, cell),
+        )
+    if variable == "B":
+        return magnetic_field_strength(
+            read_dataset_plane(h5, "B1", bid, plane, cell),
+            read_dataset_plane(h5, "B2", bid, plane, cell),
+            read_dataset_plane(h5, "B3", bid, plane, cell),
+        )
+    if variable == "vr":
+        return radial_velocity_from_plane(
+            xmin,
+            level,
+            plane,
+            cell,
+            coord,
+            root_nx,
+            read_dataset_plane(h5, "v1", bid, plane, cell),
+            read_dataset_plane(h5, "v2", bid, plane, cell),
+            read_dataset_plane(h5, "v3", bid, plane, cell),
+        )
+    return read_dataset_plane(h5, variable, bid, plane, cell)
+
+
+def collect_plane_blocks_from_h5(h5, variable: str, coords: np.ndarray, levels: np.ndarray, plane: str, coord: np.ndarray, root_nx: np.ndarray):
     normal_axis, axis_a, axis_b = plane_axes(plane)
     slices = []
     plane_value = 0.0
     tol = 1.0e-12
     domain_max = coord[2 * normal_axis + 1]
+    n = h5[reference_dataset_name(h5, variable)].shape[1]
     for bid, xmin in enumerate(coords):
-        extent = block_extent(xmin, int(levels[bid]), coord, root_nx)
+        level = int(levels[bid])
+        extent = block_extent(xmin, level, coord, root_nx)
         xmax = xmin + extent
         intersects = (
             xmin[normal_axis] - tol <= plane_value < xmax[normal_axis] - tol or
@@ -127,16 +183,9 @@ def collect_plane_blocks(coords: np.ndarray, levels: np.ndarray, values: np.ndar
         )
         if not intersects:
             continue
-        block = values[bid]
-        n = block.shape[0]
         dx = extent / n
         cell = int(np.clip(np.floor((plane_value - xmin[normal_axis]) / dx[normal_axis]), 0, n - 1))
-        if plane == "yz":
-            plane_values = block[cell, :, :]
-        elif plane == "xz":
-            plane_values = block[:, cell, :]
-        else:
-            plane_values = block[:, :, cell]
+        plane_values = read_plane_values(h5, variable, bid, plane, cell, xmin, level, coord, root_nx)
         xedges = xmin[axis_a] + np.arange(n + 1) * dx[axis_a]
         yedges = xmin[axis_b] + np.arange(n + 1) * dx[axis_b]
         slices.append((xmin, xmax, xedges, yedges, plane_values))
@@ -183,17 +232,16 @@ def build_norm(vmin: float, vmax: float):
     raise ValueError(f"unknown COLOR_SCALE '{COLOR_SCALE}'")
 
 
-def plot_plane(output_dir: Path, dump_id: str, dump_time: float, coords: np.ndarray, levels: np.ndarray, values: np.ndarray, variable: str, plane: str, coord: np.ndarray, root_nx: np.ndarray) -> None:
-    plot_dir = output_dir / "plots" / variable
+def plot_plane(output_dir: Path, dump_id: str, dump_time: float, plane_blocks, variable: str, plane: str) -> None:
+    plot_path = plot_path_for(output_dir, variable, plane, dump_id)
+    plot_dir = plot_path.parent
     plot_dir.mkdir(parents=True, exist_ok=True)
-    plot_path = plot_dir / f"{plane}-{dump_id}.png"
 
     if plot_path.exists():
         return
 
     fig, ax = plt.subplots(figsize=(6, 6))
     pcm = None
-    plane_blocks = collect_plane_blocks(coords, levels, values, plane, coord, root_nx)
     if not plane_blocks:
         raise RuntimeError(f"no blocks intersect the {plane} plane")
     vmin, vmax = color_limits(plane_blocks)
@@ -219,18 +267,29 @@ def main() -> None:
     variable = VARIABLE
     output_dir = OUTPUT_DIR
     dump_files = load_dump_files(output_dir)
+    checked_missing_plots = False
+    found_compatible_dump = False
 
     for dump_path in dump_files:
+        dump_id = dump_path.stem.split("_")[-1]
+        planes = [plane for plane in PLANES if not plot_path_for(output_dir, variable, plane, dump_id).exists()]
+        if not planes:
+            continue
+        checked_missing_plots = True
         with h5py.File(dump_path, "r") as h5:
-            dump_id = dump_path.stem.split("_")[-1]
+            if "coord" not in h5.attrs or "root_nx" not in h5.attrs:
+                continue
+            found_compatible_dump = True
             dump_time = float(h5.attrs["time"])
             coords = h5["coordinate"][...] / CM_PER_KM
             levels = h5["level"][...]
             coord = np.asarray(h5.attrs["coord"], dtype=float) / CM_PER_KM
             root_nx = h5.attrs["root_nx"]
-            values = read_values(h5, variable, coords, levels, coord, root_nx)
-        for plane in PLANES:
-            plot_plane(output_dir, dump_id, dump_time, coords, levels, values, variable, plane, coord, root_nx)
+            for plane in planes:
+                plane_blocks = collect_plane_blocks_from_h5(h5, variable, coords, levels, plane, coord, root_nx)
+                plot_plane(output_dir, dump_id, dump_time, plane_blocks, variable, plane)
+    if checked_missing_plots and not found_compatible_dump:
+        raise FileNotFoundError("no compatible dump files with geometry metadata found in output/")
 
 
 if __name__ == "__main__":
