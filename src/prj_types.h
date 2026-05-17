@@ -127,6 +127,7 @@ struct prj_mesh {
     int use_amr_angle_resolution;
     int use_BJ;
     double amr_angle_resolution_limit;
+    double amr_init_scale_factor;
     double E_floor;
     prj_amr_init_refine_fn amr_init_refine_fn;
     void *amr_init_refine_userdata;

@@ -21,9 +21,11 @@ typedef struct prj_ccsn_init_amr_ctx {
     int npts;
     const double *radius;
     double *Lrho;
+    double scale_factor;
 } prj_ccsn_init_amr_ctx;
 
-static int prj_ccsn_init_amr_ctx_build(prj_ccsn_init_amr_ctx *ctx, const prj_ccsn_profile *profile)
+static int prj_ccsn_init_amr_ctx_build(prj_ccsn_init_amr_ctx *ctx, const prj_ccsn_profile *profile,
+    double scale_factor)
 {
     int i;
 
@@ -32,6 +34,7 @@ static int prj_ccsn_init_amr_ctx_build(prj_ccsn_init_amr_ctx *ctx, const prj_ccs
     }
     ctx->npts = profile->npts;
     ctx->radius = profile->radius;
+    ctx->scale_factor = scale_factor;
     ctx->Lrho = (double *)malloc((size_t)profile->npts * sizeof(*ctx->Lrho));
     if (ctx->Lrho == 0) {
         return 1;
@@ -78,6 +81,7 @@ static void prj_ccsn_init_amr_ctx_free(prj_ccsn_init_amr_ctx *ctx)
     ctx->Lrho = 0;
     ctx->radius = 0;
     ctx->npts = 0;
+    ctx->scale_factor = 0.0;
 }
 
 static double prj_ccsn_init_amr_Lrho_interp(const prj_ccsn_init_amr_ctx *ctx, double r)
@@ -182,7 +186,7 @@ static int prj_ccsn_init_amr_refine_block(const prj_block *block, void *userdata
         }
     }
     Lmin = prj_ccsn_init_amr_Lrho_min(ctx, rmin, rmax);
-    return dx > Lmin ? 1 : 0;
+    return dx > ctx->scale_factor * Lmin ? 1 : 0;
 }
 
 static int prj_problem_local_block(const prj_block *block)
@@ -479,7 +483,8 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
     init_ctx.npts = 0;
     init_ctx.radius = 0;
     init_ctx.Lrho = 0;
-    init_ctx_ok = (prj_ccsn_init_amr_ctx_build(&init_ctx, profile) == 0);
+    init_ctx.scale_factor = sim->mesh.amr_init_scale_factor;
+    init_ctx_ok = (prj_ccsn_init_amr_ctx_build(&init_ctx, profile, sim->mesh.amr_init_scale_factor) == 0);
 
     prj_ccsn_fill_mesh(sim, profile);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);

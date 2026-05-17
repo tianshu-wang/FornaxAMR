@@ -242,6 +242,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.use_amr_angle_resolution = 0;
     sim->mesh.use_BJ = 0;
     sim->mesh.amr_angle_resolution_limit = 0.0;
+    sim->mesh.amr_init_scale_factor = 0.5;
     sim->mesh.E_floor = -1.0;
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
@@ -422,6 +423,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.use_BJ = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_angle_resolution_limit") == 0) {
             sim->mesh.amr_angle_resolution_limit = strtod(value, &endptr);
+        } else if (strcmp(key, "amr_init_scale_factor") == 0) {
+            sim->mesh.amr_init_scale_factor = strtod(value, &endptr);
         } else if (strcmp(key, "E_floor") == 0) {
             sim->mesh.E_floor = strtod(value, &endptr);
 #if PRJ_MHD

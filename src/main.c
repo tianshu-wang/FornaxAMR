@@ -243,6 +243,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "max_level: %d\n", sim->mesh.max_level);
     fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
     fprintf(stderr, "x_com_err_tol: %.6e\n", sim->x_com_err_tol);
+    fprintf(stderr, "amr_init_scale_factor: %.6e\n", sim->mesh.amr_init_scale_factor);
 }
 
 int main(int argc, char *argv[])
