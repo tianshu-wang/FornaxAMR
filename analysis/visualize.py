@@ -183,6 +183,10 @@ def collect_plane_blocks_from_h5(h5, variable: str, coords: np.ndarray, levels: 
         )
         if not intersects:
             continue
+        if X_RANGE is not None and (xmax[axis_a] <= X_RANGE[0] or xmin[axis_a] >= X_RANGE[1]):
+            continue
+        if Y_RANGE is not None and (xmax[axis_b] <= Y_RANGE[0] or xmin[axis_b] >= Y_RANGE[1]):
+            continue
         dx = extent / n
         cell = int(np.clip(np.floor((plane_value - xmin[normal_axis]) / dx[normal_axis]), 0, n - 1))
         plane_values = read_plane_values(h5, variable, bid, plane, cell, xmin, level, coord, root_nx)
