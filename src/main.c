@@ -264,6 +264,7 @@ int main(int argc, char *argv[])
     int saved_use_BJ;
     double saved_amr_angle_resolution_limit;
     double saved_min_dx;
+    double restart_x_com[3] = {0.0, 0.0, 0.0};
     int resolution = -1;
     int max_level_override = -1;
     double next_output_time = -1.0;
@@ -344,7 +345,7 @@ int main(int argc, char *argv[])
         saved_min_dx = sim.mesh.min_dx;
         PRJ_TIMER_START(&timer, "read_restart");
         prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
-            &last_output_time, &last_restart_time, &sim.dt);
+            &last_output_time, &last_restart_time, &sim.dt, restart_x_com);
         PRJ_TIMER_STOP(&timer, "read_restart");
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
@@ -375,6 +376,14 @@ int main(int argc, char *argv[])
     PRJ_TIMER_START(&timer, "gravity_init");
     prj_gravity_init(&sim);
     PRJ_TIMER_STOP(&timer, "gravity_init");
+    if (sim.restart_from_file != 0) {
+        sim.grav.x_com[0] = restart_x_com[0];
+        sim.grav.x_com[1] = restart_x_com[1];
+        sim.grav.x_com[2] = restart_x_com[2];
+        sim.grav.x_com_new[0] = restart_x_com[0];
+        sim.grav.x_com_new[1] = restart_x_com[1];
+        sim.grav.x_com_new[2] = restart_x_com[2];
+    }
  #endif
 
     PRJ_TIMER_START(&timer, "initial_eos_active");
@@ -570,7 +579,8 @@ int main(int argc, char *argv[])
             PRJ_TIMER_START(&timer, "write_restart");
             prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
                 prj_last_event_time(next_output_time, sim.output_dt),
-                prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt);
+                prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt,
+                sim.grav.x_com);
             PRJ_TIMER_STOP(&timer, "write_restart");
         }
         if (mpi.rank == 0) {
@@ -605,7 +615,8 @@ int main(int argc, char *argv[])
     PRJ_TIMER_START(&timer, "final_write_restart");
     prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
         prj_last_event_time(next_output_time, sim.output_dt),
-        prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt);
+        prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt,
+        sim.grav.x_com);
     PRJ_TIMER_STOP(&timer, "final_write_restart");
     if (mpi.rank == 0) {
         char final_restart[64];

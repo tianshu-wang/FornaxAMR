@@ -801,6 +801,37 @@ static void prj_io_write_attr_int3(hid_t obj, const char *name, const int values
     H5Sclose(space);
 }
 
+static void prj_io_write_attr_double3(hid_t obj, const char *name, const double values[3])
+{
+    hsize_t dims[1] = {3};
+    hid_t space = H5Screate_simple(1, dims, dims);
+    hid_t attr = H5Acreate2(obj, name, H5T_NATIVE_DOUBLE, space, H5P_DEFAULT, H5P_DEFAULT);
+
+    H5Awrite(attr, H5T_NATIVE_DOUBLE, values);
+    H5Aclose(attr);
+    H5Sclose(space);
+}
+
+static void prj_io_read_attr_double3(hid_t obj, const char *name, double values[3])
+{
+    hid_t attr = H5Aopen(obj, name, H5P_DEFAULT);
+
+    H5Aread(attr, H5T_NATIVE_DOUBLE, values);
+    H5Aclose(attr);
+}
+
+static void prj_io_read_attr_double3_optional(hid_t obj, const char *name, double values[3],
+    const double defaults[3])
+{
+    if (H5Aexists(obj, name) > 0) {
+        prj_io_read_attr_double3(obj, name, values);
+        return;
+    }
+    values[0] = defaults[0];
+    values[1] = defaults[1];
+    values[2] = defaults[2];
+}
+
 static void prj_io_write_attr_double6(hid_t obj, const char *name, const prj_coord *coord)
 {
     double values[6];
@@ -966,7 +997,7 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
 }
 
 void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count,
-    double last_output_time, double last_restart_time, double dt)
+    double last_output_time, double last_restart_time, double dt, const double x_com[3])
 {
     char filename[64];
     hid_t file;
@@ -1013,6 +1044,16 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     prj_io_write_attr_double(file, "min_dx", mesh->min_dx);
     prj_io_write_attr_int3(file, "root_nx", mesh->root_nx);
     prj_io_write_attr_double6(file, "coord", &mesh->coord);
+    {
+        double x_com_values[3] = {0.0, 0.0, 0.0};
+
+        if (x_com != 0) {
+            x_com_values[0] = x_com[0];
+            x_com_values[1] = x_com[1];
+            x_com_values[2] = x_com[2];
+        }
+        prj_io_write_attr_double3(file, "x_com", x_com_values);
+    }
 
     space_data = H5Screate_simple(3, dims_data, dims_data);
     dset_data = H5Dcreate2(file, "Data", H5T_NATIVE_DOUBLE, space_data, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -1152,7 +1193,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
 
 void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename,
     double *time, int *step, int *dump_count, double *last_output_time, double *last_restart_time,
-    double *dt)
+    double *dt, double x_com[3])
 {
     hid_t file;
     hid_t dset_data;
@@ -1198,6 +1239,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     min_dx = prj_io_read_attr_double_optional(file, "min_dx", 0.0);
     prj_io_read_attr_int3(file, "root_nx", root_nx);
     prj_io_read_attr_double6(file, "coord", &coord);
+    if (x_com != 0) {
+        double defaults[3] = {0.0, 0.0, 0.0};
+
+        prj_io_read_attr_double3_optional(file, "x_com", x_com, defaults);
+    }
     if (nvar_prim != PRJ_NVAR_PRIM || block_size != PRJ_BLOCK_SIZE) {
         prj_io_fail("prj_io_read_restart: incompatible restart metadata");
     }
