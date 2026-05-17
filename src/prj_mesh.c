@@ -444,75 +444,67 @@ void prj_block_setup_geometry(prj_block *b, const prj_coord *coord)
     prj_gravity_cache_block(b);
 }
 
-static double prj_block_corner_pair_angle(const double a[3], const double b[3])
+static double prj_block_max_cell_dx_over_rcom(const prj_block *b)
 {
-    double cx = a[1] * b[2] - a[2] * b[1];
-    double cy = a[2] * b[0] - a[0] * b[2];
-    double cz = a[0] * b[1] - a[1] * b[0];
-    double cross_norm = sqrt(cx * cx + cy * cy + cz * cz);
-    double dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-
-    return atan2(cross_norm, dot);
-}
-
-static double prj_box_max_corner_angle(const double box_min[3], const double box_max[3])
-{
-    double corner[8][3];
-    double max_angle = 0.0;
-    int n;
-    int m;
-
-    for (n = 0; n < 8; ++n) {
-        corner[n][0] = (n & 1) != 0 ? box_max[0] : box_min[0];
-        corner[n][1] = (n & 2) != 0 ? box_max[1] : box_min[1];
-        corner[n][2] = (n & 4) != 0 ? box_max[2] : box_min[2];
-    }
-    for (n = 0; n < 8; ++n) {
-        for (m = n + 1; m < 8; ++m) {
-            double angle = prj_block_corner_pair_angle(corner[n], corner[m]);
-
-            if (angle > max_angle) {
-                max_angle = angle;
-            }
-        }
-    }
-    return max_angle;
-}
-
-static double prj_block_max_corner_cell_angle(const prj_block *b)
-{
-    double max_angle = 0.0;
+    const prj_grav *grav = prj_gravity_active_monopole();
+    double x_com[3] = {0.0, 0.0, 0.0};
+    double dx_max;
+    double max_ratio = 0.0;
     int n;
 
     if (b == 0) {
         return 0.0;
     }
+    if (grav != 0) {
+        x_com[0] = grav->x_com[0];
+        x_com[1] = grav->x_com[1];
+        x_com[2] = grav->x_com[2];
+    }
+
+    dx_max = b->dx[0];
+    if (b->dx[1] > dx_max) {
+        dx_max = b->dx[1];
+    }
+    if (b->dx[2] > dx_max) {
+        dx_max = b->dx[2];
+    }
+
     for (n = 0; n < 8; ++n) {
-        double cell_min[3];
-        double cell_max[3];
-        double angle;
+        double center[3];
+        double dx1;
+        double dx2;
+        double dx3;
+        double r;
         int d;
 
         for (d = 0; d < 3; ++d) {
             if ((n & (1 << d)) != 0) {
-                cell_min[d] = b->xmax[d] - b->dx[d];
-                cell_max[d] = b->xmax[d];
+                center[d] = b->xmax[d] - 0.5 * b->dx[d];
             } else {
-                cell_min[d] = b->xmin[d];
-                cell_max[d] = b->xmin[d] + b->dx[d];
+                center[d] = b->xmin[d] + 0.5 * b->dx[d];
             }
         }
-        angle = prj_box_max_corner_angle(cell_min, cell_max);
-        if (angle > max_angle) {
-            max_angle = angle;
+        dx1 = center[0] - x_com[0];
+        dx2 = center[1] - x_com[1];
+        dx3 = center[2] - x_com[2];
+        r = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+        if (r <= 0.0) {
+            return HUGE_VAL;
+        }
+        {
+            double ratio = dx_max / r;
+
+            if (ratio > max_ratio) {
+                max_ratio = ratio;
+            }
         }
     }
-    return max_angle;
+    return max_ratio;
 }
 
 void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
 {
-    double angle;
+    double ratio;
 
     if (b == 0) {
         return;
@@ -523,8 +515,8 @@ void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
         return;
     }
 
-    angle = prj_block_max_corner_cell_angle(b);
-    if (angle < mesh->amr_angle_resolution_limit) {
+    ratio = prj_block_max_cell_dx_over_rcom(b);
+    if (ratio < mesh->amr_angle_resolution_limit) {
         b->can_refine = 0;
     }
 }
