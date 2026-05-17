@@ -17,6 +17,174 @@ typedef struct prj_ccsn_profile {
     double *vr;
 } prj_ccsn_profile;
 
+typedef struct prj_ccsn_init_amr_ctx {
+    int npts;
+    const double *radius;
+    double *Lrho;
+} prj_ccsn_init_amr_ctx;
+
+static int prj_ccsn_init_amr_ctx_build(prj_ccsn_init_amr_ctx *ctx, const prj_ccsn_profile *profile)
+{
+    int i;
+
+    if (ctx == 0 || profile == 0 || profile->npts < 2) {
+        return 1;
+    }
+    ctx->npts = profile->npts;
+    ctx->radius = profile->radius;
+    ctx->Lrho = (double *)malloc((size_t)profile->npts * sizeof(*ctx->Lrho));
+    if (ctx->Lrho == 0) {
+        return 1;
+    }
+    for (i = 0; i < profile->npts; ++i) {
+        double rho0;
+        double rho1;
+        double dr;
+        double dlnrho;
+
+        if (i == 0) {
+            rho0 = profile->rho[i];
+            rho1 = profile->rho[i + 1];
+            dr = profile->radius[i + 1] - profile->radius[i];
+        } else if (i == profile->npts - 1) {
+            rho0 = profile->rho[i - 1];
+            rho1 = profile->rho[i];
+            dr = profile->radius[i] - profile->radius[i - 1];
+        } else {
+            rho0 = profile->rho[i - 1];
+            rho1 = profile->rho[i + 1];
+            dr = profile->radius[i + 1] - profile->radius[i - 1];
+        }
+        if (rho0 <= 0.0 || rho1 <= 0.0 || dr <= 0.0) {
+            ctx->Lrho[i] = HUGE_VAL;
+            continue;
+        }
+        dlnrho = log(rho1) - log(rho0);
+        if (dlnrho == 0.0) {
+            ctx->Lrho[i] = HUGE_VAL;
+        } else {
+            ctx->Lrho[i] = fabs(dr / dlnrho);
+        }
+    }
+    return 0;
+}
+
+static void prj_ccsn_init_amr_ctx_free(prj_ccsn_init_amr_ctx *ctx)
+{
+    if (ctx == 0) {
+        return;
+    }
+    free(ctx->Lrho);
+    ctx->Lrho = 0;
+    ctx->radius = 0;
+    ctx->npts = 0;
+}
+
+static double prj_ccsn_init_amr_Lrho_interp(const prj_ccsn_init_amr_ctx *ctx, double r)
+{
+    int lo;
+    int hi;
+
+    if (ctx == 0 || ctx->npts <= 0) {
+        return HUGE_VAL;
+    }
+    if (r <= ctx->radius[0]) {
+        return ctx->Lrho[0];
+    }
+    if (r >= ctx->radius[ctx->npts - 1]) {
+        return ctx->Lrho[ctx->npts - 1];
+    }
+    lo = 0;
+    hi = ctx->npts - 1;
+    while (hi - lo > 1) {
+        int mid = lo + (hi - lo) / 2;
+
+        if (ctx->radius[mid] <= r) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    {
+        double w = (r - ctx->radius[lo]) / (ctx->radius[hi] - ctx->radius[lo]);
+
+        return (1.0 - w) * ctx->Lrho[lo] + w * ctx->Lrho[hi];
+    }
+}
+
+static double prj_ccsn_init_amr_Lrho_min(const prj_ccsn_init_amr_ctx *ctx, double rmin, double rmax)
+{
+    double Lmin;
+    double Lend;
+    int i;
+
+    if (ctx == 0 || ctx->npts <= 0) {
+        return HUGE_VAL;
+    }
+    if (rmax < rmin) {
+        double t = rmin;
+
+        rmin = rmax;
+        rmax = t;
+    }
+    Lmin = prj_ccsn_init_amr_Lrho_interp(ctx, rmin);
+    Lend = prj_ccsn_init_amr_Lrho_interp(ctx, rmax);
+    if (Lend < Lmin) {
+        Lmin = Lend;
+    }
+    for (i = 0; i < ctx->npts; ++i) {
+        if (ctx->radius[i] > rmin && ctx->radius[i] < rmax && ctx->Lrho[i] < Lmin) {
+            Lmin = ctx->Lrho[i];
+        }
+    }
+    return Lmin;
+}
+
+static int prj_ccsn_init_amr_refine_block(const prj_block *block, void *userdata)
+{
+    static const int cell_offsets[4] = {0, 1, PRJ_BLOCK_SIZE - 1, PRJ_BLOCK_SIZE};
+    const prj_ccsn_init_amr_ctx *ctx = (const prj_ccsn_init_amr_ctx *)userdata;
+    double rmin = HUGE_VAL;
+    double rmax = 0.0;
+    double dx;
+    double Lmin;
+    int ix;
+    int iy;
+    int iz;
+
+    if (block == 0 || ctx == 0 || ctx->npts <= 0) {
+        return 0;
+    }
+    dx = block->dx[0];
+    if (block->dx[1] > dx) {
+        dx = block->dx[1];
+    }
+    if (block->dx[2] > dx) {
+        dx = block->dx[2];
+    }
+    for (ix = 0; ix < 4; ++ix) {
+        double x = block->xmin[0] + (double)cell_offsets[ix] * block->dx[0];
+
+        for (iy = 0; iy < 4; ++iy) {
+            double y = block->xmin[1] + (double)cell_offsets[iy] * block->dx[1];
+
+            for (iz = 0; iz < 4; ++iz) {
+                double z = block->xmin[2] + (double)cell_offsets[iz] * block->dx[2];
+                double r = sqrt(x * x + y * y + z * z);
+
+                if (r < rmin) {
+                    rmin = r;
+                }
+                if (r > rmax) {
+                    rmax = r;
+                }
+            }
+        }
+    }
+    Lmin = prj_ccsn_init_amr_Lrho_min(ctx, rmin, rmax);
+    return dx > Lmin ? 1 : 0;
+}
+
 static int prj_problem_local_block(const prj_block *block)
 {
     prj_mpi *mpi = prj_mpi_current();
@@ -305,6 +473,13 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
 {
     unsigned long long prev_sig;
     unsigned long long next_sig;
+    prj_ccsn_init_amr_ctx init_ctx;
+    int init_ctx_ok;
+
+    init_ctx.npts = 0;
+    init_ctx.radius = 0;
+    init_ctx.Lrho = 0;
+    init_ctx_ok = (prj_ccsn_init_amr_ctx_build(&init_ctx, profile) == 0);
 
     prj_ccsn_fill_mesh(sim, profile);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
@@ -314,6 +489,7 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
     prj_gravity_monopole_integrate(&sim->mesh);
 #endif
     if (sim->mesh.max_level == 0) {
+        prj_ccsn_init_amr_ctx_free(&init_ctx);
         return;
     }
 
@@ -325,6 +501,11 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
     prj_gravity_monopole_reduce(&sim->mesh, 1);
     prj_gravity_monopole_integrate(&sim->mesh);
 #endif
+
+    if (init_ctx_ok) {
+        sim->mesh.amr_init_refine_fn = prj_ccsn_init_amr_refine_block;
+        sim->mesh.amr_init_refine_userdata = &init_ctx;
+    }
 
     do {
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
@@ -342,6 +523,10 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
 
         next_sig = prj_problem_mesh_signature(&sim->mesh);
     } while ((int)prj_mpi_global_sum((double)(next_sig != prev_sig ? 1 : 0)) != 0);
+
+    sim->mesh.amr_init_refine_fn = 0;
+    sim->mesh.amr_init_refine_userdata = 0;
+    prj_ccsn_init_amr_ctx_free(&init_ctx);
 
     prj_amr_init_neighbors(&sim->mesh);
     prj_mpi_prepare(&sim->mesh, prj_mpi_current());

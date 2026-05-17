@@ -1023,12 +1023,17 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
         int ii;
         int has_refine_criterion = 0;
         int has_derefine_criterion = 0;
+        int init_hook_refine = 0;
 
         if (!prj_is_local_active_block(b)) {
             continue;
         }
         if (b->refine_flag != 0) {
             continue;
+        }
+
+        if (mesh->amr_init_refine_fn != 0) {
+            init_hook_refine = mesh->amr_init_refine_fn(b, mesh->amr_init_refine_userdata);
         }
 
         for (ii = 0; ii < PRJ_BLOCK_SIZE; ++ii) {
@@ -1095,6 +1100,11 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             refine = 0;
         }
         if (has_derefine_criterion == 0) {
+            derefine = 0;
+        }
+
+        if (init_hook_refine != 0) {
+            refine = 1;
             derefine = 0;
         }
 

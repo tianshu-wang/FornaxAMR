@@ -24,6 +24,7 @@ typedef struct prj_rad prj_rad;
 typedef struct prj_mpi_buffer prj_mpi_buffer;
 typedef struct prj_mpi prj_mpi;
 typedef void (*prj_problem_init_fn)(prj_sim *sim);
+typedef int (*prj_amr_init_refine_fn)(const prj_block *block, void *userdata);
 
 struct prj_coord {
     double x1min;
@@ -127,6 +128,8 @@ struct prj_mesh {
     int use_BJ;
     double amr_angle_resolution_limit;
     double E_floor;
+    prj_amr_init_refine_fn amr_init_refine_fn;
+    void *amr_init_refine_userdata;
 };
 
 struct prj_eos {

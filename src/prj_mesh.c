@@ -788,6 +788,8 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->use_BJ = saved_use_BJ;
     mesh->amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
     mesh->E_floor = saved_E_floor;
+    mesh->amr_init_refine_fn = 0;
+    mesh->amr_init_refine_userdata = 0;
     mesh->blocks = 0;
 
     nroot = root_nx1 * root_nx2 * root_nx3;
