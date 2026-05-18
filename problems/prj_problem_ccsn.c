@@ -25,10 +25,14 @@ typedef struct prj_ccsn_init_amr_ctx {
 } prj_ccsn_init_amr_ctx;
 
 static int prj_ccsn_init_amr_ctx_build(prj_ccsn_init_amr_ctx *ctx, const prj_ccsn_profile *profile,
-    double scale_factor, prj_eos *eos)
+    double scale_factor, prj_eos *eos, double r_min_domain, double r_max_domain)
 {
     double *pressure;
     int i;
+    int i_first;
+    int i_last;
+    int i_lo;
+    int i_hi;
 
     if (ctx == 0 || profile == 0 || profile->npts < 2 || eos == 0) {
         return 1;
@@ -40,6 +44,27 @@ static int prj_ccsn_init_amr_ctx_build(prj_ccsn_init_amr_ctx *ctx, const prj_ccs
     if (ctx->LP == 0) {
         return 1;
     }
+    for (i = 0; i < profile->npts; ++i) {
+        ctx->LP[i] = HUGE_VAL;
+    }
+
+    i_first = 0;
+    while (i_first < profile->npts && profile->radius[i_first] < r_min_domain) {
+        i_first += 1;
+    }
+    i_last = profile->npts - 1;
+    while (i_last >= 0 && profile->radius[i_last] > r_max_domain) {
+        i_last -= 1;
+    }
+    if (i_first > i_last) {
+        return 0;
+    }
+    i_lo = i_first > 0 ? i_first - 1 : 0;
+    i_hi = i_last < profile->npts - 1 ? i_last + 1 : profile->npts - 1;
+    if (i_hi <= i_lo) {
+        return 0;
+    }
+
     pressure = (double *)malloc((size_t)profile->npts * sizeof(*pressure));
     if (pressure == 0) {
         free(ctx->LP);
@@ -47,27 +72,29 @@ static int prj_ccsn_init_amr_ctx_build(prj_ccsn_init_amr_ctx *ctx, const prj_ccs
         return 1;
     }
     for (i = 0; i < profile->npts; ++i) {
+        pressure[i] = 0.0;
+    }
+    for (i = i_lo; i <= i_hi; ++i) {
         double eos_q[PRJ_EOS_NQUANT];
 
         if (profile->rho[i] <= 0.0) {
-            pressure[i] = 0.0;
             continue;
         }
         prj_eos_rty(eos, profile->rho[i],
             profile->temp[i] / PRJ_CCSN_KELVIN_PER_MEV, profile->ye[i], eos_q);
         pressure[i] = eos_q[PRJ_EOS_PRESSURE];
     }
-    for (i = 0; i < profile->npts; ++i) {
+    for (i = i_lo; i <= i_hi; ++i) {
         double P0;
         double P1;
         double dr;
         double dlnP;
 
-        if (i == 0) {
+        if (i == i_lo) {
             P0 = pressure[i];
             P1 = pressure[i + 1];
             dr = profile->radius[i + 1] - profile->radius[i];
-        } else if (i == profile->npts - 1) {
+        } else if (i == i_hi) {
             P0 = pressure[i - 1];
             P1 = pressure[i];
             dr = profile->radius[i] - profile->radius[i - 1];
@@ -503,8 +530,26 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, const prj_ccsn_profile *profil
     init_ctx.radius = 0;
     init_ctx.LP = 0;
     init_ctx.scale_factor = sim->mesh.amr_init_scale_factor;
-    init_ctx_ok = (prj_ccsn_init_amr_ctx_build(&init_ctx, profile,
-        sim->mesh.amr_init_scale_factor, &sim->eos) == 0);
+    {
+        double ax = fabs(sim->coord.x1min) > fabs(sim->coord.x1max) ?
+            fabs(sim->coord.x1min) : fabs(sim->coord.x1max);
+        double ay = fabs(sim->coord.x2min) > fabs(sim->coord.x2max) ?
+            fabs(sim->coord.x2min) : fabs(sim->coord.x2max);
+        double az = fabs(sim->coord.x3min) > fabs(sim->coord.x3max) ?
+            fabs(sim->coord.x3min) : fabs(sim->coord.x3max);
+        double cx = sim->coord.x1min > 0.0 ? sim->coord.x1min :
+            (sim->coord.x1max < 0.0 ? sim->coord.x1max : 0.0);
+        double cy = sim->coord.x2min > 0.0 ? sim->coord.x2min :
+            (sim->coord.x2max < 0.0 ? sim->coord.x2max : 0.0);
+        double cz = sim->coord.x3min > 0.0 ? sim->coord.x3min :
+            (sim->coord.x3max < 0.0 ? sim->coord.x3max : 0.0);
+        double r_max_domain = sqrt(ax * ax + ay * ay + az * az);
+        double r_min_domain = sqrt(cx * cx + cy * cy + cz * cz);
+
+        init_ctx_ok = (prj_ccsn_init_amr_ctx_build(&init_ctx, profile,
+            sim->mesh.amr_init_scale_factor, &sim->eos,
+            r_min_domain, r_max_domain) == 0);
+    }
 
     prj_ccsn_fill_mesh(sim, profile);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
