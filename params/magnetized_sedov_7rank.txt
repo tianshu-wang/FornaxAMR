@@ -31,7 +31,6 @@ mhd_init = dipole
 B_norm = 1.0
 B_scale = 1.0
 
-output_dir = output/dump7
 
 bc_x1_inner = outflow
 bc_x1_outer = outflow

@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <math.h>
+#include <dirent.h>
 
 #include <hdf5.h>
 
@@ -212,12 +213,11 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->output_interval = -1;
     sim->restart_interval = -1;
     sim->amr_interval = -1;
-    strncpy(sim->output_dir, "output/dump", sizeof(sim->output_dir) - 1);
-    sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
     sim->progenitor_file[0] = '\0';
     strncpy(sim->problem_name, "general", sizeof(sim->problem_name) - 1);
     sim->problem_name[sizeof(sim->problem_name) - 1] = '\0';
     sim->restart_from_file = 0;
+    sim->restart_from_latest = 0;
     sim->restart_file_name[0] = '\0';
     sim->mesh.root_nx[0] = 8;
     sim->mesh.root_nx[1] = 8;
@@ -441,10 +441,6 @@ void prj_io_parser(prj_sim *sim, char *filename)
                 endptr = value + strlen(value);
             }
 #endif
-        } else if (strcmp(key, "output_dir") == 0) {
-            strncpy(sim->output_dir, value, sizeof(sim->output_dir) - 1);
-            sim->output_dir[sizeof(sim->output_dir) - 1] = '\0';
-            endptr = value + strlen(value);
         } else if (strcmp(key, "progenitor_file") == 0) {
             strncpy(sim->progenitor_file, value, sizeof(sim->progenitor_file) - 1);
             sim->progenitor_file[sizeof(sim->progenitor_file) - 1] = '\0';
@@ -455,6 +451,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             endptr = value + strlen(value);
         } else if (strcmp(key, "restart_from_file") == 0) {
             sim->restart_from_file = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "restart_from_latest") == 0) {
+            sim->restart_from_latest = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "restart_file_name") == 0) {
             strncpy(sim->restart_file_name, value, sizeof(sim->restart_file_name) - 1);
             sim->restart_file_name[sizeof(sim->restart_file_name) - 1] = '\0';
@@ -998,6 +996,41 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
     }
 }
 
+int prj_io_find_latest_restart(const char *dir, char *out_filename, size_t out_size, int *out_id)
+{
+    DIR *dh;
+    struct dirent *de;
+    int max_id = -1;
+
+    if (dir == 0 || out_filename == 0 || out_size == 0) {
+        return 1;
+    }
+    dh = opendir(dir);
+    if (dh == 0) {
+        return 1;
+    }
+    while ((de = readdir(dh)) != 0) {
+        int id;
+        char extra;
+        if (sscanf(de->d_name, "restart_%d.h5%c", &id, &extra) == 1 && id >= 0) {
+            if (id > max_id) {
+                max_id = id;
+            }
+        }
+    }
+    closedir(dh);
+    if (max_id < 0) {
+        return 1;
+    }
+    if ((size_t)snprintf(out_filename, out_size, "%s/restart_%08d.h5", dir, max_id) >= out_size) {
+        return 1;
+    }
+    if (out_id != 0) {
+        *out_id = max_id;
+    }
+    return 0;
+}
+
 void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count,
     double last_output_time, double last_restart_time, double dt, const double x_com[3])
 {
@@ -1432,7 +1465,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     free(metadata);
 }
 
-void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_index, int step, double time)
+void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double time)
 {
     char filename[256];
     hid_t file;
@@ -1468,7 +1501,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const char *basename, int dump_inde
     size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
     hid_t dump_real_type = prj_io_dump_real_hdf5_type();
 
-    snprintf(filename, sizeof(filename), "%s_%05d.h5", basename, dump_index);
+    snprintf(filename, sizeof(filename), "output/dump_%05d.h5", dump_index);
     if (prj_io_is_root_rank()) {
         fprintf(stderr, "save dump file %s\n", filename);
     }

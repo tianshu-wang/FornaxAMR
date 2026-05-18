@@ -297,6 +297,16 @@ int main(int argc, char *argv[])
     }
     PRJ_TIMER_STOP(&timer, "parse_params");
     init_fn = prj_select_problem(sim.problem_name);
+    if (sim.restart_from_latest != 0) {
+        int latest_id = -1;
+        if (prj_io_find_latest_restart("output", sim.restart_file_name,
+                sizeof(sim.restart_file_name), &latest_id) != 0) {
+            fprintf(stderr, "restart_from_latest is enabled but no restart_*.h5 found in output/\n");
+            return 1;
+        }
+        sim.restart_from_file = 1;
+        fprintf(stderr, "restart_from_latest selected %s (id %d)\n", sim.restart_file_name, latest_id);
+    }
     if (sim.restart_from_file != 0 && sim.restart_file_name[0] == '\0') {
         fprintf(stderr, "restart_from_file is enabled but restart_file_name is empty\n");
         return 1;
@@ -402,7 +412,7 @@ int main(int argc, char *argv[])
 
     if (sim.restart_from_file == 0) {
         PRJ_TIMER_START(&timer, "initial_dump");
-        prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
+        prj_io_write_dump(&sim.mesh, sim.dump_count, sim.step, sim.time);
         PRJ_TIMER_STOP(&timer, "initial_dump");
         sim.dump_count += 1;
         if (sim.output_dt >= 0.0) {
@@ -567,7 +577,7 @@ int main(int argc, char *argv[])
         }
         if (write_output) {
             PRJ_TIMER_START(&timer, "write_dump");
-            prj_io_write_dump(&sim.mesh, sim.output_dir, sim.dump_count, sim.step, sim.time);
+            prj_io_write_dump(&sim.mesh, sim.dump_count, sim.step, sim.time);
             PRJ_TIMER_STOP(&timer, "write_dump");
             sim.dump_count += 1;
         }

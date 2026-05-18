@@ -22,7 +22,6 @@ output_interval = 10
 restart_interval = 100
 amr_interval = 1
 
-output_dir = output/dump
 
 bc_x1_inner = user
 bc_x1_outer = outflow

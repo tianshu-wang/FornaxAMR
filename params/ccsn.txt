@@ -53,7 +53,6 @@ rad_emax_1 = 100.0
 rad_emin_2 = 1.0
 rad_emax_2 = 100.0
 
-output_dir = output/dump
 
 bc_x1_inner = outflow
 bc_x1_outer = outflow

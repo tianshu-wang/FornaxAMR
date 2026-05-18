@@ -37,7 +37,6 @@ eos_type = table
 eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
 progenitor_file = ../s9.0.swbj15.fornax
 
-output_dir = output/cc_small_dump
 
 bc_x1_inner = outflow
 bc_x1_outer = outflow

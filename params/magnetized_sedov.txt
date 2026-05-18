@@ -31,7 +31,6 @@ mhd_init = uniform
 B_norm = 1.0
 B_scale = 1.0
 
-output_dir = output/dump
 
 bc_x1_inner = outflow
 bc_x1_outer = outflow

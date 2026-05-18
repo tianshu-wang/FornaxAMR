@@ -26,7 +26,6 @@ eos_type = ideal
 
 E_floor = 1e-10
 
-output_dir = output/dump
 
 bc_x1_inner = outflow
 bc_x1_outer = outflow

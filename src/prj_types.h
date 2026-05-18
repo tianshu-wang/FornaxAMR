@@ -268,10 +268,10 @@ struct prj_sim {
     int max_steps;
     int output_interval;
     int restart_interval;
-    char output_dir[256];
     char progenitor_file[256];
     char problem_name[64];
     int restart_from_file;
+    int restart_from_latest;
     char restart_file_name[256];
     int amr_interval;
     int dump_count;
