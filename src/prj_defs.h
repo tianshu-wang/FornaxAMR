@@ -64,7 +64,22 @@
 #ifndef PRJ_BLOCK_SIZE
 #define PRJ_BLOCK_SIZE 16
 #endif
+#define PRJ_RECON_MC    0
+#define PRJ_RECON_WENO3 1
+#define PRJ_RECON_WENO7 2
+#ifndef PRJ_RECON
+#define PRJ_RECON PRJ_RECON_MC
+#endif
+#if PRJ_RECON != PRJ_RECON_MC && PRJ_RECON != PRJ_RECON_WENO3 && PRJ_RECON != PRJ_RECON_WENO7
+#error "Unsupported PRJ_RECON value"
+#endif
+#ifndef PRJ_NGHOST
+#if PRJ_RECON == PRJ_RECON_WENO7
+#define PRJ_NGHOST 4
+#else
 #define PRJ_NGHOST 2
+#endif
+#endif
 #define PRJ_AMR_N 4
 #define PRJ_PATH_MAX 1024
 #define PRJ_BS (PRJ_BLOCK_SIZE + 2 * PRJ_NGHOST)

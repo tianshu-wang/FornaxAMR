@@ -9,14 +9,14 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
 
 # User settings. Choose a dump dataset name, or derived variables "pressure", "B", or "vr".
-VARIABLE = "temperature"
+VARIABLE = "density"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
 # Set these to None to show the full domain.
 # Ranges are in km.
-X_RANGE = [-2e3,2e3]
-Y_RANGE = [-2e3,2e3]
+X_RANGE = [-2e-5,2e-5]
+Y_RANGE = [-2e-5,2e-5]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
 COLOR_SCALE = "normalize"

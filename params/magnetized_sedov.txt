@@ -12,17 +12,26 @@ x3min = -2.0
 x3max = 2.0
 
 root_nx = 4
-max_level = 3
+max_level = 2
 
 cfl = 0.4
 x_com_err_tol = 0.5
 t_end = 10.0
-max_steps = 10
-output_interval = -1
+max_steps = 1000
+output_interval = 10
 restart_interval = -1
 output_dt = -1
 restart_dt = -1
 amr_interval = 1
+
+amr_estimator = lohner
+amr_lohner_var = pressure
+amr_lohner_eps = 0.01
+amr_refine_thresh = 0.5
+amr_derefine_thresh = 0.1
+
+use_amr_angle_resolution = 1
+amr_angle_resolution_limit = 0.025
 
 eos_type = ideal
 E_floor = 1e-10

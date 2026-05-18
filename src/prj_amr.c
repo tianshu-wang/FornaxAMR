@@ -793,11 +793,12 @@ static int prj_block_neighbor_touch_offset(const prj_block *block, const prj_blo
     return 0;
 }
 
-static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *block, unsigned int boundary_mask)
+static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *block,
+    unsigned int boundary_mask, int *pending_flag)
 {
     int n;
 
-    if (mesh == 0 || block == 0 || boundary_mask == 0U) {
+    if (mesh == 0 || block == 0 || pending_flag == 0 || boundary_mask == 0U) {
         return;
     }
 
@@ -837,7 +838,7 @@ static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *bloc
             }
         }
         if (ok != 0 && matches != 0) {
-            neighbor->refine_flag = 1;
+            pending_flag[id] = 1;
         }
     }
 }
@@ -1009,11 +1010,25 @@ void prj_amr_init_neighbors(prj_mesh *mesh)
 void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
 {
     int i;
+    int *pending_flag;
+    unsigned int *boundary_mask;
+
+    if (mesh == 0 || mesh->nblocks <= 0) {
+        return;
+    }
+
+    pending_flag = (int *)calloc((size_t)mesh->nblocks, sizeof(*pending_flag));
+    boundary_mask = (unsigned int *)calloc((size_t)mesh->nblocks, sizeof(*boundary_mask));
+    if (pending_flag == 0 || boundary_mask == 0) {
+        free(pending_flag);
+        free(boundary_mask);
+        fprintf(stderr, "prj_amr_tag: allocation failed\n");
+        exit(EXIT_FAILURE);
+    }
 
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *b = &mesh->blocks[i];
         int refine = 0;
-        unsigned int boundary_refine_mask = 0U;
         int derefine = b->parent >= 0 ? 1 : 0;
         int j;
         int k;
@@ -1023,9 +1038,6 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
         int init_hook_refine = 0;
 
         if (!prj_is_local_active_block(b)) {
-            continue;
-        }
-        if (b->refine_flag != 0) {
             continue;
         }
 
@@ -1058,7 +1070,7 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
 
                     if (refine_sum > 1.0) {
                         refine = 1;
-                        boundary_refine_mask |= cell_boundary_mask;
+                        boundary_mask[i] |= cell_boundary_mask;
                     }
                 }
             }
@@ -1109,18 +1121,35 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             (mesh->max_level < 0 || b->level < mesh->max_level) &&
             (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx)) {
             if (prj_has_face_neighbor_coarser_than(mesh, b, b->level - 1)) {
-                b->refine_flag = 0;
+                pending_flag[i] = 0;
             } else {
-                b->refine_flag = 1;
+                pending_flag[i] = 1;
             }
-            prj_amr_tag_boundary_neighbors(mesh, b, boundary_refine_mask);
         } else if (derefine != 0) {
-            b->refine_flag = -1;
+            pending_flag[i] = -1;
         } else {
-            b->refine_flag = 0;
+            pending_flag[i] = 0;
+        }
+    }
+
+    for (i = 0; i < mesh->nblocks; ++i) {
+        prj_block *b = &mesh->blocks[i];
+
+        if (pending_flag[i] > 0 && prj_is_local_active_block(b)) {
+            prj_amr_tag_boundary_neighbors(mesh, b, boundary_mask[i], pending_flag);
+        }
+    }
+
+    for (i = 0; i < mesh->nblocks; ++i) {
+        if (prj_is_active_block(&mesh->blocks[i])) {
+            mesh->blocks[i].refine_flag = pending_flag[i];
+        } else {
+            mesh->blocks[i].refine_flag = 0;
         }
     }
     prj_amr_sync_refine_flags(mesh);
+    free(pending_flag);
+    free(boundary_mask);
 }
 
 #if PRJ_MHD

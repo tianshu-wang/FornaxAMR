@@ -1,6 +1,8 @@
 #ifndef PRJ_RECONSTRUCT_H
 #define PRJ_RECONSTRUCT_H
 
+#include "prj_defs.h"
+
 static inline double prj_reconstruct_abs(double x)
 {
     return x < 0.0 ? -x : x;
@@ -319,6 +321,206 @@ static inline void prj_reconstruct_for_riemann(const double stencil[3],
     for (n = 0; n < ntarget; ++n) {
         target_value[n] = stencil[1] + slope * target_location[n];
     }
+}
+
+/* ---------- Riemann face-state reconstruction (compile-time selectable) ----------
+ *
+ * PRJ_RECON selects the reconstruction scheme used to build left/right primitive
+ * face states for the Riemann solver:
+ *
+ *   PRJ_RECON == PRJ_RECON_MC     (default) monotonized-central piecewise linear
+ *   PRJ_RECON == PRJ_RECON_WENO3            3rd-order WENO-Z from a 3-cell stencil
+ *   PRJ_RECON == PRJ_RECON_WENO7            7th-order WENO-Z from a 7-cell stencil
+ *                                           (requires PRJ_NGHOST >= 4)
+ *
+ * The dispatcher `prj_reconstruct_face_value(q, target)` takes a stencil of
+ * PRJ_RECON_NCELLS cell-averaged values centered on the source cell (q[half]
+ * is q_i) and a `target` offset in cell-widths from q_i: +0.5 for the left
+ * state of the i+1/2 face, -0.5 for the right state of the i-1/2 face.
+ */
+
+#if PRJ_RECON == PRJ_RECON_WENO7
+#if PRJ_NGHOST < 4
+#error "PRJ_RECON_WENO7 requires PRJ_NGHOST >= 4 (7-cell reconstruction stencil)"
+#endif
+#define PRJ_RECON_NCELLS 7
+#else
+#define PRJ_RECON_NCELLS 3
+#endif
+
+static inline double prj_reconstruct_mc_face(double qm, double q0, double qp,
+    double target)
+{
+    double sl = q0 - qm;
+    double sr = qp - q0;
+    double slope = 0.0;
+
+    if (sl != 0.0 && sr != 0.0 && sl * sr > 0.0) {
+        double v = sl / sr;
+        double a = 0.5 * (1.0 + v);
+        double b = 2.0 * v;
+        double phi = (a < b) ? a : b;
+
+        if (phi > 2.0) phi = 2.0;
+        if (phi < 0.0) phi = 0.0;
+        slope = sr * phi;
+    }
+    return q0 + target * slope;
+}
+
+/* WENO-Z3 reconstruction (Don & Borges 2013) of a face value from the 3-cell
+ * stencil (qm, q0, qp). `target` selects which face of cell i: +0.5 for the
+ * i+1/2 face (left state) and -0.5 for the i-1/2 face (right state). The
+ * Z-weights use the global smoothness indicator tau3 = |beta0 - beta1| to
+ * approach the optimal linear weights faster than Jiang–Shu near smooth and
+ * critical-point regions:
+ *
+ *   alpha_k = gamma_k * (1 + tau3 / (eps + beta_k))
+ *
+ * (p = 1; the standard choice for the third-order variant.) */
+static inline double prj_reconstruct_weno3_face(double qm, double q0, double qp,
+    double target)
+{
+    const double eps = 1.0e-40;
+    double p0 = q0 + target * (q0 - qm);  /* left-biased sub-stencil (qm, q0)  */
+    double p1 = q0 + target * (qp - q0);  /* right-biased sub-stencil (q0, qp) */
+    double dl = q0 - qm;
+    double dr = qp - q0;
+    double beta0 = dl * dl;
+    double beta1 = dr * dr;
+    double tau3 = beta0 - beta1;
+    double gamma0;
+    double gamma1;
+    double alpha0;
+    double alpha1;
+    double sum;
+
+    if (tau3 < 0.0) {
+        tau3 = -tau3;
+    }
+    if (target > 0.0) {
+        gamma0 = 1.0 / 3.0;
+        gamma1 = 2.0 / 3.0;
+    } else {
+        gamma0 = 2.0 / 3.0;
+        gamma1 = 1.0 / 3.0;
+    }
+    alpha0 = gamma0 * (1.0 + tau3 / (eps + beta0));
+    alpha1 = gamma1 * (1.0 + tau3 / (eps + beta1));
+    sum = alpha0 + alpha1;
+    return (alpha0 * p0 + alpha1 * p1) / sum;
+}
+
+static inline double prj_reconstruct_weno7_beta0(double q0, double q1,
+    double q2, double q3)
+{
+    return (547.0 * q0 * q0 - 3882.0 * q0 * q1 + 4642.0 * q0 * q2 -
+        1854.0 * q0 * q3 + 7043.0 * q1 * q1 - 17246.0 * q1 * q2 +
+        7042.0 * q1 * q3 + 11003.0 * q2 * q2 - 9402.0 * q2 * q3 +
+        2107.0 * q3 * q3) / 240.0;
+}
+
+static inline double prj_reconstruct_weno7_beta1(double q0, double q1,
+    double q2, double q3)
+{
+    return (267.0 * q0 * q0 - 1642.0 * q0 * q1 + 1602.0 * q0 * q2 -
+        494.0 * q0 * q3 + 2843.0 * q1 * q1 - 5966.0 * q1 * q2 +
+        1922.0 * q1 * q3 + 3443.0 * q2 * q2 - 2522.0 * q2 * q3 +
+        547.0 * q3 * q3) / 240.0;
+}
+
+static inline double prj_reconstruct_weno7_beta2(double q0, double q1,
+    double q2, double q3)
+{
+    return (547.0 * q0 * q0 - 2522.0 * q0 * q1 + 1922.0 * q0 * q2 -
+        494.0 * q0 * q3 + 3443.0 * q1 * q1 - 5966.0 * q1 * q2 +
+        1602.0 * q1 * q3 + 2843.0 * q2 * q2 - 1642.0 * q2 * q3 +
+        267.0 * q3 * q3) / 240.0;
+}
+
+static inline double prj_reconstruct_weno7_beta3(double q0, double q1,
+    double q2, double q3)
+{
+    return (2107.0 * q0 * q0 - 9402.0 * q0 * q1 + 7042.0 * q0 * q2 -
+        1854.0 * q0 * q3 + 11003.0 * q1 * q1 - 17246.0 * q1 * q2 +
+        4642.0 * q1 * q3 + 7043.0 * q2 * q2 - 3882.0 * q2 * q3 +
+        547.0 * q3 * q3) / 240.0;
+}
+
+static inline double prj_reconstruct_weno7_face_plus(const double q[7])
+{
+    const double eps = 1.0e-40;
+    double p0 = (-3.0 * q[0] + 13.0 * q[1] - 23.0 * q[2] +
+        25.0 * q[3]) / 12.0;
+    double p1 = (q[1] - 5.0 * q[2] + 13.0 * q[3] + 3.0 * q[4]) / 12.0;
+    double p2 = (-q[2] + 7.0 * q[3] + 7.0 * q[4] - q[5]) / 12.0;
+    double p3 = (3.0 * q[3] + 13.0 * q[4] - 5.0 * q[5] + q[6]) / 12.0;
+    double beta0 = prj_reconstruct_weno7_beta0(q[0], q[1], q[2], q[3]);
+    double beta1 = prj_reconstruct_weno7_beta1(q[1], q[2], q[3], q[4]);
+    double beta2 = prj_reconstruct_weno7_beta2(q[2], q[3], q[4], q[5]);
+    double beta3 = prj_reconstruct_weno7_beta3(q[3], q[4], q[5], q[6]);
+    double tau7 = beta0 - beta3 + 3.0 * (beta1 - beta2);
+    double r0;
+    double r1;
+    double r2;
+    double r3;
+    double alpha0;
+    double alpha1;
+    double alpha2;
+    double alpha3;
+    double sum;
+
+    if (tau7 < 0.0) {
+        tau7 = -tau7;
+    }
+
+    r0 = tau7 / (eps + beta0);
+    r1 = tau7 / (eps + beta1);
+    r2 = tau7 / (eps + beta2);
+    r3 = tau7 / (eps + beta3);
+    alpha0 = (1.0 / 35.0) * (1.0 + r0 * r0);
+    alpha1 = (12.0 / 35.0) * (1.0 + r1 * r1);
+    alpha2 = (18.0 / 35.0) * (1.0 + r2 * r2);
+    alpha3 = (4.0 / 35.0) * (1.0 + r3 * r3);
+    sum = alpha0 + alpha1 + alpha2 + alpha3;
+
+    return (alpha0 * p0 + alpha1 * p1 + alpha2 * p2 + alpha3 * p3) / sum;
+}
+
+/* WENO-Z7 reconstruction of the face value from q[i-3]...q[i+3]. The
+ * positive face uses the left-biased seventh-order candidate set; the negative
+ * face is the same formula on the mirrored stencil. */
+static inline double prj_reconstruct_weno7_face(const double q[7], double target)
+{
+    double qr[7];
+
+    if (target > 0.0) {
+        return prj_reconstruct_weno7_face_plus(q);
+    }
+    if (target < 0.0) {
+        int n;
+
+        for (n = 0; n < 7; ++n) {
+            qr[n] = q[6 - n];
+        }
+        return prj_reconstruct_weno7_face_plus(qr);
+    }
+    return q[3];
+}
+
+static inline double prj_reconstruct_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+    if (q == 0) {
+        return 0.0;
+    }
+#if PRJ_RECON == PRJ_RECON_WENO3
+    return prj_reconstruct_weno3_face(q[0], q[1], q[2], target);
+#elif PRJ_RECON == PRJ_RECON_WENO7
+    return prj_reconstruct_weno7_face(q, target);
+#else
+    return prj_reconstruct_mc_face(q[0], q[1], q[2], target);
+#endif
 }
 
 int prj_reconstruct_step(void);

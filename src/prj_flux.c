@@ -1,29 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 
 #include "prj.h"
-
-static inline double prj_flux_mc_slope_values(double qm, double q0, double qp)
-{
-    double sl = q0 - qm;
-    double sr = qp - q0;
-    double v;
-    double a;
-    double b;
-    double phi;
-
-    if (sl == 0.0 || sr == 0.0 || sl * sr <= 0.0) {
-        return 0.0;
-    }
-
-    v = sl / sr;
-    a = 0.5 * (1.0 + v);
-    b = 2.0 * v;
-    phi = (a < b) ? a : b;
-    if (phi > 2.0) phi = 2.0;
-    if (phi < 0.0) phi = 0.0;
-    return sr * phi;
-}
 
 static inline void prj_flux_face_cells(int dir, int i, int j, int k,
     int *il, int *jl, int *kl, int *ir, int *jr, int *kr)
@@ -46,52 +25,126 @@ static inline void prj_flux_face_cells(int dir, int i, int j, int k,
     }
 }
 
+static inline double prj_flux_positive_face_value(const double q[PRJ_RECON_NCELLS],
+    double target);
+static inline double prj_flux_mc_face_value(const double q[PRJ_RECON_NCELLS],
+    double target);
+static inline double prj_flux_positive_mc_face_value(const double q[PRJ_RECON_NCELLS],
+    double target);
+static inline int prj_flux_prim_var_radiation(int v);
+static inline int prj_flux_prim_var_positive(int v);
+
 static inline double prj_flux_prim_face_value(const double *W, int v, int dir,
     int i, int j, int k, double target)
 {
-    double qm;
-    double q0;
-    double qp;
+    double q[PRJ_RECON_NCELLS];
+    const int half = PRJ_RECON_NCELLS / 2;
+    int n;
 
-    if (dir == X1DIR) {
-        qm = W[VIDX(v, i - 1, j, k)];
-        q0 = W[VIDX(v, i, j, k)];
-        qp = W[VIDX(v, i + 1, j, k)];
-    } else if (dir == X2DIR) {
-        qm = W[VIDX(v, i, j - 1, k)];
-        q0 = W[VIDX(v, i, j, k)];
-        qp = W[VIDX(v, i, j + 1, k)];
-    } else {
-        qm = W[VIDX(v, i, j, k - 1)];
-        q0 = W[VIDX(v, i, j, k)];
-        qp = W[VIDX(v, i, j, k + 1)];
+    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+        int offset = n - half;
+
+        if (dir == X1DIR) {
+            q[n] = W[VIDX(v, i + offset, j, k)];
+        } else if (dir == X2DIR) {
+            q[n] = W[VIDX(v, i, j + offset, k)];
+        } else {
+            q[n] = W[VIDX(v, i, j, k + offset)];
+        }
     }
 
-    return q0 + target * prj_flux_mc_slope_values(qm, q0, qp);
+    if (prj_flux_prim_var_radiation(v)) {
+        if (prj_flux_prim_var_positive(v)) {
+            return prj_flux_positive_mc_face_value(q, target);
+        }
+        return prj_flux_mc_face_value(q, target);
+    } else if (prj_flux_prim_var_positive(v)) {
+        return prj_flux_positive_face_value(q, target);
+    }
+    return prj_reconstruct_face_value(q, target);
+}
+
+static inline double prj_flux_mc_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+    const int half = PRJ_RECON_NCELLS / 2;
+
+    return prj_reconstruct_mc_face(q[half - 1], q[half], q[half + 1], target);
+}
+
+static inline double prj_flux_positive_mc_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+    const int half = PRJ_RECON_NCELLS / 2;
+    double value = prj_flux_mc_face_value(q, target);
+
+    if (isfinite(value) && value > 0.0) {
+        return value;
+    }
+    return q[half];
+}
+
+static inline double prj_flux_positive_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+    const int half = PRJ_RECON_NCELLS / 2;
+    double value = prj_reconstruct_face_value(q, target);
+
+    if (isfinite(value) && value > 0.0) {
+        return value;
+    }
+
+    value = prj_flux_mc_face_value(q, target);
+    if (isfinite(value) && value > 0.0) {
+        return value;
+    }
+
+    return q[half];
+}
+
+static inline int prj_flux_prim_var_radiation(int v)
+{
+#if PRJ_NRAD > 0
+    return v >= PRJ_NHYDRO && v < PRJ_NVAR_PRIM;
+#else
+    (void)v;
+    return 0;
+#endif
+}
+
+static inline int prj_flux_prim_var_positive(int v)
+{
+    if (v == PRJ_PRIM_RHO || v == PRJ_PRIM_EINT) {
+        return 1;
+    }
+#if PRJ_NRAD > 0
+    if (v >= PRJ_NHYDRO && ((v - PRJ_NHYDRO) % PRJ_RAD_GROUP_STRIDE) == 0) {
+        return 1;
+    }
+#endif
+    return 0;
 }
 
 static inline double prj_flux_eos_face_value(const double *eosvar, int v, int dir,
     int i, int j, int k, double target)
 {
-    double qm;
-    double q0;
-    double qp;
+    double q[PRJ_RECON_NCELLS];
+    const int half = PRJ_RECON_NCELLS / 2;
+    int n;
 
-    if (dir == X1DIR) {
-        qm = eosvar[EIDX(v, i - 1, j, k)];
-        q0 = eosvar[EIDX(v, i, j, k)];
-        qp = eosvar[EIDX(v, i + 1, j, k)];
-    } else if (dir == X2DIR) {
-        qm = eosvar[EIDX(v, i, j - 1, k)];
-        q0 = eosvar[EIDX(v, i, j, k)];
-        qp = eosvar[EIDX(v, i, j + 1, k)];
-    } else {
-        qm = eosvar[EIDX(v, i, j, k - 1)];
-        q0 = eosvar[EIDX(v, i, j, k)];
-        qp = eosvar[EIDX(v, i, j, k + 1)];
+    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+        int offset = n - half;
+
+        if (dir == X1DIR) {
+            q[n] = eosvar[EIDX(v, i + offset, j, k)];
+        } else if (dir == X2DIR) {
+            q[n] = eosvar[EIDX(v, i, j + offset, k)];
+        } else {
+            q[n] = eosvar[EIDX(v, i, j, k + offset)];
+        }
     }
 
-    return q0 + target * prj_flux_mc_slope_values(qm, q0, qp);
+    return prj_flux_positive_face_value(q, target);
 }
 
 static void prj_flux_face_states_local(double *W, int dir, int i, int j, int k,
