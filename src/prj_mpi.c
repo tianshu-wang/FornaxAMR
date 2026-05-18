@@ -211,6 +211,8 @@ static size_t prj_mpi_block_data_count(void)
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     return 2U * prim_count + eosvar_count + 5U * cons_count +
         9U * (size_t)PRJ_BLOCK_NCELLS
+        + 5U * (size_t)PRJ_BLOCK_NCELLS
+        + (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS
 #if PRJ_MHD
         + 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
 #endif
