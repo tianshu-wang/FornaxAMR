@@ -72,7 +72,6 @@ struct prj_block {
     int active;
     int refine_flag;
     int can_refine;
-    int base_block;
     double xmin[3];
     double xmax[3];
     double dx[3];

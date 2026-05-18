@@ -936,7 +936,7 @@ static void prj_io_fill_metadata(const prj_block *block, double *metadata_row)
     metadata_row[11] = block->dx[1];
     metadata_row[12] = block->dx[2];
     metadata_row[13] = (double)block->parent;
-    metadata_row[14] = (double)block->base_block;
+    metadata_row[14] = 0.0;
     for (n = 0; n < 8; ++n) {
         metadata_row[15 + n] = (double)block->children[n];
     }
@@ -977,7 +977,6 @@ static void prj_io_unpack_metadata(prj_block *block, const double *metadata_row)
     block->dx[1] = metadata_row[11];
     block->dx[2] = metadata_row[12];
     block->parent = (int)metadata_row[13];
-    block->base_block = (int)metadata_row[14];
     for (n = 0; n < 8; ++n) {
         block->children[n] = (int)metadata_row[15 + n];
     }

@@ -863,9 +863,6 @@ static int prj_can_coarsen_parent(const prj_mesh *mesh, int parent_id)
             !prj_is_active_block(&mesh->blocks[child_id])) {
             return 0;
         }
-        if (mesh->blocks[child_id].base_block != 0) {
-            return 0;
-        }
         if (mesh->blocks[child_id].refine_flag > 0) {
             return 0;
         }
@@ -1747,7 +1744,6 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         child->active = 1;
         child->refine_flag = 0;
         child->can_refine = 1;
-        child->base_block = 0;
         child->parent = parent->id;
         prj_reset_children(child);
         prj_clear_neighbors(child);
@@ -1865,7 +1861,6 @@ int prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
         }
         child->id = -1;
         child->active = 0;
-        child->base_block = 0;
         child->can_refine = 1;
         child->parent = -1;
         prj_reset_children(child);

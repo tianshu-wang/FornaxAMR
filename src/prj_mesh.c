@@ -170,7 +170,6 @@ static void prj_block_init_empty(prj_block *b)
     b->active = 1;
     b->refine_flag = 0;
     b->can_refine = 1;
-    b->base_block = 0;
     b->W = 0;
     b->W1 = 0;
     b->eosvar = 0;
@@ -620,20 +619,6 @@ void prj_mesh_update_max_active_level(prj_mesh *mesh)
 #endif
 }
 
-void prj_mesh_mark_base_blocks(prj_mesh *mesh)
-{
-    int i;
-
-    if (mesh == 0) {
-        return;
-    }
-    for (i = 0; i < mesh->nblocks; ++i) {
-        prj_block *block = &mesh->blocks[i];
-
-        block->base_block = (block->id >= 0 && block->active == 1) ? 1 : 0;
-    }
-}
-
 static void prj_mesh_mark_cell_derived_range(prj_block *block,
     const prj_neighbor *slot, int value)
 {
@@ -824,7 +809,6 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                 b->active = 1;
                 b->refine_flag = 0;
                 b->can_refine = 1;
-                b->base_block = 0;
                 b->xmin[0] = coord->x1min + (double)i * block_dx[0];
                 b->xmax[0] = b->xmin[0] + block_dx[0];
                 b->xmin[1] = coord->x2min + (double)j * block_dx[1];

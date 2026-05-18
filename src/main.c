@@ -365,11 +365,6 @@ int main(int argc, char *argv[])
         next_restart_time = prj_next_event_time(last_restart_time, sim.restart_dt, sim.time);
         prj_print_config(&sim, mpi.rank);
     }
-    if (sim.restart_from_file == 0) {
-        PRJ_TIMER_START(&timer, "mark_base_blocks");
-        prj_mesh_mark_base_blocks(&sim.mesh);
-        PRJ_TIMER_STOP(&timer, "mark_base_blocks");
-    }
     PRJ_TIMER_START(&timer, "rad_init");
     prj_rad_init(&sim.rad);
     PRJ_TIMER_STOP(&timer, "rad_init");
