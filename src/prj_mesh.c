@@ -141,6 +141,36 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
             exit(1);
         }
     }
+
+    /* Radiation uses a narrower ghost band (PRJ_NGHOST_RAD <= PRJ_NGHOST).
+     * Clip the recv box to the rad zone and map the result back to a send box
+     * using the same rel_level mapping the send_loc_* assignments above use. */
+    for (d = 0; d < 3; ++d) {
+        int rs = slot->recv_loc_start[d];
+        int re = slot->recv_loc_end[d];
+        int rs_rad = rs > -PRJ_NGHOST_RAD ? rs : -PRJ_NGHOST_RAD;
+        int re_rad = re < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD ? re : PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD;
+        int base;
+
+        if (rs_rad > re_rad) {
+            rs_rad = re_rad;
+        }
+        slot->recv_loc_start_rad[d] = rs_rad;
+        slot->recv_loc_end_rad[d] = re_rad;
+
+        base = slot->send_loc_start[d];
+        if (slot->rel_level == 0) {
+            int shift = base - rs;
+            slot->send_loc_start_rad[d] = rs_rad + shift;
+            slot->send_loc_end_rad[d] = re_rad + shift;
+        } else if (slot->rel_level == -1) {
+            slot->send_loc_start_rad[d] = base + 2 * (rs_rad - rs);
+            slot->send_loc_end_rad[d] = base + 2 * (re_rad - rs);
+        } else {
+            slot->send_loc_start_rad[d] = base + (rs_rad - rs) / 2;
+            slot->send_loc_end_rad[d] = base + (re_rad - rs) / 2;
+        }
+    }
 }
 
 static void prj_neighbor_clear_derived(prj_neighbor *slot)
@@ -157,6 +187,10 @@ static void prj_neighbor_clear_derived(prj_neighbor *slot)
         slot->send_loc_end[d] = 0;
         slot->recv_loc_start[d] = 0;
         slot->recv_loc_end[d] = 0;
+        slot->send_loc_start_rad[d] = 0;
+        slot->send_loc_end_rad[d] = 0;
+        slot->recv_loc_start_rad[d] = 0;
+        slot->recv_loc_end_rad[d] = 0;
     }
 }
 

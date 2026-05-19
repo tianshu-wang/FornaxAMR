@@ -770,19 +770,43 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, int stage)
                     double Wc[PRJ_NVAR_PRIM];
                     double Uc[PRJ_NVAR_CONS];
                     int v;
+#if PRJ_NRAD > 0
+                    int in_rad_zone =
+                        i >= -PRJ_NGHOST_RAD && i < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD &&
+                        j >= -PRJ_NGHOST_RAD && j < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD &&
+                        k >= -PRJ_NGHOST_RAD && k < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD;
+#endif
 
                     if (i >= 0 && i < PRJ_BLOCK_SIZE &&
                         j >= 0 && j < PRJ_BLOCK_SIZE &&
                         k >= 0 && k < PRJ_BLOCK_SIZE) {
                         continue;
                     }
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                    for (v = 0; v < PRJ_NHYDRO; ++v) {
                         Wc[v] = W[VIDX(v, i, j, k)];
                     }
+#if PRJ_NRAD > 0
+                    if (in_rad_zone) {
+                        for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+                            Wc[v] = W[VIDX(v, i, j, k)];
+                        }
+                    } else {
+                        for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+                            Wc[v] = 0.0;
+                        }
+                    }
+#endif
                     prj_eos_prim2cons(eos, Wc, Uc);
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                    for (v = 0; v < PRJ_NHYDRO; ++v) {
                         block->U[VIDX(v, i, j, k)] = Uc[v];
                     }
+#if PRJ_NRAD > 0
+                    if (in_rad_zone) {
+                        for (v = PRJ_NHYDRO; v < PRJ_NVAR_CONS; ++v) {
+                            block->U[VIDX(v, i, j, k)] = Uc[v];
+                        }
+                    }
+#endif
                 }
             }
         }

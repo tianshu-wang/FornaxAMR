@@ -291,6 +291,7 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                     continue;
                 }
 
+                /* Hydro primitives + EOS vars: iterate the full recv box. */
                 for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; ++i) {
                     for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; ++j) {
                         for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; ++k) {
@@ -298,95 +299,95 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
 
                             if (slot->rel_level==0){
                                 // Same level
-                                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] = 
+                                for (v = 0; v < PRJ_NHYDRO; ++v) {
+                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
                                         W_send[VIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                                 }
                                 for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] = 
+                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
                                         eos_send[EIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                                 }
                             } else if (slot->rel_level==-1) {
                                 // Neighbor is coarser, restriction
-                                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] = 
+                                for (v = 0; v < PRJ_NHYDRO; ++v) {
+                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
                                         0.125*
-                                        (W_send[VIDX(v, 2*i+slot->send_loc_start[0],   
-                                                        2*j+slot->send_loc_start[1], 
+                                        (W_send[VIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0], 
-                                                        2*j+slot->send_loc_start[1], 
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0], 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0], 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1], 
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1], 
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2]+1)]);
                                 }
                                 for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] = 
+                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
                                         0.125*
-                                        (eos_send[EIDX(v, 2*i+slot->send_loc_start[0],   
-                                                        2*j+slot->send_loc_start[1], 
+                                        (eos_send[EIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2])]
-                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0], 
-                                                        2*j+slot->send_loc_start[1], 
+                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2]+1)]
-                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0], 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2])]
-                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0], 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2]+1)]
-                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1], 
+                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2])]
-                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1], 
+                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2]+1)]
-                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2])]
-                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1, 
-                                                        2*j+slot->send_loc_start[1]+1, 
+                                        +eos_send[EIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2]+1)]);
                                 }
-	                            } else if (slot->rel_level==1) {
-	                                // Neighbor is finer, prolongation
-	                                double target[3];
+                            } else if (slot->rel_level==1) {
+                                // Neighbor is finer, prolongation
+                                double target[3];
 
-	                                target[0] = (i % 2 == 0) ? 0.25 : -0.25;
-	                                target[1] = (j % 2 == 0) ? 0.25 : -0.25;
-	                                target[2] = (k % 2 == 0) ? 0.25 : -0.25;
-	                                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-	                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
-	                                        prj_boundary_prolongate_value(W_send, v,
-	                                            i/2+slot->send_loc_start[0],
-	                                            j/2+slot->send_loc_start[1],
-	                                            k/2+slot->send_loc_start[2],
-	                                            0, target);
-	                                }
-	                                for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-	                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
-	                                        prj_boundary_prolongate_value(eos_send, v,
-	                                            i/2+slot->send_loc_start[0],
-	                                            j/2+slot->send_loc_start[1],
-	                                            k/2+slot->send_loc_start[2],
-	                                            1, target);
-	                                }
+                                target[0] = (i % 2 == 0) ? 0.25 : -0.25;
+                                target[1] = (j % 2 == 0) ? 0.25 : -0.25;
+                                target[2] = (k % 2 == 0) ? 0.25 : -0.25;
+                                for (v = 0; v < PRJ_NHYDRO; ++v) {
+                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
+                                        prj_boundary_prolongate_value(W_send, v,
+                                            i/2+slot->send_loc_start[0],
+                                            j/2+slot->send_loc_start[1],
+                                            k/2+slot->send_loc_start[2],
+                                            0, target);
+                                }
+                                for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+                                    eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
+                                        prj_boundary_prolongate_value(eos_send, v,
+                                            i/2+slot->send_loc_start[0],
+                                            j/2+slot->send_loc_start[1],
+                                            k/2+slot->send_loc_start[2],
+                                            1, target);
+                                }
                             } else {
                               fprintf(stderr,"slot->rel_level unrecognized: %d\n", slot->rel_level);
                               exit(1);
@@ -394,6 +395,73 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                         }
                     }
                 }
+
+#if PRJ_NRAD > 0
+                /* Radiation primitives: iterate the precomputed rad-clipped box. */
+                for (i = 0; i < slot->recv_loc_end_rad[0]-slot->recv_loc_start_rad[0]; ++i) {
+                    for (j = 0; j < slot->recv_loc_end_rad[1]-slot->recv_loc_start_rad[1]; ++j) {
+                        for (k = 0; k < slot->recv_loc_end_rad[2]-slot->recv_loc_start_rad[2]; ++k) {
+                            int v;
+
+                            if (slot->rel_level==0){
+                                for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+                                    W_recv[VIDX(v, i+slot->recv_loc_start_rad[0], j+slot->recv_loc_start_rad[1], k+slot->recv_loc_start_rad[2])] =
+                                        W_send[VIDX(v, i+slot->send_loc_start_rad[0], j+slot->send_loc_start_rad[1], k+slot->send_loc_start_rad[2])];
+                                }
+                            } else if (slot->rel_level==-1) {
+                                for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+                                    W_recv[VIDX(v, i+slot->recv_loc_start_rad[0], j+slot->recv_loc_start_rad[1], k+slot->recv_loc_start_rad[2])] =
+                                        0.125*
+                                        (W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                                        2*j+slot->send_loc_start_rad[1],
+                                                        2*k+slot->send_loc_start_rad[2])]
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                                        2*j+slot->send_loc_start_rad[1],
+                                                        2*k+slot->send_loc_start_rad[2]+1)]
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                                        2*j+slot->send_loc_start_rad[1]+1,
+                                                        2*k+slot->send_loc_start_rad[2])]
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                                        2*j+slot->send_loc_start_rad[1]+1,
+                                                        2*k+slot->send_loc_start_rad[2]+1)]
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                        2*j+slot->send_loc_start_rad[1],
+                                                        2*k+slot->send_loc_start_rad[2])]
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                        2*j+slot->send_loc_start_rad[1],
+                                                        2*k+slot->send_loc_start_rad[2]+1)]
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                        2*j+slot->send_loc_start_rad[1]+1,
+                                                        2*k+slot->send_loc_start_rad[2])]
+                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                        2*j+slot->send_loc_start_rad[1]+1,
+                                                        2*k+slot->send_loc_start_rad[2]+1)]);
+                                }
+                            } else if (slot->rel_level==1) {
+                                /* Fine-block offset parity is determined by the (rad-clipped) recv index;
+                                 * recv_loc_start_rad differs from recv_loc_start by an even amount,
+                                 * so absolute parity of (recv_loc_start_rad + i) matches the original. */
+                                double target[3];
+                                int ai = i + slot->recv_loc_start_rad[0];
+                                int aj = j + slot->recv_loc_start_rad[1];
+                                int ak = k + slot->recv_loc_start_rad[2];
+
+                                target[0] = (ai % 2 == 0) ? 0.25 : -0.25;
+                                target[1] = (aj % 2 == 0) ? 0.25 : -0.25;
+                                target[2] = (ak % 2 == 0) ? 0.25 : -0.25;
+                                for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+                                    W_recv[VIDX(v, ai, aj, ak)] =
+                                        prj_boundary_prolongate_value(W_send, v,
+                                            i/2+slot->send_loc_start_rad[0],
+                                            j/2+slot->send_loc_start_rad[1],
+                                            k/2+slot->send_loc_start_rad[2],
+                                            0, target);
+                                }
+                            }
+                        }
+                    }
+                }
+#endif
             }
         }
     }
@@ -410,6 +478,7 @@ static void prj_boundary_apply_axis(double *dst, int axis, int side, int bc_type
     int j;
     int k;
 
+    /* Hydro primitives: iterate the full ghost range. */
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
         for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
             for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
@@ -443,7 +512,7 @@ static void prj_boundary_apply_axis(double *dst, int axis, int side, int bc_type
                 }
                 src_idx[(axis + 1) % 3] = idx[(axis + 1) % 3];
                 src_idx[(axis + 2) % 3] = idx[(axis + 2) % 3];
-                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                for (v = 0; v < PRJ_NHYDRO; ++v) {
                     dst[VIDX(v, idx[0], idx[1], idx[2])] = dst[VIDX(v, src_idx[0], src_idx[1], src_idx[2])];
                 }
                 if (bc_type == PRJ_BC_REFLECT) {
@@ -457,6 +526,48 @@ static void prj_boundary_apply_axis(double *dst, int axis, int side, int bc_type
             }
         }
     }
+
+#if PRJ_NRAD > 0
+    /* Radiation primitives: narrower ghost band [-PRJ_NGHOST_RAD, ...). */
+    for (i = -PRJ_NGHOST_RAD; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD; ++i) {
+        for (j = -PRJ_NGHOST_RAD; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD; ++j) {
+            for (k = -PRJ_NGHOST_RAD; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD; ++k) {
+                int idx[3];
+                int src_idx[3];
+                int v;
+
+                idx[0] = i;
+                idx[1] = j;
+                idx[2] = k;
+                if (face_only != 0) {
+                    int axis1 = (axis + 1) % 3;
+                    int axis2 = (axis + 2) % 3;
+
+                    if (prj_boundary_idx_outside(idx[axis1]) ||
+                        prj_boundary_idx_outside(idx[axis2])) {
+                        continue;
+                    }
+                }
+                if (side == 0) {
+                    if (idx[axis] >= 0) {
+                        continue;
+                    }
+                    src_idx[axis] = -idx[axis] - 1;
+                } else {
+                    if (idx[axis] < PRJ_BLOCK_SIZE) {
+                        continue;
+                    }
+                    src_idx[axis] = 2 * PRJ_BLOCK_SIZE - 1 - idx[axis];
+                }
+                src_idx[(axis + 1) % 3] = idx[(axis + 1) % 3];
+                src_idx[(axis + 2) % 3] = idx[(axis + 2) % 3];
+                for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+                    dst[VIDX(v, idx[0], idx[1], idx[2])] = dst[VIDX(v, src_idx[0], src_idx[1], src_idx[2])];
+                }
+            }
+        }
+    }
+#endif
 }
 
 void prj_boundary_physical(const prj_bc *bc, prj_block *block, int stage, int mode)

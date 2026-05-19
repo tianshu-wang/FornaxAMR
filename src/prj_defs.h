@@ -104,6 +104,19 @@
 #if (PRJ_RECON_HYDRO == PRJ_RECON_WENO7 || PRJ_RECON_RADIATION == PRJ_RECON_WENO7) && PRJ_NGHOST < 4
 #error "PRJ_RECON_WENO7 requires PRJ_NGHOST >= 4"
 #endif
+#ifndef PRJ_NGHOST_RAD
+#if PRJ_RECON_RADIATION == PRJ_RECON_WENO7
+#define PRJ_NGHOST_RAD 4
+#else
+#define PRJ_NGHOST_RAD 2
+#endif
+#endif
+#if PRJ_NGHOST_RAD > PRJ_NGHOST
+#error "PRJ_NGHOST_RAD must not exceed PRJ_NGHOST"
+#endif
+#if ((PRJ_NGHOST - PRJ_NGHOST_RAD) & 1) != 0
+#error "PRJ_NGHOST - PRJ_NGHOST_RAD must be even for AMR prolongation alignment"
+#endif
 #define PRJ_AMR_N 4
 #define PRJ_PATH_MAX 1024
 #define PRJ_BS (PRJ_BLOCK_SIZE + 2 * PRJ_NGHOST)

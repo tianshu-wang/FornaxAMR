@@ -51,6 +51,10 @@ struct prj_neighbor {
     int send_loc_end[3];
     int recv_loc_start[3];
     int recv_loc_end[3];
+    int send_loc_start_rad[3];
+    int send_loc_end_rad[3];
+    int recv_loc_start_rad[3];
+    int recv_loc_end_rad[3];
     double xmin[3];
     double xmax[3];
     double dx[3];
@@ -298,6 +302,12 @@ struct prj_mpi_buffer {
     int *face_data_size_recv;
     int *face_data_idx_recv[3];
     double *face_buffer_recv;
+    /* Radiation stream — second segment of cell_buffer_*, covering only
+     * cells that fall in the narrower radiation ghost band. */
+    int *cell_data_size_send_rad;
+    int *cell_data_idx_send_rad[3];
+    int *cell_data_size_recv_rad;
+    int *cell_data_idx_recv_rad[3];
     int flux_send_count;
     int flux_recv_count;
     int *flux_idx_send;
