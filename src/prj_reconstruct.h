@@ -325,28 +325,20 @@ static inline void prj_reconstruct_for_riemann(const double stencil[3],
 
 /* ---------- Riemann face-state reconstruction (compile-time selectable) ----------
  *
- * PRJ_RECON selects the reconstruction scheme used to build left/right primitive
- * face states for the Riemann solver:
+ * PRJ_RECON_HYDRO selects the reconstruction scheme used to build hydro/MHD
+ * primitive face states, while PRJ_RECON_RADIATION selects radiation primitive
+ * face states:
  *
- *   PRJ_RECON == PRJ_RECON_MC     (default) monotonized-central piecewise linear
- *   PRJ_RECON == PRJ_RECON_WENO3            3rd-order WENO-Z from a 3-cell stencil
- *   PRJ_RECON == PRJ_RECON_WENO7            7th-order WENO-Z from a 7-cell stencil
- *                                           (requires PRJ_NGHOST >= 4)
+ *   PRJ_RECON_* == PRJ_RECON_MC     monotonized-central piecewise linear
+ *   PRJ_RECON_* == PRJ_RECON_WENO3  3rd-order WENO-Z from a 3-cell stencil
+ *   PRJ_RECON_* == PRJ_RECON_WENO7  7th-order WENO-Z from a 7-cell stencil
+ *                                   (requires PRJ_NGHOST >= 4)
  *
- * The dispatcher `prj_reconstruct_face_value(q, target)` takes a stencil of
- * PRJ_RECON_NCELLS cell-averaged values centered on the source cell (q[half]
- * is q_i) and a `target` offset in cell-widths from q_i: +0.5 for the left
- * state of the i+1/2 face, -0.5 for the right state of the i-1/2 face.
+ * Dispatchers take a stencil of PRJ_RECON_NCELLS cell-averaged values centered
+ * on the source cell (q[PRJ_RECON_NCELLS / 2] is q_i) and a `target` offset in
+ * cell-widths from q_i: +0.5 for the left state of the i+1/2 face, -0.5 for the
+ * right state of the i-1/2 face.
  */
-
-#if PRJ_RECON == PRJ_RECON_WENO7
-#if PRJ_NGHOST < 4
-#error "PRJ_RECON_WENO7 requires PRJ_NGHOST >= 4 (7-cell reconstruction stencil)"
-#endif
-#define PRJ_RECON_NCELLS 7
-#else
-#define PRJ_RECON_NCELLS 3
-#endif
 
 static inline double prj_reconstruct_mc_face(double qm, double q0, double qp,
     double target)
@@ -508,19 +500,38 @@ static inline double prj_reconstruct_weno7_face(const double q[7], double target
     return q[3];
 }
 
-static inline double prj_reconstruct_face_value(const double q[PRJ_RECON_NCELLS],
-    double target)
+static inline double prj_reconstruct_face_value_for_scheme(const double q[PRJ_RECON_NCELLS],
+    double target, int recon)
 {
+    const int half = PRJ_RECON_NCELLS / 2;
+
     if (q == 0) {
         return 0.0;
     }
-#if PRJ_RECON == PRJ_RECON_WENO3
-    return prj_reconstruct_weno3_face(q[0], q[1], q[2], target);
-#elif PRJ_RECON == PRJ_RECON_WENO7
-    return prj_reconstruct_weno7_face(q, target);
+    if (recon == PRJ_RECON_WENO3) {
+        return prj_reconstruct_weno3_face(q[half - 1], q[half], q[half + 1],
+            target);
+    }
+    if (recon == PRJ_RECON_WENO7) {
+#if PRJ_RECON_NCELLS >= 7
+        return prj_reconstruct_weno7_face(q, target);
 #else
-    return prj_reconstruct_mc_face(q[0], q[1], q[2], target);
+        return q[half];
 #endif
+    }
+    return prj_reconstruct_mc_face(q[half - 1], q[half], q[half + 1], target);
+}
+
+static inline double prj_reconstruct_hydro_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+    return prj_reconstruct_face_value_for_scheme(q, target, PRJ_RECON_HYDRO);
+}
+
+static inline double prj_reconstruct_radiation_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+    return prj_reconstruct_face_value_for_scheme(q, target, PRJ_RECON_RADIATION);
 }
 
 int prj_reconstruct_step(void);

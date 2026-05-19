@@ -26,10 +26,8 @@ static inline void prj_flux_face_cells(int dir, int i, int j, int k,
 }
 
 static inline double prj_flux_positive_face_value(const double q[PRJ_RECON_NCELLS],
-    double target);
+    double target, int recon);
 static inline double prj_flux_mc_face_value(const double q[PRJ_RECON_NCELLS],
-    double target);
-static inline double prj_flux_positive_mc_face_value(const double q[PRJ_RECON_NCELLS],
     double target);
 static inline int prj_flux_prim_var_radiation(int v);
 static inline int prj_flux_prim_var_positive(int v);
@@ -55,13 +53,13 @@ static inline double prj_flux_prim_face_value(const double *W, int v, int dir,
 
     if (prj_flux_prim_var_radiation(v)) {
         if (prj_flux_prim_var_positive(v)) {
-            return prj_flux_positive_mc_face_value(q, target);
+            return prj_flux_positive_face_value(q, target, PRJ_RECON_RADIATION);
         }
-        return prj_flux_mc_face_value(q, target);
+        return prj_reconstruct_radiation_face_value(q, target);
     } else if (prj_flux_prim_var_positive(v)) {
-        return prj_flux_positive_face_value(q, target);
+        return prj_flux_positive_face_value(q, target, PRJ_RECON_HYDRO);
     }
-    return prj_reconstruct_face_value(q, target);
+    return prj_reconstruct_hydro_face_value(q, target);
 }
 
 static inline double prj_flux_mc_face_value(const double q[PRJ_RECON_NCELLS],
@@ -72,23 +70,11 @@ static inline double prj_flux_mc_face_value(const double q[PRJ_RECON_NCELLS],
     return prj_reconstruct_mc_face(q[half - 1], q[half], q[half + 1], target);
 }
 
-static inline double prj_flux_positive_mc_face_value(const double q[PRJ_RECON_NCELLS],
-    double target)
-{
-    const int half = PRJ_RECON_NCELLS / 2;
-    double value = prj_flux_mc_face_value(q, target);
-
-    if (isfinite(value) && value > 0.0) {
-        return value;
-    }
-    return q[half];
-}
-
 static inline double prj_flux_positive_face_value(const double q[PRJ_RECON_NCELLS],
-    double target)
+    double target, int recon)
 {
     const int half = PRJ_RECON_NCELLS / 2;
-    double value = prj_reconstruct_face_value(q, target);
+    double value = prj_reconstruct_face_value_for_scheme(q, target, recon);
 
     if (isfinite(value) && value > 0.0) {
         return value;
@@ -144,7 +130,7 @@ static inline double prj_flux_eos_face_value(const double *eosvar, int v, int di
         }
     }
 
-    return prj_flux_positive_face_value(q, target);
+    return prj_flux_positive_face_value(q, target, PRJ_RECON_HYDRO);
 }
 
 static void prj_flux_face_states_local(double *W, int dir, int i, int j, int k,
