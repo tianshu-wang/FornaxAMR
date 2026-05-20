@@ -1135,7 +1135,7 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *b = &mesh->blocks[i];
 
-        if (pending_flag[i] > 0 && prj_is_local_active_block(b)) {
+        if (boundary_mask[i] != 0U && prj_is_local_active_block(b)) {
             prj_amr_tag_boundary_neighbors(mesh, b, boundary_mask[i], pending_flag);
         }
     }
