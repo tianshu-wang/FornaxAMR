@@ -469,13 +469,13 @@ int main(int argc, char *argv[])
             (next_event_time < 0.0 || next_restart_time < next_event_time)) {
             next_event_time = next_restart_time;
         }
-        if (next_event_time >= 0.0 && sim.time + sim.dt > next_event_time) {
-            sim.dt = 1.000001 * (next_event_time - sim.time);
-        }
-        if (sim.time + sim.dt > sim.t_end) {
-            sim.dt = sim.t_end - sim.time;
-        }
         dt_step = sim.dt;
+        if (next_event_time >= 0.0 && sim.time + dt_step > next_event_time) {
+            dt_step = 1.000001 * (next_event_time - sim.time);
+        }
+        if (sim.time + dt_step > sim.t_end) {
+            dt_step = sim.t_end - sim.time;
+        }
         PRJ_TIMER_START(&timer, "timeint_step");
         prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, dt_step, &dt_src,
 #if PRJ_TIMER

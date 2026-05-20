@@ -3,10 +3,54 @@
 
 #include "prj.h"
 
+static const double prj_problem_sedov_injection_radius = 0.05;
+
 static int prj_problem_local_block(const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
         block->W != 0 && block->W1 != 0 && block->U != 0;
+}
+
+static int prj_problem_block_overlaps_ball(const prj_block *block,
+    double cx, double cy, double cz, double radius)
+{
+    double dx = 0.0;
+    double dy = 0.0;
+    double dz = 0.0;
+
+    if (block == 0 || block->id < 0 || block->active != 1) {
+        return 0;
+    }
+    if (block->xmin[0] > cx) {
+        dx = block->xmin[0] - cx;
+    } else if (block->xmax[0] < cx) {
+        dx = cx - block->xmax[0];
+    }
+    if (block->xmin[1] > cy) {
+        dy = block->xmin[1] - cy;
+    } else if (block->xmax[1] < cy) {
+        dy = cy - block->xmax[1];
+    }
+    if (block->xmin[2] > cz) {
+        dz = block->xmin[2] - cz;
+    } else if (block->xmax[2] < cz) {
+        dz = cz - block->xmax[2];
+    }
+    return dx * dx + dy * dy + dz * dz < radius * radius;
+}
+
+static void prj_problem_ensure_data_allocated(prj_mesh *mesh)
+{
+    int bidx;
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
+        if (block->id >= 0 && block->active == 1 && block->W == 0) {
+            prj_block_alloc_data(block);
+            prj_block_setup_geometry(block, &mesh->coord);
+        }
+    }
 }
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)
@@ -86,9 +130,53 @@ static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
     }
 }
 
+static void prj_problem_refine_injection_region(prj_sim *sim, double cx, double cy, double cz,
+    double rho, double pressure)
+{
+    int level;
+    int target_level = sim->mesh.max_level;
+
+    if (target_level <= 0) {
+        return;
+    }
+
+    for (level = 0; level < target_level; ++level) {
+        int bidx;
+        int any_marked = 0;
+        int refined;
+
+        for (bidx = 0; bidx < sim->mesh.nblocks; ++bidx) {
+            prj_block *block = &sim->mesh.blocks[bidx];
+
+            if (block->id < 0 || block->active != 1 || block->level != level) {
+                continue;
+            }
+            block->refine_flag = 0;
+            if (prj_problem_block_overlaps_ball(block, cx, cy, cz,
+                    prj_problem_sedov_injection_radius)) {
+                block->refine_flag = 1;
+                any_marked = 1;
+            }
+        }
+
+        if (any_marked == 0) {
+            break;
+        }
+
+        refined = prj_amr_refine_marked_blocks(&sim->mesh);
+        if (refined == 0) {
+            break;
+        }
+        prj_amr_init_neighbors(&sim->mesh);
+        prj_problem_ensure_data_allocated(&sim->mesh);
+        prj_problem_fill_ambient(sim, rho, pressure);
+    }
+    prj_mesh_update_max_active_level(&sim->mesh);
+}
+
 static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double cz)
 {
-    const double injection_radius = 0.05;
+    const double injection_radius = prj_problem_sedov_injection_radius;
     int bidx;
     int selected = 0;
     double best_dist[8];
@@ -238,11 +326,15 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
 
 void prj_problem_sedov(prj_sim *sim)
 {
+    const double rho = 1.0;
+    const double pressure = 1.0e-3;
+
     if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
         sim->mesh.max_level, &sim->coord) != 0) {
         return;
     }
-    prj_problem_fill_ambient(sim, 1.0, 1.0e-3);
+    prj_problem_fill_ambient(sim, rho, pressure);
+    prj_problem_refine_injection_region(sim, 0.0, 0.0, 0.0, rho, pressure);
     prj_problem_inject_energy(sim, 0.0, 0.0, 0.0);
     prj_mhd_init(sim);
 }

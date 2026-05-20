@@ -9,7 +9,7 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
 
 # User settings. Choose a dump dataset name, or derived variables "pressure", "B", or "vr".
-VARIABLE = "density"
+VARIABLE = "B"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
@@ -292,6 +292,7 @@ def main() -> None:
             for plane in planes:
                 plane_blocks = collect_plane_blocks_from_h5(h5, variable, coords, levels, plane, coord, root_nx)
                 plot_plane(output_dir, dump_id, dump_time, plane_blocks, variable, plane)
+        print(dump_id)
     if checked_missing_plots and not found_compatible_dump:
         raise FileNotFoundError("no compatible dump files with geometry metadata found in output/")
 
