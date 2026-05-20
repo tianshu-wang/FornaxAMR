@@ -794,11 +794,11 @@ static int prj_block_neighbor_touch_offset(const prj_block *block, const prj_blo
 }
 
 static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *block,
-    unsigned int boundary_mask, int *pending_flag)
+    unsigned int boundary_mask, int *local_pos)
 {
     int n;
 
-    if (mesh == 0 || block == 0 || pending_flag == 0 || boundary_mask == 0U) {
+    if (mesh == 0 || block == 0 || local_pos == 0 || boundary_mask == 0U) {
         return;
     }
 
@@ -819,12 +819,6 @@ static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *bloc
         if (neighbor->level > block->level) {
             continue;
         }
-        if (mesh->min_dx > 0.0 && prj_block_cell_size(neighbor) < mesh->min_dx) {
-            continue;
-        }
-        if (neighbor->can_refine == 0) {
-            continue;
-        }
         for (axis = 0; axis < 3; ++axis) {
             int offset = prj_block_neighbor_touch_offset(block, neighbor, axis);
 
@@ -838,7 +832,7 @@ static void prj_amr_tag_boundary_neighbors(prj_mesh *mesh, const prj_block *bloc
             }
         }
         if (ok != 0 && matches != 0) {
-            pending_flag[id] = 1;
+            local_pos[id] = 1;
         }
     }
 }
@@ -1010,22 +1004,34 @@ void prj_amr_init_neighbors(prj_mesh *mesh)
 void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
 {
     int i;
-    int *pending_flag;
+    int *local_pos;
+    int *local_neg;
+    int *global_pos;
+    int *global_neg;
     unsigned int *boundary_mask;
 
     if (mesh == 0 || mesh->nblocks <= 0) {
         return;
     }
 
-    pending_flag = (int *)calloc((size_t)mesh->nblocks, sizeof(*pending_flag));
+    local_pos = (int *)calloc((size_t)mesh->nblocks, sizeof(*local_pos));
+    local_neg = (int *)calloc((size_t)mesh->nblocks, sizeof(*local_neg));
+    global_pos = (int *)calloc((size_t)mesh->nblocks, sizeof(*global_pos));
+    global_neg = (int *)calloc((size_t)mesh->nblocks, sizeof(*global_neg));
     boundary_mask = (unsigned int *)calloc((size_t)mesh->nblocks, sizeof(*boundary_mask));
-    if (pending_flag == 0 || boundary_mask == 0) {
-        free(pending_flag);
+    if (local_pos == 0 || local_neg == 0 || global_pos == 0 || global_neg == 0 ||
+        boundary_mask == 0) {
+        free(local_pos);
+        free(local_neg);
+        free(global_pos);
+        free(global_neg);
         free(boundary_mask);
         fprintf(stderr, "prj_amr_tag: allocation failed\n");
         exit(EXIT_FAILURE);
     }
 
+    /* Pass 1: per-block criterion vote, UNCAPPED.
+     * Populates local_pos/local_neg/boundary_mask for blocks this rank owns. */
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *b = &mesh->blocks[i];
         int refine = 0;
@@ -1117,38 +1123,76 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
             derefine = 0;
         }
 
-        if (refine != 0 && b->can_refine != 0 &&
-            (mesh->max_level < 0 || b->level < mesh->max_level) &&
-            (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx)) {
-            if (prj_has_face_neighbor_coarser_than(mesh, b, b->level - 1)) {
-                pending_flag[i] = 0;
-            } else {
-                pending_flag[i] = 1;
-            }
-        } else if (derefine != 0) {
-            pending_flag[i] = -1;
-        } else {
-            pending_flag[i] = 0;
+        if (refine != 0) {
+            local_pos[i] = 1;
+        }
+        if (derefine != 0) {
+            local_neg[i] = -1;
         }
     }
 
+    /* Pass 2: boundary-mask propagation on local_pos.
+     * Uses the uncapped vote so a max-level / can_refine=0 / min_dx-capped block
+     * can still hand its refine signal to a coarser neighbor. */
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *b = &mesh->blocks[i];
 
         if (boundary_mask[i] != 0U && prj_is_local_active_block(b)) {
-            prj_amr_tag_boundary_neighbors(mesh, b, boundary_mask[i], pending_flag);
+            prj_amr_tag_boundary_neighbors(mesh, b, boundary_mask[i], local_pos);
         }
     }
 
-    for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_is_active_block(&mesh->blocks[i])) {
-            mesh->blocks[i].refine_flag = pending_flag[i];
+    /* Pass 3: MPI reduce.
+     * refine wins (+1 via MAX), derefine next (-1 via MIN), neutral otherwise.
+     * After this every rank has the same global_pos / global_neg view. */
+#if defined(PRJ_ENABLE_MPI)
+    {
+        prj_mpi *mpi = prj_mpi_current();
+
+        if (mpi != 0 && mpi->totrank > 1) {
+            MPI_Allreduce(local_pos, global_pos, mesh->nblocks, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+            MPI_Allreduce(local_neg, global_neg, mesh->nblocks, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
         } else {
-            mesh->blocks[i].refine_flag = 0;
+            for (i = 0; i < mesh->nblocks; ++i) {
+                global_pos[i] = local_pos[i];
+                global_neg[i] = local_neg[i];
+            }
         }
     }
-    prj_amr_sync_refine_flags(mesh);
-    free(pending_flag);
+#else
+    for (i = 0; i < mesh->nblocks; ++i) {
+        global_pos[i] = local_pos[i];
+        global_neg[i] = local_neg[i];
+    }
+#endif
+
+    /* Pass 4: combine + apply caps to produce the final refine_flag.
+     * Caps live here so every rank decides the same outcome from the same data. */
+    for (i = 0; i < mesh->nblocks; ++i) {
+        prj_block *b = &mesh->blocks[i];
+
+        if (!prj_is_active_block(b)) {
+            b->refine_flag = 0;
+            continue;
+        }
+        if (global_pos[i] > 0) {
+            int allowed = (b->can_refine != 0) &&
+                (mesh->max_level < 0 || b->level < mesh->max_level) &&
+                (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx) &&
+                !prj_has_face_neighbor_coarser_than(mesh, b, b->level - 1);
+
+            b->refine_flag = allowed ? 1 : 0;
+        } else if (global_neg[i] < 0) {
+            b->refine_flag = -1;
+        } else {
+            b->refine_flag = 0;
+        }
+    }
+
+    free(local_pos);
+    free(local_neg);
+    free(global_pos);
+    free(global_neg);
     free(boundary_mask);
 }
 
@@ -1912,9 +1956,6 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     PRJ_TIMER_CURRENT_START("amr_tag");
     prj_amr_tag(mesh, eos);
     PRJ_TIMER_CURRENT_STOP("amr_tag");
-    PRJ_TIMER_CURRENT_START("amr_sync_flags");
-    prj_amr_sync_refine_flags(mesh);
-    PRJ_TIMER_CURRENT_STOP("amr_sync_flags");
     PRJ_TIMER_CURRENT_START("amr_enforce_two_to_one");
     prj_amr_enforce_two_to_one(mesh);
     PRJ_TIMER_CURRENT_STOP("amr_enforce_two_to_one");
