@@ -786,7 +786,8 @@ static void prj_gravity_add_block_multipole_fields(prj_block *block)
     int k;
 
     if (block == 0 || block->grav[0] == 0 || block->grav[1] == 0 || block->grav[2] == 0 ||
-        LMAX <= 1 || !prj_gravity_multipole_arrays_valid(prj_gravity_active)) {
+        LMAX <= 1 || !prj_gravity_multipole_arrays_valid(prj_gravity_active) ||
+        prj_gravity_active->use_multipole_gravity == 0) {
         return;
     }
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {

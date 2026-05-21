@@ -12,5 +12,6 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block
 void prj_amr_restrict(const prj_block *children[8], prj_block *parent);
 int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos);
 void prj_amr_init_neighbors(prj_mesh *mesh);
+double prj_amr_angular_resolution_limit(double x1, double x2, double x3, double r_com);
 
 #endif

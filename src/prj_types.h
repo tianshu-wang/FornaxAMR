@@ -127,9 +127,8 @@ struct prj_mesh {
     int amr_lohner_var[PRJ_AMR_N];
     int amr_fractional_jump_var[PRJ_AMR_N];
     int amr_criterion_set[PRJ_AMR_N];
-    int use_amr_angle_resolution;
+    int use_amr_angular_resolution_limit;
     int use_BJ;
-    double amr_angle_resolution_limit;
     double amr_init_scale_factor;
     double E_floor;
     prj_amr_init_refine_fn amr_init_refine_fn;
@@ -167,6 +166,7 @@ struct prj_eos {
 };
 
 struct prj_grav {
+    int use_multipole_gravity;
     int nbins;
     double dr_min;
     double x_com[3];

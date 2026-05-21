@@ -261,9 +261,8 @@ int main(int argc, char *argv[])
     int saved_amr_lohner_var[PRJ_AMR_N];
     int saved_amr_fractional_jump_var[PRJ_AMR_N];
     int saved_amr_criterion_set[PRJ_AMR_N];
-    int saved_use_amr_angle_resolution;
+    int saved_use_amr_angular_resolution_limit;
     int saved_use_BJ;
-    double saved_amr_angle_resolution_limit;
     double saved_min_dx;
     double restart_x_com[3] = {0.0, 0.0, 0.0};
     int resolution = -1;
@@ -350,9 +349,8 @@ int main(int argc, char *argv[])
             saved_amr_lohner_eps[i] = sim.mesh.amr_lohner_eps[i];
             saved_amr_criterion_set[i] = sim.mesh.amr_criterion_set[i];
         }
-        saved_use_amr_angle_resolution = sim.mesh.use_amr_angle_resolution;
+        saved_use_amr_angular_resolution_limit = sim.mesh.use_amr_angular_resolution_limit;
         saved_use_BJ = sim.mesh.use_BJ;
-        saved_amr_angle_resolution_limit = sim.mesh.amr_angle_resolution_limit;
         saved_min_dx = sim.mesh.min_dx;
         PRJ_TIMER_START(&timer, "read_restart");
         prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
@@ -367,9 +365,8 @@ int main(int argc, char *argv[])
             sim.mesh.amr_lohner_eps[i] = saved_amr_lohner_eps[i];
             sim.mesh.amr_criterion_set[i] = saved_amr_criterion_set[i];
         }
-        sim.mesh.use_amr_angle_resolution = saved_use_amr_angle_resolution;
+        sim.mesh.use_amr_angular_resolution_limit = saved_use_amr_angular_resolution_limit;
         sim.mesh.use_BJ = saved_use_BJ;
-        sim.mesh.amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
         sim.mesh.min_dx = saved_min_dx;
         next_output_time = prj_next_event_time(last_output_time, sim.output_dt, sim.time);
         next_restart_time = prj_next_event_time(last_restart_time, sim.restart_dt, sim.time);

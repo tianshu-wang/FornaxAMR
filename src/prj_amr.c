@@ -9,6 +9,15 @@
 #include <mpi.h>
 #endif
 
+double prj_amr_angular_resolution_limit(double x1, double x2, double x3, double r_com)
+{
+    (void)x1;
+    (void)x2;
+    (void)x3;
+    (void)r_com;
+    return 0.025;
+}
+
 static double prj_abs_double(double x)
 {
     return x < 0.0 ? -x : x;

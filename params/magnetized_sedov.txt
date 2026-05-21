@@ -30,8 +30,7 @@ amr_lohner_eps = 0.01
 amr_refine_thresh = 0.5
 amr_derefine_thresh = 0.1
 
-use_amr_angle_resolution = 0
-amr_angle_resolution_limit = 0.025
+use_amr_angular_resolution_limit = 0
 
 eos_type = ideal
 E_floor = 1e-10

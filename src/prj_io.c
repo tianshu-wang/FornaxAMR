@@ -206,6 +206,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->cfl = 0.8;
     sim->dt_factor = 1.2;
     sim->x_com_err_tol = 0.5;
+    sim->grav.use_multipole_gravity = 1;
     sim->t_end = 0.1;
     sim->output_dt = -1.0;
     sim->restart_dt = -1.0;
@@ -239,9 +240,8 @@ static void prj_io_set_default_runtime(prj_sim *sim)
         sim->mesh.amr_estimator[0] = PRJ_AMR_ESTIMATOR_VELOCITY;
         sim->mesh.amr_criterion_set[0] = 1;
     }
-    sim->mesh.use_amr_angle_resolution = 0;
+    sim->mesh.use_amr_angular_resolution_limit = 0;
     sim->mesh.use_BJ = 0;
-    sim->mesh.amr_angle_resolution_limit = 0.0;
     sim->mesh.amr_init_scale_factor = 0.5;
     sim->mesh.E_floor = -1.0;
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
@@ -354,6 +354,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->cfl = strtod(value, &endptr);
         } else if (strcmp(key, "x_com_err_tol") == 0) {
             sim->x_com_err_tol = strtod(value, &endptr);
+        } else if (strcmp(key, "use_multipole_gravity") == 0) {
+            sim->grav.use_multipole_gravity = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "t_end") == 0) {
             sim->t_end = strtod(value, &endptr);
         } else if (strcmp(key, "dt_factor") == 0) {
@@ -417,12 +419,10 @@ void prj_io_parser(prj_sim *sim, char *filename)
             }
         } else if (prj_io_parse_amr_slot_key(key, "amr_lohner_eps", &amr_slot)) {
             sim->mesh.amr_lohner_eps[amr_slot] = strtod(value, &endptr);
-        } else if (strcmp(key, "use_amr_angle_resolution") == 0) {
-            sim->mesh.use_amr_angle_resolution = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "use_amr_angular_resolution_limit") == 0) {
+            sim->mesh.use_amr_angular_resolution_limit = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "use_BJ") == 0 || strcmp(key, "use_bj") == 0) {
             sim->mesh.use_BJ = (int)strtol(value, &endptr, 10);
-        } else if (strcmp(key, "amr_angle_resolution_limit") == 0) {
-            sim->mesh.amr_angle_resolution_limit = strtod(value, &endptr);
         } else if (strcmp(key, "amr_init_scale_factor") == 0) {
             sim->mesh.amr_init_scale_factor = strtod(value, &endptr);
         } else if (strcmp(key, "E_floor") == 0) {

@@ -35,8 +35,7 @@ amr_derefine_thresh = 0.1
 amr_estimator2 = velocity
 amr_refine_thresh2 = 0.5
 amr_derefine_thresh2 = 0.1
-use_amr_angle_resolution = 1
-amr_angle_resolution_limit = 0.025
+use_amr_angular_resolution_limit = 1
 
 #eos_type = ideal
 eos_type = table

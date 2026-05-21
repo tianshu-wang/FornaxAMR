@@ -537,19 +537,45 @@ static double prj_block_max_cell_dx_over_rcom(const prj_block *b)
 
 void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
 {
+    const prj_grav *grav;
     double ratio;
+    double xc[3];
+    double x_com[3] = {0.0, 0.0, 0.0};
+    double dx1;
+    double dx2;
+    double dx3;
+    double r_com;
+    double limit;
 
     if (b == 0) {
         return;
     }
     b->can_refine = 1;
-    if (mesh == 0 || mesh->use_amr_angle_resolution == 0 ||
-        mesh->amr_angle_resolution_limit <= 0.0) {
+    if (mesh == 0 || mesh->use_amr_angular_resolution_limit == 0) {
+        return;
+    }
+
+    grav = prj_gravity_active_monopole();
+    if (grav != 0) {
+        x_com[0] = grav->x_com[0];
+        x_com[1] = grav->x_com[1];
+        x_com[2] = grav->x_com[2];
+    }
+
+    xc[0] = 0.5 * (b->xmin[0] + b->xmax[0]);
+    xc[1] = 0.5 * (b->xmin[1] + b->xmax[1]);
+    xc[2] = 0.5 * (b->xmin[2] + b->xmax[2]);
+    dx1 = xc[0] - x_com[0];
+    dx2 = xc[1] - x_com[1];
+    dx3 = xc[2] - x_com[2];
+    r_com = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+    limit = prj_amr_angular_resolution_limit(xc[0], xc[1], xc[2], r_com);
+    if (limit <= 0.0) {
         return;
     }
 
     ratio = prj_block_max_cell_dx_over_rcom(b);
-    if (ratio < mesh->amr_angle_resolution_limit) {
+    if (ratio < limit) {
         b->can_refine = 0;
     }
 }
@@ -759,9 +785,8 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     int saved_amr_fractional_jump_var[PRJ_AMR_N];
     int saved_amr_criterion_set[PRJ_AMR_N];
     double saved_amr_lohner_eps[PRJ_AMR_N];
-    int saved_use_amr_angle_resolution;
+    int saved_use_amr_angular_resolution_limit;
     int saved_use_BJ;
-    double saved_amr_angle_resolution_limit;
     double saved_amr_init_scale_factor;
     double saved_E_floor;
     double saved_min_dx;
@@ -780,9 +805,8 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         saved_amr_lohner_eps[amr_idx] = mesh->amr_lohner_eps[amr_idx];
         saved_amr_criterion_set[amr_idx] = mesh->amr_criterion_set[amr_idx];
     }
-    saved_use_amr_angle_resolution = mesh->use_amr_angle_resolution;
+    saved_use_amr_angular_resolution_limit = mesh->use_amr_angular_resolution_limit;
     saved_use_BJ = mesh->use_BJ;
-    saved_amr_angle_resolution_limit = mesh->amr_angle_resolution_limit;
     saved_amr_init_scale_factor = mesh->amr_init_scale_factor;
     saved_E_floor = mesh->E_floor;
     saved_min_dx = mesh->min_dx;
@@ -805,9 +829,8 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         mesh->amr_lohner_eps[amr_idx] = saved_amr_lohner_eps[amr_idx];
         mesh->amr_criterion_set[amr_idx] = saved_amr_criterion_set[amr_idx];
     }
-    mesh->use_amr_angle_resolution = saved_use_amr_angle_resolution;
+    mesh->use_amr_angular_resolution_limit = saved_use_amr_angular_resolution_limit;
     mesh->use_BJ = saved_use_BJ;
-    mesh->amr_angle_resolution_limit = saved_amr_angle_resolution_limit;
     mesh->amr_init_scale_factor = saved_amr_init_scale_factor;
     mesh->E_floor = saved_E_floor;
     mesh->amr_init_refine_fn = 0;
