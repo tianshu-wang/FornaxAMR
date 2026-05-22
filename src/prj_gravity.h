@@ -22,6 +22,7 @@ void prj_gravity_cache_mesh(prj_mesh *mesh);
 double prj_gravity_block_accel_at(const prj_block *block, int i, int j, int k);
 double prj_gravity_block_lapse_at(const prj_block *block, int i, int j, int k);
 const prj_grav *prj_gravity_active_monopole(void);
+void prj_gravity_real_spherical_harmonics_all(double x1, double x2, double x3, double *out);
 double prj_gravity_real_spherical_harmonic(int l, int m, double x1, double x2, double x3);
 double prj_gravity_interp_accel(const prj_grav *grav, double r);
 double prj_gravity_interp_lapse(const prj_grav *grav, double r);

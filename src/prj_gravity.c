@@ -16,9 +16,12 @@
 #define PRJ_GRAVITY_CACHE_INVALID (-1)
 #define PRJ_GRAVITY_CACHE_LAST_VALUE 2.0
 #define PRJ_GRAVITY_CACHE_SKIP_REDUCE 3.0
+#define PRJ_GRAVITY_SQRT2 1.41421356237309504880168872420969808
 
 static prj_grav *prj_gravity_active = 0;
 static double prj_gravity_rmax = 0.0;
+static double Ylm_norm[LMAX*LMAX];
+static int Ylm_norm_initialized = 0;
 
 static void prj_gravity_fill_mesh_fields(prj_mesh *mesh);
 
@@ -89,37 +92,154 @@ static double prj_gravity_ylm_norm(int l, int m)
     return sqrt(((double)(2 * l + 1) / (4.0 * M_PI)) * ratio);
 }
 
-double prj_gravity_real_spherical_harmonic(int l, int m, double x1, double x2, double x3)
+static void prj_gravity_init_ylm_norm(void)
 {
-    int abs_m = m < 0 ? -m : m;
+    int l;
+
+    for (l = 0; l < LMAX; ++l) {
+        int m;
+
+        for (m = -l; m <= l; ++m) {
+            int abs_m = m < 0 ? -m : m;
+
+            Ylm_norm[PRJ_YLM_INDEX(l, m)] = prj_gravity_ylm_norm(l, abs_m);
+        }
+    }
+    Ylm_norm_initialized = 1;
+}
+
+void prj_gravity_real_spherical_harmonics_all(double x1, double x2, double x3, double *out)
+{
     double r;
     double mu;
-    double phi;
-    double plm;
-    double ylm;
+    double somx2_sq;
+    double somx2;
+    double rho;
+    double cphi;
+    double sphi;
+    double Plm[LMAX][LMAX];
+    double cos_m[LMAX];
+    double sin_m[LMAX];
+    int l;
+    int m;
 
-    if (l < 0 || abs_m > l) {
-        return 0.0;
+    if (out == 0) {
+        return;
     }
+    if (!Ylm_norm_initialized) {
+        prj_gravity_init_ylm_norm();
+    }
+
+    for (l = 0; l < LMAX*LMAX; ++l) {
+        out[l] = 0.0;
+    }
+
     r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
     if (r <= 0.0) {
-        return l == 0 && m == 0 ? sqrt(1.0 / (4.0 * M_PI)) : 0.0;
+        out[PRJ_YLM_INDEX(0, 0)] = Ylm_norm[PRJ_YLM_INDEX(0, 0)];
+        return;
     }
+
     mu = x3 / r;
     if (mu > 1.0) {
         mu = 1.0;
     } else if (mu < -1.0) {
         mu = -1.0;
     }
-    phi = atan2(x2, x1);
-    plm = prj_gravity_assoc_legendre(l, abs_m, mu);
-    ylm = prj_gravity_ylm_norm(l, abs_m) * plm;
-    if (m > 0) {
-        ylm *= sqrt(2.0) * cos((double)abs_m * phi);
-    } else if (m < 0) {
-        ylm *= sqrt(2.0) * sin((double)abs_m * phi);
+    somx2_sq = 1.0 - mu * mu;
+    if (somx2_sq < 0.0) {
+        somx2_sq = 0.0;
     }
-    return ylm;
+    somx2 = sqrt(somx2_sq);
+
+    for (l = 0; l < LMAX; ++l) {
+        for (m = 0; m < LMAX; ++m) {
+            Plm[l][m] = 0.0;
+        }
+    }
+    Plm[0][0] = 1.0;
+    for (m = 1; m < LMAX; ++m) {
+        Plm[m][m] = -(double)(2 * m - 1) * somx2 * Plm[m - 1][m - 1];
+    }
+    for (m = 0; m < LMAX - 1; ++m) {
+        Plm[m + 1][m] = (double)(2 * m + 1) * mu * Plm[m][m];
+        for (l = m + 2; l < LMAX; ++l) {
+            Plm[l][m] = ((double)(2 * l - 1) * mu * Plm[l - 1][m] -
+                (double)(l + m - 1) * Plm[l - 2][m]) / (double)(l - m);
+        }
+    }
+
+    rho = sqrt(x1 * x1 + x2 * x2);
+    if (rho > 0.0) {
+        cphi = x1 / rho;
+        sphi = x2 / rho;
+    } else {
+        cphi = 1.0;
+        sphi = 0.0;
+    }
+    cos_m[0] = 1.0;
+    sin_m[0] = 0.0;
+#if LMAX > 1
+    cos_m[1] = cphi;
+    sin_m[1] = sphi;
+    for (m = 1; m < LMAX - 1; ++m) {
+        cos_m[m + 1] = 2.0 * cphi * cos_m[m] - cos_m[m - 1];
+        sin_m[m + 1] = 2.0 * cphi * sin_m[m] - sin_m[m - 1];
+    }
+#endif
+
+    for (l = 0; l < LMAX; ++l) {
+        int yidx = PRJ_YLM_INDEX(l, 0);
+
+        out[yidx] = Ylm_norm[yidx] * Plm[l][0];
+        for (m = 1; m <= l; ++m) {
+            double ylm = PRJ_GRAVITY_SQRT2 *
+                Ylm_norm[PRJ_YLM_INDEX(l, m)] * Plm[l][m];
+
+            out[PRJ_YLM_INDEX(l, m)] = ylm * cos_m[m];
+            out[PRJ_YLM_INDEX(l, -m)] = ylm * sin_m[m];
+        }
+    }
+}
+
+double prj_gravity_real_spherical_harmonic(int l, int m, double x1, double x2, double x3)
+{
+    int abs_m = m < 0 ? -m : m;
+
+    if (l < 0 || abs_m > l) {
+        return 0.0;
+    }
+    if (l < LMAX) {
+        double ylm[LMAX*LMAX];
+
+        prj_gravity_real_spherical_harmonics_all(x1, x2, x3, ylm);
+        return ylm[PRJ_YLM_INDEX(l, m)];
+    } else {
+        double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
+        double mu;
+        double phi;
+        double plm;
+        double ylm;
+
+        if (r <= 0.0) {
+            return l == 0 && m == 0 ? sqrt(1.0 / (4.0 * M_PI)) : 0.0;
+        }
+        mu = x3 / r;
+        if (mu > 1.0) {
+            mu = 1.0;
+        } else if (mu < -1.0) {
+            mu = -1.0;
+        }
+        phi = atan2(x2, x1);
+        plm = prj_gravity_assoc_legendre(l, abs_m, mu);
+        ylm = prj_gravity_ylm_norm(l, abs_m) * plm;
+        if (m > 0) {
+            ylm *= PRJ_GRAVITY_SQRT2 * cos((double)abs_m * phi);
+        } else if (m < 0) {
+            ylm *= PRJ_GRAVITY_SQRT2 * sin((double)abs_m * phi);
+        }
+        return ylm;
+    }
 }
 
 static double prj_gravity_clamp_double(double x, double lo, double hi)
@@ -384,12 +504,14 @@ void prj_gravity_cache_block(prj_block *block)
                 double dx1 = x1 - (grav != 0 ? grav->x_com[0] : 0.0);
                 double dx2 = x2 - (grav != 0 ? grav->x_com[1] : 0.0);
                 double dx3 = x3 - (grav != 0 ? grav->x_com[2] : 0.0);
+                double ylm[LMAX*LMAX];
                 int cache_idx = prj_block_cache_index(i, j, k);
                 int l;
 
                 block->r_com[cache_idx] = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
                 prj_gravity_cache_entry(prj_gravity_active, block->r_com[cache_idx],
                     &block->ridx[cache_idx], &block->fr[cache_idx]);
+                prj_gravity_real_spherical_harmonics_all(dx1, dx2, dx3, ylm);
                 for (l = 0; l < LMAX; ++l) {
                     int m;
 
@@ -397,8 +519,7 @@ void prj_gravity_cache_block(prj_block *block)
                         int yidx = PRJ_YLM_INDEX(l, m);
 
                         if (block->Ylm[yidx] != 0) {
-                            block->Ylm[yidx][cache_idx] =
-                                prj_gravity_real_spherical_harmonic(l, m, dx1, dx2, dx3);
+                            block->Ylm[yidx][cache_idx] = ylm[yidx];
                         }
                     }
                 }
@@ -513,6 +634,7 @@ void prj_gravity_init(prj_sim *sim)
 
     grav = &sim->grav;
     prj_gravity_free(grav);
+    prj_gravity_init_ylm_norm();
 
     span1 = fabs(sim->mesh.coord.x1max - sim->mesh.coord.x1min);
     span2 = fabs(sim->mesh.coord.x2max - sim->mesh.coord.x2min);
@@ -1039,13 +1161,16 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
     PRJ_TIMER_CURRENT_START("gravity_reduce_local");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
+        double *W;
         int i;
         int j;
         int k;
+        int l;
 
         if (!prj_gravity_block_is_local_active(block)) {
             continue;
         }
+        W = stage == 2 ? block->W1 : block->W;
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -1069,7 +1194,6 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
                     double erad;
                     double prad;
                     double vdotF;
-                    double *W = stage == 2 ? block->W1 : block->W;
 
                     idx = block->ridx != 0 ? block->ridx[cache_idx] : PRJ_GRAVITY_CACHE_INVALID;
                     if (idx >= 0 && fr < PRJ_GRAVITY_CACHE_SKIP_REDUCE) {
@@ -1114,26 +1238,59 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage)
                         grav->prad_avg[idx] += block->vol * prad;
                         grav->vdotF_avg[idx] += block->vol * vdotF;
                         grav->ms[idx] += rho * block->vol;
-                        if (r > 0.0) {
-                            int l;
+                    }
+                }
+            }
+        }
+        for (l = 0; l < LMAX; ++l) {
+            double ylm_scale = (4.0 * M_PI) / (double)(2 * l + 1);
+            int m;
 
-                            for (l = 0; l < LMAX; ++l) {
-                                double r_l = prj_gravity_pow_int(r, l);
-                                double inv_r_l1 = 1.0 / (r_l * r);
-                                double ylm_scale = (4.0 * M_PI) / (double)(2 * l + 1);
-                                int m;
+            for (m = -l; m <= l; ++m) {
+                int yidx = PRJ_YLM_INDEX(l, m);
+                const double *Ylm = block->Ylm[yidx];
+                double *Clm = grav->Clm[yidx];
+                double *Dlm = grav->Dlm[yidx];
 
-                                for (m = -l; m <= l; ++m) {
-                                    int yidx = PRJ_YLM_INDEX(l, m);
-                                    double ylm = block->Ylm[yidx] != 0 ?
-                                        block->Ylm[yidx][cache_idx] :
-                                        prj_gravity_real_spherical_harmonic(l, m, dx1, dx2, dx3);
-                                    double coeff = ylm_scale * rho * block->vol * ylm;
+                if (Ylm == 0) {
+                    continue;
+                }
+                for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                    for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                        for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                            int cache_idx = prj_block_cache_index(i, j, k);
+                            double fr = block->fr != 0 ? block->fr[cache_idx] : 0.0;
+                            double r = block->r_com != 0 ? block->r_com[cache_idx] : 0.0;
+                            double rho;
+                            double r_l;
+                            double inv_r_l1;
+                            double coeff;
 
-                                    grav->Clm[yidx][idx] += coeff * r_l;
-                                    grav->Dlm[yidx][idx] += coeff * inv_r_l1;
-                                }
+                            idx = block->ridx != 0 ? block->ridx[cache_idx] :
+                                PRJ_GRAVITY_CACHE_INVALID;
+                            if (idx < 0 || fr >= PRJ_GRAVITY_CACHE_SKIP_REDUCE) {
+                                continue;
                             }
+                            if (block->r_com == 0) {
+                                double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                                double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                                double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                                double dx1 = x1 - grav->x_com[0];
+                                double dx2 = x2 - grav->x_com[1];
+                                double dx3 = x3 - grav->x_com[2];
+
+                                r = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+                            }
+                            if (r <= 0.0) {
+                                continue;
+                            }
+                            rho = W[(size_t)PRJ_PRIM_RHO * (size_t)PRJ_BLOCK_NCELLS +
+                                (size_t)cache_idx];
+                            r_l = prj_gravity_pow_int(r, l);
+                            inv_r_l1 = 1.0 / (r_l * r);
+                            coeff = ylm_scale * rho * block->vol * Ylm[cache_idx];
+                            Clm[idx] += coeff * r_l;
+                            Dlm[idx] += coeff * inv_r_l1;
                         }
                     }
                 }
