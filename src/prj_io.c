@@ -1322,6 +1322,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
             }
         }
     }
+    if (prj_mesh_rebuild_morton_lookup(mesh) != 0) {
+        prj_io_fail("prj_io_read_restart: Morton lookup rebuild failed");
+    }
 
     prj_mpi_decompose(mesh);
     if (mpi != 0) {

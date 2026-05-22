@@ -1,4 +1,5 @@
 #include <math.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -421,6 +422,136 @@ static int prj_add_neighbor(prj_block *a, const prj_block *b)
         }
     }
     return 1;
+}
+
+static int prj_amr_neighbor_lookup_range(const prj_mesh *mesh,
+    const prj_block *block, int level, int axis, int *start, int *end)
+{
+    double coord_min[3];
+    double coord_max[3];
+    double extent;
+    double scale;
+    double lo;
+    double hi;
+    double level_count;
+
+    if (mesh == 0 || block == 0 || level < 0 || axis < 0 || axis >= 3 ||
+        start == 0 || end == 0 || mesh->root_nx[axis] <= 0) {
+        return 0;
+    }
+    coord_min[0] = mesh->coord.x1min;
+    coord_min[1] = mesh->coord.x2min;
+    coord_min[2] = mesh->coord.x3min;
+    coord_max[0] = mesh->coord.x1max;
+    coord_max[1] = mesh->coord.x2max;
+    coord_max[2] = mesh->coord.x3max;
+
+    extent = coord_max[axis] - coord_min[axis];
+    level_count = ldexp((double)mesh->root_nx[axis], level);
+    if (extent <= 0.0 || !isfinite(level_count) || level_count <= 0.0 ||
+        level_count > (double)INT_MAX) {
+        return 0;
+    }
+    scale = level_count / extent;
+    lo = (block->xmin[axis] - coord_min[axis]) * scale;
+    hi = (block->xmax[axis] - coord_min[axis]) * scale;
+    if (!isfinite(lo) || !isfinite(hi) || lo > hi ||
+        lo < (double)INT_MIN || hi > (double)INT_MAX) {
+        return 0;
+    }
+    *start = (int)floor(lo) - 1;
+    *end = (int)ceil(hi);
+    return *start <= *end;
+}
+
+static void prj_amr_try_neighbor_candidate(prj_mesh *mesh, prj_block *a, int nid)
+{
+    prj_block *b;
+
+    if (mesh == 0 || a == 0 || nid < 0 || nid >= mesh->nblocks || nid == a->id) {
+        return;
+    }
+    b = &mesh->blocks[nid];
+    if (!prj_is_active_block(b)) {
+        return;
+    }
+    if (prj_boxes_touch_face_edge_corner(a, b)) {
+        prj_add_neighbor(a, b);
+        prj_add_neighbor(b, a);
+    }
+}
+
+static void prj_amr_probe_neighbor_level(prj_mesh *mesh, prj_block *block, int level)
+{
+    int is;
+    int ie;
+    int js;
+    int je;
+    int ks;
+    int ke;
+    int ix;
+    int iy;
+    int iz;
+
+    if (!prj_amr_neighbor_lookup_range(mesh, block, level, 0, &is, &ie) ||
+        !prj_amr_neighbor_lookup_range(mesh, block, level, 1, &js, &je) ||
+        !prj_amr_neighbor_lookup_range(mesh, block, level, 2, &ks, &ke)) {
+        return;
+    }
+
+    for (ix = is; ix <= ie; ++ix) {
+        for (iy = js; iy <= je; ++iy) {
+            for (iz = ks; iz <= ke; ++iz) {
+                int nid = prj_mesh_morton_lookup_block(mesh, level, ix, iy, iz);
+
+                prj_amr_try_neighbor_candidate(mesh, block, nid);
+            }
+        }
+    }
+}
+
+static void prj_amr_init_neighbors_pairwise(prj_mesh *mesh)
+{
+    int i;
+    int j;
+
+    for (i = 0; i < mesh->nblocks; ++i) {
+        prj_block *a = &mesh->blocks[i];
+
+        if (!prj_is_active_block(a)) {
+            continue;
+        }
+        for (j = i + 1; j < mesh->nblocks; ++j) {
+            prj_block *b = &mesh->blocks[j];
+
+            if (!prj_is_active_block(b)) {
+                continue;
+            }
+            if (prj_boxes_touch_face_edge_corner(a, b)) {
+                prj_add_neighbor(a, b);
+                prj_add_neighbor(b, a);
+            }
+        }
+    }
+}
+
+static void prj_amr_init_neighbors_morton(prj_mesh *mesh)
+{
+    int i;
+
+    for (i = 0; i < mesh->nblocks; ++i) {
+        prj_block *block = &mesh->blocks[i];
+        int level;
+
+        if (!prj_is_active_block(block)) {
+            continue;
+        }
+        for (level = block->level - 1; level <= block->level + 1; ++level) {
+            if (level >= 0) {
+                prj_amr_probe_neighbor_level(mesh, block, level);
+            }
+        }
+    }
 }
 
 static int prj_amr_clamp_storage_index(int idx)
@@ -981,7 +1112,6 @@ int prj_amr_refine_marked_blocks(prj_mesh *mesh)
 void prj_amr_init_neighbors(prj_mesh *mesh)
 {
     int i;
-    int j;
 
     for (i = 0; i < mesh->nblocks; ++i) {
         if (mesh->blocks[i].id >= 0) {
@@ -989,23 +1119,10 @@ void prj_amr_init_neighbors(prj_mesh *mesh)
         }
     }
 
-    for (i = 0; i < mesh->nblocks; ++i) {
-        prj_block *a = &mesh->blocks[i];
-
-        if (!prj_is_active_block(a)) {
-            continue;
-        }
-        for (j = i + 1; j < mesh->nblocks; ++j) {
-            prj_block *b = &mesh->blocks[j];
-
-            if (!prj_is_active_block(b)) {
-                continue;
-            }
-            if (prj_boxes_touch_face_edge_corner(a, b)) {
-                prj_add_neighbor(a, b);
-                prj_add_neighbor(b, a);
-            }
-        }
+    if (prj_mesh_rebuild_morton_lookup(mesh) == 0) {
+        prj_amr_init_neighbors_morton(mesh);
+    } else {
+        prj_amr_init_neighbors_pairwise(mesh);
     }
     prj_mesh_update_cell_derived_mask(mesh);
 }

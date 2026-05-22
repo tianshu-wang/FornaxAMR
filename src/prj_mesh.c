@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include <limits.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -769,6 +770,247 @@ void prj_mesh_update_cell_derived_mask(prj_mesh *mesh)
     }
 }
 
+static int prj_mesh_is_active_block(const prj_block *block)
+{
+    return block != 0 && block->id >= 0 && block->active == 1;
+}
+
+static unsigned long long prj_mesh_morton_part(unsigned int value)
+{
+    unsigned long long x = (unsigned long long)(value & 0x1fffffU);
+
+    x = (x | (x << 32)) & 0x1f00000000ffffULL;
+    x = (x | (x << 16)) & 0x1f0000ff0000ffULL;
+    x = (x | (x << 8)) & 0x100f00f00f00f00fULL;
+    x = (x | (x << 4)) & 0x10c30c30c30c30c3ULL;
+    x = (x | (x << 2)) & 0x1249249249249249ULL;
+    return x;
+}
+
+static unsigned long long prj_mesh_morton_key(int level, int ix, int iy, int iz)
+{
+    unsigned long long key;
+
+    key = ((unsigned long long)(unsigned int)level) * 0x9e3779b97f4a7c15ULL;
+    key ^= prj_mesh_morton_part((unsigned int)ix) << 2;
+    key ^= prj_mesh_morton_part((unsigned int)iy) << 1;
+    key ^= prj_mesh_morton_part((unsigned int)iz);
+    return key;
+}
+
+static unsigned long long prj_mesh_morton_hash(unsigned long long key)
+{
+    key ^= key >> 33;
+    key *= 0xff51afd7ed558ccdULL;
+    key ^= key >> 33;
+    key *= 0xc4ceb9fe1a85ec53ULL;
+    key ^= key >> 33;
+    return key;
+}
+
+static int prj_mesh_level_axis_count(const prj_mesh *mesh, int level, int axis)
+{
+    double count;
+
+    if (mesh == 0 || level < 0 || axis < 0 || axis >= 3 ||
+        mesh->root_nx[axis] <= 0) {
+        return 0;
+    }
+    count = ldexp((double)mesh->root_nx[axis], level);
+    if (!isfinite(count) || count <= 0.0 || count > (double)INT_MAX) {
+        return 0;
+    }
+    return (int)(count + 0.5);
+}
+
+static int prj_mesh_block_logical_coords(const prj_mesh *mesh,
+    const prj_block *block, int coord[3])
+{
+    double coord_min[3];
+    double coord_max[3];
+    int axis;
+
+    if (mesh == 0 || block == 0 || coord == 0 || block->level < 0) {
+        return 0;
+    }
+    coord_min[0] = mesh->coord.x1min;
+    coord_min[1] = mesh->coord.x2min;
+    coord_min[2] = mesh->coord.x3min;
+    coord_max[0] = mesh->coord.x1max;
+    coord_max[1] = mesh->coord.x2max;
+    coord_max[2] = mesh->coord.x3max;
+
+    for (axis = 0; axis < 3; ++axis) {
+        double extent = coord_max[axis] - coord_min[axis];
+        int level_count = prj_mesh_level_axis_count(mesh, block->level, axis);
+        double scale;
+        double scaled;
+        int c;
+
+        if (extent <= 0.0 || level_count <= 0) {
+            return 0;
+        }
+        scale = (double)level_count / extent;
+        scaled = (block->xmin[axis] - coord_min[axis]) * scale;
+        if (!isfinite(scaled) || scaled < -0.5 || scaled > (double)INT_MAX) {
+            return 0;
+        }
+        c = (int)(scaled + 0.5);
+        if (c < 0 || c >= level_count) {
+            return 0;
+        }
+        coord[axis] = c;
+    }
+    return 1;
+}
+
+static int prj_mesh_morton_lookup_capacity(int count)
+{
+    int capacity = 16;
+    int target;
+
+    if (count <= 0) {
+        return 0;
+    }
+    if (count > INT_MAX / 4) {
+        return 0;
+    }
+    target = count * 4;
+    while (capacity < target) {
+        if (capacity > INT_MAX / 2) {
+            return 0;
+        }
+        capacity *= 2;
+    }
+    return capacity;
+}
+
+static int prj_mesh_morton_lookup_insert(prj_mesh *mesh, const prj_block *block)
+{
+    int coord[3];
+    unsigned long long key;
+    unsigned long long hash;
+    unsigned int mask;
+    int probe;
+
+    if (mesh == 0 || block == 0 || mesh->morton_lookup == 0 ||
+        mesh->morton_lookup_capacity <= 0) {
+        return 1;
+    }
+    if (!prj_mesh_block_logical_coords(mesh, block, coord)) {
+        return 1;
+    }
+
+    key = prj_mesh_morton_key(block->level, coord[0], coord[1], coord[2]);
+    hash = prj_mesh_morton_hash(key);
+    mask = (unsigned int)(mesh->morton_lookup_capacity - 1);
+    for (probe = 0; probe < mesh->morton_lookup_capacity; ++probe) {
+        unsigned int idx = (unsigned int)(hash + (unsigned long long)probe) & mask;
+        prj_morton_lookup_entry *entry = &mesh->morton_lookup[idx];
+
+        if (entry->occupied == 0 ||
+            (entry->level == block->level &&
+             entry->coord[0] == coord[0] &&
+             entry->coord[1] == coord[1] &&
+             entry->coord[2] == coord[2])) {
+            entry->occupied = 1;
+            entry->level = block->level;
+            entry->coord[0] = coord[0];
+            entry->coord[1] = coord[1];
+            entry->coord[2] = coord[2];
+            entry->id = block->id;
+            entry->key = key;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int prj_mesh_rebuild_morton_lookup(prj_mesh *mesh)
+{
+    int active_count;
+    int capacity;
+    int i;
+
+    if (mesh == 0) {
+        return 1;
+    }
+
+    active_count = 0;
+    for (i = 0; i < mesh->nblocks; ++i) {
+        if (prj_mesh_is_active_block(&mesh->blocks[i])) {
+            active_count += 1;
+        }
+    }
+    mesh->morton_lookup_count = active_count;
+    if (active_count <= 0) {
+        return 0;
+    }
+
+    capacity = prj_mesh_morton_lookup_capacity(active_count);
+    if (capacity <= 0) {
+        mesh->morton_lookup_count = 0;
+        return 1;
+    }
+    if (mesh->morton_lookup_capacity != capacity) {
+        prj_morton_lookup_entry *lookup =
+            (prj_morton_lookup_entry *)calloc((size_t)capacity, sizeof(*lookup));
+
+        if (lookup == 0) {
+            mesh->morton_lookup_count = 0;
+            return 1;
+        }
+        free(mesh->morton_lookup);
+        mesh->morton_lookup = lookup;
+        mesh->morton_lookup_capacity = capacity;
+    } else {
+        memset(mesh->morton_lookup, 0,
+            (size_t)mesh->morton_lookup_capacity * sizeof(*mesh->morton_lookup));
+    }
+
+    for (i = 0; i < mesh->nblocks; ++i) {
+        if (prj_mesh_is_active_block(&mesh->blocks[i]) &&
+            prj_mesh_morton_lookup_insert(mesh, &mesh->blocks[i]) != 0) {
+            mesh->morton_lookup_count = 0;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int prj_mesh_morton_lookup_block(const prj_mesh *mesh, int level, int ix, int iy, int iz)
+{
+    unsigned long long key;
+    unsigned long long hash;
+    unsigned int mask;
+    int probe;
+
+    if (mesh == 0 || mesh->morton_lookup == 0 ||
+        mesh->morton_lookup_capacity <= 0 || mesh->morton_lookup_count <= 0 ||
+        level < 0 || ix < 0 || iy < 0 || iz < 0) {
+        return -1;
+    }
+
+    key = prj_mesh_morton_key(level, ix, iy, iz);
+    hash = prj_mesh_morton_hash(key);
+    mask = (unsigned int)(mesh->morton_lookup_capacity - 1);
+    for (probe = 0; probe < mesh->morton_lookup_capacity; ++probe) {
+        unsigned int idx = (unsigned int)(hash + (unsigned long long)probe) & mask;
+        const prj_morton_lookup_entry *entry = &mesh->morton_lookup[idx];
+
+        if (entry->occupied == 0) {
+            return -1;
+        }
+        if (entry->level == level &&
+            entry->coord[0] == ix &&
+            entry->coord[1] == iy &&
+            entry->coord[2] == iz) {
+            return entry->id;
+        }
+    }
+    return -1;
+}
+
 int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int max_level, const prj_coord *coord)
 {
     int i;
@@ -836,6 +1078,10 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->amr_init_refine_fn = 0;
     mesh->amr_init_refine_userdata = 0;
     mesh->blocks = 0;
+    free(mesh->morton_lookup);
+    mesh->morton_lookup = 0;
+    mesh->morton_lookup_capacity = 0;
+    mesh->morton_lookup_count = 0;
 
     nroot = root_nx1 * root_nx2 * root_nx3;
     capacity = 65536;
@@ -933,6 +1179,10 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
 
 
     prj_mesh_update_cell_derived_mask(mesh);
+    if (prj_mesh_rebuild_morton_lookup(mesh) != 0) {
+        prj_mesh_destroy(mesh);
+        return 4;
+    }
     return 0;
 }
 
@@ -948,8 +1198,12 @@ void prj_mesh_destroy(prj_mesh *mesh)
         prj_block_free_data(&mesh->blocks[i]);
     }
     free(mesh->blocks);
+    free(mesh->morton_lookup);
     mesh->blocks = 0;
+    mesh->morton_lookup = 0;
     mesh->nblocks = 0;
     mesh->nblocks_max = 0;
+    mesh->morton_lookup_capacity = 0;
+    mesh->morton_lookup_count = 0;
     mesh->max_active_level = -1;
 }

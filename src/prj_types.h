@@ -18,6 +18,7 @@ typedef struct prj_sim prj_sim;
 typedef struct prj_eos prj_eos;
 typedef struct prj_coord prj_coord;
 typedef struct prj_neighbor prj_neighbor;
+typedef struct prj_morton_lookup_entry prj_morton_lookup_entry;
 typedef struct prj_bc prj_bc;
 typedef struct prj_grav prj_grav;
 typedef struct prj_rad prj_rad;
@@ -58,6 +59,14 @@ struct prj_neighbor {
     double xmin[3];
     double xmax[3];
     double dx[3];
+};
+
+struct prj_morton_lookup_entry {
+    int occupied;
+    int level;
+    int coord[3];
+    int id;
+    unsigned long long key;
 };
 
 struct prj_bc {
@@ -119,6 +128,9 @@ struct prj_mesh {
     int max_active_level;
     int root_nx[3];
     prj_block *blocks;
+    prj_morton_lookup_entry *morton_lookup;
+    int morton_lookup_capacity;
+    int morton_lookup_count;
     prj_coord coord;
     double amr_refine_thresh[PRJ_AMR_N];
     double amr_derefine_thresh[PRJ_AMR_N];
