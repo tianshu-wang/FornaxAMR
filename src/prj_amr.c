@@ -674,6 +674,9 @@ static double prj_loehner_cell_indicator(
     double num_x;
     double num_y;
     double num_z;
+    double num_xy;
+    double num_xz;
+    double num_yz;
     double den_x;
     double den_y;
     double den_z;
@@ -691,13 +694,29 @@ static double prj_loehner_cell_indicator(
     num_x = uxp - 2.0 * u0 + uxm;
     num_y = uyp - 2.0 * u0 + uym;
     num_z = uzp - 2.0 * u0 + uzm;
+    num_xy = 0.25 * (
+        prj_loehner_cell_value(mesh, b, lohner_var, i + 1, j + 1, k) -
+        prj_loehner_cell_value(mesh, b, lohner_var, i + 1, j - 1, k) -
+        prj_loehner_cell_value(mesh, b, lohner_var, i - 1, j + 1, k) +
+        prj_loehner_cell_value(mesh, b, lohner_var, i - 1, j - 1, k));
+    num_xz = 0.25 * (
+        prj_loehner_cell_value(mesh, b, lohner_var, i + 1, j, k + 1) -
+        prj_loehner_cell_value(mesh, b, lohner_var, i + 1, j, k - 1) -
+        prj_loehner_cell_value(mesh, b, lohner_var, i - 1, j, k + 1) +
+        prj_loehner_cell_value(mesh, b, lohner_var, i - 1, j, k - 1));
+    num_yz = 0.25 * (
+        prj_loehner_cell_value(mesh, b, lohner_var, i, j + 1, k + 1) -
+        prj_loehner_cell_value(mesh, b, lohner_var, i, j + 1, k - 1) -
+        prj_loehner_cell_value(mesh, b, lohner_var, i, j - 1, k + 1) +
+        prj_loehner_cell_value(mesh, b, lohner_var, i, j - 1, k - 1));
     den_x = prj_abs_double(uxp - u0) + prj_abs_double(u0 - uxm) +
         alpha * (prj_abs_double(uxp) + 2.0 * prj_abs_double(u0) + prj_abs_double(uxm));
     den_y = prj_abs_double(uyp - u0) + prj_abs_double(u0 - uym) +
         alpha * (prj_abs_double(uyp) + 2.0 * prj_abs_double(u0) + prj_abs_double(uym));
     den_z = prj_abs_double(uzp - u0) + prj_abs_double(u0 - uzm) +
         alpha * (prj_abs_double(uzp) + 2.0 * prj_abs_double(u0) + prj_abs_double(uzm));
-    numerator = num_x * num_x + num_y * num_y + num_z * num_z;
+    numerator = num_x * num_x + num_y * num_y + num_z * num_z +
+        2.0 * (num_xy * num_xy + num_xz * num_xz + num_yz * num_yz);
     denominator = den_x * den_x + den_y * den_y + den_z * den_z + small;
 
     return prj_sqrt_double(numerator / denominator);
