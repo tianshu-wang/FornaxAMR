@@ -62,7 +62,7 @@
 #define PRJ_NVAR_PRIM (PRJ_NHYDRO + PRJ_NRAD_VAR)
 #define PRJ_NVAR_EOSVAR 3
 #ifndef PRJ_BLOCK_SIZE
-#define PRJ_BLOCK_SIZE 16
+#define PRJ_BLOCK_SIZE 8
 #endif
 #define PRJ_RECON_MC    0
 #define PRJ_RECON_WENO3 1

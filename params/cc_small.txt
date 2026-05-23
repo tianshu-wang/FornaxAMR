@@ -11,7 +11,7 @@ x2max = 3.0e9
 x3min = -3.0e9
 x3max = 3.0e9
 
-root_nx = 4
+root_nx = 8
 max_level = 1
 
 cfl = 0.4
@@ -31,6 +31,8 @@ amr_estimator2 = fractional_jump
 amr_refine_thresh2 = 0.5
 amr_derefine_thresh2 = 0.2
 use_amr_angular_resolution_limit = 1
+
+use_multipole_gravity = 0
 
 eos_type = table
 eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
