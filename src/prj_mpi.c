@@ -167,6 +167,78 @@ static unsigned long long prj_mpi_morton_code(const prj_mesh *mesh, const prj_bl
         prj_mpi_spread_bits(iz);
 }
 
+typedef struct {
+    unsigned long long key;
+    int id;
+} prj_mpi_order_item;
+
+static int prj_mpi_order_item_less(const prj_mpi_order_item *a,
+    const prj_mpi_order_item *b)
+{
+    if (a->key != b->key) {
+        return a->key < b->key;
+    }
+    return a->id < b->id;
+}
+
+static void prj_mpi_order_merge(prj_mpi_order_item *items,
+    prj_mpi_order_item *scratch, int left, int mid, int right)
+{
+    int i = left;
+    int j = mid;
+    int k = left;
+
+    while (i < mid && j < right) {
+        if (!prj_mpi_order_item_less(&items[j], &items[i])) {
+            scratch[k++] = items[i++];
+        } else {
+            scratch[k++] = items[j++];
+        }
+    }
+    while (i < mid) {
+        scratch[k++] = items[i++];
+    }
+    while (j < right) {
+        scratch[k++] = items[j++];
+    }
+    for (i = left; i < right; ++i) {
+        items[i] = scratch[i];
+    }
+}
+
+static void prj_mpi_order_sort_range(prj_mpi_order_item *items,
+    prj_mpi_order_item *scratch, int left, int right)
+{
+    int mid;
+
+    if (right - left <= 1) {
+        return;
+    }
+    mid = left + (right - left) / 2;
+    prj_mpi_order_sort_range(items, scratch, left, mid);
+    prj_mpi_order_sort_range(items, scratch, mid, right);
+    if (!prj_mpi_order_item_less(&items[mid], &items[mid - 1])) {
+        return;
+    }
+    prj_mpi_order_merge(items, scratch, left, mid, right);
+}
+
+static int prj_mpi_order_sort(prj_mpi_order_item *items, int count)
+{
+    prj_mpi_order_item *scratch;
+
+    if (count <= 1) {
+        return 0;
+    }
+    scratch = (prj_mpi_order_item *)malloc((size_t)count * sizeof(*scratch));
+    if (scratch == 0) {
+        return 1;
+    }
+    prj_mpi_order_sort_range(items, scratch, 0, count);
+    free(scratch);
+    return 0;
+}
+
 static int prj_mpi_encode_cell_index(int i, int j, int k)
 {
     return ((i + PRJ_NGHOST) * PRJ_BS + (j + PRJ_NGHOST)) * PRJ_BS + (k + PRJ_NGHOST);
@@ -250,11 +322,7 @@ static void prj_mpi_sync_slot_ranks(prj_mesh *mesh)
 
 static void prj_mpi_compute_decomposition(prj_mesh *mesh)
 {
-    struct prj_order_item {
-        unsigned long long key;
-        int id;
-    };
-    struct prj_order_item *items;
+    prj_mpi_order_item *items;
     int count;
     int i;
     int cursor;
@@ -269,7 +337,7 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh)
             count += 1;
         }
     }
-    items = (struct prj_order_item *)malloc((size_t)count * sizeof(*items));
+    items = (prj_mpi_order_item *)malloc((size_t)count * sizeof(*items));
     if (items == 0) {
         return;
     }
@@ -281,18 +349,9 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh)
             cursor += 1;
         }
     }
-    for (i = 0; i < count; ++i) {
-        int j;
-
-        for (j = i + 1; j < count; ++j) {
-            if (items[j].key < items[i].key ||
-                (items[j].key == items[i].key && items[j].id < items[i].id)) {
-                struct prj_order_item tmp = items[i];
-
-                items[i] = items[j];
-                items[j] = tmp;
-            }
-        }
+    if (prj_mpi_order_sort(items, count) != 0) {
+        free(items);
+        return;
     }
     for (i = 0; i < count; ++i) {
         int nrank = prj_mpi_active != 0 ? prj_mpi_active->totrank : 1;
