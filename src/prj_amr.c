@@ -310,6 +310,55 @@ static void prj_clear_neighbors(prj_block *b)
     }
 }
 
+static void prj_amr_mark_dirty_block_and_neighbors(const prj_mesh *mesh,
+    int block_id, int *dirty)
+{
+    const prj_block *block;
+    int n;
+
+    if (mesh == 0 || dirty == 0 || block_id < 0 || block_id >= mesh->nblocks) {
+        return;
+    }
+    dirty[block_id] = 1;
+    block = &mesh->blocks[block_id];
+    for (n = 0; n < 56; ++n) {
+        int nid = block->slot[n].id;
+
+        if (nid >= 0 && nid < mesh->nblocks) {
+            dirty[nid] = 1;
+        }
+    }
+}
+
+static void prj_amr_mark_coarsen_dirty(const prj_mesh *mesh, int parent_id,
+    int *dirty)
+{
+    const prj_block *parent;
+    int oct;
+
+    if (mesh == 0 || dirty == 0 || parent_id < 0 || parent_id >= mesh->nblocks) {
+        return;
+    }
+    dirty[parent_id] = 1;
+    parent = &mesh->blocks[parent_id];
+    for (oct = 0; oct < 8; ++oct) {
+        prj_amr_mark_dirty_block_and_neighbors(mesh, parent->children[oct],
+            dirty);
+    }
+}
+
+static void prj_amr_clear_dirty_mask(int *dirty, int count)
+{
+    int i;
+
+    if (dirty == 0) {
+        return;
+    }
+    for (i = 0; i < count; ++i) {
+        dirty[i] = 0;
+    }
+}
+
 static void prj_reset_children(prj_block *b)
 {
     int n;
@@ -510,7 +559,8 @@ static void prj_amr_probe_neighbor_level(prj_mesh *mesh, prj_block *block, int l
     }
 }
 
-static void prj_amr_init_neighbors_pairwise(prj_mesh *mesh)
+static void prj_amr_init_neighbors_pairwise(prj_mesh *mesh,
+    const int *rebuild_mask)
 {
     int i;
     int j;
@@ -527,6 +577,10 @@ static void prj_amr_init_neighbors_pairwise(prj_mesh *mesh)
             if (!prj_is_active_block(b)) {
                 continue;
             }
+            if (rebuild_mask != 0 && rebuild_mask[i] == 0 &&
+                rebuild_mask[j] == 0) {
+                continue;
+            }
             if (prj_boxes_touch_face_edge_corner(a, b)) {
                 prj_add_neighbor(a, b);
                 prj_add_neighbor(b, a);
@@ -535,7 +589,8 @@ static void prj_amr_init_neighbors_pairwise(prj_mesh *mesh)
     }
 }
 
-static void prj_amr_init_neighbors_morton(prj_mesh *mesh)
+static void prj_amr_init_neighbors_morton(prj_mesh *mesh,
+    const int *rebuild_mask)
 {
     int i;
 
@@ -544,6 +599,9 @@ static void prj_amr_init_neighbors_morton(prj_mesh *mesh)
         int level;
 
         if (!prj_is_active_block(block)) {
+            continue;
+        }
+        if (rebuild_mask != 0 && rebuild_mask[i] == 0) {
             continue;
         }
         for (level = block->level - 1; level <= block->level + 1; ++level) {
@@ -1105,7 +1163,8 @@ void prj_amr_enforce_two_to_one(prj_mesh *mesh)
     } while (changed != 0);
 }
 
-int prj_amr_refine_marked_blocks(prj_mesh *mesh)
+static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
+    int *neighbor_dirty)
 {
     int i;
     int changed = 0;
@@ -1118,8 +1177,20 @@ int prj_amr_refine_marked_blocks(prj_mesh *mesh)
         if (i < mesh->nblocks && prj_is_active_block(&mesh->blocks[i]) &&
             mesh->blocks[i].refine_flag > 0 && mesh->blocks[i].can_refine != 0) {
             int was_active = mesh->blocks[i].active;
+            int oct;
 
+            prj_amr_mark_dirty_block_and_neighbors(mesh, i, neighbor_dirty);
             prj_amr_refine_block(mesh, i);
+            if (neighbor_dirty != 0) {
+                neighbor_dirty[i] = 1;
+                for (oct = 0; oct < 8; ++oct) {
+                    int child_id = mesh->blocks[i].children[oct];
+
+                    if (child_id >= 0 && child_id < mesh->nblocks) {
+                        neighbor_dirty[child_id] = 1;
+                    }
+                }
+            }
             if (was_active != mesh->blocks[i].active) {
                 changed = 1;
             }
@@ -1128,22 +1199,34 @@ int prj_amr_refine_marked_blocks(prj_mesh *mesh)
     return changed;
 }
 
-void prj_amr_init_neighbors(prj_mesh *mesh)
+int prj_amr_refine_marked_blocks(prj_mesh *mesh)
+{
+    return prj_amr_refine_marked_blocks_with_dirty(mesh, 0);
+}
+
+static void prj_amr_init_neighbors_with_mask(prj_mesh *mesh,
+    const int *rebuild_mask)
 {
     int i;
 
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (mesh->blocks[i].id >= 0) {
+        if (mesh->blocks[i].id >= 0 &&
+            (rebuild_mask == 0 || rebuild_mask[i] != 0)) {
             prj_clear_neighbors(&mesh->blocks[i]);
         }
     }
 
     if (prj_mesh_rebuild_morton_lookup(mesh) == 0) {
-        prj_amr_init_neighbors_morton(mesh);
+        prj_amr_init_neighbors_morton(mesh, rebuild_mask);
     } else {
-        prj_amr_init_neighbors_pairwise(mesh);
+        prj_amr_init_neighbors_pairwise(mesh, rebuild_mask);
     }
     prj_mesh_update_cell_derived_mask(mesh);
+}
+
+void prj_amr_init_neighbors(prj_mesh *mesh)
+{
+    prj_amr_init_neighbors_with_mask(mesh, 0);
 }
 
 void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
@@ -2093,9 +2176,14 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     int i;
     int refined = 0;
     int coarsened = 0;
+    int *neighbor_dirty = 0;
 
     if (mesh == 0) {
         return 0;
+    }
+    if (mesh->nblocks_max > 0) {
+        neighbor_dirty = (int *)calloc((size_t)mesh->nblocks_max,
+            sizeof(*neighbor_dirty));
     }
 
     PRJ_TIMER_CURRENT_START("amr_tag");
@@ -2114,11 +2202,16 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     PRJ_TIMER_CURRENT_STOP("amr_mhd_prolongate_bf_exchange");
 #endif
     PRJ_TIMER_CURRENT_START("amr_refine_marked");
-    refined = prj_amr_refine_marked_blocks(mesh);
+    refined = prj_amr_refine_marked_blocks_with_dirty(mesh, neighbor_dirty);
     PRJ_TIMER_CURRENT_STOP("amr_refine_marked");
     if (refined) {
         PRJ_TIMER_CURRENT_START("amr_init_neighbors_refine");
-        prj_amr_init_neighbors(mesh);
+        if (neighbor_dirty != 0) {
+            prj_amr_init_neighbors_with_mask(mesh, neighbor_dirty);
+            prj_amr_clear_dirty_mask(neighbor_dirty, mesh->nblocks_max);
+        } else {
+            prj_amr_init_neighbors(mesh);
+        }
         PRJ_TIMER_CURRENT_STOP("amr_init_neighbors_refine");
     }
 
@@ -2132,7 +2225,11 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
         }
         can_coarsen = prj_can_coarsen_parent(mesh, i);
         if (can_coarsen) {
+            prj_amr_mark_coarsen_dirty(mesh, i, neighbor_dirty);
             if (prj_amr_coarsen_block(mesh, i)) {
+                if (neighbor_dirty != 0) {
+                    neighbor_dirty[i] = 1;
+                }
                 coarsened = 1;
             }
         }
@@ -2140,7 +2237,11 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     PRJ_TIMER_CURRENT_STOP("amr_coarsen");
     if (coarsened) {
         PRJ_TIMER_CURRENT_START("amr_init_neighbors_coarsen");
-        prj_amr_init_neighbors(mesh);
+        if (neighbor_dirty != 0) {
+            prj_amr_init_neighbors_with_mask(mesh, neighbor_dirty);
+        } else {
+            prj_amr_init_neighbors(mesh);
+        }
         PRJ_TIMER_CURRENT_STOP("amr_init_neighbors_coarsen");
     }
 
@@ -2152,6 +2253,7 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
             }
         }
         PRJ_TIMER_CURRENT_STOP("amr_clear_flags");
+        free(neighbor_dirty);
         return 0;
     }
 
@@ -2165,5 +2267,6 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     prj_mesh_update_max_active_level(mesh);
     prj_sync_primitive_from_conserved(mesh, eos);
     PRJ_TIMER_CURRENT_STOP("amr_setup_changed_blocks");
+    free(neighbor_dirty);
     return 1;
 }
