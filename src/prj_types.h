@@ -305,12 +305,18 @@ struct prj_mpi_buffer {
     int *cell_data_size_send;
     int *cell_data_idx_send[3];
     double *cell_buffer_send;
+    int cell_send_count_by_kind[6];
+    int cell_send_count_rad_by_kind[6];
+    double *cell_buffer_send_by_kind[6];
     int *face_data_size_send;
     int *face_data_idx_send[3];
     double *face_buffer_send;
     int *cell_data_size_recv;
     int *cell_data_idx_recv[3];
     double *cell_buffer_recv;
+    int cell_recv_count_by_kind[6];
+    int cell_recv_count_rad_by_kind[6];
+    double *cell_buffer_recv_by_kind[6];
     int *face_data_size_recv;
     int *face_data_idx_recv[3];
     double *face_buffer_recv;

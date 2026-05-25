@@ -12,7 +12,7 @@ x3min = -3.0e9
 x3max = 3.0e9
 
 root_nx = 8
-max_level = 1
+max_level = 3
 
 cfl = 0.4
 x_com_err_tol = 0.5

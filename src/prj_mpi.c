@@ -19,6 +19,7 @@ static prj_mpi *prj_mpi_active = 0;
  * the narrower radiation ghost band. */
 #define PRJ_MPI_GHOST_NVAR_HE  (PRJ_NHYDRO + PRJ_NVAR_EOSVAR)
 #define PRJ_MPI_GHOST_NVAR_RAD (PRJ_NRAD_VAR)
+#define PRJ_MPI_GHOST_FILL_KIND_N 6
 #define PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET 4
 
 static int prj_block_is_active(const prj_block *block)
@@ -42,6 +43,7 @@ static double *prj_mpi_stage_array(prj_block *block, int stage)
 static void prj_mpi_buffer_free(prj_mpi_buffer *buffer)
 {
     int axis;
+    int fill_kind;
 
     if (buffer == 0) {
         return;
@@ -49,6 +51,10 @@ static void prj_mpi_buffer_free(prj_mpi_buffer *buffer)
     free(buffer->receiver_blocks);
     free(buffer->cell_data_size_send);
     free(buffer->cell_buffer_send);
+    for (fill_kind = 0; fill_kind < PRJ_MPI_GHOST_FILL_KIND_N; ++fill_kind) {
+        free(buffer->cell_buffer_send_by_kind[fill_kind]);
+        free(buffer->cell_buffer_recv_by_kind[fill_kind]);
+    }
     free(buffer->face_data_size_send);
     free(buffer->face_buffer_send);
     free(buffer->cell_data_size_recv);
@@ -566,6 +572,68 @@ static int prj_mpi_buffer_recv_count(const prj_mpi_buffer *buffer)
     return count;
 }
 
+static int prj_mpi_ghost_fill_kind_ok(int fill_kind)
+{
+    return fill_kind >= 0 && fill_kind < PRJ_MPI_GHOST_FILL_KIND_N;
+}
+
+static int prj_mpi_ghost_fill_kind_from_rel_level(int rel_level)
+{
+    if (rel_level == 0) {
+        return PRJ_BOUNDARY_FILL_SAME_LEVEL;
+    }
+    if (rel_level < 0) {
+        return PRJ_BOUNDARY_FILL_RESTRICTION;
+    }
+    return PRJ_BOUNDARY_FILL_PROLONGATION;
+}
+
+static int prj_mpi_alloc_ghost_value_buffer(double **buffer,
+    int cell_count, int cell_count_rad)
+{
+    size_t value_count;
+
+    if (buffer == 0 || cell_count < 0 || cell_count_rad < 0) {
+        return 1;
+    }
+    value_count = (size_t)cell_count * (size_t)PRJ_MPI_GHOST_NVAR_HE +
+        (size_t)cell_count_rad * (size_t)PRJ_MPI_GHOST_NVAR_RAD;
+    if (value_count == 0) {
+        *buffer = 0;
+        return 0;
+    }
+    *buffer = (double *)calloc(value_count, sizeof(**buffer));
+    return *buffer == 0 ? 1 : 0;
+}
+
+static void prj_mpi_count_recv_ghosts_by_kind(prj_mpi_buffer *buffer,
+    int cell_count, int cell_count_rad)
+{
+    int i;
+
+    if (buffer == 0) {
+        return;
+    }
+    memset(buffer->cell_recv_count_by_kind, 0,
+        sizeof(buffer->cell_recv_count_by_kind));
+    memset(buffer->cell_recv_count_rad_by_kind, 0,
+        sizeof(buffer->cell_recv_count_rad_by_kind));
+    for (i = 0; i < cell_count; ++i) {
+        int fill_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv[2][i]);
+
+        if (prj_mpi_ghost_fill_kind_ok(fill_kind)) {
+            buffer->cell_recv_count_by_kind[fill_kind] += 1;
+        }
+    }
+    for (i = 0; i < cell_count_rad; ++i) {
+        int fill_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv_rad[2][i]);
+
+        if (prj_mpi_ghost_fill_kind_ok(fill_kind)) {
+            buffer->cell_recv_count_rad_by_kind[fill_kind] += 1;
+        }
+    }
+}
+
 static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buffer *buffer)
 {
 #if defined(PRJ_ENABLE_MPI)
@@ -575,12 +643,15 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     int cell_size_total;
     int cell_size_total_rad;
     int axis;
+    int fill_kind;
     int bidx;
     int occ;
     int *idx_send[3];
     int *idx_send_rad[3];
     int record_count;
     int record_count_rad;
+    int record_count_by_kind[PRJ_MPI_GHOST_FILL_KIND_N];
+    int record_count_rad_by_kind[PRJ_MPI_GHOST_FILL_KIND_N];
     int pos;
     int pos_rad;
     MPI_Request requests[12];
@@ -603,6 +674,8 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     idx_send_rad[2] = 0;
     record_count = 0;
     record_count_rad = 0;
+    memset(record_count_by_kind, 0, sizeof(record_count_by_kind));
+    memset(record_count_rad_by_kind, 0, sizeof(record_count_rad_by_kind));
     occ = 0;
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -619,10 +692,12 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             int k;
             int before;
             int before_rad;
+            int sample_kind;
 
             if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != buffer->receiver_rank) {
                 continue;
             }
+            sample_kind = prj_mpi_ghost_fill_kind_from_rel_level(slot->rel_level);
             before = record_count;
             before_rad = record_count_rad;
 
@@ -630,6 +705,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                 for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
                     for (k = slot->recv_loc_start[2]; k < slot->recv_loc_end[2]; ++k) {
                         record_count += 1;
+                        record_count_by_kind[sample_kind] += 1;
                     }
                 }
             }
@@ -637,6 +713,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                 for (j = slot->recv_loc_start_rad[1]; j < slot->recv_loc_end_rad[1]; ++j) {
                     for (k = slot->recv_loc_start_rad[2]; k < slot->recv_loc_end_rad[2]; ++k) {
                         record_count_rad += 1;
+                        record_count_rad_by_kind[sample_kind] += 1;
                     }
                 }
             }
@@ -685,12 +762,13 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             return 1;
         }
     }
-    if (record_count > 0 || record_count_rad > 0) {
-        size_t bytes = (size_t)record_count * (size_t)PRJ_MPI_GHOST_NVAR_HE
-            + (size_t)record_count_rad * (size_t)PRJ_MPI_GHOST_NVAR_RAD;
-        buffer->cell_buffer_send = (double *)calloc(bytes > 0 ? bytes : 1,
-            sizeof(*buffer->cell_buffer_send));
-        if (buffer->cell_buffer_send == 0) {
+    for (fill_kind = 0; fill_kind < PRJ_MPI_GHOST_FILL_KIND_N; ++fill_kind) {
+        buffer->cell_send_count_by_kind[fill_kind] = record_count_by_kind[fill_kind];
+        buffer->cell_send_count_rad_by_kind[fill_kind] = record_count_rad_by_kind[fill_kind];
+        if (prj_mpi_alloc_ghost_value_buffer(
+                &buffer->cell_buffer_send_by_kind[fill_kind],
+                record_count_by_kind[fill_kind],
+                record_count_rad_by_kind[fill_kind]) != 0) {
             free(send_sizes);
             free(send_sizes_rad);
             for (axis = 0; axis < 3; ++axis) {
@@ -831,16 +909,6 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             }
         }
     }
-    if (cell_size_total > 0 || cell_size_total_rad > 0) {
-        size_t bytes = (size_t)cell_size_total * (size_t)PRJ_MPI_GHOST_NVAR_HE
-            + (size_t)cell_size_total_rad * (size_t)PRJ_MPI_GHOST_NVAR_RAD;
-        buffer->cell_buffer_recv = (double *)calloc(bytes > 0 ? bytes : 1,
-            sizeof(*buffer->cell_buffer_recv));
-        if (buffer->cell_buffer_recv == 0) {
-            return 1;
-        }
-    }
-
     for (axis = 0; axis < 3; ++axis) {
         MPI_Irecv(buffer->cell_data_idx_recv[axis], cell_size_total, MPI_INT, buffer->receiver_rank, 110 + axis,
             MPI_COMM_WORLD, &requests[req_n++]);
@@ -852,6 +920,16 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             MPI_COMM_WORLD, &requests[req_n++]);
     }
     MPI_Waitall(req_n, requests, MPI_STATUSES_IGNORE);
+    prj_mpi_count_recv_ghosts_by_kind(buffer, cell_size_total,
+        cell_size_total_rad);
+    for (fill_kind = 0; fill_kind < PRJ_MPI_GHOST_FILL_KIND_N; ++fill_kind) {
+        if (prj_mpi_alloc_ghost_value_buffer(
+                &buffer->cell_buffer_recv_by_kind[fill_kind],
+                buffer->cell_recv_count_by_kind[fill_kind],
+                buffer->cell_recv_count_rad_by_kind[fill_kind]) != 0) {
+            return 1;
+        }
+    }
     return 0;
 #else
     (void)mesh;
@@ -889,18 +967,26 @@ static double prj_mpi_prolongate_cell_value(const double *src, int var,
 static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buffer *buffer,
     int stage, int fill_kind)
 {
+    double *send_buffer;
     int bidx;
     int pos;
     int pos_rad;
     int rad_offset;
     int record_count_total;
 
-    if (mesh == 0 || mpi == 0 || buffer == 0 || buffer->cell_buffer_send == 0) {
+    if (mesh == 0 || mpi == 0 || buffer == 0 ||
+        !prj_mpi_ghost_fill_kind_ok(fill_kind)) {
+        return;
+    }
+    send_buffer = buffer->cell_buffer_send_by_kind[fill_kind];
+    if (send_buffer == 0 &&
+        (buffer->cell_send_count_by_kind[fill_kind] > 0 ||
+         buffer->cell_send_count_rad_by_kind[fill_kind] > 0)) {
         return;
     }
 
     /* Radiation stream lives directly after the hydro+EOS stream in the same buffer. */
-    record_count_total = prj_mpi_buffer_record_total(buffer->cell_data_size_send, buffer->number);
+    record_count_total = buffer->cell_send_count_by_kind[fill_kind];
     rad_offset = record_count_total * PRJ_MPI_GHOST_NVAR_HE;
 
     pos = 0;
@@ -922,12 +1008,12 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
             int k;
             int v;
 
-            int sample_kind;
-            if (slot->rel_level == 0) { sample_kind = PRJ_BOUNDARY_FILL_SAME_LEVEL; }
-            else if (slot->rel_level < 0) { sample_kind = PRJ_BOUNDARY_FILL_RESTRICTION; }
-            else { sample_kind = PRJ_BOUNDARY_FILL_PROLONGATION; }
+            int sample_kind = prj_mpi_ghost_fill_kind_from_rel_level(slot->rel_level);
 
             if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != buffer->receiver_rank) {
+                continue;
+            }
+            if (sample_kind != fill_kind) {
                 continue;
             }
 
@@ -935,29 +1021,20 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
             for (i = 0; i < slot->recv_loc_end[0]-slot->recv_loc_start[0]; ++i) {
                 for (j = 0; j < slot->recv_loc_end[1]-slot->recv_loc_start[1]; ++j) {
                     for (k = 0; k < slot->recv_loc_end[2]-slot->recv_loc_start[2]; ++k) {
-                        if (sample_kind != fill_kind) {
-                            for (v = 0; v < PRJ_NHYDRO; ++v) {
-                                buffer->cell_buffer_send[pos++] = 0.0;
-                            }
-                            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                buffer->cell_buffer_send[pos++] = 0.0;
-                            }
-                            continue;
-                        }
                         if (slot->rel_level==0){
                             // Same level
                             for (v = 0; v < PRJ_NHYDRO; ++v) {
-                                buffer->cell_buffer_send[pos++] =
+                                send_buffer[pos++] =
                                     W_send[VIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                             }
                             for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                buffer->cell_buffer_send[pos++] =
+                                send_buffer[pos++] =
                                     eos_send[EIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                             }
                         } else if (slot->rel_level==-1) {
                             // Neighbor is coarser, restriction
                             for (v = 0; v < PRJ_NHYDRO; ++v) {
-                                buffer->cell_buffer_send[pos++] =
+                                send_buffer[pos++] =
                                     0.125*
                                     (W_send[VIDX(v, 2*i+slot->send_loc_start[0],
                                                     2*j+slot->send_loc_start[1],
@@ -985,7 +1062,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                                                     2*k+slot->send_loc_start[2]+1)]);
                             }
                             for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                buffer->cell_buffer_send[pos++] =
+                                send_buffer[pos++] =
                                     0.125*
                                     (eos_send[EIDX(v, 2*i+slot->send_loc_start[0],
                                                     2*j+slot->send_loc_start[1],
@@ -1020,7 +1097,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                             target[1] = (j % 2 == 0) ? 0.25 : -0.25;
                             target[2] = (k % 2 == 0) ? 0.25 : -0.25;
                             for (v = 0; v < PRJ_NHYDRO; ++v) {
-                                buffer->cell_buffer_send[pos++] =
+                                send_buffer[pos++] =
                                     prj_mpi_prolongate_cell_value(W_send, v,
                                         i/2+slot->send_loc_start[0],
                                         j/2+slot->send_loc_start[1],
@@ -1028,7 +1105,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                                         0, target, mesh->use_BJ);
                             }
                             for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                                buffer->cell_buffer_send[pos++] =
+                                send_buffer[pos++] =
                                     prj_mpi_prolongate_cell_value(eos_send, v,
                                         i/2+slot->send_loc_start[0],
                                         j/2+slot->send_loc_start[1],
@@ -1050,18 +1127,18 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                     for (k = 0; k < slot->recv_loc_end_rad[2]-slot->recv_loc_start_rad[2]; ++k) {
                         if (sample_kind != fill_kind) {
                             for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                                buffer->cell_buffer_send[pos_rad++] = 0.0;
+                                send_buffer[pos_rad++] = 0.0;
                             }
                             continue;
                         }
                         if (slot->rel_level==0){
                             for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                                buffer->cell_buffer_send[pos_rad++] =
+                                send_buffer[pos_rad++] =
                                     W_send[VIDX(v, i+slot->send_loc_start_rad[0], j+slot->send_loc_start_rad[1], k+slot->send_loc_start_rad[2])];
                             }
                         } else if (slot->rel_level==-1) {
                             for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                                buffer->cell_buffer_send[pos_rad++] =
+                                send_buffer[pos_rad++] =
                                     0.125*
                                     (W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
                                                     2*j+slot->send_loc_start_rad[1],
@@ -1098,7 +1175,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                             target[1] = (aj % 2 == 0) ? 0.25 : -0.25;
                             target[2] = (ak % 2 == 0) ? 0.25 : -0.25;
                             for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                                buffer->cell_buffer_send[pos_rad++] =
+                                send_buffer[pos_rad++] =
                                     prj_mpi_prolongate_cell_value(W_send, v,
                                         i/2+slot->send_loc_start_rad[0],
                                         j/2+slot->send_loc_start_rad[1],
@@ -1115,6 +1192,103 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
 
     (void)pos;
     (void)pos_rad;
+}
+
+static void prj_mpi_unpack_ghost_values(prj_mesh *mesh, prj_mpi *mpi,
+    prj_mpi_buffer *buffer, int stage, int fill_kind)
+{
+    double *recv_buffer;
+    int total;
+    int total_rad;
+    int pos;
+    int pos_rad;
+    int i;
+
+    if (mesh == 0 || mpi == 0 || buffer == 0 ||
+        !prj_mpi_ghost_fill_kind_ok(fill_kind)) {
+        return;
+    }
+    recv_buffer = buffer->cell_buffer_recv_by_kind[fill_kind];
+    if (recv_buffer == 0 &&
+        (buffer->cell_recv_count_by_kind[fill_kind] > 0 ||
+         buffer->cell_recv_count_rad_by_kind[fill_kind] > 0)) {
+        return;
+    }
+    total = prj_mpi_buffer_recv_count(buffer);
+    total = prj_mpi_buffer_record_total(buffer->cell_data_size_recv, total);
+    total_rad = prj_mpi_buffer_recv_count(buffer);
+    total_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_recv_rad,
+        total_rad);
+    pos = 0;
+    pos_rad = buffer->cell_recv_count_by_kind[fill_kind] *
+        PRJ_MPI_GHOST_NVAR_HE;
+
+    for (i = 0; i < total; ++i) {
+        int block_id = buffer->cell_data_idx_recv[0][i];
+        int code = buffer->cell_data_idx_recv[1][i];
+        int sample_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv[2][i]);
+        int ii;
+        int jj;
+        int kk;
+        int v;
+        prj_block *block;
+        double *dst;
+
+        if (sample_kind != fill_kind) {
+            continue;
+        }
+        if (block_id < 0 || block_id >= mesh->nblocks) {
+            pos += PRJ_MPI_GHOST_NVAR_HE;
+            continue;
+        }
+        block = &mesh->blocks[block_id];
+        if (block->rank != mpi->rank || block->W == 0 || block->eosvar == 0) {
+            pos += PRJ_MPI_GHOST_NVAR_HE;
+            continue;
+        }
+        dst = prj_mpi_stage_array(block, stage);
+        prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
+            dst[VIDX(v, ii, jj, kk)] = recv_buffer[pos++];
+        }
+        for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+            block->eosvar[EIDX(v, ii, jj, kk)] = recv_buffer[pos++];
+        }
+    }
+#if PRJ_NRAD > 0
+    for (i = 0; i < total_rad; ++i) {
+        int block_id = buffer->cell_data_idx_recv_rad[0][i];
+        int code = buffer->cell_data_idx_recv_rad[1][i];
+        int sample_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv_rad[2][i]);
+        int ii;
+        int jj;
+        int kk;
+        int v;
+        prj_block *block;
+        double *dst;
+
+        if (sample_kind != fill_kind) {
+            continue;
+        }
+        if (block_id < 0 || block_id >= mesh->nblocks) {
+            pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
+            continue;
+        }
+        block = &mesh->blocks[block_id];
+        if (block->rank != mpi->rank || block->W == 0) {
+            pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
+            continue;
+        }
+        dst = prj_mpi_stage_array(block, stage);
+        prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
+        for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+            dst[VIDX(v, ii, jj, kk)] = recv_buffer[pos_rad++];
+        }
+    }
+#else
+    (void)pos_rad;
+    (void)total_rad;
+#endif
 }
 
 #if PRJ_MHD
@@ -3479,7 +3653,8 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
     MPI_Request *requests;
     int request_count;
 
-    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1 ||
+    if (mesh == 0 || mpi == 0 || !prj_mpi_ghost_fill_kind_ok(fill_kind) ||
+        mpi->totrank <= 1 ||
         mpi->neighbor_number == 0) {
         return;
     }
@@ -3492,28 +3667,22 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
     PRJ_TIMER_CURRENT_START("mpi_exchange_ghosts");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int record_count;
-        int record_count_rad;
-        int recv_count;
-        int cell_size_total;
-        int cell_size_total_rad;
+        int record_count = buffer->cell_send_count_by_kind[fill_kind];
+        int record_count_rad = buffer->cell_send_count_rad_by_kind[fill_kind];
+        int cell_size_total = buffer->cell_recv_count_by_kind[fill_kind];
+        int cell_size_total_rad = buffer->cell_recv_count_rad_by_kind[fill_kind];
         int send_total;
         int recv_total;
 
-        record_count = prj_mpi_buffer_record_total(buffer->cell_data_size_send, buffer->number);
-        record_count_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_send_rad, buffer->number);
-        recv_count = prj_mpi_buffer_recv_count(buffer);
-        cell_size_total = prj_mpi_buffer_record_total(buffer->cell_data_size_recv, recv_count);
-        cell_size_total_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_recv_rad, recv_count);
         send_total = record_count * PRJ_MPI_GHOST_NVAR_HE + record_count_rad * PRJ_MPI_GHOST_NVAR_RAD;
         recv_total = cell_size_total * PRJ_MPI_GHOST_NVAR_HE + cell_size_total_rad * PRJ_MPI_GHOST_NVAR_RAD;
         PRJ_TIMER_CURRENT_START("mpi_ghost_pack");
         prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
         PRJ_TIMER_CURRENT_STOP("mpi_ghost_pack");
 
-        MPI_Irecv(buffer->cell_buffer_recv, recv_total, MPI_DOUBLE, buffer->receiver_rank, 120,
+        MPI_Irecv(buffer->cell_buffer_recv_by_kind[fill_kind], recv_total, MPI_DOUBLE, buffer->receiver_rank, 120,
             MPI_COMM_WORLD, &requests[request_count++]);
-        MPI_Isend(buffer->cell_buffer_send, send_total, MPI_DOUBLE, buffer->receiver_rank, 120,
+        MPI_Isend(buffer->cell_buffer_send_by_kind[fill_kind], send_total, MPI_DOUBLE, buffer->receiver_rank, 120,
             MPI_COMM_WORLD, &requests[request_count++]);
     }
     if (request_count > 0) {
@@ -3524,90 +3693,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
     PRJ_TIMER_CURRENT_START("mpi_ghost_unpack");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int total = 0;
-        int total_rad = 0;
-        int pos = 0;
-        int pos_rad;
-        int i;
-
-        for (i = 0; buffer->cell_data_size_recv != 0 && buffer->cell_data_size_recv[i] >= 0; ++i) {
-            total += buffer->cell_data_size_recv[i];
-        }
-        for (i = 0; buffer->cell_data_size_recv_rad != 0 && buffer->cell_data_size_recv_rad[i] >= 0; ++i) {
-            total_rad += buffer->cell_data_size_recv_rad[i];
-        }
-        pos_rad = total * PRJ_MPI_GHOST_NVAR_HE;
-
-        for (i = 0; i < total; ++i) {
-            int block_id = buffer->cell_data_idx_recv[0][i];
-            int code = buffer->cell_data_idx_recv[1][i];
-            int sample_code = buffer->cell_data_idx_recv[2][i];
-            int sample_kind = prj_mpi_sample_kind_from_code(sample_code);
-            int ii;
-            int jj;
-            int kk;
-            int v;
-            prj_block *block;
-            double *dst;
-
-            if (block_id < 0 || block_id >= mesh->nblocks) {
-                pos += PRJ_MPI_GHOST_NVAR_HE;
-                continue;
-            }
-            if (sample_kind < 0 || sample_kind != fill_kind) {
-                pos += PRJ_MPI_GHOST_NVAR_HE;
-                continue;
-            }
-            block = &mesh->blocks[block_id];
-            if (block->rank != mpi->rank || block->W == 0 || block->eosvar == 0) {
-                pos += PRJ_MPI_GHOST_NVAR_HE;
-                continue;
-            }
-            dst = prj_mpi_stage_array(block, stage);
-            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
-            for (v = 0; v < PRJ_NHYDRO; ++v) {
-                dst[VIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
-            }
-            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                block->eosvar[EIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
-            }
-        }
-#if PRJ_NRAD > 0
-        for (i = 0; i < total_rad; ++i) {
-            int block_id = buffer->cell_data_idx_recv_rad[0][i];
-            int code = buffer->cell_data_idx_recv_rad[1][i];
-            int sample_code = buffer->cell_data_idx_recv_rad[2][i];
-            int sample_kind = prj_mpi_sample_kind_from_code(sample_code);
-            int ii;
-            int jj;
-            int kk;
-            int v;
-            prj_block *block;
-            double *dst;
-
-            if (block_id < 0 || block_id >= mesh->nblocks) {
-                pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
-                continue;
-            }
-            if (sample_kind < 0 || sample_kind != fill_kind) {
-                pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
-                continue;
-            }
-            block = &mesh->blocks[block_id];
-            if (block->rank != mpi->rank || block->W == 0) {
-                pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
-                continue;
-            }
-            dst = prj_mpi_stage_array(block, stage);
-            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
-            for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                dst[VIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos_rad++];
-            }
-        }
-#else
-        (void)pos_rad;
-        (void)total_rad;
-#endif
+        prj_mpi_unpack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
     }
     PRJ_TIMER_CURRENT_STOP("mpi_ghost_unpack");
     PRJ_TIMER_CURRENT_STOP("mpi_exchange_ghosts");
@@ -3626,7 +3712,8 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
     MPI_Request *requests;
     int request_count;
 
-    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1 || mpi->neighbor_number == 0) {
+    if (mesh == 0 || mpi == 0 || !prj_mpi_ghost_fill_kind_ok(fill_kind) ||
+        mpi->totrank <= 1 || mpi->neighbor_number == 0) {
         return;
     }
     requests = (MPI_Request *)mpi->request_buffer;
@@ -3638,18 +3725,17 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
     PRJ_TIMER_CURRENT_START("mpi_exchange_ghosts_and_bf");
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int record_count = prj_mpi_buffer_record_total(buffer->cell_data_size_send, buffer->number);
-        int record_count_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_send_rad, buffer->number);
-        int recv_count = prj_mpi_buffer_recv_count(buffer);
-        int cell_size_total = prj_mpi_buffer_record_total(buffer->cell_data_size_recv, recv_count);
-        int cell_size_total_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_recv_rad, recv_count);
+        int record_count = buffer->cell_send_count_by_kind[fill_kind];
+        int record_count_rad = buffer->cell_send_count_rad_by_kind[fill_kind];
+        int cell_size_total = buffer->cell_recv_count_by_kind[fill_kind];
+        int cell_size_total_rad = buffer->cell_recv_count_rad_by_kind[fill_kind];
         int send_total = record_count * PRJ_MPI_GHOST_NVAR_HE + record_count_rad * PRJ_MPI_GHOST_NVAR_RAD;
         int recv_total = cell_size_total * PRJ_MPI_GHOST_NVAR_HE + cell_size_total_rad * PRJ_MPI_GHOST_NVAR_RAD;
 
         prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
-        MPI_Irecv(buffer->cell_buffer_recv, recv_total, MPI_DOUBLE,
+        MPI_Irecv(buffer->cell_buffer_recv_by_kind[fill_kind], recv_total, MPI_DOUBLE,
             buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
-        MPI_Isend(buffer->cell_buffer_send, send_total, MPI_DOUBLE,
+        MPI_Isend(buffer->cell_buffer_send_by_kind[fill_kind], send_total, MPI_DOUBLE,
             buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
 #if PRJ_MHD
         {
@@ -3688,88 +3774,7 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
     }
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int total = 0;
-        int total_rad = 0;
-        int pos = 0;
-        int pos_rad;
-        int i;
-
-        for (i = 0; buffer->cell_data_size_recv != 0 && buffer->cell_data_size_recv[i] >= 0; ++i) {
-            total += buffer->cell_data_size_recv[i];
-        }
-        for (i = 0; buffer->cell_data_size_recv_rad != 0 && buffer->cell_data_size_recv_rad[i] >= 0; ++i) {
-            total_rad += buffer->cell_data_size_recv_rad[i];
-        }
-        pos_rad = total * PRJ_MPI_GHOST_NVAR_HE;
-
-        for (i = 0; i < total; ++i) {
-            int block_id = buffer->cell_data_idx_recv[0][i];
-            int code = buffer->cell_data_idx_recv[1][i];
-            int sample_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv[2][i]);
-            int ii;
-            int jj;
-            int kk;
-            int v;
-            prj_block *block;
-            double *dst;
-
-            if (block_id < 0 || block_id >= mesh->nblocks) {
-                pos += PRJ_MPI_GHOST_NVAR_HE;
-                continue;
-            }
-            if (sample_kind < 0 || sample_kind != fill_kind) {
-                pos += PRJ_MPI_GHOST_NVAR_HE;
-                continue;
-            }
-            block = &mesh->blocks[block_id];
-            if (block->rank != mpi->rank || block->W == 0 || block->eosvar == 0) {
-                pos += PRJ_MPI_GHOST_NVAR_HE;
-                continue;
-            }
-            dst = prj_mpi_stage_array(block, stage);
-            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
-            for (v = 0; v < PRJ_NHYDRO; ++v) {
-                dst[VIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
-            }
-            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
-                block->eosvar[EIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos++];
-            }
-        }
-#if PRJ_NRAD > 0
-        for (i = 0; i < total_rad; ++i) {
-            int block_id = buffer->cell_data_idx_recv_rad[0][i];
-            int code = buffer->cell_data_idx_recv_rad[1][i];
-            int sample_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv_rad[2][i]);
-            int ii;
-            int jj;
-            int kk;
-            int v;
-            prj_block *block;
-            double *dst;
-
-            if (block_id < 0 || block_id >= mesh->nblocks) {
-                pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
-                continue;
-            }
-            if (sample_kind < 0 || sample_kind != fill_kind) {
-                pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
-                continue;
-            }
-            block = &mesh->blocks[block_id];
-            if (block->rank != mpi->rank || block->W == 0) {
-                pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
-                continue;
-            }
-            dst = prj_mpi_stage_array(block, stage);
-            prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
-            for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                dst[VIDX(v, ii, jj, kk)] = buffer->cell_buffer_recv[pos_rad++];
-            }
-        }
-#else
-        (void)pos_rad;
-        (void)total_rad;
-#endif
+        prj_mpi_unpack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
 #if PRJ_MHD
         {
             int recv_record_count = buffer->bf_recv_record_count[fill_kind];
