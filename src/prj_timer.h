@@ -9,16 +9,24 @@
 #define PRJ_TIMER_MAX_ENTRIES 256
 #endif
 
+#ifndef PRJ_TIMER_MAX_DEPTH
+#define PRJ_TIMER_MAX_DEPTH 128
+#endif
+
 typedef struct prj_timer_entry {
     const char *name;
     double total;
+    double inclusive_total;
     double start;
+    double inclusive_start;
     int count;
     int active;
 } prj_timer_entry;
 
 typedef struct prj_timer {
     prj_timer_entry entry[PRJ_TIMER_MAX_ENTRIES];
+    int stack[PRJ_TIMER_MAX_DEPTH];
+    int stack_depth;
     int nentry;
 } prj_timer;
 
@@ -32,6 +40,7 @@ int prj_timer_stop(prj_timer *timer, const char *name);
 int prj_timer_start_cached(prj_timer *timer, const char *name, int *cache_idx);
 int prj_timer_stop_cached(prj_timer *timer, const char *name, int *cache_idx);
 double prj_timer_total(const prj_timer *timer, const char *name);
+double prj_timer_inclusive_total(const prj_timer *timer, const char *name);
 int prj_timer_count(const prj_timer *timer, const char *name);
 void prj_timer_report(const prj_timer *timer, FILE *stream, int rank);
 
