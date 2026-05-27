@@ -682,15 +682,13 @@ int prj_riemann_face_axis(const prj_block *block, const double slot_xmin[3],
     return axis;
 }
 
-void prj_riemann_flux_send(prj_mesh *mesh)
+void prj_riemann_flux_send(prj_mesh *mesh, const prj_mpi *mpi)
 {
-    prj_mpi *mpi;
     int my_rank;
     int bidx;
 
     if (mesh == 0) return;
 
-    mpi = prj_mpi_current();
     my_rank = (mpi != 0) ? mpi->rank : 0;
 
     /* ---- Phase 1: local (same-rank) coarse-fine correction ---- */

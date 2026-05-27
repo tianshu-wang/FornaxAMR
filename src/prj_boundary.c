@@ -4,8 +4,6 @@
 
 #include "prj.h"
 
-static prj_mesh *prj_boundary_active_mesh = 0;
-
 static const char *prj_boundary_combined_mpi_timer_name(int fill_kind)
 {
     switch (fill_kind) {
@@ -103,10 +101,8 @@ static const double *prj_boundary_stage_array_const(const prj_block *block, int 
     return stage == 2 ? block->W1 : block->W;
 }
 
-static int prj_boundary_active_block(const prj_block *block)
+static int prj_boundary_active_block(const prj_mpi *mpi, const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && block->active == 1 &&
         (mpi == 0 || block->rank == mpi->rank);
 }
@@ -146,13 +142,13 @@ static double prj_boundary_read_value(const double *src, int var, int i, int j, 
     return src[is_eosvar != 0 ? EIDX(var, i, j, k) : VIDX(var, i, j, k)];
 }
 
-static int prj_boundary_use_BJ(void)
+static int prj_boundary_use_BJ(const prj_mesh *mesh)
 {
-    return prj_boundary_active_mesh != 0 && prj_boundary_active_mesh->use_BJ != 0;
+    return mesh != 0 && mesh->use_BJ != 0;
 }
 
 static double prj_boundary_prolongate_value(const double *src, int var,
-    int i, int j, int k, int is_eosvar, const double target[3])
+    int i, int j, int k, int is_eosvar, const double target[3], int use_BJ)
 {
     double stencil[27];
     int di;
@@ -167,11 +163,11 @@ static double prj_boundary_prolongate_value(const double *src, int var,
             }
         }
     }
-    return prj_reconstruct_cell_for_prolongate(stencil, target, prj_boundary_use_BJ());
+    return prj_reconstruct_cell_for_prolongate(stencil, target, use_BJ);
 }
 
 static void prj_boundary_get_values(const prj_block *block, const double *src, int nvar, int is_eosvar,
-    const char *label, double x1, double x2, double x3, double *dst)
+    int use_BJ, const char *label, double x1, double x2, double x3, double *dst)
 {
     double ox[3];
     double frac[3];
@@ -240,7 +236,7 @@ static void prj_boundary_get_values(const prj_block *block, const double *src, i
             target[0] = (x1 - xcenter) / block->dx[0];
             target[1] = (x2 - ycenter) / block->dx[1];
             target[2] = (x3 - zcenter) / block->dx[2];
-            dst[v] = prj_boundary_prolongate_value(src, v, i, j, k, is_eosvar, target);
+            dst[v] = prj_boundary_prolongate_value(src, v, i, j, k, is_eosvar, target, use_BJ);
         } else {
             fprintf(stderr, "%s: mixed unsupported sample location (%g, %g, %g)\n", label, x1, x2, x3);
             exit(EXIT_FAILURE);
@@ -248,21 +244,24 @@ static void prj_boundary_get_values(const prj_block *block, const double *src, i
     }
 }
 
-void prj_boundary_get_prim(const prj_block *block, int stage, double x1, double x2, double x3, double *w)
+void prj_boundary_get_prim(const prj_mesh *mesh, const prj_block *block, int stage,
+    double x1, double x2, double x3, double *w)
 {
     prj_boundary_get_values(block, prj_boundary_stage_array_const(block, stage),
-        PRJ_NVAR_PRIM, 0, "prj_boundary_get_prim", x1, x2, x3, w);
+        PRJ_NVAR_PRIM, 0, prj_boundary_use_BJ(mesh), "prj_boundary_get_prim", x1, x2, x3, w);
 }
 
-void prj_boundary_get_eosvar(const prj_block *block, double x1, double x2, double x3, double *eosv)
+void prj_boundary_get_eosvar(const prj_mesh *mesh, const prj_block *block,
+    double x1, double x2, double x3, double *eosv)
 {
     prj_boundary_get_values(block, block != 0 ? block->eosvar : 0,
-        PRJ_NVAR_EOSVAR, 1, "prj_boundary_get_eosvar", x1, x2, x3, eosv);
+        PRJ_NVAR_EOSVAR, 1, prj_boundary_use_BJ(mesh), "prj_boundary_get_eosvar", x1, x2, x3, eosv);
 }
 
-void prj_boundary_send(prj_block *block, int stage, int fill_kind)
+void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int stage, int fill_kind)
 {
     int n;
+    int use_BJ = prj_boundary_use_BJ(mesh);
     
     double *W_send = stage == 2 ? block->W1 : block->W;
     double *eos_send = block->eosvar;
@@ -270,15 +269,15 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
     for (n = 0; n < 56; ++n) {
         int id = block->slot[n].id;
 
-        if (id >= 0 && prj_boundary_active_mesh != 0 && id < prj_boundary_active_mesh->nblocks) {
-            prj_block *neighbor = &prj_boundary_active_mesh->blocks[id];
+        if (id >= 0 && mesh != 0 && id < mesh->nblocks) {
+            prj_block *neighbor = &mesh->blocks[id];
             double *W_recv = stage == 2 ? neighbor->W1 : neighbor->W;
             double *eos_recv = neighbor->eosvar;
             int i;
             int j;
             int k;
 
-            if (!prj_boundary_active_block(neighbor)) {
+            if (!prj_boundary_active_block(mpi, neighbor)) {
                 continue;
             }
             if (neighbor->rank == block->rank) {
@@ -378,7 +377,7 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                                             i/2+slot->send_loc_start[0],
                                             j/2+slot->send_loc_start[1],
                                             k/2+slot->send_loc_start[2],
-                                            0, target);
+                                            0, target, use_BJ);
                                 }
                                 for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
                                     eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
@@ -386,7 +385,7 @@ void prj_boundary_send(prj_block *block, int stage, int fill_kind)
                                             i/2+slot->send_loc_start[0],
                                             j/2+slot->send_loc_start[1],
                                             k/2+slot->send_loc_start[2],
-                                            1, target);
+                                            1, target, use_BJ);
                                 }
                             } else {
                               fprintf(stderr,"slot->rel_level unrecognized: %d\n", slot->rel_level);
@@ -570,7 +569,7 @@ static void prj_boundary_apply_axis(double *dst, int axis, int side, int bc_type
 #endif
 }
 
-void prj_boundary_physical(const prj_bc *bc, prj_block *block, int stage, int mode)
+void prj_boundary_physical(const prj_mesh *mesh, const prj_bc *bc, prj_block *block, int stage, int mode)
 {
     double *dst = prj_boundary_stage_array(block, stage);
     const double tol = 1.0e-12;
@@ -579,22 +578,22 @@ void prj_boundary_physical(const prj_bc *bc, prj_block *block, int stage, int mo
     int face_only = mode == PRJ_BOUNDARY_PHYS_FACE_ONLY ? 1 : 0;
 
     for (pass = 0; pass < npass; ++pass) {
-        if (prj_abs_double(block->xmin[0] - prj_boundary_active_mesh->coord.x1min) < tol) {
+        if (prj_abs_double(block->xmin[0] - mesh->coord.x1min) < tol) {
             prj_boundary_apply_axis(dst, 0, 0, bc->bc_x1_inner, face_only);
         }
-        if (prj_abs_double(block->xmax[0] - prj_boundary_active_mesh->coord.x1max) < tol) {
+        if (prj_abs_double(block->xmax[0] - mesh->coord.x1max) < tol) {
             prj_boundary_apply_axis(dst, 0, 1, bc->bc_x1_outer, face_only);
         }
-        if (prj_abs_double(block->xmin[1] - prj_boundary_active_mesh->coord.x2min) < tol) {
+        if (prj_abs_double(block->xmin[1] - mesh->coord.x2min) < tol) {
             prj_boundary_apply_axis(dst, 1, 0, bc->bc_x2_inner, face_only);
         }
-        if (prj_abs_double(block->xmax[1] - prj_boundary_active_mesh->coord.x2max) < tol) {
+        if (prj_abs_double(block->xmax[1] - mesh->coord.x2max) < tol) {
             prj_boundary_apply_axis(dst, 1, 1, bc->bc_x2_outer, face_only);
         }
-        if (prj_abs_double(block->xmin[2] - prj_boundary_active_mesh->coord.x3min) < tol) {
+        if (prj_abs_double(block->xmin[2] - mesh->coord.x3min) < tol) {
             prj_boundary_apply_axis(dst, 2, 0, bc->bc_x3_inner, face_only);
         }
-        if (prj_abs_double(block->xmax[2] - prj_boundary_active_mesh->coord.x3max) < tol) {
+        if (prj_abs_double(block->xmax[2] - mesh->coord.x3max) < tol) {
             prj_boundary_apply_axis(dst, 2, 1, bc->bc_x3_outer, face_only);
         }
     }
@@ -850,7 +849,7 @@ static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
 }
 
 static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
-    prj_block *fine, int use_bf1, const prj_neighbor *slot)
+    prj_block *fine, int use_bf1, const prj_neighbor *slot, int use_BJ)
 {
     int dir;
     int max_count = 0;
@@ -924,7 +923,7 @@ static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
                 cbuf[2] = buf[2];
                 prj_mhd_prolong_bf_from_buffer(cbuf, buf_lo, buf_n,
                     coarse->dx, fine, ci, cj, ck, fi, fj, fk, use_bf1,
-                    prj_boundary_use_BJ());
+                    use_BJ);
             }
         }
     }
@@ -934,7 +933,7 @@ static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
     free(buf[2]);
 }
 
-static void prj_boundary_init_face_fidelity(prj_mesh *mesh)
+static void prj_boundary_init_face_fidelity(prj_mesh *mesh, const prj_mpi *mpi)
 {
     int bidx;
 
@@ -945,7 +944,7 @@ static void prj_boundary_init_face_fidelity(prj_mesh *mesh)
         prj_block *block = &mesh->blocks[bidx];
         int dir;
 
-        if (!prj_boundary_active_block(block)) {
+        if (!prj_boundary_active_block(mpi, block)) {
             continue;
         }
         prj_boundary_check_bf_storage(block, "prj_boundary_init_face_fidelity");
@@ -1034,42 +1033,43 @@ static void prj_boundary_apply_bf_axis(prj_block *block, int use_bf1,
     }
 }
 
-static void prj_boundary_physical_bf(const prj_bc *bc, prj_block *block, int use_bf1)
+static void prj_boundary_physical_bf(const prj_mesh *mesh, const prj_bc *bc, prj_block *block, int use_bf1)
 {
     const double tol = 1.0e-12;
     int pass;
 
-    if (bc == 0 || prj_boundary_active_mesh == 0) {
+    if (mesh == 0 || bc == 0) {
         fprintf(stderr, "prj_boundary_physical_bf: missing boundary context\n");
         exit(EXIT_FAILURE);
     }
     for (pass = 0; pass < 3; ++pass) {
-        if (prj_abs_double(block->xmin[0] - prj_boundary_active_mesh->coord.x1min) < tol) {
+        if (prj_abs_double(block->xmin[0] - mesh->coord.x1min) < tol) {
             prj_boundary_apply_bf_axis(block, use_bf1, 0, 0, bc->bc_x1_inner);
         }
-        if (prj_abs_double(block->xmax[0] - prj_boundary_active_mesh->coord.x1max) < tol) {
+        if (prj_abs_double(block->xmax[0] - mesh->coord.x1max) < tol) {
             prj_boundary_apply_bf_axis(block, use_bf1, 0, 1, bc->bc_x1_outer);
         }
-        if (prj_abs_double(block->xmin[1] - prj_boundary_active_mesh->coord.x2min) < tol) {
+        if (prj_abs_double(block->xmin[1] - mesh->coord.x2min) < tol) {
             prj_boundary_apply_bf_axis(block, use_bf1, 1, 0, bc->bc_x2_inner);
         }
-        if (prj_abs_double(block->xmax[1] - prj_boundary_active_mesh->coord.x2max) < tol) {
+        if (prj_abs_double(block->xmax[1] - mesh->coord.x2max) < tol) {
             prj_boundary_apply_bf_axis(block, use_bf1, 1, 1, bc->bc_x2_outer);
         }
-        if (prj_abs_double(block->xmin[2] - prj_boundary_active_mesh->coord.x3min) < tol) {
+        if (prj_abs_double(block->xmin[2] - mesh->coord.x3min) < tol) {
             prj_boundary_apply_bf_axis(block, use_bf1, 2, 0, bc->bc_x3_inner);
         }
-        if (prj_abs_double(block->xmax[2] - prj_boundary_active_mesh->coord.x3max) < tol) {
+        if (prj_abs_double(block->xmax[2] - mesh->coord.x3max) < tol) {
             prj_boundary_apply_bf_axis(block, use_bf1, 2, 1, bc->bc_x3_outer);
         }
     }
 }
 
-void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
+void prj_boundary_send_bf(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int use_bf1, int fill_kind)
 {
     int n;
+    int use_BJ = prj_boundary_use_BJ(mesh);
 
-    if (!prj_boundary_active_block(block)) {
+    if (!prj_boundary_active_block(mpi, block)) {
         return;
     }
     prj_boundary_check_bf_storage(block, "prj_boundary_send_bf");
@@ -1077,11 +1077,11 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
         int id = block->slot[n].id;
         prj_block *neighbor;
 
-        if (id < 0 || prj_boundary_active_mesh == 0 || id >= prj_boundary_active_mesh->nblocks) {
+        if (id < 0 || mesh == 0 || id >= mesh->nblocks) {
             continue;
         }
-        neighbor = &prj_boundary_active_mesh->blocks[id];
-        if (!prj_boundary_active_block(neighbor) || neighbor->rank != block->rank) {
+        neighbor = &mesh->blocks[id];
+        if (!prj_boundary_active_block(mpi, neighbor) || neighbor->rank != block->rank) {
             continue;
         }
         
@@ -1102,7 +1102,7 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
                 break;
             case PRJ_BOUNDARY_FILL_PROLONGATION:
                 if (slot->rel_level > 0) {
-                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
+                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot, use_BJ);
                 }
                 break;
             case PRJ_BOUNDARY_FILL_NONRECON:
@@ -1114,7 +1114,7 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
                 break;
             case PRJ_BOUNDARY_FILL_RECON:
                 if (slot->rel_level > 0) {
-                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
+                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot, use_BJ);
                 }
                 break;
             case PRJ_BOUNDARY_FILL_ALL:
@@ -1123,7 +1123,7 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
                 } else if (slot->rel_level < 0) {
                     prj_boundary_restrict_bf_to_coarse(block, neighbor, use_bf1, slot);
                 } else {
-                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot);
+                    prj_boundary_prolong_bf_to_fine(block, neighbor, use_bf1, slot, use_BJ);
                 }
                 break;
             default:
@@ -1134,9 +1134,8 @@ void prj_boundary_send_bf(prj_block *block, int use_bf1, int fill_kind)
     }
 }
 
-void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos *eos)
+void prj_boundary_fill_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int use_bf1, prj_eos *eos)
 {
-    prj_mpi *mpi = prj_mpi_current();
     const int fill_passes[3] = {
         PRJ_BOUNDARY_FILL_SAME_LEVEL,
         PRJ_BOUNDARY_FILL_RESTRICTION,
@@ -1149,14 +1148,13 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
         fprintf(stderr, "prj_boundary_fill_bf: mesh or bc is null\n");
         exit(EXIT_FAILURE);
     }
-    prj_boundary_active_mesh = mesh;
     PRJ_TIMER_CURRENT_START("boundary_bf_init_fidelity");
-    prj_boundary_init_face_fidelity(mesh);
+    prj_boundary_init_face_fidelity(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("boundary_bf_init_fidelity");
     PRJ_TIMER_CURRENT_START("boundary_bf_physical_pre");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_bf_physical_pre");
@@ -1167,8 +1165,8 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
 
         PRJ_TIMER_CURRENT_START(local_name);
         for (i = 0; i < mesh->nblocks; ++i) {
-            if (prj_boundary_active_block(&mesh->blocks[i])) {
-                prj_boundary_send_bf(&mesh->blocks[i], use_bf1, fill_kind);
+            if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+                prj_boundary_send_bf(mesh, mpi, &mesh->blocks[i], use_bf1, fill_kind);
             }
         }
         PRJ_TIMER_CURRENT_STOP(local_name);
@@ -1178,14 +1176,14 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
     }
     PRJ_TIMER_CURRENT_START("boundary_bf_physical_post");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_bf_physical_post");
     PRJ_TIMER_CURRENT_START("mhd_bf2bc");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_mhd_bf2bc(eos, &mesh->blocks[i], use_bf1);
         }
     }
@@ -1193,17 +1191,15 @@ void prj_boundary_fill_bf(prj_mesh *mesh, const prj_bc *bc, int use_bf1, prj_eos
 }
 #endif
 
-void prj_boundary_mpi_recv(prj_mesh *mesh, int stage, int fill_kind)
+void prj_boundary_mpi_recv(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     if (mpi == 0) {
         return;
     }
     prj_mpi_exchange_ghosts(mesh, mpi, stage, fill_kind);
 }
 
-void prj_boundary_fill_ghosts(prj_mesh *mesh, const prj_bc *bc, int stage)
+void prj_boundary_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int stage)
 {
     const int fill_passes[3] = {
         PRJ_BOUNDARY_FILL_SAME_LEVEL,
@@ -1213,11 +1209,10 @@ void prj_boundary_fill_ghosts(prj_mesh *mesh, const prj_bc *bc, int stage)
     int i;
     int pass;
 
-    prj_boundary_active_mesh = mesh;
     PRJ_TIMER_CURRENT_START("boundary_physical_face");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical(bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_physical_face");
@@ -1228,27 +1223,27 @@ void prj_boundary_fill_ghosts(prj_mesh *mesh, const prj_bc *bc, int stage)
 
         PRJ_TIMER_CURRENT_START(local_name);
         for (i = 0; i < mesh->nblocks; ++i) {
-            if (prj_boundary_active_block(&mesh->blocks[i])) {
-                prj_boundary_send(&mesh->blocks[i], stage, fill_kind);
+            if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+                prj_boundary_send(mesh, mpi, &mesh->blocks[i], stage, fill_kind);
             }
         }
         PRJ_TIMER_CURRENT_STOP(local_name);
         PRJ_TIMER_CURRENT_START(mpi_name);
-        prj_boundary_mpi_recv(mesh, stage, fill_kind);
+        prj_boundary_mpi_recv(mesh, mpi, stage, fill_kind);
         PRJ_TIMER_CURRENT_STOP(mpi_name);
     }
     PRJ_TIMER_CURRENT_START("boundary_physical_all");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical(bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_physical_all");
 }
 
-void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, const prj_bc *bc, int stage, int use_bf1, prj_eos *eos)
+void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc,
+    int stage, int use_bf1, prj_eos *eos)
 {
-    prj_mpi *mpi = prj_mpi_current();
     const int fill_passes[3] = {
         PRJ_BOUNDARY_FILL_SAME_LEVEL,
         PRJ_BOUNDARY_FILL_RESTRICTION,
@@ -1257,22 +1252,21 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, const prj_bc *bc, int stage
     int i;
     int pass;
 
-    prj_boundary_active_mesh = mesh;
     PRJ_TIMER_CURRENT_START("boundary_physical_face");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical(bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_physical_face");
 #if PRJ_MHD
     PRJ_TIMER_CURRENT_START("boundary_bf_init_fidelity");
-    prj_boundary_init_face_fidelity(mesh);
+    prj_boundary_init_face_fidelity(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("boundary_bf_init_fidelity");
     PRJ_TIMER_CURRENT_START("boundary_bf_physical_pre");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_bf_physical_pre");
@@ -1287,16 +1281,16 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, const prj_bc *bc, int stage
 
         PRJ_TIMER_CURRENT_START(ghost_local);
         for (i = 0; i < mesh->nblocks; ++i) {
-            if (prj_boundary_active_block(&mesh->blocks[i])) {
-                prj_boundary_send(&mesh->blocks[i], stage, fill_kind);
+            if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+                prj_boundary_send(mesh, mpi, &mesh->blocks[i], stage, fill_kind);
             }
         }
         PRJ_TIMER_CURRENT_STOP(ghost_local);
 #if PRJ_MHD
         PRJ_TIMER_CURRENT_START(prj_boundary_bf_local_timer_name(fill_kind));
         for (i = 0; i < mesh->nblocks; ++i) {
-            if (prj_boundary_active_block(&mesh->blocks[i])) {
-                prj_boundary_send_bf(&mesh->blocks[i], use_bf1, fill_kind);
+            if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+                prj_boundary_send_bf(mesh, mpi, &mesh->blocks[i], use_bf1, fill_kind);
             }
         }
         PRJ_TIMER_CURRENT_STOP(prj_boundary_bf_local_timer_name(fill_kind));
@@ -1307,22 +1301,22 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, const prj_bc *bc, int stage
     }
     PRJ_TIMER_CURRENT_START("boundary_physical_all");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical(bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_physical_all");
 #if PRJ_MHD
     PRJ_TIMER_CURRENT_START("boundary_bf_physical_post");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
-            prj_boundary_physical_bf(bc, &mesh->blocks[i], use_bf1);
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
+            prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
     PRJ_TIMER_CURRENT_STOP("boundary_bf_physical_post");
     PRJ_TIMER_CURRENT_START("mhd_bf2bc");
     for (i = 0; i < mesh->nblocks; ++i) {
-        if (prj_boundary_active_block(&mesh->blocks[i])) {
+        if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_mhd_bf2bc(eos, &mesh->blocks[i], use_bf1);
         }
     }

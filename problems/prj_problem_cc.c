@@ -235,10 +235,8 @@ static int prj_cc_init_amr_refine_block(const prj_block *block, void *userdata)
     return dx > ctx->scale_factor * Lmin ? 1 : 0;
 }
 
-static int prj_problem_local_block(const prj_block *block)
+static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && block->active == 1 &&
         (mpi == 0 || block->rank == mpi->rank);
 }
@@ -490,7 +488,7 @@ static void prj_cc_profile_sample(const prj_cc_profile *profile, double r,
     }
 }
 
-static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
+static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_cc_profile *profile)
 {
     int bidx;
 
@@ -500,7 +498,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
         int j;
         int k;
 
-        if (!prj_problem_local_block(block)) {
+        if (!prj_problem_local_block(mpi, block)) {
             continue;
         }
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -554,7 +552,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_cc_profile *profile)
     }
 }
 
-static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
+static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profile *profile)
 {
     unsigned long long prev_sig;
     unsigned long long next_sig;
@@ -586,24 +584,24 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
             r_min_domain, r_max_domain) == 0);
     }
 
-    prj_cc_fill_mesh(sim, profile);
-    prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
+    prj_cc_fill_mesh(sim, mpi, profile);
+    prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
 #if PRJ_USE_GRAVITY
-    prj_gravity_init(sim);
-    prj_gravity_monopole_reduce(&sim->mesh, 1);
-    prj_gravity_monopole_integrate(&sim->mesh);
+    prj_gravity_init(sim, mpi);
+    prj_gravity_monopole_reduce(&sim->mesh, mpi, 1);
+    prj_gravity_monopole_integrate(&sim->mesh, mpi);
 #endif
     if (sim->mesh.max_level == 0) {
         prj_cc_init_amr_ctx_free(&init_ctx);
         return;
     }
 
-    prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
-    prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
-    prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
+    prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1);
+    prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
+    prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
 #if PRJ_USE_GRAVITY
-    prj_gravity_monopole_reduce(&sim->mesh, 1);
-    prj_gravity_monopole_integrate(&sim->mesh);
+    prj_gravity_monopole_reduce(&sim->mesh, mpi, 1);
+    prj_gravity_monopole_integrate(&sim->mesh, mpi);
 #endif
 
     if (init_ctx_ok) {
@@ -613,30 +611,30 @@ static void prj_cc_initialize_amr(prj_sim *sim, const prj_cc_profile *profile)
 
     do {
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
-        prj_amr_adapt(&sim->mesh, &sim->eos);
-        prj_mpi_rebalance(&sim->mesh);
-        prj_cc_fill_mesh(sim, profile);
+        prj_amr_adapt(&sim->mesh, &sim->eos, mpi);
+        prj_mpi_rebalance(&sim->mesh, mpi);
+        prj_cc_fill_mesh(sim, mpi, profile);
 
-        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
-        prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
-        prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
+        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1);
+        prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
+        prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
     #if PRJ_USE_GRAVITY
-        prj_gravity_monopole_reduce(&sim->mesh, 1);
-        prj_gravity_monopole_integrate(&sim->mesh);
+        prj_gravity_monopole_reduce(&sim->mesh, mpi, 1);
+        prj_gravity_monopole_integrate(&sim->mesh, mpi);
     #endif
 
         next_sig = prj_problem_mesh_signature(&sim->mesh);
-    } while ((int)prj_mpi_global_sum((double)(next_sig != prev_sig ? 1 : 0)) != 0);
+    } while ((int)prj_mpi_global_sum(mpi, (double)(next_sig != prev_sig ? 1 : 0)) != 0);
 
     sim->mesh.amr_init_refine_fn = 0;
     sim->mesh.amr_init_refine_userdata = 0;
     prj_cc_init_amr_ctx_free(&init_ctx);
 
     prj_amr_init_neighbors(&sim->mesh);
-    prj_mpi_prepare(&sim->mesh, prj_mpi_current());
+    prj_mpi_prepare(&sim->mesh, mpi);
 }
 
-void prj_problem_cc(prj_sim *sim)
+void prj_problem_cc(prj_sim *sim, prj_mpi *mpi)
 {
     prj_cc_profile profile;
 
@@ -647,18 +645,18 @@ void prj_problem_cc(prj_sim *sim)
         strncpy(sim->eos.filename, PRJ_CC_EOS_PATH, sizeof(sim->eos.filename) - 1);
         sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
     }
-    prj_eos_init(&sim->eos);
+    prj_eos_init(&sim->eos, mpi);
     if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
         sim->mesh.max_level, &sim->coord) != 0) {
         return;
     }
-    prj_mpi_decompose(&sim->mesh);
-    prj_mpi_prepare(&sim->mesh, prj_mpi_current());
+    prj_mpi_decompose(&sim->mesh, mpi);
+    prj_mpi_prepare(&sim->mesh, mpi);
 
     if (prj_cc_profile_load(&profile, sim->progenitor_file) != 0) {
         return;
     }
-    prj_cc_initialize_amr(sim, &profile);
-    prj_mhd_init(sim);
+    prj_cc_initialize_amr(sim, mpi, &profile);
+    prj_mhd_init(sim, mpi);
     prj_cc_profile_free(&profile);
 }

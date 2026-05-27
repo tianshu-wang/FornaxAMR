@@ -643,17 +643,13 @@ static void prj_io_fail(const char *message)
     exit(1);
 }
 
-static int prj_io_is_local_owner(const prj_block *block)
+static int prj_io_is_local_owner(const prj_mpi *mpi, const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && (mpi == 0 || block->rank == mpi->rank);
 }
 
-static int prj_io_is_root_rank(void)
+static int prj_io_is_root_rank(const prj_mpi *mpi)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return mpi == 0 || mpi->rank == 0;
 }
 
@@ -662,10 +658,10 @@ static int prj_io_restart_write_data_block(const prj_block *block)
     return block != 0 && block->active == 1 && block->W != 0;
 }
 
-static int prj_io_restart_read_data_block(const prj_block *block)
+static int prj_io_restart_read_data_block(const prj_mpi *mpi, const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        prj_io_is_local_owner(block) && block->W != 0;
+        prj_io_is_local_owner(mpi, block) && block->W != 0;
 }
 
 #if PRJ_MHD
@@ -676,11 +672,9 @@ static int prj_io_restart_write_bf_block(const prj_block *block)
 }
 #endif
 
-static hid_t prj_io_create_file(const char *filename)
+static hid_t prj_io_create_file(const prj_mpi *mpi, const char *filename)
 {
 #if defined(PRJ_ENABLE_MPI)
-    prj_mpi *mpi = prj_mpi_current();
-
     if (mpi != 0 && mpi->totrank > 1) {
         hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
         hid_t file;
@@ -694,11 +688,9 @@ static hid_t prj_io_create_file(const char *filename)
     return H5Fcreate(filename, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
 }
 
-static hid_t prj_io_open_file_readonly(const char *filename)
+static hid_t prj_io_open_file_readonly(const prj_mpi *mpi, const char *filename)
 {
 #if defined(PRJ_ENABLE_MPI)
-    prj_mpi *mpi = prj_mpi_current();
-
     if (mpi != 0 && mpi->totrank > 1) {
         hid_t fapl = H5Pcreate(H5P_FILE_ACCESS);
         hid_t file;
@@ -712,11 +704,9 @@ static hid_t prj_io_open_file_readonly(const char *filename)
     return H5Fopen(filename, H5F_ACC_RDONLY, H5P_DEFAULT);
 }
 
-static hid_t prj_io_data_xfer_plist(void)
+static hid_t prj_io_data_xfer_plist(const prj_mpi *mpi)
 {
 #if defined(PRJ_ENABLE_MPI)
-    prj_mpi *mpi = prj_mpi_current();
-
     if (mpi != 0 && mpi->totrank > 1) {
         hid_t dxpl = H5Pcreate(H5P_DATASET_XFER);
 
@@ -743,12 +733,12 @@ static hid_t prj_io_dump_real_hdf5_type(void)
 #endif
 }
 
-static void prj_io_write_hyperslab(hid_t dset, hid_t mem_type, int ndims,
+static void prj_io_write_hyperslab(hid_t dset, const prj_mpi *mpi, hid_t mem_type, int ndims,
     const hsize_t *start, const hsize_t *count, const void *buffer)
 {
     hid_t mem_space = H5Screate_simple(ndims, count, count);
     hid_t file_space = H5Dget_space(dset);
-    hid_t dxpl = prj_io_data_xfer_plist();
+    hid_t dxpl = prj_io_data_xfer_plist(mpi);
 
     H5Sselect_hyperslab(file_space, H5S_SELECT_SET, start, 0, count, 0);
     H5Dwrite(dset, mem_type, mem_space, file_space, dxpl, buffer);
@@ -757,12 +747,12 @@ static void prj_io_write_hyperslab(hid_t dset, hid_t mem_type, int ndims,
     H5Sclose(mem_space);
 }
 
-static void prj_io_read_hyperslab(hid_t dset, hid_t mem_type, int ndims,
+static void prj_io_read_hyperslab(hid_t dset, const prj_mpi *mpi, hid_t mem_type, int ndims,
     const hsize_t *start, const hsize_t *count, void *buffer)
 {
     hid_t mem_space = H5Screate_simple(ndims, count, count);
     hid_t file_space = H5Dget_space(dset);
-    hid_t dxpl = prj_io_data_xfer_plist();
+    hid_t dxpl = prj_io_data_xfer_plist(mpi);
 
     H5Sselect_hyperslab(file_space, H5S_SELECT_SET, start, 0, count, 0);
     H5Dread(dset, mem_type, mem_space, file_space, dxpl, buffer);
@@ -1031,7 +1021,7 @@ int prj_io_find_latest_restart(const char *dir, char *out_filename, size_t out_s
     return 0;
 }
 
-void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_count,
+void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time, int step, int dump_count,
     double last_output_time, double last_restart_time, double dt, const double x_com[3])
 {
     char filename[64];
@@ -1052,7 +1042,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     int bidx;
 
     snprintf(filename, sizeof(filename), "output/restart_%08d.h5", step);
-    if (prj_io_is_root_rank()) {
+    if (prj_io_is_root_rank(mpi)) {
         fprintf(stderr, "save restart file %s\n", filename);
     }
     dims_data[0] = (hsize_t)mesh->nblocks;
@@ -1065,7 +1055,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     dims_bf[1] = 3;
     dims_bf[2] = (hsize_t)PRJ_BLOCK_NFACES;
 #endif
-    file = prj_io_create_file(filename);
+    file = prj_io_create_file(mpi, filename);
     prj_io_write_attr_double(file, "time", time);
     prj_io_write_attr_int(file, "step", step);
     prj_io_write_attr_int(file, "dump_count", dump_count);
@@ -1099,7 +1089,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     space_bf = H5Screate_simple(3, dims_bf, dims_bf);
     dset_bf = H5Dcreate2(file, "Bf", H5T_NATIVE_DOUBLE, space_bf, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 #endif
-    if (prj_io_is_root_rank() && mesh->nblocks > 0) {
+    if (prj_io_is_root_rank(mpi) && mesh->nblocks > 0) {
         hsize_t start_meta[2] = {0, 0};
         hsize_t count_meta[2] = {(hsize_t)mesh->nblocks, (hsize_t)PRJ_IO_METADATA_SIZE};
         double *metadata = (double *)calloc((size_t)mesh->nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
@@ -1110,7 +1100,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
         for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
             prj_io_fill_metadata(&mesh->blocks[bidx], &metadata[(size_t)bidx * PRJ_IO_METADATA_SIZE]);
         }
-        prj_io_write_hyperslab(dset_meta, H5T_NATIVE_DOUBLE, 2, start_meta, count_meta, metadata);
+        prj_io_write_hyperslab(dset_meta, mpi, H5T_NATIVE_DOUBLE, 2, start_meta, count_meta, metadata);
         free(metadata);
     }
     bidx = 0;
@@ -1164,7 +1154,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
                 }
             }
         }
-        prj_io_write_hyperslab(dset_data, H5T_NATIVE_DOUBLE, 3, start_data, count_data, buffer);
+        prj_io_write_hyperslab(dset_data, mpi, H5T_NATIVE_DOUBLE, 3, start_data, count_data, buffer);
         free(buffer);
     }
 #if PRJ_MHD
@@ -1211,7 +1201,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
                 }
             }
         }
-        prj_io_write_hyperslab(dset_bf, H5T_NATIVE_DOUBLE, 3, start_bf, count_bf, buffer);
+        prj_io_write_hyperslab(dset_bf, mpi, H5T_NATIVE_DOUBLE, 3, start_bf, count_bf, buffer);
         free(buffer);
     }
 #endif
@@ -1226,7 +1216,7 @@ void prj_io_write_restart(const prj_mesh *mesh, double time, int step, int dump_
     H5Fclose(file);
 }
 
-void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filename,
+void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const char *filename,
     double *time, int *step, int *dump_count, double *last_output_time, double *last_restart_time,
     double *dt, double x_com[3])
 {
@@ -1245,14 +1235,13 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     prj_coord coord;
     double *metadata;
     int bidx;
-    prj_mpi *mpi = prj_mpi_current();
     prj_bc bc = {
         PRJ_BC_OUTFLOW, PRJ_BC_OUTFLOW,
         PRJ_BC_OUTFLOW, PRJ_BC_OUTFLOW,
         PRJ_BC_OUTFLOW, PRJ_BC_OUTFLOW
     };
 
-    file = prj_io_open_file_readonly(filename);
+    file = prj_io_open_file_readonly(mpi, filename);
     prj_io_read_attr_double(file, "time", time);
     prj_io_read_attr_int(file, "step", step);
     if (dump_count != 0) {
@@ -1326,7 +1315,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
         prj_io_fail("prj_io_read_restart: Morton lookup rebuild failed");
     }
 
-    prj_mpi_decompose(mesh);
+    prj_mpi_decompose(mesh, mpi);
     if (mpi != 0) {
         prj_mpi_prepare(mesh, mpi);
     }
@@ -1352,11 +1341,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
         int k;
         size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
 
-        while (bidx < nblocks && !prj_io_restart_read_data_block(&mesh->blocks[bidx])) {
+        while (bidx < nblocks && !prj_io_restart_read_data_block(mpi, &mesh->blocks[bidx])) {
             bidx += 1;
         }
         run_start = bidx;
-        while (bidx < nblocks && prj_io_restart_read_data_block(&mesh->blocks[bidx])) {
+        while (bidx < nblocks && prj_io_restart_read_data_block(mpi, &mesh->blocks[bidx])) {
             bidx += 1;
         }
         run_len = bidx - run_start;
@@ -1373,7 +1362,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
         if (buffer == 0) {
             prj_io_fail("prj_io_read_restart: allocation failed");
         }
-        prj_io_read_hyperslab(dset_data, H5T_NATIVE_DOUBLE, 3, start_data, count_data, buffer);
+        prj_io_read_hyperslab(dset_data, mpi, H5T_NATIVE_DOUBLE, 3, start_data, count_data, buffer);
         for (ridx = 0; ridx < run_len; ++ridx) {
             prj_block *block = &mesh->blocks[run_start + ridx];
 
@@ -1410,7 +1399,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
                     prj_io_fail("prj_io_read_restart: missing MHD block storage");
                 }
             }
-            prj_io_read_hyperslab(dset_bf, H5T_NATIVE_DOUBLE, 3, start_bf, count_bf, bf_buffer);
+            prj_io_read_hyperslab(dset_bf, mpi, H5T_NATIVE_DOUBLE, 3, start_bf, count_bf, bf_buffer);
             for (ridx = 0; ridx < run_len; ++ridx) {
                 prj_block *block = &mesh->blocks[run_start + ridx];
 
@@ -1459,16 +1448,16 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, const char *filenam
     H5Dclose(dset_data);
     H5Fclose(file);
     prj_mesh_update_max_active_level(mesh);
-    if (prj_io_is_root_rank()) {
+    if (prj_io_is_root_rank(mpi)) {
         fprintf(stderr, "read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
     }
-    prj_eos_fill_active_cells(mesh, (prj_eos *)eos, 1);
-    prj_boundary_fill_ghosts(mesh, &bc, 1);
-    prj_eos_fill_mesh(mesh, (prj_eos *)eos, 1);
+    prj_eos_fill_active_cells(mesh, (prj_eos *)eos, mpi, 1);
+    prj_boundary_fill_ghosts(mesh, mpi, &bc, 1);
+    prj_eos_fill_mesh(mesh, (prj_eos *)eos, mpi, 1);
     free(metadata);
 }
 
-void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double time)
+void prj_io_write_dump(const prj_mesh *mesh, const prj_mpi *mpi, int dump_index, int step, double time)
 {
     char filename[256];
     hid_t file;
@@ -1505,15 +1494,16 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
     hid_t dump_real_type = prj_io_dump_real_hdf5_type();
 
     snprintf(filename, sizeof(filename), "output/dump_%05d.h5", dump_index);
-    if (prj_io_is_root_rank()) {
+    if (prj_io_is_root_rank(mpi)) {
         fprintf(stderr, "save dump file %s\n", filename);
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        if (mesh->blocks[bidx].id >= 0 && mesh->blocks[bidx].active == 1 && prj_io_is_local_owner(&mesh->blocks[bidx])) {
+        if (mesh->blocks[bidx].id >= 0 && mesh->blocks[bidx].active == 1 &&
+            prj_io_is_local_owner(mpi, &mesh->blocks[bidx])) {
             local_active += 1;
         }
     }
-    nactive = (int)prj_mpi_global_sum((double)local_active);
+    nactive = (int)prj_mpi_global_sum(mpi, (double)local_active);
     dims_level[0] = (hsize_t)nactive;
     dims_coord[0] = (hsize_t)nactive;
     dims_coord[1] = 3;
@@ -1535,7 +1525,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
     dims_bf[X3DIR][2] = PRJ_BLOCK_SIZE;
     dims_bf[X3DIR][3] = PRJ_BLOCK_SIZE + 1;
 #endif
-    file = prj_io_create_file(filename);
+    file = prj_io_create_file(mpi, filename);
     prj_io_write_attr_int(file, "dump_index", dump_index);
     prj_io_write_attr_int(file, "step", step);
     prj_io_write_attr_double(file, "time", time);
@@ -1573,8 +1563,6 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
     {
         int offset = 0;
 #if defined(PRJ_ENABLE_MPI)
-        prj_mpi *mpi = prj_mpi_current();
-
         if (mpi != 0 && mpi->totrank > 1) {
             MPI_Exscan(&local_active, &offset, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
             if (mpi->rank == 0) {
@@ -1596,7 +1584,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
         for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
             const prj_block *block = &mesh->blocks[bidx];
 
-            if (block->id < 0 || block->active != 1 || !prj_io_is_local_owner(block)) {
+            if (block->id < 0 || block->active != 1 || !prj_io_is_local_owner(mpi, block)) {
                 continue;
             }
             if (block->W == 0) {
@@ -1619,13 +1607,13 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
             hsize_t start_level[1] = {(hsize_t)active_idx};
             hsize_t count_level[1] = {(hsize_t)local_active};
 
-            prj_io_write_hyperslab(dset_level, H5T_NATIVE_INT, 1, start_level, count_level, level_buffer);
+            prj_io_write_hyperslab(dset_level, mpi, H5T_NATIVE_INT, 1, start_level, count_level, level_buffer);
         }
         {
             hsize_t start_coord[2] = {(hsize_t)active_idx, 0};
             hsize_t count_coord[2] = {(hsize_t)local_active, 3};
 
-            prj_io_write_hyperslab(dset_coord, H5T_NATIVE_DOUBLE, 2, start_coord, count_coord, coord_buffer);
+            prj_io_write_hyperslab(dset_coord, mpi, H5T_NATIVE_DOUBLE, 2, start_coord, count_coord, coord_buffer);
         }
 #if PRJ_DUMP_SINGLE_PRECISION
         {
@@ -1660,7 +1648,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
                         }
                     }
                 }
-                prj_io_write_hyperslab(dset_var[var], H5T_NATIVE_FLOAT, 4, start_var, count_var, buffer);
+                prj_io_write_hyperslab(dset_var[var], mpi, H5T_NATIVE_FLOAT, 4, start_var, count_var, buffer);
             }
             for (var = 0; var < PRJ_NVAR_EOSVAR; ++var) {
                 hsize_t start_var[4] = {(hsize_t)active_idx, 0, 0, 0};
@@ -1683,7 +1671,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
                         }
                     }
                 }
-                prj_io_write_hyperslab(dset_eosvar[var], H5T_NATIVE_FLOAT, 4, start_var, count_var, buffer);
+                prj_io_write_hyperslab(dset_eosvar[var], mpi, H5T_NATIVE_FLOAT, 4, start_var, count_var, buffer);
             }
             free(buffer);
         }
@@ -1720,7 +1708,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
                         }
                     }
                 }
-                prj_io_write_hyperslab(dset_var[var], H5T_NATIVE_DOUBLE, 4, start_var, count_var, buffer);
+                prj_io_write_hyperslab(dset_var[var], mpi, H5T_NATIVE_DOUBLE, 4, start_var, count_var, buffer);
             }
             for (var = 0; var < PRJ_NVAR_EOSVAR; ++var) {
                 hsize_t start_var[4] = {(hsize_t)active_idx, 0, 0, 0};
@@ -1743,7 +1731,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
                         }
                     }
                 }
-                prj_io_write_hyperslab(dset_eosvar[var], H5T_NATIVE_DOUBLE, 4, start_var, count_var, buffer);
+                prj_io_write_hyperslab(dset_eosvar[var], mpi, H5T_NATIVE_DOUBLE, 4, start_var, count_var, buffer);
             }
             free(buffer);
         }
@@ -1785,7 +1773,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
                             }
                         }
                     }
-                    prj_io_write_hyperslab(dset_bf[dir], H5T_NATIVE_FLOAT, 4, start_bf, count_bf, buffer);
+                    prj_io_write_hyperslab(dset_bf[dir], mpi, H5T_NATIVE_FLOAT, 4, start_bf, count_bf, buffer);
                     free(buffer);
                 }
 #else
@@ -1814,7 +1802,7 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
                             }
                         }
                     }
-                    prj_io_write_hyperslab(dset_bf[dir], H5T_NATIVE_DOUBLE, 4, start_bf, count_bf, buffer);
+                    prj_io_write_hyperslab(dset_bf[dir], mpi, H5T_NATIVE_DOUBLE, 4, start_bf, count_bf, buffer);
                     free(buffer);
                 }
 #endif
@@ -1855,9 +1843,9 @@ void prj_io_write_dump(const prj_mesh *mesh, int dump_index, int step, double ti
             hid_t dset_lapse = H5Dcreate2(file, "lapse", H5T_NATIVE_DOUBLE, space_lapse,
                                           H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
-            if (prj_io_is_root_rank()) {
-                hid_t dxpl_accel = prj_io_data_xfer_plist();
-                hid_t dxpl_lapse = prj_io_data_xfer_plist();
+            if (prj_io_is_root_rank(mpi)) {
+                hid_t dxpl_accel = prj_io_data_xfer_plist(mpi);
+                hid_t dxpl_lapse = prj_io_data_xfer_plist(mpi);
 
                 H5Dwrite(dset_accel, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_accel, grav->accel);
                 H5Dwrite(dset_lapse, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_lapse, grav->lapse);

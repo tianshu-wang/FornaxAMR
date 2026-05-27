@@ -2,10 +2,8 @@
 
 #include "prj.h"
 
-static int prj_problem_local_block(const prj_block *block)
+static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && block->active == 1 &&
         (mpi == 0 || block->rank == mpi->rank);
 }
@@ -23,7 +21,7 @@ static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const 
     }
 }
 
-void prj_problem_shock1d(prj_sim *sim)
+void prj_problem_shock1d(prj_sim *sim, prj_mpi *mpi)
 {
     int bidx;
 
@@ -38,7 +36,7 @@ void prj_problem_shock1d(prj_sim *sim)
         int j;
         int k;
 
-        if (!prj_problem_local_block(block)) {
+        if (!prj_problem_local_block(mpi, block)) {
             continue;
         }
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -59,5 +57,5 @@ void prj_problem_shock1d(prj_sim *sim)
             }
         }
     }
-    prj_mhd_init(sim);
+    prj_mhd_init(sim, mpi);
 }

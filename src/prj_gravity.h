@@ -4,19 +4,19 @@
 #define PRJ_GNEWT 6.67430e-8
 #define PRJ_GRAVITY_USE_GR 1
 #ifndef LMAX
-#define LMAX 4
+#define LMAX 12
 #endif
 #if LMAX < 1
 #error "LMAX must be at least 1"
 #endif
 #define PRJ_YLM_INDEX(l, m) ((l) * (l) + (l) + (m))
 
-void prj_gravity_init(prj_sim *sim);
-void prj_gravity_rebuild_grid(prj_sim *sim);
+void prj_gravity_init(prj_sim *sim, const prj_mpi *mpi);
+void prj_gravity_rebuild_grid(prj_sim *sim, const prj_mpi *mpi);
 void prj_gravity_free(prj_grav *grav);
-void prj_gravity_monopole_reduce(prj_mesh *mesh, int stage);
-void prj_gravity_monopole_integrate(prj_mesh *mesh);
-int prj_gravity_update_center_of_mass(prj_mesh *mesh, double x_com_err_tol);
+void prj_gravity_monopole_reduce(prj_mesh *mesh, const prj_mpi *mpi, int stage);
+void prj_gravity_monopole_integrate(prj_mesh *mesh, const prj_mpi *mpi);
+int prj_gravity_update_center_of_mass(prj_mesh *mesh, const prj_mpi *mpi, double x_com_err_tol);
 void prj_gravity_cache_block(prj_block *block);
 void prj_gravity_cache_mesh(prj_mesh *mesh);
 double prj_gravity_block_accel_at(const prj_block *block, int i, int j, int k);

@@ -11,8 +11,6 @@
 #include <mpi.h>
 #endif
 
-static prj_mpi *prj_mpi_active = 0;
-
 /* Ghost-zone exchange buffer is split into two concatenated streams per
  * neighbor: the front stream covers hydro primitives + EOS vars for every
  * ghost cell, the back stream covers radiation primitives only for cells in
@@ -28,10 +26,10 @@ static int prj_block_is_active(const prj_block *block)
 }
 
 #if PRJ_MHD
-static int prj_mpi_block_is_local(const prj_block *block)
+static int prj_mpi_block_is_local(const prj_mpi *mpi, const prj_block *block)
 {
     return prj_block_is_active(block) &&
-        (prj_mpi_active == 0 || block->rank == prj_mpi_active->rank);
+        (mpi == 0 || block->rank == mpi->rank);
 }
 #endif
 
@@ -264,7 +262,7 @@ static int prj_mpi_sample_kind_from_code(int sample_code)
     return sample_code;
 }
 
-static void prj_mpi_assign_block_storage(prj_mesh *mesh)
+static void prj_mpi_assign_block_storage(prj_mesh *mesh, const prj_mpi *mpi)
 {
     int bidx;
 
@@ -274,7 +272,7 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh)
         if (block->id < 0) {
             continue;
         }
-        if (prj_mpi_active != 0 && block->rank != prj_mpi_active->rank) {
+        if (mpi != 0 && block->rank != mpi->rank) {
             if (block->W != 0) {
                 prj_block_free_data(block);
             }
@@ -326,13 +324,14 @@ static void prj_mpi_sync_slot_ranks(prj_mesh *mesh)
     }
 }
 
-static void prj_mpi_compute_decomposition(prj_mesh *mesh)
+static void prj_mpi_compute_decomposition(prj_mesh *mesh, const prj_mpi *mpi)
 {
     prj_mpi_order_item *items;
     int count;
     int i;
     int cursor;
     int rank;
+    int nrank;
 
     if (mesh == 0) {
         return;
@@ -359,9 +358,8 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh)
         free(items);
         return;
     }
+    nrank = mpi != 0 ? mpi->totrank : 1;
     for (i = 0; i < count; ++i) {
-        int nrank = prj_mpi_active != 0 ? prj_mpi_active->totrank : 1;
-
         rank = (int)(((long long)i * (long long)nrank) / (long long)count);
         if (rank >= nrank) {
             rank = nrank - 1;
@@ -372,13 +370,13 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh)
     free(items);
 }
 
-static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const int *old_ranks)
+static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const prj_mpi *mpi, const int *old_ranks)
 {
 #if defined(PRJ_ENABLE_MPI)
     size_t data_count;
     int bidx;
 
-    if (mesh == 0 || prj_mpi_active == 0 || old_ranks == 0 || prj_mpi_active->totrank <= 1) {
+    if (mesh == 0 || mpi == 0 || old_ranks == 0 || mpi->totrank <= 1) {
         return;
     }
 
@@ -398,7 +396,7 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const int *old_ranks)
             continue;
         }
         tag = 500 + bidx;
-        if (prj_mpi_active->rank == new_rank || prj_mpi_active->rank == old_rank) {
+        if (mpi->rank == new_rank || mpi->rank == old_rank) {
             double *sendbuf = 0;
             double *recvbuf = 0;
             int source = MPI_PROC_NULL;
@@ -406,7 +404,7 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const int *old_ranks)
             int recvcount = 0;
             int sendcount = 0;
 
-            if (prj_mpi_active->rank == new_rank) {
+            if (mpi->rank == new_rank) {
                 if (block->W == 0 && prj_block_alloc_data(block) != 0) {
                     continue;
                 }
@@ -414,7 +412,7 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const int *old_ranks)
                 recvcount = (int)data_count;
                 source = old_rank;
             }
-            if (prj_mpi_active->rank == old_rank && block->W != 0) {
+            if (mpi->rank == old_rank && block->W != 0) {
                 sendbuf = block->W;
                 sendcount = (int)data_count;
                 dest = new_rank;
@@ -424,18 +422,19 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const int *old_ranks)
                 recvbuf, recvcount, MPI_DOUBLE, source, tag,
                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-            if (prj_mpi_active->rank == old_rank && block->W != 0) {
+            if (mpi->rank == old_rank && block->W != 0) {
                 prj_block_free_data(block);
             }
         }
     }
 #else
     (void)mesh;
+    (void)mpi;
     (void)old_ranks;
 #endif
 }
 
-static void prj_mpi_print_balance(const prj_mesh *mesh)
+static void prj_mpi_print_balance(const prj_mesh *mesh, const prj_mpi *mpi)
 {
 #if defined(PRJ_ENABLE_MPI)
     int *counts;
@@ -446,11 +445,11 @@ static void prj_mpi_print_balance(const prj_mesh *mesh)
     int max_count;
     int total_active;
 
-    if (mesh == 0 || prj_mpi_active == 0 || prj_mpi_active->totrank <= 1) {
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
         return;
     }
 
-    counts = (int *)calloc((size_t)prj_mpi_active->totrank, sizeof(*counts));
+    counts = (int *)calloc((size_t)mpi->totrank, sizeof(*counts));
     if (counts == 0) {
         return;
     }
@@ -458,18 +457,18 @@ static void prj_mpi_print_balance(const prj_mesh *mesh)
     local_active = 0;
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         if (prj_block_is_active(&mesh->blocks[bidx]) &&
-            mesh->blocks[bidx].rank == prj_mpi_active->rank) {
+            mesh->blocks[bidx].rank == mpi->rank) {
             local_active += 1;
         }
     }
 
     MPI_Gather(&local_active, 1, MPI_INT, counts, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    if (prj_mpi_active->rank == 0) {
+    if (mpi->rank == 0) {
         min_count = counts[0];
         max_count = counts[0];
         total_active = counts[0];
-        for (rank = 1; rank < prj_mpi_active->totrank; ++rank) {
+        for (rank = 1; rank < mpi->totrank; ++rank) {
             int count = counts[rank];
 
             if (count < min_count) {
@@ -488,6 +487,7 @@ static void prj_mpi_print_balance(const prj_mesh *mesh)
     free(counts);
 #else
     (void)mesh;
+    (void)mpi;
 #endif
 }
 
@@ -509,11 +509,11 @@ static int prj_mpi_has_rebalanced(const prj_mesh *mesh, const int *old_ranks)
     return 0;
 }
 
-static void prj_mpi_collect_active_counts(const prj_mesh *mesh, int *counts)
+static void prj_mpi_collect_active_counts(const prj_mesh *mesh, const prj_mpi *mpi, int *counts)
 {
     int bidx;
 
-    if (mesh == 0 || counts == 0 || prj_mpi_active == 0) {
+    if (mesh == 0 || counts == 0 || mpi == 0) {
         return;
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -522,7 +522,7 @@ static void prj_mpi_collect_active_counts(const prj_mesh *mesh, int *counts)
         if (!prj_block_is_active(block)) {
             continue;
         }
-        if (block->rank >= 0 && block->rank < prj_mpi_active->totrank) {
+        if (block->rank >= 0 && block->rank < mpi->totrank) {
             counts[block->rank] += 1;
         }
     }
@@ -1646,7 +1646,7 @@ static int prj_mpi_pack_bf_records(const prj_mesh *mesh, const prj_mpi *mpi,
         const prj_block *block = &mesh->blocks[bidx];
         int n;
 
-        if (!prj_mpi_block_is_local(block)) {
+        if (!prj_mpi_block_is_local(mpi, block)) {
             continue;
         }
         for (n = 0; n < 56; ++n) {
@@ -2139,7 +2139,7 @@ static int prj_mpi_apply_bf_prolongation_record(prj_block *fine, int use_bf1,
     return 0;
 }
 
-static int prj_mpi_apply_bf_records(prj_mesh *mesh, int use_bf1,
+static int prj_mpi_apply_bf_records(prj_mesh *mesh, const prj_mpi *mpi, int use_bf1,
     int fill_kind, const int *headers, int record_count,
     const double *values, int value_count)
 {
@@ -2167,7 +2167,7 @@ static int prj_mpi_apply_bf_records(prj_mesh *mesh, int use_bf1,
             continue;
         }
         dst = &mesh->blocks[block_id];
-        if (!prj_mpi_block_is_local(dst)) {
+        if (!prj_mpi_block_is_local(mpi, dst)) {
             pos += nvalue;
             continue;
         }
@@ -2209,7 +2209,7 @@ static void prj_mpi_count_bf_records(const prj_mesh *mesh, const prj_mpi *mpi,
         const prj_block *block = &mesh->blocks[bidx];
         int n;
 
-        if (!prj_mpi_block_is_local(block)) {
+        if (!prj_mpi_block_is_local(mpi, block)) {
             continue;
         }
         for (n = 0; n < 56; ++n) {
@@ -2362,7 +2362,7 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
         PRJ_TIMER_CURRENT_STOP("mpi_bf_sendrecv");
 
         PRJ_TIMER_CURRENT_START("mpi_bf_apply");
-        if (prj_mpi_apply_bf_records(mesh, use_bf1, fill_kind,
+        if (prj_mpi_apply_bf_records(mesh, mpi, use_bf1, fill_kind,
                 buffer->bf_headers_recv, recv_record_count,
                 buffer->bf_values_recv,
                 recv_value_count) != 0) {
@@ -2536,7 +2536,8 @@ static int prj_mpi_amr_bf_pack_face_record(const prj_block *parent,
         record_capacity, header);
 }
 
-static int prj_mpi_amr_bf_pack_records(const prj_mesh *mesh, int receiver_rank,
+static int prj_mpi_amr_bf_pack_records(const prj_mesh *mesh, const prj_mpi *mpi,
+    int receiver_rank,
     int require_refine_flag, int *headers, int record_capacity,
     int *record_count, double *values, int value_capacity, int *value_count)
 {
@@ -2565,7 +2566,7 @@ static int prj_mpi_amr_bf_pack_records(const prj_mesh *mesh, int receiver_rank,
                 continue;
             }
             neighbor = &mesh->blocks[slot->id];
-            if (!prj_mpi_block_is_local(neighbor)) {
+            if (!prj_mpi_block_is_local(mpi, neighbor)) {
                 continue;
             }
             for (child_oct = 0; child_oct < 8; ++child_oct) {
@@ -2598,7 +2599,7 @@ static int prj_mpi_amr_bf_pack_records(const prj_mesh *mesh, int receiver_rank,
     return 0;
 }
 
-static int prj_mpi_amr_bf_count_records(const prj_mesh *mesh, int receiver_rank)
+static int prj_mpi_amr_bf_count_records(const prj_mesh *mesh, const prj_mpi *mpi, int receiver_rank)
 {
     int count = 0;
     int parent_idx;
@@ -2623,7 +2624,7 @@ static int prj_mpi_amr_bf_count_records(const prj_mesh *mesh, int receiver_rank)
                 continue;
             }
             neighbor = &mesh->blocks[slot->id];
-            if (!prj_mpi_block_is_local(neighbor)) {
+            if (!prj_mpi_block_is_local(mpi, neighbor)) {
                 continue;
             }
             for (child_oct = 0; child_oct < 8; ++child_oct) {
@@ -2641,7 +2642,7 @@ static int prj_mpi_amr_bf_count_records(const prj_mesh *mesh, int receiver_rank)
     return count;
 }
 
-static int prj_mpi_build_amr_bf_plan_for_neighbor(const prj_mesh *mesh,
+static int prj_mpi_build_amr_bf_plan_for_neighbor(const prj_mesh *mesh, const prj_mpi *mpi,
     prj_mpi_buffer *buffer)
 {
 #if defined(PRJ_ENABLE_MPI)
@@ -2651,7 +2652,7 @@ static int prj_mpi_build_amr_bf_plan_for_neighbor(const prj_mesh *mesh,
     if (mesh == 0 || buffer == 0) {
         return 1;
     }
-    send_counts[0] = prj_mpi_amr_bf_count_records(mesh, buffer->receiver_rank);
+    send_counts[0] = prj_mpi_amr_bf_count_records(mesh, mpi, buffer->receiver_rank);
     send_counts[1] = send_counts[0] * PRJ_MPI_AMR_BF_FACE_NVALUE;
     MPI_Sendrecv(send_counts, 2, MPI_INT, buffer->receiver_rank, 503,
         recv_counts, 2, MPI_INT, buffer->receiver_rank, 503,
@@ -2746,7 +2747,7 @@ void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi)
             int recv_counts[2] = {0, 0};
 
             PRJ_TIMER_CURRENT_START("mpi_amr_bf_pack");
-            if (prj_mpi_amr_bf_pack_records(mesh, buffer->receiver_rank,
+            if (prj_mpi_amr_bf_pack_records(mesh, mpi, buffer->receiver_rank,
                     1, buffer->amr_bf_headers_send,
                     buffer->amr_bf_send_record_capacity, &send_counts[0],
                     buffer->amr_bf_values_send,
@@ -2809,7 +2810,8 @@ void prj_mpi_exchange_amr_mhd_prolongate_bf(const prj_mesh *mesh, prj_mpi *mpi)
 #endif
 }
 
-int prj_mpi_amr_mhd_prolongate_bf_one(const prj_block *parent,
+int prj_mpi_amr_mhd_prolongate_bf_one(const prj_mpi *mpi,
+    const prj_block *parent,
     const prj_neighbor *slot, prj_block *child, int child_oct, int use_bf1,
     int dir)
 {
@@ -2817,9 +2819,8 @@ int prj_mpi_amr_mhd_prolongate_bf_one(const prj_block *parent,
     int recv_face;
     int send_face;
     int r;
-    const prj_mpi *mpi;
 
-    if (prj_mpi_active == 0 || prj_mpi_active->totrank <= 1) {
+    if (mpi == 0 || mpi->totrank <= 1) {
         return 0;
     }
     if (parent == 0 || slot == 0 || child == 0 || dir < 0 || dir >= 3) {
@@ -2830,7 +2831,6 @@ int prj_mpi_amr_mhd_prolongate_bf_one(const prj_block *parent,
         return 0;
     }
     (void)send_face;
-    mpi = prj_mpi_active;
     if (mpi->amr_bf_value_count !=
         mpi->amr_bf_record_count * PRJ_MPI_AMR_BF_FACE_NVALUE) {
         fprintf(stderr,
@@ -2882,6 +2882,7 @@ int prj_mpi_amr_mhd_prolongate_bf_one(const prj_block *parent,
         parent->id, child_oct, slot->id, use_bf1 != 0 ? 1 : 0, dir, recv_face);
     exit(EXIT_FAILURE);
 #else
+    (void)mpi;
     (void)parent;
     (void)slot;
     (void)child;
@@ -3054,7 +3055,7 @@ static int prj_mpi_build_emf_plan_pass(prj_mesh *mesh, prj_mpi *mpi,
         prj_block *block = &mesh->blocks[bidx];
         int slot;
 
-        if (!prj_mpi_block_is_local(block)) {
+        if (!prj_mpi_block_is_local(mpi, block)) {
             continue;
         }
         for (slot = 0; slot < 56; ++slot) {
@@ -3248,7 +3249,7 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
                 continue;
             }
             block = &mesh->blocks[block_id];
-            if (!prj_mpi_block_is_local(block) || block->edge_fidelity[dir] == 0 ||
+            if (!prj_mpi_block_is_local(mpi, block) || block->edge_fidelity[dir] == 0 ||
                 block->emf[dir] == 0) {
                 continue;
             }
@@ -3277,11 +3278,6 @@ void prj_mpi_exchange_emf(prj_mesh *mesh, prj_mpi *mpi)
 #endif
 }
 #endif
-
-prj_mpi *prj_mpi_current(void)
-{
-    return prj_mpi_active;
-}
 
 static int prj_mpi_flux_record_count_for_neighbor(prj_mesh *mesh,
     const prj_mpi *mpi, int receiver_rank)
@@ -3508,16 +3504,15 @@ void prj_mpi_init(int *argc, char ***argv, prj_mpi *mpi)
     mpi->rank = 0;
     mpi->totrank = 1;
 #endif
-    prj_mpi_active = mpi;
 }
 
-void prj_mpi_decompose(prj_mesh *mesh)
+void prj_mpi_decompose(prj_mesh *mesh, const prj_mpi *mpi)
 {
     PRJ_TIMER_CURRENT_START("mpi_decompose_compute");
-    prj_mpi_compute_decomposition(mesh);
+    prj_mpi_compute_decomposition(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("mpi_decompose_compute");
     PRJ_TIMER_CURRENT_START("mpi_decompose_assign_storage");
-    prj_mpi_assign_block_storage(mesh);
+    prj_mpi_assign_block_storage(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("mpi_decompose_assign_storage");
 }
 
@@ -3622,7 +3617,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
 #if PRJ_MHD
             || prj_mpi_build_bf_plan_for_neighbor(mesh, mpi, buffer) != 0
             || prj_mpi_build_emf_plan_for_neighbor(mesh, mpi, buffer) != 0
-            || prj_mpi_build_amr_bf_plan_for_neighbor(mesh, buffer) != 0
+            || prj_mpi_build_amr_bf_plan_for_neighbor(mesh, mpi, buffer) != 0
 #endif
             ) {
             free(rank_seen);
@@ -3780,7 +3775,7 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
             int recv_record_count = buffer->bf_recv_record_count[fill_kind];
             int recv_value_count = buffer->bf_recv_value_count[fill_kind];
 
-            if (prj_mpi_apply_bf_records(mesh, use_bf1, fill_kind,
+            if (prj_mpi_apply_bf_records(mesh, mpi, use_bf1, fill_kind,
                     buffer->bf_headers_recv, recv_record_count,
                     buffer->bf_values_recv, recv_value_count) != 0) {
                 fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to apply Bf records\n");
@@ -4011,7 +4006,7 @@ void prj_mpi_exchange_fluxes_and_emf(prj_mesh *mesh, prj_mpi *mpi)
                 continue;
             }
             block = &mesh->blocks[block_id];
-            if (!prj_mpi_block_is_local(block) || block->edge_fidelity[dir] == 0 ||
+            if (!prj_mpi_block_is_local(mpi, block) || block->edge_fidelity[dir] == 0 ||
                 block->emf[dir] == 0) {
                 continue;
             }
@@ -4034,7 +4029,7 @@ void prj_mpi_exchange_fluxes_and_emf(prj_mesh *mesh, prj_mpi *mpi)
     }
     PRJ_TIMER_CURRENT_STOP("mpi_emf_apply");
 #if PRJ_MHD_DEBUG
-    prj_mhd_debug_check_emf(mesh);
+    prj_mhd_debug_check_emf(mesh, mpi);
 #endif
 #endif
 
@@ -4046,39 +4041,41 @@ void prj_mpi_exchange_fluxes_and_emf(prj_mesh *mesh, prj_mpi *mpi)
 }
 
 
-double prj_mpi_min_dt(double local_dt)
+double prj_mpi_min_dt(const prj_mpi *mpi, double local_dt)
 {
 #if defined(PRJ_ENABLE_MPI)
     double global_dt = local_dt;
 
-    if (prj_mpi_active != 0 && prj_mpi_active->totrank > 1) {
+    if (mpi != 0 && mpi->totrank > 1) {
         PRJ_TIMER_CURRENT_START("mpi_allreduce_min_dt");
         MPI_Allreduce(&local_dt, &global_dt, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
         PRJ_TIMER_CURRENT_STOP("mpi_allreduce_min_dt");
     }
     return global_dt;
 #else
+    (void)mpi;
     return local_dt;
 #endif
 }
 
-double prj_mpi_global_sum(double local_val)
+double prj_mpi_global_sum(const prj_mpi *mpi, double local_val)
 {
 #if defined(PRJ_ENABLE_MPI)
     double global_val = local_val;
 
-    if (prj_mpi_active != 0 && prj_mpi_active->totrank > 1) {
+    if (mpi != 0 && mpi->totrank > 1) {
         PRJ_TIMER_CURRENT_START("mpi_allreduce_sum");
         MPI_Allreduce(&local_val, &global_val, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
         PRJ_TIMER_CURRENT_STOP("mpi_allreduce_sum");
     }
     return global_val;
 #else
+    (void)mpi;
     return local_val;
 #endif
 }
 
-void prj_mpi_rebalance(prj_mesh *mesh)
+void prj_mpi_rebalance(prj_mesh *mesh, prj_mpi *mpi)
 {
 #if defined(PRJ_ENABLE_MPI)
     int *old_ranks;
@@ -4087,13 +4084,13 @@ void prj_mpi_rebalance(prj_mesh *mesh)
     int did_rebalance;
     int bidx;
 
-    if (mesh == 0 || prj_mpi_active == 0) {
+    if (mesh == 0 || mpi == 0) {
         return;
     }
     PRJ_TIMER_CURRENT_START("mpi_rebalance");
     old_ranks = (int *)calloc((size_t)mesh->nblocks, sizeof(*old_ranks));
-    counts_before = (int *)calloc((size_t)prj_mpi_active->totrank, sizeof(*counts_before));
-    counts_after = (int *)calloc((size_t)prj_mpi_active->totrank, sizeof(*counts_after));
+    counts_before = (int *)calloc((size_t)mpi->totrank, sizeof(*counts_before));
+    counts_after = (int *)calloc((size_t)mpi->totrank, sizeof(*counts_after));
     if (old_ranks == 0 || counts_before == 0 || counts_after == 0) {
         free(counts_after);
         free(counts_before);
@@ -4104,25 +4101,25 @@ void prj_mpi_rebalance(prj_mesh *mesh)
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         old_ranks[bidx] = mesh->blocks[bidx].rank;
     }
-    prj_mpi_collect_active_counts(mesh, counts_before);
+    prj_mpi_collect_active_counts(mesh, mpi, counts_before);
     PRJ_TIMER_CURRENT_START("mpi_rebalance_decompose");
-    prj_mpi_compute_decomposition(mesh);
+    prj_mpi_compute_decomposition(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("mpi_rebalance_decompose");
     did_rebalance = prj_mpi_has_rebalanced(mesh, old_ranks);
-    prj_mpi_collect_active_counts(mesh, counts_after);
+    prj_mpi_collect_active_counts(mesh, mpi, counts_after);
     if (did_rebalance) {
         PRJ_TIMER_CURRENT_START("mpi_rebalance_migrate");
-        prj_mpi_migrate_active_blocks(mesh, old_ranks);
+        prj_mpi_migrate_active_blocks(mesh, mpi, old_ranks);
         PRJ_TIMER_CURRENT_STOP("mpi_rebalance_migrate");
     }
     PRJ_TIMER_CURRENT_START("mpi_rebalance_assign_storage");
-    prj_mpi_assign_block_storage(mesh);
+    prj_mpi_assign_block_storage(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("mpi_rebalance_assign_storage");
-    prj_mpi_prepare(mesh, prj_mpi_active);
+    prj_mpi_prepare(mesh, mpi);
     if (did_rebalance &&
-            prj_mpi_counts_changed(counts_before, counts_after, prj_mpi_active->totrank)) {
+            prj_mpi_counts_changed(counts_before, counts_after, mpi->totrank)) {
         PRJ_TIMER_CURRENT_START("mpi_rebalance_print_balance");
-        prj_mpi_print_balance(mesh);
+        prj_mpi_print_balance(mesh, mpi);
         PRJ_TIMER_CURRENT_STOP("mpi_rebalance_print_balance");
     }
     free(counts_after);
@@ -4131,7 +4128,7 @@ void prj_mpi_rebalance(prj_mesh *mesh)
     PRJ_TIMER_CURRENT_STOP("mpi_rebalance");
 #else
     if (mesh != 0) {
-        prj_mpi_decompose(mesh);
+        prj_mpi_decompose(mesh, mpi);
     }
 #endif
 }
@@ -4144,13 +4141,12 @@ int prj_mpi_get_neighbor_rank(const prj_mesh *mesh, int neighbor_block_id)
     return mesh->blocks[neighbor_block_id].rank;
 }
 
-void prj_mpi_finalize(void)
+void prj_mpi_finalize(prj_mpi *mpi)
 {
-    if (prj_mpi_active != 0) {
-        prj_mpi_clear_neighbors(prj_mpi_active);
+    if (mpi != 0) {
+        prj_mpi_clear_neighbors(mpi);
     }
 #if defined(PRJ_ENABLE_MPI)
     MPI_Finalize();
 #endif
-    prj_mpi_active = 0;
 }

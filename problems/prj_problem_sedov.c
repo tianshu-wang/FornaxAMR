@@ -130,8 +130,8 @@ static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
     }
 }
 
-static void prj_problem_refine_injection_region(prj_sim *sim, double cx, double cy, double cz,
-    double rho, double pressure)
+static void prj_problem_refine_injection_region(prj_sim *sim, const prj_mpi *mpi,
+    double cx, double cy, double cz, double rho, double pressure)
 {
     int level;
     int target_level = sim->mesh.max_level;
@@ -163,7 +163,7 @@ static void prj_problem_refine_injection_region(prj_sim *sim, double cx, double 
             break;
         }
 
-        refined = prj_amr_refine_marked_blocks(&sim->mesh);
+        refined = prj_amr_refine_marked_blocks(&sim->mesh, mpi);
         if (refined == 0) {
             break;
         }
@@ -324,7 +324,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
     }
 }
 
-void prj_problem_sedov(prj_sim *sim)
+void prj_problem_sedov(prj_sim *sim, prj_mpi *mpi)
 {
     const double rho = 1.0;
     const double pressure = 1.0e-3;
@@ -334,7 +334,7 @@ void prj_problem_sedov(prj_sim *sim)
         return;
     }
     prj_problem_fill_ambient(sim, rho, pressure);
-    prj_problem_refine_injection_region(sim, 0.0, 0.0, 0.0, rho, pressure);
+    prj_problem_refine_injection_region(sim, mpi, 0.0, 0.0, 0.0, rho, pressure);
     prj_problem_inject_energy(sim, 0.0, 0.0, 0.0);
-    prj_mhd_init(sim);
+    prj_mhd_init(sim, mpi);
 }

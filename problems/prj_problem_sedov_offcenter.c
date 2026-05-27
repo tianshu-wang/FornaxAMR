@@ -3,10 +3,8 @@
 
 #include "prj.h"
 
-static int prj_problem_local_block(const prj_block *block)
+static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && block->active == 1 &&
         (mpi == 0 || block->rank == mpi->rank);
 }
@@ -54,7 +52,7 @@ static double prj_problem_ball_overlap_fraction(const prj_block *block, int i, i
     return (double)inside / (double)total;
 }
 
-static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
+static void prj_problem_fill_ambient(prj_sim *sim, const prj_mpi *mpi, double rho, double pressure)
 {
     double eint = pressure / ((5.0 / 3.0) - 1.0) / rho;
     int bidx;
@@ -65,7 +63,7 @@ static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
         int j;
         int k;
 
-        if (!prj_problem_local_block(block)) {
+        if (!prj_problem_local_block(mpi, block)) {
             continue;
         }
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -88,7 +86,7 @@ static void prj_problem_fill_ambient(prj_sim *sim, double rho, double pressure)
     }
 }
 
-static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double cz)
+static void prj_problem_inject_energy(prj_sim *sim, const prj_mpi *mpi, double cx, double cy, double cz)
 {
     int bidx;
     int selected = 0;
@@ -113,7 +111,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
         int j;
         int k;
 
-        if (!prj_problem_local_block(block)) {
+        if (!prj_problem_local_block(mpi, block)) {
             continue;
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -185,7 +183,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
             int j;
             int k;
 
-            if (!prj_problem_local_block(block)) {
+            if (!prj_problem_local_block(mpi, block)) {
                 continue;
             }
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -213,7 +211,7 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
         int j;
         int k;
 
-        if (!prj_problem_local_block(block)) {
+        if (!prj_problem_local_block(mpi, block)) {
             continue;
         }
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -237,13 +235,13 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
     }
 }
 
-void prj_problem_sedov_offcenter(prj_sim *sim)
+void prj_problem_sedov_offcenter(prj_sim *sim, prj_mpi *mpi)
 {
     if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
         sim->mesh.max_level, &sim->coord) != 0) {
         return;
     }
-    prj_problem_fill_ambient(sim, 1.0, 1.0e-3);
-    prj_problem_inject_energy(sim, 0.2, 0.2, 0.2);
-    prj_mhd_init(sim);
+    prj_problem_fill_ambient(sim, mpi, 1.0, 1.0e-3);
+    prj_problem_inject_energy(sim, mpi, 0.2, 0.2, 0.2);
+    prj_mhd_init(sim, mpi);
 }

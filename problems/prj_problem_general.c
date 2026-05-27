@@ -2,10 +2,8 @@
 
 #include "prj.h"
 
-static int prj_problem_local_block(const prj_block *block)
+static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && block->active == 1 &&
         (mpi == 0 || block->rank == mpi->rank);
 }
@@ -66,7 +64,8 @@ static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const 
     }
 }
 
-static void prj_problem_fill_mesh(prj_sim *sim, void (*init_fn)(double, double, double, double *))
+static void prj_problem_fill_mesh(prj_sim *sim, prj_mpi *mpi,
+    void (*init_fn)(double, double, double, double *))
 {
     int bidx;
 
@@ -76,7 +75,7 @@ static void prj_problem_fill_mesh(prj_sim *sim, void (*init_fn)(double, double, 
         int j;
         int k;
 
-        if (!prj_problem_local_block(block)) {
+        if (!prj_problem_local_block(mpi, block)) {
             continue;
         }
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -97,33 +96,33 @@ static void prj_problem_fill_mesh(prj_sim *sim, void (*init_fn)(double, double, 
     }
 }
 
-static void prj_problem_fill_until_amr_converged(prj_sim *sim)
+static void prj_problem_fill_until_amr_converged(prj_sim *sim, prj_mpi *mpi)
 {
     unsigned long long prev_sig;
     unsigned long long next_sig;
 
-    prj_problem_fill_mesh(sim, prj_problem_initial_condition);
+    prj_problem_fill_mesh(sim, mpi, prj_problem_initial_condition);
     if (sim->mesh.max_level == 0) {
         return;
     }
 
     do {
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
-        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, 1);
-        prj_boundary_fill_ghosts(&sim->mesh, &sim->bc, 1);
-        prj_eos_fill_mesh(&sim->mesh, &sim->eos, 1);
-        prj_amr_adapt(&sim->mesh, &sim->eos);
-        prj_problem_fill_mesh(sim, prj_problem_initial_condition);
+        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1);
+        prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
+        prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
+        prj_amr_adapt(&sim->mesh, &sim->eos, mpi);
+        prj_problem_fill_mesh(sim, mpi, prj_problem_initial_condition);
         next_sig = prj_problem_mesh_signature(&sim->mesh);
     } while (next_sig != prev_sig);
 }
 
-void prj_problem_general(prj_sim *sim)
+void prj_problem_general(prj_sim *sim, prj_mpi *mpi)
 {
     if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
         sim->mesh.max_level, &sim->coord) != 0) {
         return;
     }
-    prj_problem_fill_until_amr_converged(sim);
-    prj_mhd_init(sim);
+    prj_problem_fill_until_amr_converged(sim, mpi);
+    prj_mhd_init(sim, mpi);
 }

@@ -72,17 +72,13 @@ static int prj_is_active_block(const prj_block *b)
     return b != 0 && b->id >= 0 && b->active == 1;
 }
 
-static int prj_is_local_active_block(const prj_block *b)
+static int prj_is_local_active_block(const prj_mpi *mpi, const prj_block *b)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return prj_is_active_block(b) && (mpi == 0 || b->rank == mpi->rank);
 }
 
-static int prj_is_local_block_owner(const prj_block *b)
+static int prj_is_local_block_owner(const prj_mpi *mpi, const prj_block *b)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return b != 0 && b->id >= 0 && (mpi == 0 || b->rank == mpi->rank);
 }
 
@@ -135,10 +131,9 @@ static int prj_amr_boundary_mask_has_side(unsigned int mask, int axis, int sign)
     return (mask & (sign < 0 ? PRJ_AMR_BOUNDARY_ZMIN : PRJ_AMR_BOUNDARY_ZMAX)) != 0U;
 }
 
-static void prj_amr_sync_refine_flags(prj_mesh *mesh)
+static void prj_amr_sync_refine_flags(prj_mesh *mesh, const prj_mpi *mpi)
 {
 #if defined(PRJ_ENABLE_MPI)
-    prj_mpi *mpi = prj_mpi_current();
     int *local_pos;
     int *global_pos;
     int *local_neg;
@@ -165,7 +160,7 @@ static void prj_amr_sync_refine_flags(prj_mesh *mesh)
                 local_pos[i] = 1;
             }
         } else if (mesh->blocks[i].refine_flag < 0 &&
-            prj_is_local_active_block(&mesh->blocks[i])) {
+            prj_is_local_active_block(mpi, &mesh->blocks[i])) {
             local_neg[i] = -1;
         }
     }
@@ -192,6 +187,7 @@ static void prj_amr_sync_refine_flags(prj_mesh *mesh)
     free(global_neg);
 #else
     (void)mesh;
+    (void)mpi;
 #endif
 }
 
@@ -236,10 +232,9 @@ static size_t prj_block_data_count(void)
         ;
 }
 
-static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, prj_block *parent)
+static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, const prj_mpi *mpi, prj_block *parent)
 {
 #if defined(PRJ_ENABLE_MPI)
-    prj_mpi *mpi;
     size_t data_count;
     int parent_rank;
     int oct;
@@ -247,7 +242,6 @@ static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, prj_block *pare
     if (mesh == 0 || parent == 0) {
         return;
     }
-    mpi = prj_mpi_current();
     if (mpi == 0 || mpi->totrank <= 1) {
         return;
     }
@@ -284,6 +278,7 @@ static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, prj_block *pare
     }
 #else
     (void)mesh;
+    (void)mpi;
     (void)parent;
 #endif
 }
@@ -1095,7 +1090,7 @@ static int prj_can_coarsen_parent(const prj_mesh *mesh, int parent_id)
     return 1;
 }
 
-static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos)
+static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi)
 {
     int bidx;
 
@@ -1105,7 +1100,7 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos)
         int j;
         int k;
 
-        if (!prj_is_local_active_block(b)) {
+        if (!prj_is_local_active_block(mpi, b)) {
             continue;
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -1132,7 +1127,7 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos)
     }
 }
 
-void prj_amr_enforce_two_to_one(prj_mesh *mesh)
+void prj_amr_enforce_two_to_one(prj_mesh *mesh, const prj_mpi *mpi)
 {
     int changed;
 
@@ -1159,12 +1154,12 @@ void prj_amr_enforce_two_to_one(prj_mesh *mesh)
                 }
             }
         }
-        prj_amr_sync_refine_flags(mesh);
+        prj_amr_sync_refine_flags(mesh, mpi);
     } while (changed != 0);
 }
 
 static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
-    int *neighbor_dirty)
+    const prj_mpi *mpi, int *neighbor_dirty)
 {
     int i;
     int changed = 0;
@@ -1180,7 +1175,7 @@ static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
             int oct;
 
             prj_amr_mark_dirty_block_and_neighbors(mesh, i, neighbor_dirty);
-            prj_amr_refine_block(mesh, i);
+            prj_amr_refine_block(mesh, mpi, i);
             if (neighbor_dirty != 0) {
                 neighbor_dirty[i] = 1;
                 for (oct = 0; oct < 8; ++oct) {
@@ -1199,9 +1194,9 @@ static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
     return changed;
 }
 
-int prj_amr_refine_marked_blocks(prj_mesh *mesh)
+int prj_amr_refine_marked_blocks(prj_mesh *mesh, const prj_mpi *mpi)
 {
-    return prj_amr_refine_marked_blocks_with_dirty(mesh, 0);
+    return prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, 0);
 }
 
 static void prj_amr_init_neighbors_with_mask(prj_mesh *mesh,
@@ -1229,7 +1224,7 @@ void prj_amr_init_neighbors(prj_mesh *mesh)
     prj_amr_init_neighbors_with_mask(mesh, 0);
 }
 
-void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
+void prj_amr_tag(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi)
 {
     int i;
     int *local_pos;
@@ -1271,7 +1266,7 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
         int has_derefine_criterion = 0;
         int init_hook_refine = 0;
 
-        if (!prj_is_local_active_block(b)) {
+        if (!prj_is_local_active_block(mpi, b)) {
             continue;
         }
 
@@ -1365,7 +1360,7 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *b = &mesh->blocks[i];
 
-        if (boundary_mask[i] != 0U && prj_is_local_active_block(b)) {
+        if (boundary_mask[i] != 0U && prj_is_local_active_block(mpi, b)) {
             prj_amr_tag_boundary_neighbors(mesh, b, boundary_mask[i], local_pos);
         }
     }
@@ -1375,8 +1370,6 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos)
      * After this every rank has the same global_pos / global_neg view. */
 #if defined(PRJ_ENABLE_MPI)
     {
-        prj_mpi *mpi = prj_mpi_current();
-
         if (mpi != 0 && mpi->totrank > 1) {
             MPI_Allreduce(local_pos, global_pos, mesh->nblocks, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
             MPI_Allreduce(local_neg, global_neg, mesh->nblocks, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
@@ -1588,7 +1581,8 @@ static void prj_amr_mhd_pack_prolong_bf_buffer(const prj_block *parent,
     }
 }
 
-static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block *parent, prj_block *child,
+static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_block *parent, prj_block *child,
     int child_oct, int use_bf1)
 {
     int xoct = child_oct & 1;
@@ -1685,7 +1679,7 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
 
         } else {
             for (dir = 0; dir < 3; ++dir) {
-                prj_mpi_amr_mhd_prolongate_bf_one(parent, slot, child,
+                prj_mpi_amr_mhd_prolongate_bf_one(mpi, parent, slot, child,
                     child_oct, use_bf1, dir);
             }
         }
@@ -1715,10 +1709,11 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_block 
     prj_amr_mhd_free_prolong_bf_buffer(buf);
 }
 
-static void prj_amr_mhd_prolongate_bf(const prj_mesh *mesh, const prj_block *parent, prj_block *child, int child_oct)
+static void prj_amr_mhd_prolongate_bf(const prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_block *parent, prj_block *child, int child_oct)
 {
-    prj_amr_mhd_prolongate_bf_one(mesh, parent, child, child_oct, 0);
-    prj_amr_mhd_prolongate_bf_one(mesh, parent, child, child_oct, 1);
+    prj_amr_mhd_prolongate_bf_one(mesh, mpi, parent, child, child_oct, 0);
+    prj_amr_mhd_prolongate_bf_one(mesh, mpi, parent, child, child_oct, 1);
     prj_amr_mhd_mark_active_faces(child, PRJ_MHD_FIDELITY_COARSER);
     prj_amr_mhd_set_cons_b_from_bf(child, 0);
 }
@@ -1843,7 +1838,8 @@ static void prj_amr_mhd_restrict_bf(const prj_block *children[8], prj_block *par
 }
 #endif
 
-void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block *child, int child_oct, double E_floor)
+void prj_amr_prolongate(const prj_mesh *mesh, const prj_mpi *mpi, const prj_block *parent,
+    prj_block *child, int child_oct, double E_floor)
 {
     int i;
     int j;
@@ -1854,6 +1850,9 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block
     int zoct = (child_oct >> 2) & 1;
     int use_BJ = mesh != 0 && mesh->use_BJ != 0;
 
+#if !PRJ_MHD
+    (void)mpi;
+#endif
     prj_zero_block_arrays(child);
 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -1924,7 +1923,7 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_block *parent, prj_block
         }
     }
 #if PRJ_MHD
-    prj_amr_mhd_prolongate_bf(mesh,parent, child, child_oct);
+    prj_amr_mhd_prolongate_bf(mesh, mpi, parent, child, child_oct);
 #endif
 }
 
@@ -1998,7 +1997,7 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
 #endif
 }
 
-void prj_amr_refine_block(prj_mesh *mesh, int block_id)
+void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
 {
     prj_block *parent;
     int oct;
@@ -2021,7 +2020,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
         parent->refine_flag = 0;
         return;
     }
-    owner_local = prj_is_local_block_owner(parent);
+    owner_local = prj_is_local_block_owner(mpi, parent);
 
     xmid[0] = 0.5 * (parent->xmin[0] + parent->xmax[0]);
     xmid[1] = 0.5 * (parent->xmin[1] + parent->xmax[1]);
@@ -2068,7 +2067,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
                 return;
             }
             prj_block_setup_geometry(child, &mesh->coord);
-            prj_amr_prolongate(mesh, parent, child, oct, mesh->E_floor);
+            prj_amr_prolongate(mesh, mpi, parent, child, oct, mesh->E_floor);
         } else {
             child->W = 0;
             child->W1 = 0;
@@ -2102,7 +2101,7 @@ void prj_amr_refine_block(prj_mesh *mesh, int block_id)
     parent->refine_flag = 0;
 }
 
-int prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
+int prj_amr_coarsen_block(prj_mesh *mesh, const prj_mpi *mpi, int parent_id)
 {
     prj_block *parent;
     const prj_block *children[8];
@@ -2142,9 +2141,9 @@ int prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
             parent->rank = child_ranks[oct];
         }
     }
-    owner_local = prj_is_local_block_owner(parent);
+    owner_local = prj_is_local_block_owner(mpi, parent);
 
-    prj_amr_move_children_to_parent_rank(mesh, parent);
+    prj_amr_move_children_to_parent_rank(mesh, mpi, parent);
     if (owner_local) {
         if (parent->W == 0) {
             prj_block_alloc_data(parent);
@@ -2171,7 +2170,7 @@ int prj_amr_coarsen_block(prj_mesh *mesh, int parent_id)
     return 1;
 }
 
-int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
+int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
 {
     int i;
     int refined = 0;
@@ -2187,22 +2186,22 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
     }
 
     PRJ_TIMER_CURRENT_START("amr_tag");
-    prj_amr_tag(mesh, eos);
+    prj_amr_tag(mesh, eos, mpi);
     PRJ_TIMER_CURRENT_STOP("amr_tag");
     PRJ_TIMER_CURRENT_START("amr_enforce_two_to_one");
-    prj_amr_enforce_two_to_one(mesh);
+    prj_amr_enforce_two_to_one(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("amr_enforce_two_to_one");
     PRJ_TIMER_CURRENT_START("amr_sync_flags");
-    prj_amr_sync_refine_flags(mesh);
+    prj_amr_sync_refine_flags(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("amr_sync_flags");
 
 #if PRJ_MHD
     PRJ_TIMER_CURRENT_START("amr_mhd_prolongate_bf_exchange");
-    prj_mpi_exchange_amr_mhd_prolongate_bf(mesh, prj_mpi_current());
+    prj_mpi_exchange_amr_mhd_prolongate_bf(mesh, mpi);
     PRJ_TIMER_CURRENT_STOP("amr_mhd_prolongate_bf_exchange");
 #endif
     PRJ_TIMER_CURRENT_START("amr_refine_marked");
-    refined = prj_amr_refine_marked_blocks_with_dirty(mesh, neighbor_dirty);
+    refined = prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, neighbor_dirty);
     PRJ_TIMER_CURRENT_STOP("amr_refine_marked");
     if (refined) {
         PRJ_TIMER_CURRENT_START("amr_init_neighbors_refine");
@@ -2226,7 +2225,7 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
         can_coarsen = prj_can_coarsen_parent(mesh, i);
         if (can_coarsen) {
             prj_amr_mark_coarsen_dirty(mesh, i, neighbor_dirty);
-            if (prj_amr_coarsen_block(mesh, i)) {
+            if (prj_amr_coarsen_block(mesh, mpi, i)) {
                 if (neighbor_dirty != 0) {
                     neighbor_dirty[i] = 1;
                 }
@@ -2265,7 +2264,7 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos)
         }
     }
     prj_mesh_update_max_active_level(mesh);
-    prj_sync_primitive_from_conserved(mesh, eos);
+    prj_sync_primitive_from_conserved(mesh, eos, mpi);
     PRJ_TIMER_CURRENT_STOP("amr_setup_changed_blocks");
     free(neighbor_dirty);
     return 1;

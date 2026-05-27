@@ -58,7 +58,7 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     return prj_problem_general;
 }
 
-static void prj_prepare_restart_problem(prj_sim *sim, prj_problem_init_fn init_fn)
+static void prj_prepare_restart_problem(prj_sim *sim, prj_problem_init_fn init_fn, prj_mpi *mpi)
 {
     static const char *cc_eos_path =
         "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat";
@@ -72,7 +72,7 @@ static void prj_prepare_restart_problem(prj_sim *sim, prj_problem_init_fn init_f
         strncpy(sim->eos.filename, cc_eos_path, sizeof(sim->eos.filename) - 1);
         sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
     }
-    prj_eos_init(&sim->eos);
+    prj_eos_init(&sim->eos, mpi);
 }
 
 static void prj_copy_file(const char *src, const char *dst)
@@ -326,13 +326,13 @@ int main(int argc, char *argv[])
     prj_print_config(&sim, mpi.rank);
     PRJ_TIMER_START(&timer, "problem_init");
     if (sim.restart_from_file == 0) {
-        init_fn(&sim);
+        init_fn(&sim, &mpi);
         if (!init_with_mpi) {
-            prj_mpi_decompose(&sim.mesh);
+            prj_mpi_decompose(&sim.mesh, &mpi);
             prj_mpi_prepare(&sim.mesh, &mpi);
         }
     } else {
-        prj_prepare_restart_problem(&sim, init_fn);
+        prj_prepare_restart_problem(&sim, init_fn, &mpi);
     }
     PRJ_TIMER_STOP(&timer, "problem_init");
     if (mpi.rank == 0) {
@@ -353,7 +353,7 @@ int main(int argc, char *argv[])
         saved_use_BJ = sim.mesh.use_BJ;
         saved_min_dx = sim.mesh.min_dx;
         PRJ_TIMER_START(&timer, "read_restart");
-        prj_io_read_restart(&sim.mesh, &sim.eos, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
+        prj_io_read_restart(&sim.mesh, &sim.eos, &mpi, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
             &last_output_time, &last_restart_time, &sim.dt, restart_x_com);
         PRJ_TIMER_STOP(&timer, "read_restart");
         for (i = 0; i < PRJ_AMR_N; ++i) {
@@ -377,7 +377,7 @@ int main(int argc, char *argv[])
     PRJ_TIMER_STOP(&timer, "rad_init");
  #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(&timer, "gravity_init");
-    prj_gravity_init(&sim);
+    prj_gravity_init(&sim, &mpi);
     PRJ_TIMER_STOP(&timer, "gravity_init");
     if (sim.restart_from_file != 0) {
         sim.grav.x_com[0] = restart_x_com[0];
@@ -390,26 +390,26 @@ int main(int argc, char *argv[])
  #endif
 
     PRJ_TIMER_START(&timer, "initial_eos_active");
-    prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
+    prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1);
     PRJ_TIMER_STOP(&timer, "initial_eos_active");
     PRJ_TIMER_START(&timer, "initial_ghost_bf_fill");
-    prj_boundary_fill_ghosts_and_bf(&sim.mesh, &sim.bc, 1, 0, &sim.eos);
+    prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos);
     PRJ_TIMER_STOP(&timer, "initial_ghost_bf_fill");
     PRJ_TIMER_START(&timer, "initial_eos_mesh");
-    prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+    prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1);
     PRJ_TIMER_STOP(&timer, "initial_eos_mesh");
 #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(&timer, "initial_gravity_reduce");
-    prj_gravity_monopole_reduce(&sim.mesh, 1);
+    prj_gravity_monopole_reduce(&sim.mesh, &mpi, 1);
     PRJ_TIMER_STOP(&timer, "initial_gravity_reduce");
     PRJ_TIMER_START(&timer, "initial_gravity_integrate");
-    prj_gravity_monopole_integrate(&sim.mesh);
+    prj_gravity_monopole_integrate(&sim.mesh, &mpi);
     PRJ_TIMER_STOP(&timer, "initial_gravity_integrate");
 #endif
 
     if (sim.restart_from_file == 0) {
         PRJ_TIMER_START(&timer, "initial_dump");
-        prj_io_write_dump(&sim.mesh, sim.dump_count, sim.step, sim.time);
+        prj_io_write_dump(&sim.mesh, &mpi, sim.dump_count, sim.step, sim.time);
         PRJ_TIMER_STOP(&timer, "initial_dump");
         sim.dump_count += 1;
         if (sim.output_dt >= 0.0) {
@@ -441,14 +441,14 @@ int main(int argc, char *argv[])
         PRJ_TIMER_START(&timer, "main_loop");
 #if PRJ_USE_GRAVITY
         PRJ_TIMER_START(&timer, "gravity_update_x_com");
-        prj_gravity_update_center_of_mass(&sim.mesh, sim.x_com_err_tol);
+        prj_gravity_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol);
         PRJ_TIMER_STOP(&timer, "gravity_update_x_com");
 #endif
         {
             double dt_new;
 
             PRJ_TIMER_START(&timer, "calc_dt");
-            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, sim.cfl);
+            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, &mpi, sim.cfl);
             PRJ_TIMER_STOP(&timer, "calc_dt");
 
             if (sim.dt > 0.0) {
@@ -474,7 +474,7 @@ int main(int argc, char *argv[])
             dt_step = sim.t_end - sim.time;
         }
         PRJ_TIMER_START(&timer, "timeint_step");
-        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, dt_step, &dt_src,
+        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, &mpi, dt_step, &dt_src,
 #if PRJ_TIMER
             &timer
 #else
@@ -483,7 +483,7 @@ int main(int argc, char *argv[])
         );
         PRJ_TIMER_STOP(&timer, "timeint_step");
         PRJ_TIMER_START(&timer, "mpi_min_dt_src");
-        dt_src = prj_mpi_min_dt(dt_src);
+        dt_src = prj_mpi_min_dt(&mpi, dt_src);
         PRJ_TIMER_STOP(&timer, "mpi_min_dt_src");
         if (sim.cfl * dt_src < sim.dt) {
             sim.dt = sim.cfl * dt_src;
@@ -495,26 +495,26 @@ int main(int argc, char *argv[])
 #if PRJ_USE_GRAVITY
             if (prj_amr_criteria_need_gravity(&sim.mesh)) {
                 PRJ_TIMER_START(&timer, "amr_pre_gravity_reduce");
-                prj_gravity_monopole_reduce(&sim.mesh, 1);
+                prj_gravity_monopole_reduce(&sim.mesh, &mpi, 1);
                 PRJ_TIMER_STOP(&timer, "amr_pre_gravity_reduce");
                 PRJ_TIMER_START(&timer, "amr_pre_gravity_integrate");
-                prj_gravity_monopole_integrate(&sim.mesh);
+                prj_gravity_monopole_integrate(&sim.mesh, &mpi);
                 PRJ_TIMER_STOP(&timer, "amr_pre_gravity_integrate");
             }
 #endif
             PRJ_TIMER_START(&timer, "amr_pre_eos_ghost_cons");
-            prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, 1);
+            prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1);
             PRJ_TIMER_STOP(&timer, "amr_pre_eos_ghost_cons");
             PRJ_TIMER_START(&timer, "amr_adapt");
-            int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos);
+            int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi);
             PRJ_TIMER_STOP(&timer, "amr_adapt");
             if (block_changed) {
                 PRJ_TIMER_START(&timer, "amr_mpi_rebalance");
-                prj_mpi_rebalance(&sim.mesh);
+                prj_mpi_rebalance(&sim.mesh, &mpi);
                 PRJ_TIMER_STOP(&timer, "amr_mpi_rebalance");
 #if PRJ_USE_GRAVITY
                 PRJ_TIMER_START(&timer, "amr_gravity_rebuild_grid");
-                prj_gravity_rebuild_grid(&sim);
+                prj_gravity_rebuild_grid(&sim, &mpi);
                 PRJ_TIMER_STOP(&timer, "amr_gravity_rebuild_grid");
 #endif
             }
@@ -522,28 +522,28 @@ int main(int argc, char *argv[])
             if (block_changed) {
                 PRJ_TIMER_START(&timer, "ghost_fill_post_amr");
                 PRJ_TIMER_START(&timer, "post_amr_eos_active");
-                prj_eos_fill_active_cells(&sim.mesh, &sim.eos, 1);
+                prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1);
                 PRJ_TIMER_STOP(&timer, "post_amr_eos_active");
                 PRJ_TIMER_START(&timer, "post_amr_ghost_bf_fill");
-                prj_boundary_fill_ghosts_and_bf(&sim.mesh, &sim.bc, 1, 0, &sim.eos);
+                prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos);
                 PRJ_TIMER_STOP(&timer, "post_amr_ghost_bf_fill");
                 PRJ_TIMER_START(&timer, "post_amr_eos_mesh");
-                prj_eos_fill_mesh(&sim.mesh, &sim.eos, 1);
+                prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1);
                 PRJ_TIMER_STOP(&timer, "post_amr_eos_mesh");
                 PRJ_TIMER_STOP(&timer, "ghost_fill_post_amr");
             #if PRJ_USE_GRAVITY
                 PRJ_TIMER_START(&timer, "post_amr_gravity_reduce");
-                prj_gravity_monopole_reduce(&sim.mesh, 1);
+                prj_gravity_monopole_reduce(&sim.mesh, &mpi, 1);
                 PRJ_TIMER_STOP(&timer, "post_amr_gravity_reduce");
                 PRJ_TIMER_START(&timer, "post_amr_gravity_integrate");
-                prj_gravity_monopole_integrate(&sim.mesh);
+                prj_gravity_monopole_integrate(&sim.mesh, &mpi);
                 PRJ_TIMER_STOP(&timer, "post_amr_gravity_integrate");
             #endif
             }
         }
 #if PRJ_MHD && PRJ_MHD_DEBUG
         PRJ_TIMER_START(&timer, "mhd_debug_divb");
-        prj_mhd_debug_check_divb(&sim.mesh, 0);
+        prj_mhd_debug_check_divb(&sim.mesh, &mpi, 0);
         PRJ_TIMER_STOP(&timer, "mhd_debug_divb");
 #endif
         if (sim.output_interval > 0 && sim.step % sim.output_interval == 0) {
@@ -574,13 +574,13 @@ int main(int argc, char *argv[])
         }
         if (write_output) {
             PRJ_TIMER_START(&timer, "write_dump");
-            prj_io_write_dump(&sim.mesh, sim.dump_count, sim.step, sim.time);
+            prj_io_write_dump(&sim.mesh, &mpi, sim.dump_count, sim.step, sim.time);
             PRJ_TIMER_STOP(&timer, "write_dump");
             sim.dump_count += 1;
         }
         if (write_restart) {
             PRJ_TIMER_START(&timer, "write_restart");
-            prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
+            prj_io_write_restart(&sim.mesh, &mpi, sim.time, sim.step, sim.dump_count,
                 prj_last_event_time(next_output_time, sim.output_dt),
                 prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt,
                 sim.grav.x_com);
@@ -616,7 +616,7 @@ int main(int argc, char *argv[])
     }
 
     PRJ_TIMER_START(&timer, "final_write_restart");
-    prj_io_write_restart(&sim.mesh, sim.time, sim.step, sim.dump_count,
+    prj_io_write_restart(&sim.mesh, &mpi, sim.time, sim.step, sim.dump_count,
         prj_last_event_time(next_output_time, sim.output_dt),
         prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt,
         sim.grav.x_com);
@@ -636,6 +636,6 @@ int main(int argc, char *argv[])
     prj_gravity_free(&sim.grav);
 #endif
     prj_mesh_destroy(&sim.mesh);
-    prj_mpi_finalize();
+    prj_mpi_finalize(&mpi);
     return 0;
 }

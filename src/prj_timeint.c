@@ -19,10 +19,8 @@ static double prj_timeint_cell_lapse(const prj_block *block, int i, int j, int k
 }
 #endif
 
-static int prj_timeint_local_block(const prj_block *block)
+static int prj_timeint_local_block(const prj_mpi *mpi, const prj_block *block)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     return block != 0 && block->id >= 0 && block->active == 1 &&
         (mpi == 0 || block->rank == mpi->rank);
 }
@@ -346,7 +344,8 @@ static void prj_timeint_mhd_set_cons_b_from_bf(const prj_block *block,
     }
 }
 
-static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_array)(prj_block *),
+static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, const prj_mpi *mpi,
+    double *(*stage_array)(prj_block *),
     prj_timer *timer)
 {
     int bidx;
@@ -358,13 +357,13 @@ static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, double *(*stage_arra
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (prj_timeint_local_block(block)) {
+        if (prj_timeint_local_block(mpi, block)) {
             prj_timeint_mhd_update_emf(block, stage_array(block));
         }
     }
     PRJ_TIMER_STOP(timer, "mhd_emf_local");
     PRJ_TIMER_START(timer, "mhd_emf_send");
-    prj_mhd_emf_send(mesh);
+    prj_mhd_emf_send(mesh, mpi);
     PRJ_TIMER_STOP(timer, "mhd_emf_send");
 }
 
@@ -381,7 +380,7 @@ static double *prj_timeint_stage2_array(prj_block *block)
 
 static void prj_timeint_update_dt_src_values(const prj_block *block,
     double rho, double mom1, double mom2, double mom3, double etot,
-    int i, int j, int k, double *dt_src)
+    int i, int j, int k, const prj_mpi *mpi, double *dt_src)
 {
     double dt_src_local;
 
@@ -395,6 +394,7 @@ static void prj_timeint_update_dt_src_values(const prj_block *block,
         *dt_src = dt_src_local;
     }
 #if !PRJ_GRAV_DEBUG
+    (void)mpi;
     (void)rho;
     (void)mom1;
     (void)mom2;
@@ -402,7 +402,6 @@ static void prj_timeint_update_dt_src_values(const prj_block *block,
 #endif
 #if PRJ_GRAV_DEBUG
     if (dt_src_local<1e-7) {
-        prj_mpi *mpi = prj_mpi_current();
         int rank = mpi != 0 ? mpi->rank : 0;
         double inv_rho = rho != 0.0 ? 1.0 / rho : 0.0;
         double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
@@ -422,13 +421,13 @@ static void prj_timeint_update_dt_src_values(const prj_block *block,
 
 #if !(PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE)
 static void prj_timeint_update_dt_src(const prj_block *block, const double *u,
-    int i, int j, int k, double *dt_src)
+    int i, int j, int k, const prj_mpi *mpi, double *dt_src)
 {
     if (u == 0) {
         return;
     }
     prj_timeint_update_dt_src_values(block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
-        u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, dt_src);
+        u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
 }
 #endif
 
@@ -571,7 +570,7 @@ static void prj_timeint_store_mhd_rad_cell(const prj_mesh *mesh, prj_block *bloc
 
 static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh,
     prj_rad *rad, prj_eos *eos, prj_block *block, int i, int j, int k,
-    double dt, double *dt_src)
+    double dt, const prj_mpi *mpi, double *dt_src)
 {
     double u[PRJ_NVAR_CONS];
     int field;
@@ -579,7 +578,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh,
 
     prj_timeint_cell_cons_from_prim_mhd_rad(block->W, i, j, k, u);
     prj_timeint_update_dt_src_values(block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
-        u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, dt_src);
+        u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
 
 #define PRJ_STAGE1_UPDATE(v) do { \
         int vv = (v); \
@@ -626,7 +625,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh,
 
 static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh,
     prj_rad *rad, prj_eos *eos, prj_block *block, int i, int j, int k,
-    double dt, double *dt_src)
+    double dt, const prj_mpi *mpi, double *dt_src)
 {
     double u[PRJ_NVAR_CONS];
     double rho0;
@@ -655,7 +654,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh,
     prj_timeint_mhd_hydro_cons_from_prim(block->W1, i, j, k,
         &rho1, &mom11, &mom21, &mom31, &etot1, &ye1, &b11, &b21, &b31);
     prj_timeint_update_dt_src_values(block, rho0, mom10, mom20, mom30, etot0,
-        i, j, k, dt_src);
+        i, j, k, mpi, dt_src);
 
 #define PRJ_STAGE2_UPDATE(v, u0v, u1v) do { \
         int vv = (v); \
@@ -767,7 +766,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
 }
 #endif
 
-double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
+double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, double cfl)
 {
     double dt_min = 1.0e99;
     int bidx;
@@ -780,7 +779,7 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
         int j;
         int k;
 
-        if (!prj_timeint_local_block(block)) {
+        if (!prj_timeint_local_block(mpi, block)) {
             continue;
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -822,11 +821,11 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, double cfl)
         }
     }
 
-    return prj_mpi_min_dt(dt_min);
+    return prj_mpi_min_dt(mpi, dt_min);
 }
 
 void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
-    prj_rad *rad, double dt, double *dt_src, prj_timer *timer)
+    prj_rad *rad, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
 {
     int bidx;
 
@@ -838,29 +837,29 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (prj_timeint_local_block(block)) {
+        if (prj_timeint_local_block(mpi, block)) {
             prj_flux_update(eos, rad, block, block->W, block->eosvar, block->flux, 0);
         }
     }
     PRJ_TIMER_STOP(timer, "flux_local_stage1");
     PRJ_TIMER_START(timer, "flux_exchange_stage1");
-    prj_riemann_flux_send(mesh);
+    prj_riemann_flux_send(mesh, mpi);
     PRJ_TIMER_STOP(timer, "flux_exchange_stage1");
     PRJ_TIMER_STOP(timer, "flux_stage1");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_emf_stage1");
-    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage1_array, timer);
+    prj_timeint_mhd_update_mesh_emf(mesh, mpi, prj_timeint_stage1_array, timer);
     PRJ_TIMER_STOP(timer, "mhd_emf_stage1");
 #endif
     PRJ_TIMER_START(timer, "mpi_exchange_flux_emf_stage1");
-    prj_mpi_exchange_fluxes_and_emf(mesh, prj_mpi_current());
+    prj_mpi_exchange_fluxes_and_emf(mesh, mpi);
     PRJ_TIMER_STOP(timer, "mpi_exchange_flux_emf_stage1");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_update_bf_stage1");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (prj_timeint_local_block(block)) {
+        if (prj_timeint_local_block(mpi, block)) {
             prj_timeint_mhd_update_bf(block, 1, dt);
         }
     }
@@ -870,7 +869,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (prj_timeint_local_block(block)) {
+        if (prj_timeint_local_block(mpi, block)) {
             int i;
             int j;
             int k;
@@ -884,7 +883,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
 #if PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE
                         prj_timeint_update_cell_stage1_mhd_rad(mesh, rad, eos, block,
-                            i, j, k, dt, dt_src);
+                            i, j, k, dt, mpi, dt_src);
 #else
                         double w[PRJ_NVAR_PRIM];
                         double u[PRJ_NVAR_CONS];
@@ -895,7 +894,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
                         prj_timeint_cell_prim(block->W, i, j, k, w);
                         prj_eos_prim2cons(eos, w, u);
-                        prj_timeint_update_dt_src(block, u, i, j, k, dt_src);
+                        prj_timeint_update_dt_src(block, u, i, j, k, mpi, dt_src);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u1[v] = u[v] + dt * (block->dUdt[VIDX(v, i, j, k)] + fluxdiv[v]);
                         }
@@ -932,28 +931,28 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_STOP(timer, "update_stage1");
     PRJ_TIMER_START(timer, "ghost_fill_stage1");
     PRJ_TIMER_START(timer, "eos_active_stage1");
-    prj_eos_fill_active_cells(mesh, eos, 2);
+    prj_eos_fill_active_cells(mesh, eos, mpi, 2);
     PRJ_TIMER_STOP(timer, "eos_active_stage1");
     PRJ_TIMER_START(timer, "boundary_ghost_bf_stage1");
-    prj_boundary_fill_ghosts_and_bf(mesh, bc, 2, 1, eos);
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 2, 1, eos);
     PRJ_TIMER_STOP(timer, "boundary_ghost_bf_stage1");
     PRJ_TIMER_START(timer, "eos_mesh_stage1");
-    prj_eos_fill_mesh(mesh, eos, 2);
+    prj_eos_fill_mesh(mesh, eos, mpi, 2);
     PRJ_TIMER_STOP(timer, "eos_mesh_stage1");
     PRJ_TIMER_STOP(timer, "ghost_fill_stage1");
 #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(timer, "gravity_reduce_stage1");
-    prj_gravity_monopole_reduce(mesh, 2);
+    prj_gravity_monopole_reduce(mesh, mpi, 2);
     PRJ_TIMER_STOP(timer, "gravity_reduce_stage1");
     PRJ_TIMER_START(timer, "gravity_integrate_stage1");
-    prj_gravity_monopole_integrate(mesh);
+    prj_gravity_monopole_integrate(mesh, mpi);
     PRJ_TIMER_STOP(timer, "gravity_integrate_stage1");
 #endif
     PRJ_TIMER_STOP(timer, "stage1");
 }
 
 void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
-    prj_rad *rad, double dt, double *dt_src, prj_timer *timer)
+    prj_rad *rad, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
 {
     int bidx;
 
@@ -964,29 +963,29 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (prj_timeint_local_block(block)) {
+        if (prj_timeint_local_block(mpi, block)) {
             prj_flux_update(eos, rad, block, block->W1, block->eosvar, block->flux, 1);
         }
     }
     PRJ_TIMER_STOP(timer, "flux_local_stage2");
     PRJ_TIMER_START(timer, "flux_exchange_stage2");
-    prj_riemann_flux_send(mesh);
+    prj_riemann_flux_send(mesh, mpi);
     PRJ_TIMER_STOP(timer, "flux_exchange_stage2");
     PRJ_TIMER_STOP(timer, "flux_stage2");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_emf_stage2");
-    prj_timeint_mhd_update_mesh_emf(mesh, prj_timeint_stage2_array, timer);
+    prj_timeint_mhd_update_mesh_emf(mesh, mpi, prj_timeint_stage2_array, timer);
     PRJ_TIMER_STOP(timer, "mhd_emf_stage2");
 #endif
     PRJ_TIMER_START(timer, "mpi_exchange_flux_emf_stage2");
-    prj_mpi_exchange_fluxes_and_emf(mesh, prj_mpi_current());
+    prj_mpi_exchange_fluxes_and_emf(mesh, mpi);
     PRJ_TIMER_STOP(timer, "mpi_exchange_flux_emf_stage2");
 #if PRJ_MHD
     PRJ_TIMER_START(timer, "mhd_update_bf_stage2");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (prj_timeint_local_block(block)) {
+        if (prj_timeint_local_block(mpi, block)) {
             prj_timeint_mhd_update_bf(block, 2, dt);
         }
     }
@@ -996,7 +995,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (prj_timeint_local_block(block)) {
+        if (prj_timeint_local_block(mpi, block)) {
             int i;
             int j;
             int k;
@@ -1010,7 +1009,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
 #if PRJ_MHD && PRJ_NRAD > 0 && PRJ_FAST_MHD_RAD_CELL_UPDATE
                         prj_timeint_update_cell_stage2_mhd_rad(mesh, rad, eos, block,
-                            i, j, k, dt, dt_src);
+                            i, j, k, dt, mpi, dt_src);
 #else
                         double w[PRJ_NVAR_PRIM];
                         double u[PRJ_NVAR_CONS];
@@ -1023,7 +1022,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                         prj_eos_prim2cons(eos, w, u);
                         prj_timeint_cell_prim(block->W1, i, j, k, w);
                         prj_eos_prim2cons(eos, w, u1);
-                        prj_timeint_update_dt_src(block, u, i, j, k, dt_src);
+                        prj_timeint_update_dt_src(block, u, i, j, k, mpi, dt_src);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             u[v] = 0.5 * u[v] + 0.5 * (u1[v] + dt * (block->dUdt[VIDX(v, i, j, k)] + fluxdiv[v]));
                         }
@@ -1060,29 +1059,29 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_STOP(timer, "update_stage2");
     PRJ_TIMER_START(timer, "ghost_fill_stage2");
     PRJ_TIMER_START(timer, "eos_active_stage2");
-    prj_eos_fill_active_cells(mesh, eos, 1);
+    prj_eos_fill_active_cells(mesh, eos, mpi, 1);
     PRJ_TIMER_STOP(timer, "eos_active_stage2");
     PRJ_TIMER_START(timer, "boundary_ghost_bf_stage2");
-    prj_boundary_fill_ghosts_and_bf(mesh, bc, 1, 0, eos);
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos);
     PRJ_TIMER_STOP(timer, "boundary_ghost_bf_stage2");
     PRJ_TIMER_START(timer, "eos_mesh_stage2");
-    prj_eos_fill_mesh(mesh, eos, 1);
+    prj_eos_fill_mesh(mesh, eos, mpi, 1);
     PRJ_TIMER_STOP(timer, "eos_mesh_stage2");
     PRJ_TIMER_STOP(timer, "ghost_fill_stage2");
 #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(timer, "gravity_reduce_stage2");
-    prj_gravity_monopole_reduce(mesh, 1);
+    prj_gravity_monopole_reduce(mesh, mpi, 1);
     PRJ_TIMER_STOP(timer, "gravity_reduce_stage2");
     PRJ_TIMER_START(timer, "gravity_integrate_stage2");
-    prj_gravity_monopole_integrate(mesh);
+    prj_gravity_monopole_integrate(mesh, mpi);
     PRJ_TIMER_STOP(timer, "gravity_integrate_stage2");
 #endif
     PRJ_TIMER_STOP(timer, "stage2");
 }
 
 void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
-    prj_rad *rad, double dt, double *dt_src, prj_timer *timer)
+    prj_rad *rad, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
 {
-    prj_timeint_stage1(mesh, coord, bc, eos, rad, dt, dt_src, timer);
-    prj_timeint_stage2(mesh, coord, bc, eos, rad, dt, dt_src, timer);
+    prj_timeint_stage1(mesh, coord, bc, eos, rad, mpi, dt, dt_src, timer);
+    prj_timeint_stage2(mesh, coord, bc, eos, rad, mpi, dt, dt_src, timer);
 }

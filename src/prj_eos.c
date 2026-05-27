@@ -83,15 +83,11 @@ static double prj_eos_clamp_double(double x, double lo, double hi)
 
 static void prj_eos_table_range_fail(const char *name, double value, double lo, double hi)
 {
-    prj_mpi *mpi = prj_mpi_current();
-
     fprintf(stderr,
         "tabulated EOS lookup out of range for %s: value=%.17e allowed=[%.17e, %.17e]\n",
         name, value, lo, hi);
 #if defined(PRJ_ENABLE_MPI)
-    if (mpi != 0 && mpi->totrank > 1) {
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+    MPI_Abort(MPI_COMM_WORLD, 1);
 #endif
     exit(1);
 }
@@ -246,9 +242,8 @@ static void prj_eos_table_check_rty_inputs(const prj_eos *eos, double rho, doubl
     }
 }
 
-static int prj_eos_prepare_table(prj_eos *eos)
+static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
 {
-    prj_mpi *mpi;
     FILE *f;
     size_t slab_size;
     size_t expected_bytes;
@@ -285,8 +280,6 @@ static int prj_eos_prepare_table(prj_eos *eos)
     eos->ln10_dlogT = M_LN10 * eos->dlogT;
     slab_size = (size_t)eos->nt * (size_t)eos->nr * (size_t)eos->ny;
     expected_bytes = (size_t)PRJ_EOS_NUMEL * slab_size * sizeof(*eos->table);
-    mpi = prj_mpi_current();
-
 #if defined(PRJ_ENABLE_MPI)
     if (mpi != 0 && mpi->totrank > 1) {
         if (mpi->rank == 0) {
@@ -369,10 +362,8 @@ static int prj_eos_prepare_table(prj_eos *eos)
     return 0;
 }
 
-void prj_eos_init(prj_eos *eos)
+void prj_eos_init(prj_eos *eos, const prj_mpi *mpi)
 {
-    prj_mpi *mpi;
-
     if (eos == 0) {
         return;
     }
@@ -404,8 +395,7 @@ void prj_eos_init(prj_eos *eos)
         eos->table = 0;
         return;
     }
-    (void)prj_eos_prepare_table(eos);
-    mpi = prj_mpi_current();
+    (void)prj_eos_prepare_table(eos, mpi);
     if (eos->table_loaded == 1 && (mpi == 0 || mpi->rank == 0)) {
         fprintf(stderr, "EOS table initialization finished\n");
     }
@@ -488,7 +478,7 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
         return;
     }
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
-        eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
+        eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         int jy;
         int jyp;
         int jr;
@@ -526,7 +516,7 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
 double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye)
 {
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
-        eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
+        eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         int jy, jyp, jr, jrp, jt, jtp;
         double dye, drho, dtemp;
         double eta_raw;
@@ -553,7 +543,7 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         return;
     }
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
-        eos->filename[0] != '\0' && prj_eos_prepare_table(eos) == 0 && eos->table_loaded == 1) {
+        eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         double e_table;
         double rl;
         double jyf;
@@ -682,7 +672,7 @@ void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W)
     }
 }
 
-void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, int stage)
+void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
 {
     int bidx;
 
@@ -693,7 +683,6 @@ void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, int stage)
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        prj_mpi *mpi = prj_mpi_current();
         double *W = stage == 2 ? block->W1 : block->W;
         int i;
         int j;
@@ -716,7 +705,7 @@ void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, int stage)
     PRJ_TIMER_CURRENT_STOP("eos_fill_active_cells");
 }
 
-void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, int stage)
+void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
 {
     int bidx;
 
@@ -727,7 +716,6 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, int stage)
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        prj_mpi *mpi = prj_mpi_current();
         double *W = stage == 2 ? block->W1 : block->W;
 
         if (block->id < 0 || block->active != 1 || W == 0 || block->eosvar == 0) {
@@ -741,7 +729,7 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, int stage)
     PRJ_TIMER_CURRENT_STOP("eos_fill_mesh");
 }
 
-void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, int stage)
+void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
 {
     int bidx;
 
@@ -752,7 +740,6 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, int stage)
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        prj_mpi *mpi = prj_mpi_current();
         double *W = stage == 2 ? block->W1 : block->W;
         int i;
         int j;

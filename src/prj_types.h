@@ -24,7 +24,7 @@ typedef struct prj_grav prj_grav;
 typedef struct prj_rad prj_rad;
 typedef struct prj_mpi_buffer prj_mpi_buffer;
 typedef struct prj_mpi prj_mpi;
-typedef void (*prj_problem_init_fn)(prj_sim *sim);
+typedef void (*prj_problem_init_fn)(prj_sim *sim, prj_mpi *mpi);
 typedef int (*prj_amr_init_refine_fn)(const prj_block *block, void *userdata);
 
 struct prj_coord {
