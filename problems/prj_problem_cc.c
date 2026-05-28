@@ -628,6 +628,9 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
         prj_amr_adapt(&sim->mesh, &sim->eos, mpi, &sim->grav);
         prj_mpi_rebalance(&sim->mesh, mpi);
+    #if PRJ_USE_GRAVITY
+        prj_gravity_rebuild_grid(sim, mpi);
+    #endif
         prj_cc_fill_mesh(sim, mpi, profile);
 
         prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1);
