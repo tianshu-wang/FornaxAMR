@@ -269,7 +269,9 @@ int main(int argc, char *argv[])
 
     memset(&sim, 0, sizeof(sim));
     prj_timer_init(&timer);
+#if PRJ_TIMER
     prj_timer_set_current(&timer);
+#endif
     PRJ_TIMER_START(&timer, "init_total");
     PRJ_TIMER_START(&timer, "parse_params");
     prj_io_parser(&sim, 0);
@@ -384,6 +386,14 @@ int main(int argc, char *argv[])
     }
  #endif
 
+    if (sim.restart_from_file == 0 &&
+        (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn) &&
+        sim.perturbation_gaussian_norm != 0.0) {
+        PRJ_TIMER_START(&timer, "set_perturbation");
+        prj_set_perturbation(&sim.mesh, &sim.eos, &mpi,
+            sim.perturbation_gaussian_norm, sim.perturbation_seed);
+        PRJ_TIMER_STOP(&timer, "set_perturbation");
+    }
     PRJ_TIMER_START(&timer, "initial_eos_active");
     prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1);
     PRJ_TIMER_STOP(&timer, "initial_eos_active");

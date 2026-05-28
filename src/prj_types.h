@@ -292,6 +292,8 @@ struct prj_sim {
     char restart_file_name[256];
     int amr_interval;
     int dump_count;
+    double perturbation_gaussian_norm;
+    unsigned long long perturbation_seed;
 #if PRJ_MHD
     int mhd_init_type;
     double mhd_B_norm;

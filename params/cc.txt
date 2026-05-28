@@ -49,3 +49,6 @@ bc_x2_inner = outflow
 bc_x2_outer = outflow
 bc_x3_inner = outflow
 bc_x3_outer = outflow
+
+perturbation_gaussian_norm = 0.01
+perturbation_seed = 42

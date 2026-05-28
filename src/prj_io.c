@@ -215,6 +215,8 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->restart_interval = -1;
     sim->amr_interval = -1;
     sim->progenitor_file[0] = '\0';
+    sim->perturbation_gaussian_norm = 0.0;
+    sim->perturbation_seed = 0ULL;
     strncpy(sim->problem_name, "general", sizeof(sim->problem_name) - 1);
     sim->problem_name[sizeof(sim->problem_name) - 1] = '\0';
     sim->restart_from_file = 0;
@@ -372,6 +374,10 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->restart_interval = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_interval") == 0) {
             sim->amr_interval = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "perturbation_gaussian_norm") == 0) {
+            sim->perturbation_gaussian_norm = strtod(value, &endptr);
+        } else if (strcmp(key, "perturbation_seed") == 0) {
+            sim->perturbation_seed = strtoull(value, &endptr, 10);
         } else if (strcmp(key, "root_nx") == 0) {
             int root_n = (int)strtol(value, &endptr, 10);
 

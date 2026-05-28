@@ -4,7 +4,9 @@
 
 #include "prj.h"
 
+#if PRJ_TIMER
 static prj_timer *prj_timer_active = 0;
+#endif
 
 double prj_timer_now(void)
 {
@@ -50,12 +52,20 @@ void prj_timer_reset(prj_timer *timer)
 
 void prj_timer_set_current(prj_timer *timer)
 {
+#if PRJ_TIMER
     prj_timer_active = timer;
+#else
+    (void)timer;
+#endif
 }
 
 prj_timer *prj_timer_current(void)
 {
+#if PRJ_TIMER
     return prj_timer_active;
+#else
+    return 0;
+#endif
 }
 
 static int prj_timer_find(const prj_timer *timer, const char *name)

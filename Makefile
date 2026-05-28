@@ -68,6 +68,7 @@ SRCS := \
 	$(SRC_DIR)/prj_mesh.c \
 	$(SRC_DIR)/prj_mhd.c \
 	$(SRC_DIR)/prj_mpi.c \
+	$(SRC_DIR)/prj_perturbation.c \
 	$(SRC_DIR)/prj_radiation.c \
 	$(SRC_DIR)/prj_rad3_opac.c \
 	$(SRC_DIR)/prj_rad_inel.c \
