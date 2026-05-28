@@ -1293,7 +1293,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
 
         prj_io_unpack_metadata(block, meta_row);
         prj_block_setup_geometry(block, &coord);
-        prj_block_update_can_refine(block, mesh);
+        prj_block_update_can_refine(block, mesh, 0);
     }
 
     for (bidx = 0; bidx < nblocks; ++bidx) {
@@ -1457,7 +1457,8 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     free(metadata);
 }
 
-void prj_io_write_dump(const prj_mesh *mesh, const prj_mpi *mpi, int dump_index, int step, double time)
+void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi *mpi,
+    int dump_index, int step, double time)
 {
     char filename[256];
     hid_t file;
@@ -1831,8 +1832,6 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_mpi *mpi, int dump_index,
     }
 #endif
     {
-        const prj_grav *grav = prj_gravity_active_monopole();
-
         if (grav != 0 && grav->nbins > 0 && grav->accel != 0 && grav->lapse != 0) {
             hsize_t dims_accel[1] = {(hsize_t)grav->nbins};
             hsize_t dims_lapse[1] = {(hsize_t)grav->nbins + 1};

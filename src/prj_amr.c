@@ -777,33 +777,32 @@ static double prj_loehner_cell_indicator(
 
 static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
-    static const int offset[6][3] = {
-        {-1, 0, 0},
-        {1, 0, 0},
-        {0, -1, 0},
-        {0, 1, 0},
-        {0, 0, -1},
-        {0, 0, 1}
-    };
     const double small = 1.0e-14;
     double v1;
     double v2;
     double v3;
     double cs;
     double max_indicator = 0.0;
-    int n;
+    int axis;
 
     v1 = prj_block_primitive_at(b, PRJ_PRIM_V1, i, j, k);
     v2 = prj_block_primitive_at(b, PRJ_PRIM_V2, i, j, k);
     v3 = prj_block_primitive_at(b, PRJ_PRIM_V3, i, j, k);
     cs = prj_block_sound_speed_at(b, eos, i, j, k);
-    for (n = 0; n < 6; ++n) {
-        double dv1 = v1 - prj_block_primitive_at(b, PRJ_PRIM_V1, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
-        double dv2 = v2 - prj_block_primitive_at(b, PRJ_PRIM_V2, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
-        double dv3 = v3 - prj_block_primitive_at(b, PRJ_PRIM_V3, i + offset[n][0], j + offset[n][1], k + offset[n][2]);
-        double dv = prj_sqrt_double(dv1 * dv1 + dv2 * dv2 + dv3 * dv3) / (cs + small);
+    for (axis = 0; axis < 3; ++axis) {
+        int side;
 
-        max_indicator = prj_max_double(max_indicator, dv);
+        for (side = -1; side <= 1; side += 2) {
+            int di = axis == 0 ? side : 0;
+            int dj = axis == 1 ? side : 0;
+            int dk = axis == 2 ? side : 0;
+            double dv1 = v1 - prj_block_primitive_at(b, PRJ_PRIM_V1, i + di, j + dj, k + dk);
+            double dv2 = v2 - prj_block_primitive_at(b, PRJ_PRIM_V2, i + di, j + dj, k + dk);
+            double dv3 = v3 - prj_block_primitive_at(b, PRJ_PRIM_V3, i + di, j + dj, k + dk);
+            double dv = prj_sqrt_double(dv1 * dv1 + dv2 * dv2 + dv3 * dv3) / (cs + small);
+
+            max_indicator = prj_max_double(max_indicator, dv);
+        }
     }
     return max_indicator;
 }
@@ -1159,7 +1158,7 @@ void prj_amr_enforce_two_to_one(prj_mesh *mesh, const prj_mpi *mpi)
 }
 
 static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
-    const prj_mpi *mpi, int *neighbor_dirty)
+    const prj_mpi *mpi, const prj_grav *grav, int *neighbor_dirty)
 {
     int i;
     int changed = 0;
@@ -1175,7 +1174,7 @@ static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
             int oct;
 
             prj_amr_mark_dirty_block_and_neighbors(mesh, i, neighbor_dirty);
-            prj_amr_refine_block(mesh, mpi, i);
+            prj_amr_refine_block(mesh, mpi, i, grav);
             if (neighbor_dirty != 0) {
                 neighbor_dirty[i] = 1;
                 for (oct = 0; oct < 8; ++oct) {
@@ -1194,9 +1193,9 @@ static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
     return changed;
 }
 
-int prj_amr_refine_marked_blocks(prj_mesh *mesh, const prj_mpi *mpi)
+int prj_amr_refine_marked_blocks(prj_mesh *mesh, const prj_mpi *mpi, const prj_grav *grav)
 {
-    return prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, 0);
+    return prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, grav, 0);
 }
 
 static void prj_amr_init_neighbors_with_mask(prj_mesh *mesh,
@@ -1997,7 +1996,7 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
 #endif
 }
 
-void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
+void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id, const prj_grav *grav)
 {
     prj_block *parent;
     int oct;
@@ -2059,7 +2058,7 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
         child->dx[0] = parent->dx[0] * 0.5;
         child->dx[1] = parent->dx[1] * 0.5;
         child->dx[2] = parent->dx[2] * 0.5;
-        prj_block_update_can_refine(child, mesh);
+        prj_block_update_can_refine(child, mesh, grav);
         if (owner_local) {
             if (prj_block_alloc_data(child) != 0) {
                 child->id = -1;
@@ -2170,7 +2169,7 @@ int prj_amr_coarsen_block(prj_mesh *mesh, const prj_mpi *mpi, int parent_id)
     return 1;
 }
 
-int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
+int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi, const prj_grav *grav)
 {
     int i;
     int refined = 0;
@@ -2201,7 +2200,7 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
     PRJ_TIMER_CURRENT_STOP("amr_mhd_prolongate_bf_exchange");
 #endif
     PRJ_TIMER_CURRENT_START("amr_refine_marked");
-    refined = prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, neighbor_dirty);
+    refined = prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, grav, neighbor_dirty);
     PRJ_TIMER_CURRENT_STOP("amr_refine_marked");
     if (refined) {
         PRJ_TIMER_CURRENT_START("amr_init_neighbors_refine");

@@ -3,7 +3,7 @@
 
 #include "prj.h"
 
-static const double prj_problem_sedov_injection_radius = 0.05;
+#define PRJ_PROBLEM_SEDOV_INJECTION_RADIUS 0.05
 
 static int prj_problem_local_block(const prj_block *block)
 {
@@ -153,7 +153,7 @@ static void prj_problem_refine_injection_region(prj_sim *sim, const prj_mpi *mpi
             }
             block->refine_flag = 0;
             if (prj_problem_block_overlaps_ball(block, cx, cy, cz,
-                    prj_problem_sedov_injection_radius)) {
+                    PRJ_PROBLEM_SEDOV_INJECTION_RADIUS)) {
                 block->refine_flag = 1;
                 any_marked = 1;
             }
@@ -163,7 +163,7 @@ static void prj_problem_refine_injection_region(prj_sim *sim, const prj_mpi *mpi
             break;
         }
 
-        refined = prj_amr_refine_marked_blocks(&sim->mesh, mpi);
+        refined = prj_amr_refine_marked_blocks(&sim->mesh, mpi, &sim->grav);
         if (refined == 0) {
             break;
         }
@@ -176,7 +176,7 @@ static void prj_problem_refine_injection_region(prj_sim *sim, const prj_mpi *mpi
 
 static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double cz)
 {
-    const double injection_radius = prj_problem_sedov_injection_radius;
+    const double injection_radius = PRJ_PROBLEM_SEDOV_INJECTION_RADIUS;
     int bidx;
     int selected = 0;
     double best_dist[8];

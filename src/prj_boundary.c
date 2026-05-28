@@ -454,7 +454,7 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
                                             i/2+slot->send_loc_start_rad[0],
                                             j/2+slot->send_loc_start_rad[1],
                                             k/2+slot->send_loc_start_rad[2],
-                                            0, target);
+                                            0, target, use_BJ);
                                 }
                             }
                         }

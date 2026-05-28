@@ -5,7 +5,6 @@
 
 #include "prj.h"
 
-#define PRJ_CCSN_EOS_PATH "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat"
 #define PRJ_CCSN_KELVIN_PER_MEV 1.160451812e10
 
 typedef struct prj_ccsn_profile {
@@ -190,9 +189,22 @@ static double prj_ccsn_init_amr_LP_min(const prj_ccsn_init_amr_ctx *ctx, double 
     return Lmin;
 }
 
+static int prj_ccsn_init_amr_cell_offset(int idx)
+{
+    if (idx == 0) {
+        return 0;
+    }
+    if (idx == 1) {
+        return 1;
+    }
+    if (idx == 2) {
+        return PRJ_BLOCK_SIZE - 1;
+    }
+    return PRJ_BLOCK_SIZE;
+}
+
 static int prj_ccsn_init_amr_refine_block(const prj_block *block, void *userdata)
 {
-    static const int cell_offsets[4] = {0, 1, PRJ_BLOCK_SIZE - 1, PRJ_BLOCK_SIZE};
     const prj_ccsn_init_amr_ctx *ctx = (const prj_ccsn_init_amr_ctx *)userdata;
     double rmin = HUGE_VAL;
     double rmax = 0.0;
@@ -213,13 +225,16 @@ static int prj_ccsn_init_amr_refine_block(const prj_block *block, void *userdata
         dx = block->dx[2];
     }
     for (ix = 0; ix < 4; ++ix) {
-        double x = block->xmin[0] + (double)cell_offsets[ix] * block->dx[0];
+        const int xoff = prj_ccsn_init_amr_cell_offset(ix);
+        double x = block->xmin[0] + (double)xoff * block->dx[0];
 
         for (iy = 0; iy < 4; ++iy) {
-            double y = block->xmin[1] + (double)cell_offsets[iy] * block->dx[1];
+            const int yoff = prj_ccsn_init_amr_cell_offset(iy);
+            double y = block->xmin[1] + (double)yoff * block->dx[1];
 
             for (iz = 0; iz < 4; ++iz) {
-                double z = block->xmin[2] + (double)cell_offsets[iz] * block->dx[2];
+                const int zoff = prj_ccsn_init_amr_cell_offset(iz);
+                double z = block->xmin[2] + (double)zoff * block->dx[2];
                 double r = sqrt(x * x + y * y + z * z);
 
                 if (r < rmin) {
@@ -553,8 +568,8 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_ccsn_p
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
 #if PRJ_USE_GRAVITY
     prj_gravity_init(sim, mpi);
-    prj_gravity_monopole_reduce(&sim->mesh, mpi, 1);
-    prj_gravity_monopole_integrate(&sim->mesh, mpi);
+    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
+    prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
 #endif
     if (sim->mesh.max_level == 0) {
         prj_ccsn_init_amr_ctx_free(&init_ctx);
@@ -566,8 +581,8 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_ccsn_p
     prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
 #if PRJ_USE_GRAVITY
-    prj_gravity_monopole_reduce(&sim->mesh, mpi, 1);
-    prj_gravity_monopole_integrate(&sim->mesh, mpi);
+    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
+    prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
 #endif
 
     if (init_ctx_ok) {
@@ -577,7 +592,7 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_ccsn_p
 
     do {
         prev_sig = prj_problem_mesh_signature(&sim->mesh);
-        prj_amr_adapt(&sim->mesh, &sim->eos, mpi);
+        prj_amr_adapt(&sim->mesh, &sim->eos, mpi, &sim->grav);
         prj_mpi_rebalance(&sim->mesh, mpi);
         prj_ccsn_fill_mesh(sim, mpi, profile);
 
@@ -585,8 +600,8 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_ccsn_p
         prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
     #if PRJ_USE_GRAVITY
-        prj_gravity_monopole_reduce(&sim->mesh, mpi, 1);
-        prj_gravity_monopole_integrate(&sim->mesh, mpi);
+        prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
+        prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
     #endif
 
         next_sig = prj_problem_mesh_signature(&sim->mesh);
@@ -607,11 +622,6 @@ void prj_problem_ccsn(prj_sim *sim, prj_mpi *mpi)
     if (sim->progenitor_file[0] == '\0') {
         return;
     }
-    if (sim->eos.kind == PRJ_EOS_KIND_TABLE && sim->eos.filename[0] == '\0') {
-        strncpy(sim->eos.filename, PRJ_CCSN_EOS_PATH, sizeof(sim->eos.filename) - 1);
-        sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
-    }
-    prj_eos_init(&sim->eos, mpi);
     if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
         sim->mesh.max_level, &sim->coord) != 0) {
         return;

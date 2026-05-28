@@ -58,19 +58,10 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     return prj_problem_general;
 }
 
-static void prj_prepare_restart_problem(prj_sim *sim, prj_problem_init_fn init_fn, prj_mpi *mpi)
+static void prj_prepare_restart_problem(prj_sim *sim, prj_mpi *mpi)
 {
-    static const char *cc_eos_path =
-        "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat";
-
     if (sim == 0) {
         return;
-    }
-    if ((init_fn == prj_problem_cc || init_fn == prj_problem_ccsn) &&
-        sim->eos.kind == PRJ_EOS_KIND_TABLE &&
-        sim->eos.filename[0] == '\0') {
-        strncpy(sim->eos.filename, cc_eos_path, sizeof(sim->eos.filename) - 1);
-        sim->eos.filename[sizeof(sim->eos.filename) - 1] = '\0';
     }
     prj_eos_init(&sim->eos, mpi);
 }
@@ -151,62 +142,65 @@ static const char *prj_amr_label(const prj_sim *sim)
     return "off";
 }
 
-static const char *prj_amr_estimator_label(const prj_sim *sim)
+static void prj_amr_estimator_label(const prj_sim *sim, char *label, size_t label_size)
 {
+    int written = 0;
+    int i;
+    int any = 0;
+
+    if (label == 0 || label_size == 0) {
+        return;
+    }
+    label[0] = '\0';
     if (sim == 0) {
-        return "unknown";
+        snprintf(label, label_size, "unknown");
+        return;
     }
-    {
-        static char label[128];
-        int offset = 0;
-        int i;
-        int any = 0;
+    for (i = 0; i < PRJ_AMR_N; ++i) {
+        const char *name;
 
-        label[0] = '\0';
-        for (i = 0; i < PRJ_AMR_N; ++i) {
-            const char *name;
-
-            if (sim->mesh.amr_criterion_set[i] == 0) {
-                continue;
-            }
-            if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
-                name = "pressure_scale_height";
-            } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP) {
-                if (sim->mesh.amr_fractional_jump_var[i] == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
-                    name = "fractional_jump_pressure";
-                } else {
-                    name = "fractional_jump_density";
-                }
-            } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_VELOCITY) {
-                name = "velocity";
+        if (sim->mesh.amr_criterion_set[i] == 0) {
+            continue;
+        }
+        if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
+            name = "pressure_scale_height";
+        } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP) {
+            if (sim->mesh.amr_fractional_jump_var[i] == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
+                name = "fractional_jump_pressure";
             } else {
-                if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_DENSITY) {
-                    name = "lohner_density";
-                } else if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_TEMPERATURE) {
-                    name = "lohner_temperature";
-                } else {
-                    name = "lohner_pressure";
-                }
+                name = "fractional_jump_density";
             }
-            offset += snprintf(label + offset, sizeof(label) - (size_t)offset,
-                "%s%s", any ? "," : "", name);
-            any = 1;
-            if (offset >= (int)sizeof(label) - 1) {
-                break;
+        } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_VELOCITY) {
+            name = "velocity";
+        } else {
+            if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_DENSITY) {
+                name = "lohner_density";
+            } else if (sim->mesh.amr_lohner_var[i] == PRJ_LOHNER_VAR_TEMPERATURE) {
+                name = "lohner_temperature";
+            } else {
+                name = "lohner_pressure";
             }
         }
-        if (any != 0) {
-            return label;
+        written += snprintf(label + written, label_size - (size_t)written,
+            "%s%s", any ? "," : "", name);
+        any = 1;
+        if (written >= (int)label_size - 1) {
+            break;
         }
     }
-    return "none";
+    if (any == 0) {
+        snprintf(label, label_size, "none");
+    }
 }
 
 static void prj_print_config(const prj_sim *sim, int rank)
 {
+    char amr_estimator_label[128];
+
     if (rank != 0 || sim == 0) {
         return;
     }
+    prj_amr_estimator_label(sim, amr_estimator_label, sizeof(amr_estimator_label));
 
     fprintf(stderr, "config:\n");
     fprintf(stderr, "mpi: %s\n",
@@ -237,7 +231,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
         prj_amr_label(sim)
     );
     fprintf(stderr, "amr estimator: %s\n",
-        prj_amr_estimator_label(sim)
+        amr_estimator_label
     );
     fprintf(stderr, "use_BJ: %s\n", sim->mesh.use_BJ != 0 ? "on" : "off");
     fprintf(stderr, "max_level: %d\n", sim->mesh.max_level);
@@ -326,13 +320,14 @@ int main(int argc, char *argv[])
     prj_print_config(&sim, mpi.rank);
     PRJ_TIMER_START(&timer, "problem_init");
     if (sim.restart_from_file == 0) {
+        prj_eos_init(&sim.eos, &mpi);
         init_fn(&sim, &mpi);
         if (!init_with_mpi) {
             prj_mpi_decompose(&sim.mesh, &mpi);
             prj_mpi_prepare(&sim.mesh, &mpi);
         }
     } else {
-        prj_prepare_restart_problem(&sim, init_fn, &mpi);
+        prj_prepare_restart_problem(&sim, &mpi);
     }
     PRJ_TIMER_STOP(&timer, "problem_init");
     if (mpi.rank == 0) {
@@ -400,16 +395,16 @@ int main(int argc, char *argv[])
     PRJ_TIMER_STOP(&timer, "initial_eos_mesh");
 #if PRJ_USE_GRAVITY
     PRJ_TIMER_START(&timer, "initial_gravity_reduce");
-    prj_gravity_monopole_reduce(&sim.mesh, &mpi, 1);
+    prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
     PRJ_TIMER_STOP(&timer, "initial_gravity_reduce");
     PRJ_TIMER_START(&timer, "initial_gravity_integrate");
-    prj_gravity_monopole_integrate(&sim.mesh, &mpi);
+    prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
     PRJ_TIMER_STOP(&timer, "initial_gravity_integrate");
 #endif
 
     if (sim.restart_from_file == 0) {
         PRJ_TIMER_START(&timer, "initial_dump");
-        prj_io_write_dump(&sim.mesh, &mpi, sim.dump_count, sim.step, sim.time);
+        prj_io_write_dump(&sim.mesh, &sim.grav, &mpi, sim.dump_count, sim.step, sim.time);
         PRJ_TIMER_STOP(&timer, "initial_dump");
         sim.dump_count += 1;
         if (sim.output_dt >= 0.0) {
@@ -441,7 +436,7 @@ int main(int argc, char *argv[])
         PRJ_TIMER_START(&timer, "main_loop");
 #if PRJ_USE_GRAVITY
         PRJ_TIMER_START(&timer, "gravity_update_x_com");
-        prj_gravity_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol);
+        prj_gravity_update_center_of_mass(&sim.mesh, &sim.grav, &mpi, sim.x_com_err_tol);
         PRJ_TIMER_STOP(&timer, "gravity_update_x_com");
 #endif
         {
@@ -474,7 +469,8 @@ int main(int argc, char *argv[])
             dt_step = sim.t_end - sim.time;
         }
         PRJ_TIMER_START(&timer, "timeint_step");
-        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, &mpi, dt_step, &dt_src,
+        prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, &sim.grav, &mpi,
+            dt_step, &dt_src,
 #if PRJ_TIMER
             &timer
 #else
@@ -495,10 +491,10 @@ int main(int argc, char *argv[])
 #if PRJ_USE_GRAVITY
             if (prj_amr_criteria_need_gravity(&sim.mesh)) {
                 PRJ_TIMER_START(&timer, "amr_pre_gravity_reduce");
-                prj_gravity_monopole_reduce(&sim.mesh, &mpi, 1);
+                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
                 PRJ_TIMER_STOP(&timer, "amr_pre_gravity_reduce");
                 PRJ_TIMER_START(&timer, "amr_pre_gravity_integrate");
-                prj_gravity_monopole_integrate(&sim.mesh, &mpi);
+                prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
                 PRJ_TIMER_STOP(&timer, "amr_pre_gravity_integrate");
             }
 #endif
@@ -506,7 +502,7 @@ int main(int argc, char *argv[])
             prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1);
             PRJ_TIMER_STOP(&timer, "amr_pre_eos_ghost_cons");
             PRJ_TIMER_START(&timer, "amr_adapt");
-            int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi);
+            int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi, &sim.grav);
             PRJ_TIMER_STOP(&timer, "amr_adapt");
             if (block_changed) {
                 PRJ_TIMER_START(&timer, "amr_mpi_rebalance");
@@ -533,10 +529,10 @@ int main(int argc, char *argv[])
                 PRJ_TIMER_STOP(&timer, "ghost_fill_post_amr");
             #if PRJ_USE_GRAVITY
                 PRJ_TIMER_START(&timer, "post_amr_gravity_reduce");
-                prj_gravity_monopole_reduce(&sim.mesh, &mpi, 1);
+                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
                 PRJ_TIMER_STOP(&timer, "post_amr_gravity_reduce");
                 PRJ_TIMER_START(&timer, "post_amr_gravity_integrate");
-                prj_gravity_monopole_integrate(&sim.mesh, &mpi);
+                prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
                 PRJ_TIMER_STOP(&timer, "post_amr_gravity_integrate");
             #endif
             }
@@ -574,7 +570,7 @@ int main(int argc, char *argv[])
         }
         if (write_output) {
             PRJ_TIMER_START(&timer, "write_dump");
-            prj_io_write_dump(&sim.mesh, &mpi, sim.dump_count, sim.step, sim.time);
+            prj_io_write_dump(&sim.mesh, &sim.grav, &mpi, sim.dump_count, sim.step, sim.time);
             PRJ_TIMER_STOP(&timer, "write_dump");
             sim.dump_count += 1;
         }

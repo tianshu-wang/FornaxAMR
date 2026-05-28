@@ -92,6 +92,15 @@ static void prj_eos_table_range_fail(const char *name, double value, double lo, 
     exit(1);
 }
 
+static void prj_eos_missing_table_filename_fail(void)
+{
+    fprintf(stderr, "tabulated EOS requires eos_file in the parameter file\n");
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Abort(MPI_COMM_WORLD, 1);
+#endif
+    exit(1);
+}
+
 static void prj_eos_convert_pressure_slab_to_log(prj_eos *eos, size_t slab_size)
 {
     size_t offset;
@@ -108,9 +117,19 @@ static void prj_eos_convert_pressure_slab_to_log(prj_eos *eos, size_t slab_size)
     }
 }
 
+static int prj_eos_compact_src_rec(int idx)
+{
+    switch (idx) {
+        case 0: return 1;
+        case 1: return 2;
+        case 2: return 12;
+        case 3: return 15;
+        default: return 1;
+    }
+}
+
 static void prj_eos_compact_table(prj_eos *eos)
 {
-    static const int src_rec[PRJ_EOS_COMPACT_NUMEL] = {1, 2, 12, 15};
     size_t slab_size;
     size_t compact_bytes;
     double *compact;
@@ -126,7 +145,7 @@ static void prj_eos_compact_table(prj_eos *eos)
         return;
     }
     for (i = 0; i < PRJ_EOS_COMPACT_NUMEL; ++i) {
-        size_t src_off = (size_t)(src_rec[i] - 1) * slab_size;
+        size_t src_off = (size_t)(prj_eos_compact_src_rec(i) - 1) * slab_size;
         size_t dst_off = (size_t)i * slab_size;
         memcpy(&compact[dst_off], &eos->table[src_off], slab_size * sizeof(double));
     }
@@ -367,7 +386,10 @@ void prj_eos_init(prj_eos *eos, const prj_mpi *mpi)
     if (eos == 0) {
         return;
     }
-    if (eos->kind != PRJ_EOS_KIND_TABLE || eos->filename[0] == '\0') {
+    if (eos->kind == PRJ_EOS_KIND_TABLE && eos->filename[0] == '\0') {
+        prj_eos_missing_table_filename_fail();
+    }
+    if (eos->kind != PRJ_EOS_KIND_TABLE) {
         eos->table_loaded = 0;
         eos->table_is_mmap = 0;
         eos->nt = 0;

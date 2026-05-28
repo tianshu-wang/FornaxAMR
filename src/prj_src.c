@@ -225,7 +225,8 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
 #endif
 }
 
-void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_block *block,
+void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
+    const prj_block *block,
     double *restrict W, double *restrict dUdt)
 {
     int v;
@@ -244,6 +245,6 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_block *block,
     }
     prj_src_geom(eos, W, dUdt);
     prj_src_user(eos, W, dUdt);
-    prj_src_monopole_gravity(block, prj_gravity_active_monopole(), W, dUdt);
+    prj_src_monopole_gravity(block, grav, W, dUdt);
     prj_src_radiation_vel_grad(rad, block, W, dUdt);
 }

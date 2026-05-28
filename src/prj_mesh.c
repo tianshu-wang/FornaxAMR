@@ -406,7 +406,6 @@ int prj_block_alloc_data(prj_block *b)
     for (int n = 0; n < LMAX*LMAX; ++n) {
         prj_fill(b->Ylm[n], (size_t)PRJ_BLOCK_NCELLS, 0.0);
     }
-    prj_gravity_cache_block(b);
     return 0;
 }
 
@@ -475,12 +474,10 @@ void prj_block_setup_geometry(prj_block *b, const prj_coord *coord)
     b->area[0] = b->dx[1] * b->dx[2];
     b->area[1] = b->dx[0] * b->dx[2];
     b->area[2] = b->dx[0] * b->dx[1];
-    prj_gravity_cache_block(b);
 }
 
-static double prj_block_max_cell_dx_over_rcom(const prj_block *b)
+static double prj_block_max_cell_dx_over_rcom(const prj_block *b, const prj_grav *grav)
 {
-    const prj_grav *grav = prj_gravity_active_monopole();
     double x_com[3] = {0.0, 0.0, 0.0};
     double dx_max;
     double max_ratio = 0.0;
@@ -536,9 +533,8 @@ static double prj_block_max_cell_dx_over_rcom(const prj_block *b)
     return max_ratio;
 }
 
-void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
+void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh, const prj_grav *grav)
 {
-    const prj_grav *grav;
     double ratio;
     double xc[3];
     double x_com[3] = {0.0, 0.0, 0.0};
@@ -556,7 +552,6 @@ void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
         return;
     }
 
-    grav = prj_gravity_active_monopole();
     if (grav != 0) {
         x_com[0] = grav->x_com[0];
         x_com[1] = grav->x_com[1];
@@ -575,7 +570,7 @@ void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
         return;
     }
 
-    ratio = prj_block_max_cell_dx_over_rcom(b);
+    ratio = prj_block_max_cell_dx_over_rcom(b, grav);
     if (ratio < limit) {
         b->can_refine = 0;
     }
@@ -1122,7 +1117,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                 b->dx[1] = block_dx[1] / (double)PRJ_BLOCK_SIZE;
                 b->dx[2] = block_dx[2] / (double)PRJ_BLOCK_SIZE;
                 prj_block_setup_geometry(b, coord);
-                prj_block_update_can_refine(b, mesh);
+                prj_block_update_can_refine(b, mesh, 0);
                 if (prj_block_alloc_data(b) != 0) {
                     prj_mesh_destroy(mesh);
                     return 3;

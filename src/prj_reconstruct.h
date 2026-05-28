@@ -29,6 +29,11 @@ static inline double prj_reconstruct_clamp01(double x)
     return x;
 }
 
+static inline double prj_reconstruct_fine_offset(int idx)
+{
+    return idx == 0 ? -0.25 : 0.25;
+}
+
 static inline int prj_reconstruct_stencil3_index(int di, int dj, int dk)
 {
     return (di + 1) * 9 + (dj + 1) * 3 + (dk + 1);
@@ -140,7 +145,6 @@ static inline double prj_reconstruct_cell_for_prolongate_minmod(const double ste
 static inline double prj_reconstruct_cell_for_prolongate_bj(const double stencil[27],
     const double target_location[3])
 {
-    static const double fine_offset[2] = {-0.25, 0.25};
     double base;
     double grad[3];
     double qmin;
@@ -181,8 +185,9 @@ static inline double prj_reconstruct_cell_for_prolongate_bj(const double stencil
     for (ii = 0; ii < 2; ++ii) {
         for (jj = 0; jj < 2; ++jj) {
             for (kk = 0; kk < 2; ++kk) {
-                double delta = grad[0] * fine_offset[ii] +
-                    grad[1] * fine_offset[jj] + grad[2] * fine_offset[kk];
+                double delta = grad[0] * prj_reconstruct_fine_offset(ii) +
+                    grad[1] * prj_reconstruct_fine_offset(jj) +
+                    grad[2] * prj_reconstruct_fine_offset(kk);
                 double q = base + delta;
                 double a;
 
@@ -243,7 +248,6 @@ static inline double prj_reconstruct_face_for_prolongate_minmod(const double ste
 static inline double prj_reconstruct_face_for_prolongate_bj(const double stencil[9],
     const double target_location[2])
 {
-    static const double fine_offset[2] = {-0.25, 0.25};
     double base;
     double grad[2];
     double qmin;
@@ -277,7 +281,8 @@ static inline double prj_reconstruct_face_for_prolongate_bj(const double stencil
 
     for (ii = 0; ii < 2; ++ii) {
         for (jj = 0; jj < 2; ++jj) {
-            double delta = grad[0] * fine_offset[ii] + grad[1] * fine_offset[jj];
+            double delta = grad[0] * prj_reconstruct_fine_offset(ii) +
+                grad[1] * prj_reconstruct_fine_offset(jj);
             double q = base + delta;
             double a;
 

@@ -181,6 +181,7 @@ struct prj_grav {
     int use_multipole_gravity;
     int nbins;
     double dr_min;
+    double rmax;
     double x_com[3];
     double x_com_new[3];
     double *rf;
