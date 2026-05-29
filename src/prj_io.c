@@ -213,6 +213,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->max_steps = 100;
     sim->output_interval = -1;
     sim->restart_interval = -1;
+    sim->timer_interval = 10;
     sim->amr_interval = -1;
     sim->progenitor_file[0] = '\0';
     sim->perturbation_gaussian_norm = 0.0;
@@ -372,6 +373,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->output_interval = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "restart_interval") == 0) {
             sim->restart_interval = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "timer_interval") == 0) {
+            sim->timer_interval = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_interval") == 0) {
             sim->amr_interval = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "perturbation_gaussian_norm") == 0) {

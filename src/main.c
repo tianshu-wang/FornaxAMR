@@ -238,6 +238,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
     fprintf(stderr, "x_com_err_tol: %.6e\n", sim->x_com_err_tol);
     fprintf(stderr, "amr_init_scale_factor: %.6e\n", sim->mesh.amr_init_scale_factor);
+    fprintf(stderr, "timer_interval: %d\n", sim->timer_interval);
 }
 
 int main(int argc, char *argv[])
@@ -619,6 +620,11 @@ int main(int argc, char *argv[])
                 wall_days, wall_hours, wall_minutes, wall_seconds);
         }
         PRJ_TIMER_STOP(&timer, "main_loop");
+#if PRJ_TIMER
+        if (sim.timer_interval > 0 && sim.step % sim.timer_interval == 0) {
+            prj_write_timer_report(&timer, mpi.rank);
+        }
+#endif
     }
 
     PRJ_TIMER_START(&timer, "final_write_restart");
