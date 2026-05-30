@@ -163,6 +163,7 @@ static void prj_problem_refine_injection_region(prj_sim *sim, const prj_mpi *mpi
             break;
         }
 
+        prj_amr_enforce_two_to_one(&sim->mesh, mpi);
         refined = prj_amr_refine_marked_blocks(&sim->mesh, mpi, &sim->grav);
         if (refined == 0) {
             break;
