@@ -337,5 +337,7 @@ void prj_problem_sedov(prj_sim *sim, prj_mpi *mpi)
     prj_problem_fill_ambient(sim, rho, pressure);
     prj_problem_refine_injection_region(sim, mpi, 0.0, 0.0, 0.0, rho, pressure);
     prj_problem_inject_energy(sim, 0.0, 0.0, 0.0);
+    prj_mpi_decompose(&(sim->mesh), mpi);
+    prj_mpi_prepare(&(sim->mesh), mpi);
     prj_mhd_init(sim, mpi);
 }

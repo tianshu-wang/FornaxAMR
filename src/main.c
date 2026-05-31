@@ -316,7 +316,7 @@ int main(int argc, char *argv[])
         sim.mesh.max_level = max_level_override;
     }
 
-    init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn);
+    init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn || init_fn == prj_problem_sedov);
     PRJ_TIMER_START(&timer, "mpi_init");
     prj_mpi_init(&argc, &argv, &mpi);
     PRJ_TIMER_STOP(&timer, "mpi_init");
