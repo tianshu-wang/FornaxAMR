@@ -213,7 +213,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->max_steps = 100;
     sim->output_interval = -1;
     sim->restart_interval = -1;
-    sim->timer_interval = 10;
+    sim->timer_interval = 100;
     sim->amr_interval = -1;
     sim->progenitor_file[0] = '\0';
     sim->perturbation_gaussian_norm = 0.0;
