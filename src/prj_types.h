@@ -358,15 +358,12 @@ struct prj_mpi_buffer {
     int *emf_src_block;
     int *emf_src_dir;
     int *emf_src_idx[3];
-    int amr_bf_send_record_count;
     int amr_bf_send_value_count;
     int amr_bf_recv_record_count;
     int amr_bf_recv_value_count;
-    int amr_bf_send_record_capacity;
     int amr_bf_send_value_capacity;
     int amr_bf_recv_record_capacity;
     int amr_bf_recv_value_capacity;
-    int *amr_bf_headers_send;
     double *amr_bf_values_send;
     int *amr_bf_headers_recv;
     double *amr_bf_values_recv;
