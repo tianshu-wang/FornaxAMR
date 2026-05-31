@@ -199,6 +199,8 @@ struct prj_grav {
     double *erad_avg;
     double *prad_avg;
     double *vdotF_avg;
+    double *reduce_avg_buf;
+    double *reduce_lm_buf;
 };
 
 struct prj_rad {

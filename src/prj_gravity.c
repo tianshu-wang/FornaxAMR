@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -575,6 +576,8 @@ void prj_gravity_free(prj_grav *grav)
     free(grav->erad_avg);
     free(grav->prad_avg);
     free(grav->vdotF_avg);
+    free(grav->reduce_avg_buf);
+    free(grav->reduce_lm_buf);
     grav->rf = 0;
     grav->ms = 0;
     grav->phi = 0;
@@ -592,6 +595,8 @@ void prj_gravity_free(prj_grav *grav)
     grav->erad_avg = 0;
     grav->prad_avg = 0;
     grav->vdotF_avg = 0;
+    grav->reduce_avg_buf = 0;
+    grav->reduce_lm_buf = 0;
     grav->nbins = 0;
     grav->dr_min = 0.0;
     grav->rmax = 0.0;
@@ -651,11 +656,18 @@ void prj_gravity_init(prj_sim *sim, const prj_mpi *mpi)
     grav->erad_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->erad_avg));
     grav->prad_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->prad_avg));
     grav->vdotF_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->vdotF_avg));
+    grav->reduce_avg_buf = (double *)calloc(9U * (size_t)grav->nbins,
+        sizeof(*grav->reduce_avg_buf));
+    if (use_multipole) {
+        grav->reduce_lm_buf = (double *)calloc(2U * (size_t)(LMAX * LMAX) *
+            (size_t)grav->nbins, sizeof(*grav->reduce_lm_buf));
+    }
     if (grav->rf == 0 || grav->ms == 0 || grav->phi == 0 || grav->accel == 0 ||
         grav->lapse == 0 || (use_multipole && !prj_gravity_multipole_arrays_valid(grav)) ||
         grav->vol == 0 || grav->rho_avg == 0 ||
         grav->vr_avg == 0 || grav->pgas_avg == 0 || grav->uavg_int == 0 ||
-        grav->erad_avg == 0 || grav->prad_avg == 0 || grav->vdotF_avg == 0) {
+        grav->erad_avg == 0 || grav->prad_avg == 0 || grav->vdotF_avg == 0 ||
+        grav->reduce_avg_buf == 0 || (use_multipole && grav->reduce_lm_buf == 0)) {
         prj_gravity_free(grav);
         return;
     }
@@ -1303,92 +1315,51 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 
 #if defined(PRJ_ENABLE_MPI)
     {
-        if (mpi != 0 && mpi->totrank > 1) {
-            double *restrict global_ms;
-            double *restrict global_vol;
-            double *restrict global_rho_avg;
-            double *restrict global_vr_avg;
-            double *restrict global_pgas_avg;
-            double *restrict global_uavg_int;
-            double *restrict global_erad_avg;
-            double *restrict global_prad_avg;
-            double *restrict global_vdotF_avg;
-            double *restrict global_lm = 0;
+        if (mpi != 0 && mpi->totrank > 1 && grav->reduce_avg_buf != 0 &&
+            (!use_multipole || grav->reduce_lm_buf != 0)) {
+            double *restrict buf = grav->reduce_avg_buf;
+            size_t nb = (size_t)grav->nbins;
 
             PRJ_TIMER_CURRENT_START("gravity_reduce_mpi_allreduce");
-            global_ms = (double *)calloc((size_t)grav->nbins, sizeof(*global_ms));
-            global_vol = (double *)calloc((size_t)grav->nbins, sizeof(*global_vol));
-            global_rho_avg = (double *)calloc((size_t)grav->nbins, sizeof(*global_rho_avg));
-            global_vr_avg = (double *)calloc((size_t)grav->nbins, sizeof(*global_vr_avg));
-            global_pgas_avg = (double *)calloc((size_t)grav->nbins, sizeof(*global_pgas_avg));
-            global_uavg_int = (double *)calloc((size_t)grav->nbins, sizeof(*global_uavg_int));
-            global_erad_avg = (double *)calloc((size_t)grav->nbins, sizeof(*global_erad_avg));
-            global_prad_avg = (double *)calloc((size_t)grav->nbins, sizeof(*global_prad_avg));
-            global_vdotF_avg = (double *)calloc((size_t)grav->nbins, sizeof(*global_vdotF_avg));
+            memcpy(buf + 0U * nb, grav->ms,        nb * sizeof(double));
+            memcpy(buf + 1U * nb, grav->vol,       nb * sizeof(double));
+            memcpy(buf + 2U * nb, grav->rho_avg,   nb * sizeof(double));
+            memcpy(buf + 3U * nb, grav->vr_avg,    nb * sizeof(double));
+            memcpy(buf + 4U * nb, grav->pgas_avg,  nb * sizeof(double));
+            memcpy(buf + 5U * nb, grav->uavg_int,  nb * sizeof(double));
+            memcpy(buf + 6U * nb, grav->erad_avg,  nb * sizeof(double));
+            memcpy(buf + 7U * nb, grav->prad_avg,  nb * sizeof(double));
+            memcpy(buf + 8U * nb, grav->vdotF_avg, nb * sizeof(double));
+            MPI_Allreduce(MPI_IN_PLACE, buf, 9 * grav->nbins, MPI_DOUBLE, MPI_SUM,
+                MPI_COMM_WORLD);
+            memcpy(grav->ms,        buf + 0U * nb, nb * sizeof(double));
+            memcpy(grav->vol,       buf + 1U * nb, nb * sizeof(double));
+            memcpy(grav->rho_avg,   buf + 2U * nb, nb * sizeof(double));
+            memcpy(grav->vr_avg,    buf + 3U * nb, nb * sizeof(double));
+            memcpy(grav->pgas_avg,  buf + 4U * nb, nb * sizeof(double));
+            memcpy(grav->uavg_int,  buf + 5U * nb, nb * sizeof(double));
+            memcpy(grav->erad_avg,  buf + 6U * nb, nb * sizeof(double));
+            memcpy(grav->prad_avg,  buf + 7U * nb, nb * sizeof(double));
+            memcpy(grav->vdotF_avg, buf + 8U * nb, nb * sizeof(double));
             if (use_multipole) {
-                global_lm = (double *)calloc((size_t)grav->nbins, sizeof(*global_lm));
-            }
-            if (global_ms == 0 || global_vol == 0 || global_rho_avg == 0 || global_vr_avg == 0 ||
-                global_pgas_avg == 0 || global_uavg_int == 0 || global_erad_avg == 0 ||
-                global_prad_avg == 0 || global_vdotF_avg == 0 ||
-                (use_multipole && global_lm == 0)) {
-                free(global_lm);
-                free(global_vdotF_avg);
-                free(global_prad_avg);
-                free(global_erad_avg);
-                free(global_uavg_int);
-                free(global_pgas_avg);
-                free(global_vr_avg);
-                free(global_rho_avg);
-                free(global_vol);
-                free(global_ms);
-                PRJ_TIMER_CURRENT_STOP("gravity_reduce_mpi_allreduce");
-                return;
-            }
-            MPI_Allreduce(grav->ms, global_ms, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->vol, global_vol, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->rho_avg, global_rho_avg, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->vr_avg, global_vr_avg, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->pgas_avg, global_pgas_avg, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->uavg_int, global_uavg_int, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->erad_avg, global_erad_avg, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->prad_avg, global_prad_avg, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            MPI_Allreduce(grav->vdotF_avg, global_vdotF_avg, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-            for (idx = 0; idx < grav->nbins; ++idx) {
-                grav->ms[idx] = global_ms[idx];
-                grav->vol[idx] = global_vol[idx];
-                grav->rho_avg[idx] = global_rho_avg[idx];
-                grav->vr_avg[idx] = global_vr_avg[idx];
-                grav->pgas_avg[idx] = global_pgas_avg[idx];
-                grav->uavg_int[idx] = global_uavg_int[idx];
-                grav->erad_avg[idx] = global_erad_avg[idx];
-                grav->prad_avg[idx] = global_prad_avg[idx];
-                grav->vdotF_avg[idx] = global_vdotF_avg[idx];
-            }
-            if (use_multipole) {
+                double *restrict lmbuf = grav->reduce_lm_buf;
                 int yidx;
 
-                for (yidx = 0; yidx < LMAX*LMAX; ++yidx) {
-                    MPI_Allreduce(grav->Clm[yidx], global_lm, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-                    for (idx = 0; idx < grav->nbins; ++idx) {
-                        grav->Clm[yidx][idx] = global_lm[idx];
-                    }
-                    MPI_Allreduce(grav->Dlm[yidx], global_lm, grav->nbins, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-                    for (idx = 0; idx < grav->nbins; ++idx) {
-                        grav->Dlm[yidx][idx] = global_lm[idx];
-                    }
+                for (yidx = 0; yidx < LMAX * LMAX; ++yidx) {
+                    memcpy(lmbuf + (size_t)(2 * yidx + 0) * nb, grav->Clm[yidx],
+                        nb * sizeof(double));
+                    memcpy(lmbuf + (size_t)(2 * yidx + 1) * nb, grav->Dlm[yidx],
+                        nb * sizeof(double));
+                }
+                MPI_Allreduce(MPI_IN_PLACE, lmbuf, 2 * LMAX * LMAX * grav->nbins,
+                    MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+                for (yidx = 0; yidx < LMAX * LMAX; ++yidx) {
+                    memcpy(grav->Clm[yidx], lmbuf + (size_t)(2 * yidx + 0) * nb,
+                        nb * sizeof(double));
+                    memcpy(grav->Dlm[yidx], lmbuf + (size_t)(2 * yidx + 1) * nb,
+                        nb * sizeof(double));
                 }
             }
-            free(global_lm);
-            free(global_vdotF_avg);
-            free(global_prad_avg);
-            free(global_erad_avg);
-            free(global_uavg_int);
-            free(global_pgas_avg);
-            free(global_vr_avg);
-            free(global_rho_avg);
-            free(global_vol);
-            free(global_ms);
             PRJ_TIMER_CURRENT_STOP("gravity_reduce_mpi_allreduce");
         }
     }
