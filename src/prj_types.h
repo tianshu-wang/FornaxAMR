@@ -182,6 +182,7 @@ struct prj_grav {
     int nbins;
     double dr_min;
     double rmax;
+    double min_cell;
     double x_com[3];
     double x_com_new[3];
     double *rf;

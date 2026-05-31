@@ -447,6 +447,7 @@ static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh, const prj
         return;
     }
     min_cell = prj_gravity_min_cell_size(mesh, mpi);
+    grav->min_cell = min_cell;
     grav->dr_min = 1.5 * min_cell;
     if (grav->dr_min <= 0.0 || grav->rmax <= grav->dr_min) {
         grav->dr_min = grav->rmax / (double)grav->nbins;
@@ -600,6 +601,7 @@ void prj_gravity_free(prj_grav *grav)
     grav->nbins = 0;
     grav->dr_min = 0.0;
     grav->rmax = 0.0;
+    grav->min_cell = 0.0;
     grav->x_com[0] = 0.0;
     grav->x_com[1] = 0.0;
     grav->x_com[2] = 0.0;
@@ -1116,7 +1118,7 @@ int prj_gravity_update_center_of_mass(prj_mesh *mesh, prj_grav *grav, const prj_
     dx1 = grav->x_com_new[1] - grav->x_com[1];
     dx2 = grav->x_com_new[2] - grav->x_com[2];
     distance = sqrt(dx0 * dx0 + dx1 * dx1 + dx2 * dx2);
-    min_cell = prj_gravity_min_cell_size(mesh, mpi);
+    min_cell = grav->min_cell;
     threshold = x_com_err_tol * min_cell;
     if (threshold < 0.0) {
         threshold = 0.0;
