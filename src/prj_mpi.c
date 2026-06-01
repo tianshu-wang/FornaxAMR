@@ -3882,27 +3882,37 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
         int send_total = record_count * PRJ_MPI_GHOST_NVAR_HE + record_count_rad * PRJ_MPI_GHOST_NVAR_RAD;
         int recv_total = cell_size_total * PRJ_MPI_GHOST_NVAR_HE + cell_size_total_rad * PRJ_MPI_GHOST_NVAR_RAD;
 
-        prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
-        MPI_Irecv(buffer->cell_buffer_recv_by_kind[fill_kind], recv_total, MPI_DOUBLE,
-            buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
-        MPI_Isend(buffer->cell_buffer_send_by_kind[fill_kind], send_total, MPI_DOUBLE,
-            buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
+        if (send_total > 0) {
+            prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
+            MPI_Isend(buffer->cell_buffer_send_by_kind[fill_kind], send_total, MPI_DOUBLE,
+                buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
+        }
+        if (recv_total > 0) {
+            MPI_Irecv(buffer->cell_buffer_recv_by_kind[fill_kind], recv_total, MPI_DOUBLE,
+                buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
+        }
 #if PRJ_MHD
         {
-            int send_value_count = 0;
+            int expected_send = buffer->bf_send_value_count[fill_kind];
             int recv_value_count = buffer->bf_recv_value_count[fill_kind];
 
-            if (prj_mpi_pack_bf_values_only(mesh, mpi, buffer->receiver_rank,
-                    use_bf1, fill_kind, buffer->bf_values_send,
-                    buffer->bf_send_value_capacity, &send_value_count) != 0 ||
-                send_value_count != buffer->bf_send_value_count[fill_kind]) {
-                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to pack Bf values\n");
-                exit(EXIT_FAILURE);
+            if (expected_send > 0) {
+                int send_value_count = 0;
+
+                if (prj_mpi_pack_bf_values_only(mesh, mpi, buffer->receiver_rank,
+                        use_bf1, fill_kind, buffer->bf_values_send,
+                        buffer->bf_send_value_capacity, &send_value_count) != 0 ||
+                    send_value_count != expected_send) {
+                    fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to pack Bf values\n");
+                    exit(EXIT_FAILURE);
+                }
+                MPI_Isend(buffer->bf_values_send, send_value_count, MPI_DOUBLE,
+                    buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
             }
-            MPI_Irecv(buffer->bf_values_recv, recv_value_count, MPI_DOUBLE,
-                buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
-            MPI_Isend(buffer->bf_values_send, send_value_count, MPI_DOUBLE,
-                buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
+            if (recv_value_count > 0) {
+                MPI_Irecv(buffer->bf_values_recv, recv_value_count, MPI_DOUBLE,
+                    buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
+            }
         }
 #else
         (void)use_bf1;
@@ -3913,12 +3923,19 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
     }
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        prj_mpi_unpack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
+        int cell_size_total = buffer->cell_recv_count_by_kind[fill_kind];
+        int cell_size_total_rad = buffer->cell_recv_count_rad_by_kind[fill_kind];
+        int recv_total = cell_size_total * PRJ_MPI_GHOST_NVAR_HE + cell_size_total_rad * PRJ_MPI_GHOST_NVAR_RAD;
+
+        if (recv_total > 0) {
+            prj_mpi_unpack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
+        }
 #if PRJ_MHD
         {
             int recv_value_count = buffer->bf_recv_value_count[fill_kind];
 
-            if (prj_mpi_apply_bf_values_from_sender(mesh, mpi,
+            if (recv_value_count > 0 &&
+                prj_mpi_apply_bf_values_from_sender(mesh, mpi,
                     buffer->receiver_rank, use_bf1, fill_kind,
                     buffer->bf_values_recv, recv_value_count) != 0) {
                 fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to apply Bf values\n");
