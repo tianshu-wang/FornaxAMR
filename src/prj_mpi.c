@@ -1677,6 +1677,49 @@ static int prj_mpi_pack_bf_records(const prj_mesh *mesh, const prj_mpi *mpi,
     return 0;
 }
 
+static int prj_mpi_pack_bf_values_only(const prj_mesh *mesh, const prj_mpi *mpi,
+    int receiver_rank, int use_bf1, int fill_kind, double *values,
+    int value_capacity, int *value_count)
+{
+    int bidx;
+
+    *value_count = 0;
+    if (mesh == 0 || mpi == 0) {
+        return 1;
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        const prj_block *block = &mesh->blocks[bidx];
+        int n;
+
+        if (!prj_mpi_block_is_local(mpi, block)) {
+            continue;
+        }
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &block->slot[n];
+            int nid = slot->id;
+            int expected;
+            int before;
+
+            if (nid < 0 || nid >= mesh->nblocks ||
+                mesh->blocks[nid].rank != receiver_rank ||
+                !prj_mpi_bf_slot_matches(fill_kind, slot->rel_level)) {
+                continue;
+            }
+            expected = prj_mpi_bf_record_value_count(fill_kind, slot);
+            if (expected <= 0) {
+                continue;
+            }
+            before = *value_count;
+            if (prj_mpi_pack_bf_record_values(block, use_bf1, slot,
+                    values, value_count, value_capacity) != 0 ||
+                *value_count - before != expected) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 static inline double prj_mpi_bf_buf_read(const double *buf,
     const int buf_lo[3], const int buf_n[3], int i, int j, int k)
 {
@@ -2186,6 +2229,67 @@ static int prj_mpi_apply_bf_records(prj_mesh *mesh, const prj_mpi *mpi, int use_
             return 1;
         }
         pos += nvalue;
+    }
+    return pos == value_count ? 0 : 1;
+}
+
+static int prj_mpi_apply_bf_values_from_sender(prj_mesh *mesh, const prj_mpi *mpi,
+    int sender_rank, int use_bf1, int fill_kind, const double *values,
+    int value_count)
+{
+    int sbidx;
+    int pos = 0;
+
+    if (mesh == 0 || mpi == 0) {
+        return 1;
+    }
+    for (sbidx = 0; sbidx < mesh->nblocks; ++sbidx) {
+        const prj_block *sblock = &mesh->blocks[sbidx];
+        int n;
+
+        if (!prj_block_is_active(sblock) || sblock->rank != sender_rank) {
+            continue;
+        }
+        for (n = 0; n < 56; ++n) {
+            const prj_neighbor *slot = &sblock->slot[n];
+            int nid = slot->id;
+            int expected;
+            prj_block *dst;
+            int err = 0;
+
+            if (nid < 0 || nid >= mesh->nblocks ||
+                mesh->blocks[nid].rank != mpi->rank ||
+                !prj_mpi_bf_slot_matches(fill_kind, slot->rel_level)) {
+                continue;
+            }
+            expected = prj_mpi_bf_record_value_count(fill_kind, slot);
+            if (expected <= 0) {
+                continue;
+            }
+            if (pos + expected > value_count) {
+                return 1;
+            }
+            dst = &mesh->blocks[nid];
+            if (!prj_mpi_block_is_local(mpi, dst)) {
+                pos += expected;
+                continue;
+            }
+            prj_mpi_check_bf_storage(dst, "prj_mpi_apply_bf_values_from_sender");
+            if (slot->rel_level == 0) {
+                err = prj_mpi_apply_bf_same_level_record(dst, use_bf1,
+                    slot, values + pos, expected);
+            } else if (slot->rel_level < 0) {
+                err = prj_mpi_apply_bf_restriction_record(dst, use_bf1,
+                    slot, values + pos, expected);
+            } else {
+                err = prj_mpi_apply_bf_prolongation_record(dst, use_bf1,
+                    slot, values + pos, expected, mesh->use_BJ);
+            }
+            if (err != 0) {
+                return 1;
+            }
+            pos += expected;
+        }
     }
     return pos == value_count ? 0 : 1;
 }
@@ -3826,27 +3930,16 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
             buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
 #if PRJ_MHD
         {
-            int send_record_count = 0;
             int send_value_count = 0;
-            int recv_record_count = buffer->bf_recv_record_count[fill_kind];
             int recv_value_count = buffer->bf_recv_value_count[fill_kind];
 
-            if (prj_mpi_pack_bf_records(mesh, mpi, buffer->receiver_rank, use_bf1,
-                    fill_kind, buffer->bf_headers_send,
-                    buffer->bf_send_record_capacity, &send_record_count,
-                    buffer->bf_values_send, buffer->bf_send_value_capacity,
-                    &send_value_count) != 0 ||
-                send_record_count != buffer->bf_send_record_count[fill_kind] ||
+            if (prj_mpi_pack_bf_values_only(mesh, mpi, buffer->receiver_rank,
+                    use_bf1, fill_kind, buffer->bf_values_send,
+                    buffer->bf_send_value_capacity, &send_value_count) != 0 ||
                 send_value_count != buffer->bf_send_value_count[fill_kind]) {
-                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to pack Bf records\n");
+                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to pack Bf values\n");
                 exit(EXIT_FAILURE);
             }
-            MPI_Irecv(buffer->bf_headers_recv,
-                recv_record_count * PRJ_MPI_BF_HEADER_NINT, MPI_INT,
-                buffer->receiver_rank, 301, MPI_COMM_WORLD, &requests[request_count++]);
-            MPI_Isend(buffer->bf_headers_send,
-                send_record_count * PRJ_MPI_BF_HEADER_NINT, MPI_INT,
-                buffer->receiver_rank, 301, MPI_COMM_WORLD, &requests[request_count++]);
             MPI_Irecv(buffer->bf_values_recv, recv_value_count, MPI_DOUBLE,
                 buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
             MPI_Isend(buffer->bf_values_send, send_value_count, MPI_DOUBLE,
@@ -3864,13 +3957,12 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
         prj_mpi_unpack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
 #if PRJ_MHD
         {
-            int recv_record_count = buffer->bf_recv_record_count[fill_kind];
             int recv_value_count = buffer->bf_recv_value_count[fill_kind];
 
-            if (prj_mpi_apply_bf_records(mesh, mpi, use_bf1, fill_kind,
-                    buffer->bf_headers_recv, recv_record_count,
+            if (prj_mpi_apply_bf_values_from_sender(mesh, mpi,
+                    buffer->receiver_rank, use_bf1, fill_kind,
                     buffer->bf_values_recv, recv_value_count) != 0) {
-                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to apply Bf records\n");
+                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to apply Bf values\n");
                 exit(EXIT_FAILURE);
             }
         }
