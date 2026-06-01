@@ -1,6 +1,7 @@
 #ifndef PRJ_MPI_H
 #define PRJ_MPI_H
 
+void prj_mpi_barrier(const prj_mpi *mpi);
 void prj_mpi_init(int *argc, char ***argv, prj_mpi *mpi);
 void prj_mpi_decompose(prj_mesh *mesh, const prj_mpi *mpi);
 void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi);

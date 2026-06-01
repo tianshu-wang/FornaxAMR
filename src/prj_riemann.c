@@ -692,7 +692,6 @@ void prj_riemann_flux_send(prj_mesh *mesh, const prj_mpi *mpi)
     my_rank = (mpi != 0) ? mpi->rank : 0;
 
     /* ---- Phase 1: local (same-rank) coarse-fine correction ---- */
-    PRJ_TIMER_CURRENT_START("riemann_flux_local_correction");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
         int n;
@@ -751,5 +750,4 @@ void prj_riemann_flux_send(prj_mesh *mesh, const prj_mpi *mpi)
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("riemann_flux_local_correction");
 }

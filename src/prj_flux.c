@@ -402,7 +402,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
         int kk;
         const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
 
-        PRJ_TIMER_CURRENT_START("flux_opacity_refresh");
         for (ii = -1; ii <= PRJ_BLOCK_SIZE; ++ii) {
             for (jj = -1; jj <= PRJ_BLOCK_SIZE; ++jj) {
                 for (kk = -1; kk <= PRJ_BLOCK_SIZE; ++kk) {
@@ -418,18 +417,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                 }
             }
         }
-        PRJ_TIMER_CURRENT_STOP("flux_opacity_refresh");
     }
 #endif
 
     for (dir = 0; dir < 3; ++dir) {
-#if PRJ_TIMER
-        static const char *const flux_dir_timer[3] = {
-            "flux_dir_x1",
-            "flux_dir_x2",
-            "flux_dir_x3"
-        };
-#endif
         int i;
         int j;
         int k;
@@ -453,7 +444,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 #endif
 
 #if PRJ_TIMER
-        PRJ_TIMER_CURRENT_START(flux_dir_timer[dir]);
 #endif
         for (i = istart; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
@@ -563,7 +553,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
             }
         }
 #if PRJ_TIMER
-        PRJ_TIMER_CURRENT_STOP(flux_dir_timer[dir]);
 #endif
     }
 }

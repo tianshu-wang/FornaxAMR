@@ -701,7 +701,6 @@ void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
     if (mesh == 0) {
         return;
     }
-    PRJ_TIMER_CURRENT_START("eos_fill_active_cells");
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -724,7 +723,6 @@ void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("eos_fill_active_cells");
 }
 
 void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
@@ -734,7 +732,6 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int sta
     if (mesh == 0) {
         return;
     }
-    PRJ_TIMER_CURRENT_START("eos_fill_mesh");
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -748,7 +745,6 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int sta
         }
         prj_eos_fill_block(eos, block, W);
     }
-    PRJ_TIMER_CURRENT_STOP("eos_fill_mesh");
 }
 
 void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
@@ -758,7 +754,6 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
     if (mesh == 0) {
         return;
     }
-    PRJ_TIMER_CURRENT_START("eos_fill_ghost_cons");
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -820,7 +815,6 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("eos_fill_ghost_cons");
 }
 
 void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)

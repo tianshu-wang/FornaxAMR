@@ -44,6 +44,9 @@ double prj_timer_inclusive_total(const prj_timer *timer, const char *name);
 int prj_timer_count(const prj_timer *timer, const char *name);
 void prj_timer_report(const prj_timer *timer, FILE *stream, int rank);
 
+struct prj_mpi;
+void prj_mpi_barrier(const struct prj_mpi *mpi);
+
 #if PRJ_TIMER
 #define PRJ_TIMER_START(timer, name) do { \
         static int prj_timer_cache_idx = -1; \
@@ -55,11 +58,23 @@ void prj_timer_report(const prj_timer *timer, FILE *stream, int rank);
     } while (0)
 #define PRJ_TIMER_CURRENT_START(name) PRJ_TIMER_START(prj_timer_current(), (name))
 #define PRJ_TIMER_CURRENT_STOP(name) PRJ_TIMER_STOP(prj_timer_current(), (name))
+#define PRJ_TIMER_BARRIER_START(timer, mpi, name) do { \
+        PRJ_TIMER_START((timer), (name)); \
+        prj_mpi_barrier((mpi)); \
+    } while (0)
+#define PRJ_TIMER_BARRIER_STOP(timer, mpi, name) do { \
+        prj_mpi_barrier((mpi)); \
+        PRJ_TIMER_STOP((timer), (name)); \
+    } while (0)
 #else
 #define PRJ_TIMER_START(timer, name) ((void)(timer), (void)(name))
 #define PRJ_TIMER_STOP(timer, name) ((void)(timer), (void)(name))
 #define PRJ_TIMER_CURRENT_START(name) ((void)(name))
 #define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
+#define PRJ_TIMER_BARRIER_START(timer, mpi, name) \
+        ((void)(timer), (void)(mpi), (void)(name))
+#define PRJ_TIMER_BARRIER_STOP(timer, mpi, name) \
+        ((void)(timer), (void)(mpi), (void)(name))
 #endif
 
 #endif

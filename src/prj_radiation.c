@@ -524,16 +524,11 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     int g;
 
     (void)u;
-    PRJ_TIMER_CURRENT_START("rad_eu_resid_opac_lookup");
     prj_rad3_opac_lookup(rad, rho, T, Ye, kappa, 0, 0, eta);
-    PRJ_TIMER_CURRENT_STOP("rad_eu_resid_opac_lookup");
-    PRJ_TIMER_CURRENT_START("rad_eu_resid_eos_rty");
     prj_eos_rty(eos, rho, T, Ye, eos_q);
-    PRJ_TIMER_CURRENT_STOP("rad_eu_resid_eos_rty");
     eint_new = eos_q[PRJ_EOS_EINT];
     Uint_new = rho * eint_new;
 
-    PRJ_TIMER_CURRENT_START("rad_eu_resid_group_loop");
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             int idx = nu * PRJ_NEGROUP + g;
@@ -549,7 +544,6 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("rad_eu_resid_group_loop");
 
     *F1 = Uint_new - Uint_old + sum_dE;
     *F2 = rho * Ye - rho * Ye_old + sum_dE_xe;
@@ -602,7 +596,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     Ye_old = u[PRJ_CONS_YE] / rho;
     eint_old = Uint_old / rho;
 
-    PRJ_TIMER_CURRENT_START("rad_eu_setup");
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             E_nu_old[nu * PRJ_NEGROUP + g] = u[PRJ_CONS_RAD_E(nu, g)];
@@ -615,7 +608,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     err_scale_1 = fabs(Uint_old) > 0.0 ? Uint_old : 1.0;
     err_scale_2 = fabs(rho * Ye_old) > 0.0 ? rho * Ye_old : 1.0;
     res_cur = 1.0e30;
-    PRJ_TIMER_CURRENT_STOP("rad_eu_setup");
 
     for (iter = 0; iter < rad->maxiter; ++iter) {
         double F1;
@@ -665,10 +657,8 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             have_cached_residual = 0;
             have_final_residual = 1;
         } else {
-            PRJ_TIMER_CURRENT_START("rad_eu_resid_base");
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
                 E_nu_old, T, Ye, &F1, &F2, E_nu_new, last_kappa);
-            PRJ_TIMER_CURRENT_STOP("rad_eu_resid_base");
             f1 = F1 / err_scale_1;
             f2 = F2 / err_scale_2;
             res_cur = 0.5 * (f1 * f1 + f2 * f2);
@@ -679,7 +669,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         }
 
         /* Jacobian via finite differences with power-of-2 step. */
-        PRJ_TIMER_CURRENT_START("rad_eu_jacobian");
         hT = 3.0e-8 * T;
         // hT = pow(2.0, round(log(hT) / log(2.0)));
         hY = 3.0e-8 * Ye;
@@ -694,9 +683,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             E_nu_old, T, Ye + hY, &F1_p, &F2_p, 0, 0);
         dFdY_1 = (F1_p - F1) / hY;
         dFdY_2 = (F2_p - F2) / hY;
-        PRJ_TIMER_CURRENT_STOP("rad_eu_jacobian");
 
-        PRJ_TIMER_CURRENT_START("rad_eu_linsolve");
         /* grad(½||F||²) = J^T F  (unscaled, for line search). */
         gradf0 = dFdT_1 * F1 / (err_scale_1 * err_scale_1) +
             dFdT_2 * F2 / (err_scale_2 * err_scale_2);
@@ -755,10 +742,8 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
 
         /* Directional derivative for Armijo check. */
         gradfdx = gradf0 * dT + gradf1 * dY;
-        PRJ_TIMER_CURRENT_STOP("rad_eu_linsolve");
 
         /* Backtracking line search with cubic/quadratic interpolation. */
-        PRJ_TIMER_CURRENT_START("rad_eu_linesearch");
         lam = 1.0;
         lamold = 0.0;
         resold = 0.0;
@@ -811,7 +796,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
                 lam = templam > 0.1 * lam ? templam : 0.1 * lam;
             }
         }
-        PRJ_TIMER_CURRENT_STOP("rad_eu_linesearch");
 
         T = T + lam * dT;
         Ye = Ye + lam * dY;
@@ -844,7 +828,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
 
     /* Final pass at converged (T, Ye) to populate E_nu_new if the accepted
      * line-search residual was not already evaluated at the final state. */
-    PRJ_TIMER_CURRENT_START("rad_eu_final");
     {
         double eint_new;
 
@@ -865,7 +848,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("rad_eu_final");
 
     if (final_temperature != 0) {
         *final_temperature = T;
@@ -901,16 +883,13 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     v[2] = u[PRJ_CONS_MOM3] / rho;
     inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
 
-    PRJ_TIMER_CURRENT_START("rad_mu_opac_lookup");
     prj_rad3_opac_lookup(rad, rho, temperature, Ye, 0, sigma, delta, 0);
-    PRJ_TIMER_CURRENT_STOP("rad_mu_opac_lookup");
 
     dmom[0] = 0.0;
     dmom[1] = 0.0;
     dmom[2] = 0.0;
     detot = 0.0;
 
-    PRJ_TIMER_CURRENT_START("rad_mu_group_loop");
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             int idx = nu * PRJ_NEGROUP + g;
@@ -935,9 +914,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     u[PRJ_CONS_MOM2] -= dmom[1];
     u[PRJ_CONS_MOM3] -= dmom[2];
     u[PRJ_CONS_ETOT] -= detot;
-    PRJ_TIMER_CURRENT_STOP("rad_mu_group_loop");
 
-    PRJ_TIMER_CURRENT_START("rad_mu_flux_limit");
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             double E = u[PRJ_CONS_RAD_E(nu, g)];
@@ -955,7 +932,6 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("rad_mu_flux_limit");
 }
 
 /* Koren slope-limiter function φ(r) = max(0, min(2r, (2+r)/3, 2)). */
@@ -1028,7 +1004,6 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         return;
     }
 
-    PRJ_TIMER_CURRENT_START("rad_ff_dvdx");
     inv_dx[0] = 1.0 / block->dx[0];
     inv_dx[1] = 1.0 / block->dx[1];
     inv_dx[2] = 1.0 / block->dx[2];
@@ -1057,7 +1032,6 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
         }
     }
-    PRJ_TIMER_CURRENT_STOP("rad_ff_dvdx");
 
     int cell_idx = IDX(ic, jc, kc);
     double grad_phi[3];
@@ -1086,7 +1060,6 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         int kk;
 
         /* Per-group cell-centred state and M1 pressure tensor. */
-        PRJ_TIMER_CURRENT_START("rad_ff_closure");
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             Eg[g] = W_state[VIDX(PRJ_PRIM_RAD_E(field, g), ic, jc, kc)];
             Fg[g][0] = W_state[VIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
@@ -1099,10 +1072,8 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             dF_acc[g][1] = 0.0;
             dF_acc[g][2] = 0.0;
         }
-        PRJ_TIMER_CURRENT_STOP("rad_ff_closure");
 
         /* Energy: dE_g/dt += Σ_{i,j} v^i_{;j} · [(ν P^{ji})_{g+1/2} - (ν P^{ji})_{g-1/2}]. */
-        PRJ_TIMER_CURRENT_START("rad_ff_energy_sr");
         for (jj = 0; jj < 3; ++jj) {
             for (ii = 0; ii < 3; ++ii) {
                 double vij = dvdx[jj][ii];
@@ -1132,11 +1103,9 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 }
             }
         }
-        PRJ_TIMER_CURRENT_STOP("rad_ff_energy_sr");
 
         /* Flux: dF_{gj}/dt += Σ_{i,k} v^i_{;k} · [(ν Q^{kji})_{g+1/2} - (ν Q^{kji})_{g-1/2}].
          * Closure: Q^{kji}_g from the Levermore/Vaytet third moment. */
-        PRJ_TIMER_CURRENT_START("rad_ff_flux_sr");
         for (jj = 0; jj < 3; ++jj) {
             for (kk = 0; kk < 3; ++kk) {
                 for (ii = 0; ii < 3; ++ii) {
@@ -1167,7 +1136,6 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 }
             }
         }
-        PRJ_TIMER_CURRENT_STOP("rad_ff_flux_sr");
 
         /* GR ε-flux pieces of G^e and G^m_j (the ∂_ε terms only):
          *   G^e          = -F_{sε}·∇φ/c² + (∇φ/c²) · ∂_ε(ε F_{sε})
@@ -1185,7 +1153,6 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
          *
          * ∇_i φ at the cell centre comes from the active monopole gravity:
          * gravitational acceleration a_i = accel(r) · x_i/r, and ∇φ = −a. */
-        PRJ_TIMER_CURRENT_START("rad_ff_grav");
         {
             /* Energy: per i, scalar q[g] = F^i_g, coef = −(∇_i φ)/c². */
             for (ii = 0; ii < 3; ++ii) {
@@ -1241,21 +1208,18 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 }
             }
         }
-        PRJ_TIMER_CURRENT_STOP("rad_ff_grav");
 
         /* Apply.  dt is the effective stage weight (full dt in stage1, 0.5·dt
          * in stage2 to match the RK2-Heun mixing of dUdt).  The lapse factor
          * α(r) accounts for the GR proper-time slowdown in the gravitational
          * well, consistent with the lapse multipliers already on the spatial
          * radiation flux and on the gravity source. */
-        PRJ_TIMER_CURRENT_START("rad_ff_apply");
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             u[PRJ_CONS_RAD_E(field, g)] += lapse * dt * dE_acc[g];
             u[PRJ_CONS_RAD_F1(field, g)] += lapse * dt * dF_acc[g][0];
             u[PRJ_CONS_RAD_F2(field, g)] += lapse * dt * dF_acc[g][1];
             u[PRJ_CONS_RAD_F3(field, g)] += lapse * dt * dF_acc[g][2];
         }
-        PRJ_TIMER_CURRENT_STOP("rad_ff_apply");
     }
 #else
     (void)rad;

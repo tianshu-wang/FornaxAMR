@@ -1033,14 +1033,12 @@ static void prj_gravity_fill_mesh_fields(prj_mesh *mesh, const prj_grav *grav, c
     if (mesh == 0) {
         return;
     }
-    PRJ_TIMER_CURRENT_START("gravity_fill_block_fields");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         if (!prj_gravity_block_is_local_active(mpi, &mesh->blocks[bidx])) {
             continue;
         }
         prj_gravity_fill_block_fields(&mesh->blocks[bidx], grav);
     }
-    PRJ_TIMER_CURRENT_STOP("gravity_fill_block_fields");
 }
 
 int prj_gravity_update_center_of_mass(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi,
@@ -1061,7 +1059,6 @@ int prj_gravity_update_center_of_mass(prj_mesh *mesh, prj_grav *grav, const prj_
         return 0;
     }
 
-    PRJ_TIMER_CURRENT_START("gravity_x_com_reduce_local");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
         int i;
@@ -1088,7 +1085,6 @@ int prj_gravity_update_center_of_mass(prj_mesh *mesh, prj_grav *grav, const prj_
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("gravity_x_com_reduce_local");
 
 #if defined(PRJ_ENABLE_MPI)
     if (mpi != 0 && mpi->totrank > 1) {
@@ -1154,7 +1150,6 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         return;
     }
 
-    PRJ_TIMER_CURRENT_START("gravity_reduce_zero");
     for (idx = 0; idx < grav->nbins; ++idx) {
         grav->ms[idx] = 0.0;
         grav->vol[idx] = 0.0;
@@ -1169,9 +1164,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
     if (use_multipole) {
         prj_gravity_zero_multipole_coefficients(grav);
     }
-    PRJ_TIMER_CURRENT_STOP("gravity_reduce_zero");
 
-    PRJ_TIMER_CURRENT_START("gravity_reduce_local");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
         double *W;
@@ -1313,7 +1306,6 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
             }
         }
     }
-    PRJ_TIMER_CURRENT_STOP("gravity_reduce_local");
 
 #if defined(PRJ_ENABLE_MPI)
     {
@@ -1322,7 +1314,6 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
             double *restrict buf = grav->reduce_avg_buf;
             size_t nb = (size_t)grav->nbins;
 
-            PRJ_TIMER_CURRENT_START("gravity_reduce_mpi_allreduce");
             memcpy(buf + 0U * nb, grav->ms,        nb * sizeof(double));
             memcpy(buf + 1U * nb, grav->vol,       nb * sizeof(double));
             memcpy(buf + 2U * nb, grav->rho_avg,   nb * sizeof(double));
@@ -1362,13 +1353,11 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                         nb * sizeof(double));
                 }
             }
-            PRJ_TIMER_CURRENT_STOP("gravity_reduce_mpi_allreduce");
         }
     }
 #endif
 
     if (use_multipole) {
-        PRJ_TIMER_CURRENT_START("gravity_reduce_multipole_cumsum");
         {
             int yidx;
 
@@ -1381,10 +1370,8 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                 }
             }
         }
-        PRJ_TIMER_CURRENT_STOP("gravity_reduce_multipole_cumsum");
     }
 
-    PRJ_TIMER_CURRENT_START("gravity_reduce_normalize");
     for (idx = 0; idx < grav->nbins; ++idx) {
         double r0 = grav->rf[idx];
         double r1 = grav->rf[idx + 1];
@@ -1400,7 +1387,6 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
             grav->vdotF_avg[idx] /= shell_vol;
         }
     }
-    PRJ_TIMER_CURRENT_STOP("gravity_reduce_normalize");
 }
 
 void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi)
@@ -1414,7 +1400,6 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
         return;
     }
 
-    PRJ_TIMER_CURRENT_START("gravity_integrate");
     enclosed_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*enclosed_face));
     baryon_mass_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*baryon_mass_face));
     gamma_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*gamma_face));
@@ -1422,7 +1407,6 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
         free(gamma_face);
         free(baryon_mass_face);
         free(enclosed_face);
-        PRJ_TIMER_CURRENT_STOP("gravity_integrate");
         return;
     }
 
@@ -1570,7 +1554,6 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
     free(gamma_face);
     free(baryon_mass_face);
     free(enclosed_face);
-    PRJ_TIMER_CURRENT_STOP("gravity_integrate");
     prj_gravity_fill_mesh_fields(mesh, grav, mpi);
 }
 
