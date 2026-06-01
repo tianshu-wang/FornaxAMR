@@ -6,7 +6,7 @@
 #include "prj_defs.h"
 
 #ifndef LMAX
-#define LMAX 4
+#define LMAX 12
 #endif
 #if LMAX < 1
 #error "LMAX must be at least 1"
