@@ -1091,10 +1091,13 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                         } else if (slot->rel_level==1) {
                             // Neighbor is finer, prolongation
                             double target[3];
+                            int ai = i + slot->recv_loc_start[0];
+                            int aj = j + slot->recv_loc_start[1];
+                            int ak = k + slot->recv_loc_start[2];
 
-                            target[0] = (i % 2 == 0) ? 0.25 : -0.25;
-                            target[1] = (j % 2 == 0) ? 0.25 : -0.25;
-                            target[2] = (k % 2 == 0) ? 0.25 : -0.25;
+                            target[0] = (ai % 2 == 0) ? -0.25 : 0.25;
+                            target[1] = (aj % 2 == 0) ? -0.25 : 0.25;
+                            target[2] = (ak % 2 == 0) ? -0.25 : 0.25;
                             for (v = 0; v < PRJ_NHYDRO; ++v) {
                                 send_buffer[pos++] =
                                     prj_mpi_prolongate_cell_value(W_send, v,
@@ -1170,9 +1173,9 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                             int aj = j + slot->recv_loc_start_rad[1];
                             int ak = k + slot->recv_loc_start_rad[2];
 
-                            target[0] = (ai % 2 == 0) ? 0.25 : -0.25;
-                            target[1] = (aj % 2 == 0) ? 0.25 : -0.25;
-                            target[2] = (ak % 2 == 0) ? 0.25 : -0.25;
+                            target[0] = (ai % 2 == 0) ? -0.25 : 0.25;
+                            target[1] = (aj % 2 == 0) ? -0.25 : 0.25;
+                            target[2] = (ak % 2 == 0) ? -0.25 : 0.25;
                             for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
                                 send_buffer[pos_rad++] =
                                     prj_mpi_prolongate_cell_value(W_send, v,
