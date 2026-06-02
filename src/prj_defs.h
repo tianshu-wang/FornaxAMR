@@ -64,6 +64,9 @@
 #ifndef PRJ_BLOCK_SIZE
 #define PRJ_BLOCK_SIZE 8
 #endif
+#if (PRJ_BLOCK_SIZE & 1) != 0
+#error "PRJ_BLOCK_SIZE must be even for AMR refinement"
+#endif
 #define PRJ_RECON_MC    0
 #define PRJ_RECON_WENO3 1
 #define PRJ_RECON_WENO7 2
@@ -101,6 +104,9 @@
 #define PRJ_NGHOST 2
 #endif
 #endif
+#if (PRJ_NGHOST & 1) != 0
+#error "PRJ_NGHOST must be even for AMR prolongation alignment"
+#endif
 #if (PRJ_RECON_HYDRO == PRJ_RECON_WENO7 || PRJ_RECON_RADIATION == PRJ_RECON_WENO7) && PRJ_NGHOST < 4
 #error "PRJ_RECON_WENO7 requires PRJ_NGHOST >= 4"
 #endif
@@ -110,6 +116,9 @@
 #else
 #define PRJ_NGHOST_RAD 2
 #endif
+#endif
+#if (PRJ_NGHOST_RAD & 1) != 0
+#error "PRJ_NGHOST_RAD must be even for AMR prolongation alignment"
 #endif
 #if PRJ_NGHOST_RAD > PRJ_NGHOST
 #error "PRJ_NGHOST_RAD must not exceed PRJ_NGHOST"
