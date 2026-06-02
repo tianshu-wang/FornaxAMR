@@ -384,6 +384,117 @@ static void prj_flux_face_eosvar(const double *eosvar, int var, int dir, int i, 
     *right_value = prj_flux_eos_face_value(eosvar, var, dir, ir, jr, kr, -0.5);
 }
 
+#if PRJ_NRAD > 0
+/* Transport absorption/scattering opacity for one cell, stored per group in
+ * block->kappa_cell / block->sigma_cell. Used by the radiation flux. */
+static void prj_flux_opacity_cell(prj_rad *rad, prj_block *block, const double *W,
+    const double *eosvar, int ii, int jj, int kk)
+{
+    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+    double rho = W[VIDX(PRJ_PRIM_RHO, ii, jj, kk)];
+    double ye = W[VIDX(PRJ_PRIM_YE, ii, jj, kk)];
+    double T = (eosvar != 0) ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ii, jj, kk)] : 0.0;
+    size_t off = (size_t)IDX(ii, jj, kk) * stride;
+
+    prj_rad3_opac_lookup(rad, rho, T, ye,
+        &block->kappa_cell[off], &block->sigma_cell[off], 0, 0);
+}
+
+static int prj_flux_opacity_block_ready(const prj_block *block)
+{
+    return block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0;
+}
+#endif
+
+/* Fill transport opacity over the active cells only (0..PRJ_BLOCK_SIZE-1).
+ * Reads active W/eosvar, which are stable once eos_fill_active has run, so this
+ * can be overlapped with the same-level ghost exchange. */
+void prj_flux_fill_transport_opacity_active(prj_mesh *mesh, prj_rad *rad,
+    const prj_mpi *mpi, int stage)
+{
+#if PRJ_NRAD > 0
+    int bidx;
+
+    if (mesh == 0 || rad == 0) {
+        return;
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        double *W = stage == 2 ? block->W1 : block->W;
+        int ii;
+        int jj;
+        int kk;
+
+        if (block->id < 0 || block->active != 1 || W == 0 ||
+            !prj_flux_opacity_block_ready(block)) {
+            continue;
+        }
+        if (mpi != 0 && block->rank != mpi->rank) {
+            continue;
+        }
+        for (ii = 0; ii < PRJ_BLOCK_SIZE; ++ii) {
+            for (jj = 0; jj < PRJ_BLOCK_SIZE; ++jj) {
+                for (kk = 0; kk < PRJ_BLOCK_SIZE; ++kk) {
+                    prj_flux_opacity_cell(rad, block, W, block->eosvar, ii, jj, kk);
+                }
+            }
+        }
+    }
+#else
+    (void)mesh;
+    (void)rad;
+    (void)mpi;
+    (void)stage;
+#endif
+}
+
+/* Fill transport opacity over the 1-cell ghost halo (the shell of the
+ * [-1, PRJ_BLOCK_SIZE] box). Needs ghost W/eosvar, so it must run after all
+ * ghost filling and eos_fill_mesh are done. */
+void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
+    const prj_mpi *mpi, int stage)
+{
+#if PRJ_NRAD > 0
+    int bidx;
+
+    if (mesh == 0 || rad == 0) {
+        return;
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        double *W = stage == 2 ? block->W1 : block->W;
+        int ii;
+        int jj;
+        int kk;
+
+        if (block->id < 0 || block->active != 1 || W == 0 ||
+            !prj_flux_opacity_block_ready(block)) {
+            continue;
+        }
+        if (mpi != 0 && block->rank != mpi->rank) {
+            continue;
+        }
+        for (ii = -1; ii <= PRJ_BLOCK_SIZE; ++ii) {
+            for (jj = -1; jj <= PRJ_BLOCK_SIZE; ++jj) {
+                for (kk = -1; kk <= PRJ_BLOCK_SIZE; ++kk) {
+                    if (ii >= 0 && ii < PRJ_BLOCK_SIZE &&
+                        jj >= 0 && jj < PRJ_BLOCK_SIZE &&
+                        kk >= 0 && kk < PRJ_BLOCK_SIZE) {
+                        continue;
+                    }
+                    prj_flux_opacity_cell(rad, block, W, block->eosvar, ii, jj, kk);
+                }
+            }
+        }
+    }
+#else
+    (void)mesh;
+    (void)rad;
+    (void)mpi;
+    (void)stage;
+#endif
+}
+
 void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     double *eosvar, double *flux[3], int use_bf1)
 {
@@ -395,30 +506,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     (void)use_bf1;
 #endif
 
-#if PRJ_NRAD > 0
-    if (block->kappa_cell != 0 && block->sigma_cell != 0) {
-        int ii;
-        int jj;
-        int kk;
-        const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
-
-        for (ii = -1; ii <= PRJ_BLOCK_SIZE; ++ii) {
-            for (jj = -1; jj <= PRJ_BLOCK_SIZE; ++jj) {
-                for (kk = -1; kk <= PRJ_BLOCK_SIZE; ++kk) {
-                    double rho = W[VIDX(PRJ_PRIM_RHO, ii, jj, kk)];
-                    double ye = W[VIDX(PRJ_PRIM_YE, ii, jj, kk)];
-                    double T = (eosvar != 0)
-                        ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ii, jj, kk)]
-                        : 0.0;
-                    size_t off = (size_t)IDX(ii, jj, kk) * stride;
-
-                    prj_rad3_opac_lookup(rad, rho, T, ye,
-                        &block->kappa_cell[off], &block->sigma_cell[off], 0, 0);
-                }
-            }
-        }
-    }
-#endif
+    /* Transport opacity (kappa_cell/sigma_cell) is now filled ahead of the flux:
+     * active cells in the same-level ghost shadow and the 1-ghost halo after
+     * eos_fill_mesh. See prj_flux_fill_transport_opacity_active/halo. */
 
     for (dir = 0; dir < 3; ++dir) {
         int i;

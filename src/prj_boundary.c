@@ -1149,7 +1149,7 @@ void prj_boundary_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, in
 }
 
 void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc,
-    int stage, int use_bf1, prj_eos *eos)
+    int stage, int use_bf1, prj_eos *eos, prj_grav *grav, prj_rad *rad)
 {
     const int fill_passes[3] = {
         PRJ_BOUNDARY_FILL_SAME_LEVEL,
@@ -1158,6 +1158,9 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
     };
     int i;
     int pass;
+
+    (void)grav;
+    (void)rad;
 
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
@@ -1196,6 +1199,25 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
             }
         }
 #endif
+#if PRJ_USE_GRAVITY
+        /* Overlap the gravity radial reduce/integrate with the in-flight
+         * same-level exchange. Both read only active cells (the reduce's
+         * stage matches this fill's stage); the reduce writes radial profiles
+         * and the integrate writes per-cell lapse/grav from geometry, so
+         * neither touches the W ghost zones the exchange is filling. The two
+         * allreduces inside the reduce progress the posted Isend/Irecv. */
+        if (grav != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
+            prj_gravity_monopole_reduce(mesh, grav, mpi, stage);
+            prj_gravity_monopole_integrate(mesh, grav, mpi);
+        }
+#endif
+        /* Transport opacity for active cells overlaps the same-level exchange
+         * too: it reads only active W/eosvar (stable after eos_fill_active) and
+         * writes the active region of kappa_cell/sigma_cell. The 1-ghost halo
+         * is filled by the caller after eos_fill_mesh. */
+        if (rad != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
+            prj_flux_fill_transport_opacity_active(mesh, rad, mpi, stage);
+        }
         prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
     }
     for (i = 0; i < mesh->nblocks; ++i) {

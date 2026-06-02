@@ -914,23 +914,20 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     prj_eos_fill_active_cells(mesh, eos, mpi, 2);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_eos_fill_active");
 
+    /* The gravity radial reduce/integrate and the active-cell transport opacity
+     * run inside the same-level pass of this ghost fill, overlapped with the
+     * in-flight exchange. */
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_ghost_mpi");
-    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 2, 1, eos);
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 2, 1, eos, grav, rad);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_ghost_mpi");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_mesh");
     prj_eos_fill_mesh(mesh, eos, mpi, 2);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_eos_fill_mesh");
 
-#if PRJ_USE_GRAVITY
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_gravity_reduce");
-    prj_gravity_monopole_reduce(mesh, grav, mpi, 2);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_gravity_reduce");
-
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_gravity_integrate");
-    prj_gravity_monopole_integrate(mesh, grav, mpi);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_gravity_integrate");
-#endif
+    /* The 1-ghost halo opacity needs ghost W/eosvar, so fill it now that all
+     * ghost filling and eos_fill_mesh are done. */
+    prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 2);
 }
 
 void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
@@ -1036,23 +1033,20 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     prj_eos_fill_active_cells(mesh, eos, mpi, 1);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_eos_fill_active");
 
+    /* The gravity radial reduce/integrate and the active-cell transport opacity
+     * run inside the same-level pass of this ghost fill, overlapped with the
+     * in-flight exchange. */
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_ghost_mpi");
-    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos);
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_ghost_mpi");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_mesh");
     prj_eos_fill_mesh(mesh, eos, mpi, 1);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_eos_fill_mesh");
 
-#if PRJ_USE_GRAVITY
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_gravity_reduce");
-    prj_gravity_monopole_reduce(mesh, grav, mpi, 1);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_gravity_reduce");
-
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_gravity_integrate");
-    prj_gravity_monopole_integrate(mesh, grav, mpi);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_gravity_integrate");
-#endif
+    /* The 1-ghost halo opacity needs ghost W/eosvar, so fill it now that all
+     * ghost filling and eos_fill_mesh are done. */
+    prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 1);
 }
 
 void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
