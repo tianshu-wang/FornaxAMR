@@ -16,7 +16,7 @@ double prj_amr_angular_resolution_limit(double x1, double x2, double x3, double 
     (void)x2;
     (void)x3;
     (void)r_com;
-    return 0.05;
+    return 0.025;
 }
 
 static double prj_abs_double(double x)
