@@ -8,7 +8,7 @@ import numpy as np
 from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
 
-# User settings. Choose a dump dataset name, or derived variables "pressure", "B", or "vr".
+# User settings. Choose a dump variable name, or derived variables "B" or "vr".
 VARIABLE = "B"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
@@ -39,9 +39,42 @@ def load_dump_files(output_dir: Path):
     return dumps
 
 
-def pressure_from_state(density: np.ndarray, eint: np.ndarray) -> np.ndarray:
-    gamma = 5.0 / 3.0
-    return (gamma - 1.0) * density * eint
+def decode_variable_name(value) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8").rstrip("\x00")
+    return str(value).rstrip("\x00")
+
+
+def decode_variable_names(attr):
+    values = np.asarray(attr)
+    if values.shape == ():
+        text = decode_variable_name(values.item())
+        return [part.strip() for part in text.split(",") if part.strip()]
+    return [decode_variable_name(value) for value in values.tolist()]
+
+
+def build_variable_map(h5):
+    variable_map = {}
+    for dataset_name, obj in h5.items():
+        if not isinstance(obj, h5py.Dataset) or "variable_names" not in obj.attrs:
+            continue
+        names = decode_variable_names(obj.attrs["variable_names"])
+        if obj.ndim < 2 or obj.shape[1] != len(names):
+            raise ValueError(f"dataset {dataset_name!r} has inconsistent variable_names")
+        for var_idx, name in enumerate(names):
+            if name in variable_map:
+                raise ValueError(f"duplicate dump variable name {name!r}")
+            variable_map[name] = (dataset_name, var_idx)
+    if not variable_map:
+        raise ValueError("dump file has no grouped datasets with variable_names attributes")
+    return variable_map
+
+
+def resolve_variable(variable_map, variable: str):
+    if variable not in variable_map:
+        available = ", ".join(sorted(variable_map))
+        raise KeyError(f"variable {variable!r} not found in dump; available variables: {available}")
+    return variable_map[variable]
 
 
 def magnetic_field_strength(B1: np.ndarray, B2: np.ndarray, B3: np.ndarray) -> np.ndarray:
@@ -67,9 +100,7 @@ def plane_axes(plane: str):
     return 2, 0, 1
 
 
-def reference_dataset_name(h5, variable: str) -> str:
-    if variable == "pressure":
-        return "pressure" if "pressure" in h5 else "density"
+def reference_variable_name(variable: str) -> str:
     if variable == "B":
         return "B1"
     if variable == "vr":
@@ -77,13 +108,16 @@ def reference_dataset_name(h5, variable: str) -> str:
     return variable
 
 
-def read_dataset_plane(h5, dataset_name: str, bid: int, plane: str, cell: int) -> np.ndarray:
+def read_dataset_plane(h5, variable_map, variable: str, bid: int, plane: str, cell: int) -> np.ndarray:
+    dataset_name, var_idx = resolve_variable(variable_map, variable)
     dataset = h5[dataset_name]
+    if dataset.ndim != 5:
+        raise ValueError(f"variable {variable!r} is not cell-centered")
     if plane == "yz":
-        return dataset[bid, cell, :, :]
+        return dataset[bid, var_idx, cell, :, :]
     if plane == "xz":
-        return dataset[bid, :, cell, :]
-    return dataset[bid, :, :, cell]
+        return dataset[bid, var_idx, :, cell, :]
+    return dataset[bid, var_idx, :, :, cell]
 
 
 def orient_plane_coordinate(values, axis: int, normal_axis: int, axis_a: int):
@@ -129,6 +163,7 @@ def radial_velocity_from_plane(
 
 def read_plane_values(
     h5,
+    variable_map,
     variable: str,
     bid: int,
     plane: str,
@@ -139,17 +174,12 @@ def read_plane_values(
     root_nx: np.ndarray,
 ) -> np.ndarray:
     if variable == "pressure":
-        if "pressure" in h5:
-            return read_dataset_plane(h5, "pressure", bid, plane, cell)
-        return pressure_from_state(
-            read_dataset_plane(h5, "density", bid, plane, cell),
-            read_dataset_plane(h5, "eint", bid, plane, cell),
-        )
+        return read_dataset_plane(h5, variable_map, "pressure", bid, plane, cell)
     if variable == "B":
         return magnetic_field_strength(
-            read_dataset_plane(h5, "B1", bid, plane, cell),
-            read_dataset_plane(h5, "B2", bid, plane, cell),
-            read_dataset_plane(h5, "B3", bid, plane, cell),
+            read_dataset_plane(h5, variable_map, "B1", bid, plane, cell),
+            read_dataset_plane(h5, variable_map, "B2", bid, plane, cell),
+            read_dataset_plane(h5, variable_map, "B3", bid, plane, cell),
         )
     if variable == "vr":
         return radial_velocity_from_plane(
@@ -159,20 +189,33 @@ def read_plane_values(
             cell,
             coord,
             root_nx,
-            read_dataset_plane(h5, "v1", bid, plane, cell),
-            read_dataset_plane(h5, "v2", bid, plane, cell),
-            read_dataset_plane(h5, "v3", bid, plane, cell),
+            read_dataset_plane(h5, variable_map, "v1", bid, plane, cell),
+            read_dataset_plane(h5, variable_map, "v2", bid, plane, cell),
+            read_dataset_plane(h5, variable_map, "v3", bid, plane, cell),
         )
-    return read_dataset_plane(h5, variable, bid, plane, cell)
+    return read_dataset_plane(h5, variable_map, variable, bid, plane, cell)
 
 
-def collect_plane_blocks_from_h5(h5, variable: str, coords: np.ndarray, levels: np.ndarray, plane: str, coord: np.ndarray, root_nx: np.ndarray):
+def collect_plane_blocks_from_h5(
+    h5,
+    variable_map,
+    variable: str,
+    coords: np.ndarray,
+    levels: np.ndarray,
+    plane: str,
+    coord: np.ndarray,
+    root_nx: np.ndarray,
+):
     normal_axis, axis_a, axis_b = plane_axes(plane)
     slices = []
     plane_value = 0.0
     tol = 1.0e-12
     domain_max = coord[2 * normal_axis + 1]
-    n = h5[reference_dataset_name(h5, variable)].shape[1]
+    ref_dataset_name, _ = resolve_variable(variable_map, reference_variable_name(variable))
+    ref_dataset = h5[ref_dataset_name]
+    if ref_dataset.ndim != 5:
+        raise ValueError(f"variable {variable!r} is not cell-centered")
+    n = ref_dataset.shape[2]
     for bid, xmin in enumerate(coords):
         level = int(levels[bid])
         extent = block_extent(xmin, level, coord, root_nx)
@@ -189,7 +232,9 @@ def collect_plane_blocks_from_h5(h5, variable: str, coords: np.ndarray, levels: 
             continue
         dx = extent / n
         cell = int(np.clip(np.floor((plane_value - xmin[normal_axis]) / dx[normal_axis]), 0, n - 1))
-        plane_values = read_plane_values(h5, variable, bid, plane, cell, xmin, level, coord, root_nx)
+        plane_values = read_plane_values(
+            h5, variable_map, variable, bid, plane, cell, xmin, level, coord, root_nx
+        )
         xedges = xmin[axis_a] + np.arange(n + 1) * dx[axis_a]
         yedges = xmin[axis_b] + np.arange(n + 1) * dx[axis_b]
         slices.append((xmin, xmax, xedges, yedges, plane_values))
@@ -284,13 +329,16 @@ def main() -> None:
             if "coord" not in h5.attrs or "root_nx" not in h5.attrs:
                 continue
             found_compatible_dump = True
+            variable_map = build_variable_map(h5)
             dump_time = float(h5.attrs["time"])
             coords = h5["coordinate"][...] / CM_PER_KM
             levels = h5["level"][...]
             coord = np.asarray(h5.attrs["coord"], dtype=float) / CM_PER_KM
             root_nx = h5.attrs["root_nx"]
             for plane in planes:
-                plane_blocks = collect_plane_blocks_from_h5(h5, variable, coords, levels, plane, coord, root_nx)
+                plane_blocks = collect_plane_blocks_from_h5(
+                    h5, variable_map, variable, coords, levels, plane, coord, root_nx
+                )
                 plot_plane(output_dir, dump_id, dump_time, plane_blocks, variable, plane)
         print(dump_id)
     if checked_missing_plots and not found_compatible_dump:
