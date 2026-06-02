@@ -380,6 +380,7 @@ struct prj_mpi {
     prj_mpi_buffer *neighbor_buffer;
     void *request_buffer;
     int request_capacity;
+    int ghost_request_count;
 #if PRJ_MHD
     int *amr_bf_headers;
     double *amr_bf_values;

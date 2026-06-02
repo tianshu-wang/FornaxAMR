@@ -1178,6 +1178,12 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
     for (pass = 0; pass < 3; ++pass) {
         int fill_kind = fill_passes[pass];
 
+        /* Post the inter-rank Isend/Irecv first, then do the intra-rank local
+         * copies while the MPI messages are in flight. The pack inside the post
+         * reads only active cells; the local copies write only ghost zones, so
+         * the two never touch the same memory. The wait completes the exchange
+         * after the local work is done. */
+        prj_mpi_post_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
                 prj_boundary_send(mesh, mpi, &mesh->blocks[i], stage, fill_kind);
@@ -1190,7 +1196,7 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
             }
         }
 #endif
-        prj_mpi_exchange_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
+        prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
     }
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {

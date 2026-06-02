@@ -3859,13 +3859,21 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
 #endif
 }
 
-void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
+/* Pack send values and post the non-blocking Isend/Irecv for one fill_kind.
+ * The number of posted requests is stashed in mpi->ghost_request_count so the
+ * matching prj_mpi_wait_ghosts_and_bf can complete and unpack them. Splitting
+ * post from wait lets the caller overlap unrelated work (e.g. the gravity
+ * allreduce, which touches active cells only) inside the exchange's shadow. */
+void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
 {
 #if defined(PRJ_ENABLE_MPI)
     int nb;
     MPI_Request *requests;
     int request_count;
 
+    if (mpi != 0) {
+        mpi->ghost_request_count = 0;
+    }
     if (mesh == 0 || mpi == 0 || !prj_mpi_ghost_fill_kind_ok(fill_kind) ||
         mpi->totrank <= 1 || mpi->neighbor_number == 0) {
         return;
@@ -3873,7 +3881,7 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
     requests = (MPI_Request *)mpi->request_buffer;
     request_count = 0;
     if (requests == 0 || mpi->request_capacity < 6 * mpi->neighbor_number) {
-        fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: missing MPI request buffer\n");
+        fprintf(stderr, "prj_mpi_post_ghosts_and_bf: missing MPI request buffer\n");
         exit(EXIT_FAILURE);
     }
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
@@ -3906,7 +3914,7 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
                         use_bf1, fill_kind, buffer->bf_values_send,
                         buffer->bf_send_value_capacity, &send_value_count) != 0 ||
                     send_value_count != expected_send) {
-                    fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to pack Bf values\n");
+                    fprintf(stderr, "prj_mpi_post_ghosts_and_bf: failed to pack Bf values\n");
                     exit(EXIT_FAILURE);
                 }
                 MPI_Isend(buffer->bf_values_send, send_value_count, MPI_DOUBLE,
@@ -3921,9 +3929,35 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
         (void)use_bf1;
 #endif
     }
-    if (request_count > 0) {
-        MPI_Waitall(request_count, requests, MPI_STATUSES_IGNORE);
+    mpi->ghost_request_count = request_count;
+#else
+    (void)mesh;
+    (void)stage;
+    (void)fill_kind;
+    (void)use_bf1;
+    if (mpi != 0) {
+        mpi->ghost_request_count = 0;
     }
+#endif
+}
+
+/* Complete the Isend/Irecv posted by prj_mpi_post_ghosts_and_bf, then unpack
+ * the received values into local ghost zones. */
+void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
+{
+#if defined(PRJ_ENABLE_MPI)
+    int nb;
+    MPI_Request *requests;
+
+    if (mesh == 0 || mpi == 0 || !prj_mpi_ghost_fill_kind_ok(fill_kind) ||
+        mpi->totrank <= 1 || mpi->neighbor_number == 0) {
+        return;
+    }
+    requests = (MPI_Request *)mpi->request_buffer;
+    if (mpi->ghost_request_count > 0) {
+        MPI_Waitall(mpi->ghost_request_count, requests, MPI_STATUSES_IGNORE);
+    }
+    mpi->ghost_request_count = 0;
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
         int cell_size_total = buffer->cell_recv_count_by_kind[fill_kind];
@@ -3941,10 +3975,12 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
                 prj_mpi_apply_bf_values_from_sender(mesh, mpi,
                     buffer->receiver_rank, use_bf1, fill_kind,
                     buffer->bf_values_recv, recv_value_count) != 0) {
-                fprintf(stderr, "prj_mpi_exchange_ghosts_and_bf: failed to apply Bf values\n");
+                fprintf(stderr, "prj_mpi_wait_ghosts_and_bf: failed to apply Bf values\n");
                 exit(EXIT_FAILURE);
             }
         }
+#else
+        (void)use_bf1;
 #endif
     }
 #else
@@ -3954,6 +3990,12 @@ void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int
     (void)fill_kind;
     (void)use_bf1;
 #endif
+}
+
+void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
+{
+    prj_mpi_post_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
+    prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
 }
 
 void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)
