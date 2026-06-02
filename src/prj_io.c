@@ -1753,7 +1753,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
             dset_rad[bidx][component] = H5Dcreate2(file, dset_name, dump_real_type,
                 space_rad, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
             prj_io_write_attr_string_array(dset_rad[bidx][component], "variable_names",
-                var_names, PRJ_NEGROUP);
+                (const char (*)[PRJ_IO_DUMP_NAME_SIZE])var_names, PRJ_NEGROUP);
         }
     }
 #endif
