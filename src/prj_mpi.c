@@ -2410,6 +2410,34 @@ static int prj_mpi_build_bf_plan_for_neighbor(const prj_mesh *mesh,
         (max_recv_values > 0 && buffer->bf_values_recv == 0)) {
         return 1;
     }
+    /* Append room for this kind's B-field values in the tail of each per-kind
+     * cell value buffer, so the cell and Bf streams share one message. The
+     * cell counts were already set by the ghost plan that runs earlier. */
+    for (fill_kind = 0; fill_kind < PRJ_MPI_GHOST_FILL_KIND_N; ++fill_kind) {
+        size_t cell_send = (size_t)buffer->cell_send_count_by_kind[fill_kind] * PRJ_MPI_GHOST_NVAR_HE +
+            (size_t)buffer->cell_send_count_rad_by_kind[fill_kind] * PRJ_MPI_GHOST_NVAR_RAD;
+        size_t cell_recv = (size_t)buffer->cell_recv_count_by_kind[fill_kind] * PRJ_MPI_GHOST_NVAR_HE +
+            (size_t)buffer->cell_recv_count_rad_by_kind[fill_kind] * PRJ_MPI_GHOST_NVAR_RAD;
+
+        if (buffer->bf_send_value_count[fill_kind] > 0) {
+            double *grown = (double *)realloc(buffer->cell_buffer_send_by_kind[fill_kind],
+                (cell_send + (size_t)buffer->bf_send_value_count[fill_kind]) * sizeof(double));
+
+            if (grown == 0) {
+                return 1;
+            }
+            buffer->cell_buffer_send_by_kind[fill_kind] = grown;
+        }
+        if (buffer->bf_recv_value_count[fill_kind] > 0) {
+            double *grown = (double *)realloc(buffer->cell_buffer_recv_by_kind[fill_kind],
+                (cell_recv + (size_t)buffer->bf_recv_value_count[fill_kind]) * sizeof(double));
+
+            if (grown == 0) {
+                return 1;
+            }
+            buffer->cell_buffer_recv_by_kind[fill_kind] = grown;
+        }
+    }
     return 0;
 #else
     (void)mesh;
@@ -3892,42 +3920,42 @@ void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
         int cell_size_total_rad = buffer->cell_recv_count_rad_by_kind[fill_kind];
         int send_total = record_count * PRJ_MPI_GHOST_NVAR_HE + record_count_rad * PRJ_MPI_GHOST_NVAR_RAD;
         int recv_total = cell_size_total * PRJ_MPI_GHOST_NVAR_HE + cell_size_total_rad * PRJ_MPI_GHOST_NVAR_RAD;
+        /* Cell values occupy [0, *_total); B-field values are appended in the
+         * tail of the same per-kind buffer and sent as one message (tag 120). */
+        int bf_send = 0;
+        int bf_recv = 0;
 
-        if (send_total > 0) {
-            prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
-            MPI_Isend(buffer->cell_buffer_send_by_kind[fill_kind], send_total, MPI_DOUBLE,
-                buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
-        }
-        if (recv_total > 0) {
-            MPI_Irecv(buffer->cell_buffer_recv_by_kind[fill_kind], recv_total, MPI_DOUBLE,
-                buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
-        }
 #if PRJ_MHD
-        {
-            int expected_send = buffer->bf_send_value_count[fill_kind];
-            int recv_value_count = buffer->bf_recv_value_count[fill_kind];
-
-            if (expected_send > 0) {
-                int send_value_count = 0;
-
-                if (prj_mpi_pack_bf_values_only(mesh, mpi, buffer->receiver_rank,
-                        use_bf1, fill_kind, buffer->bf_values_send,
-                        buffer->bf_send_value_capacity, &send_value_count) != 0 ||
-                    send_value_count != expected_send) {
-                    fprintf(stderr, "prj_mpi_post_ghosts_and_bf: failed to pack Bf values\n");
-                    exit(EXIT_FAILURE);
-                }
-                MPI_Isend(buffer->bf_values_send, send_value_count, MPI_DOUBLE,
-                    buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
-            }
-            if (recv_value_count > 0) {
-                MPI_Irecv(buffer->bf_values_recv, recv_value_count, MPI_DOUBLE,
-                    buffer->receiver_rank, 302, MPI_COMM_WORLD, &requests[request_count++]);
-            }
-        }
+        bf_send = buffer->bf_send_value_count[fill_kind];
+        bf_recv = buffer->bf_recv_value_count[fill_kind];
 #else
         (void)use_bf1;
 #endif
+        if (send_total > 0) {
+            prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
+        }
+#if PRJ_MHD
+        if (bf_send > 0) {
+            int send_value_count = 0;
+
+            if (prj_mpi_pack_bf_values_only(mesh, mpi, buffer->receiver_rank,
+                    use_bf1, fill_kind,
+                    buffer->cell_buffer_send_by_kind[fill_kind] + send_total,
+                    bf_send, &send_value_count) != 0 ||
+                send_value_count != bf_send) {
+                fprintf(stderr, "prj_mpi_post_ghosts_and_bf: failed to pack Bf values\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+#endif
+        if (send_total + bf_send > 0) {
+            MPI_Isend(buffer->cell_buffer_send_by_kind[fill_kind], send_total + bf_send, MPI_DOUBLE,
+                buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
+        }
+        if (recv_total + bf_recv > 0) {
+            MPI_Irecv(buffer->cell_buffer_recv_by_kind[fill_kind], recv_total + bf_recv, MPI_DOUBLE,
+                buffer->receiver_rank, 120, MPI_COMM_WORLD, &requests[request_count++]);
+        }
     }
     mpi->ghost_request_count = request_count;
 #else
@@ -3974,7 +4002,8 @@ void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
             if (recv_value_count > 0 &&
                 prj_mpi_apply_bf_values_from_sender(mesh, mpi,
                     buffer->receiver_rank, use_bf1, fill_kind,
-                    buffer->bf_values_recv, recv_value_count) != 0) {
+                    buffer->cell_buffer_recv_by_kind[fill_kind] + recv_total,
+                    recv_value_count) != 0) {
                 fprintf(stderr, "prj_mpi_wait_ghosts_and_bf: failed to apply Bf values\n");
                 exit(EXIT_FAILURE);
             }
