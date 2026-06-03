@@ -30,6 +30,13 @@
 #define PRJ_MHD_DEBUG 0
 #endif
 
+/* PRJ_LHLLD_RIEMANN=1 selects the default Minoshima & Miyoshi LHLLD
+ * MHD solver.  Set PRJ_LHLLD_RIEMANN=0 for the legacy current-HLLD
+ * comparison path. */
+#ifndef PRJ_LHLLD_RIEMANN
+#define PRJ_LHLLD_RIEMANN 1
+#endif
+
 #if PRJ_USE_RADIATION
 #ifndef PRJ_NRAD
 #define PRJ_NRAD 3

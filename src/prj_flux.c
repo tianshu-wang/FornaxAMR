@@ -593,8 +593,17 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         WL[PRJ_PRIM_B1] = bn;
                         WR[PRJ_PRIM_B1] = bn;
 
+#if PRJ_LHLLD_RIEMANN
+                        /* PRJ_LHLLD_RIEMANN=1 is the default Minoshima &
+                         * Miyoshi LHLLD path.  Set LHLLD_RIEMANN=0 at build
+                         * time for the legacy current-HLLD comparison path. */
+                        prj_riemann_lhlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl,
+                            v_face_loc, &bv1, &bv2, deltau, deltav, deltaw);
+#else
+                        /* Legacy current-HLLD comparison path. */
                         prj_riemann_hlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl,
                             v_face_loc, &bv1, &bv2, deltau, deltav, deltaw);
+#endif
                         block->Bv1[dir][IDX(i, j, k)] = bv1;
                         block->Bv2[dir][IDX(i, j, k)] = bv2;
                     }
