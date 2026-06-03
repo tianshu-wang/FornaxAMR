@@ -52,6 +52,11 @@
 #if NCLOSURE < 1
 #error "NCLOSURE must be at least 1"
 #endif
+/* Radiation E/F can exceed the range of single-precision float; dumps divide
+   by RAD_SCALE so the values fit when stored as float. */
+#ifndef RAD_SCALE
+#define RAD_SCALE 1e25
+#endif
 #endif
 #ifndef PRJ_NEGROUP
 #define PRJ_NEGROUP 12

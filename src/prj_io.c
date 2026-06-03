@@ -1623,6 +1623,9 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
 #endif
 #if PRJ_NRAD > 0
     hsize_t dims_rad[5];
+    /* E and F can exceed the range of single-precision float; scale them down
+       on dump by dividing by RAD_SCALE to avoid overflow. */
+    const double rad_dump_scale = 1.0 / RAD_SCALE;
 #endif
     static const char hydro_names[6][PRJ_IO_DUMP_NAME_SIZE] = {
         "density", "v1", "v2", "v3", "eint", "ye"
@@ -1841,7 +1844,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
                         rad_vars[group] = PRJ_PRIM_RAD_E(field, group) + component;
                     }
                     prj_io_write_dump_cell_group(dset_rad[field][component], mpi, active_idx,
-                        local_active, PRJ_NEGROUP, active_blocks, rad_vars, 0, 0, 1.0);
+                        local_active, PRJ_NEGROUP, active_blocks, rad_vars, 0, 1, rad_dump_scale);
                 }
             }
         }
