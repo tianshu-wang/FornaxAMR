@@ -93,7 +93,7 @@ enum {
 
 static unsigned int prj_amr_refine_boundary_mask_for_cell(int i, int j, int k)
 {
-    const int boundary_buffer = PRJ_NGHOST;
+    const int boundary_buffer = PRJ_AMR_BUFFER_ZONE;
     unsigned int mask = 0U;
 
     if (i < boundary_buffer) {
