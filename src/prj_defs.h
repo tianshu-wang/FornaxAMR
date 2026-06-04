@@ -22,6 +22,10 @@
 #define PRJ_DUMP_SINGLE_PRECISION 1
 #endif
 
+#ifndef PRJ_MIXED_PRECISION
+#define PRJ_MIXED_PRECISION 0
+#endif
+
 #ifndef PRJ_MHD
 #define PRJ_MHD 0
 #endif
@@ -52,8 +56,8 @@
 #if NCLOSURE < 1
 #error "NCLOSURE must be at least 1"
 #endif
-/* Radiation E/F can exceed the range of single-precision float; dumps divide
-   by RAD_SCALE so the values fit when stored as float. */
+/* Radiation E/F can exceed the range of single-precision float; scaled float
+   paths divide by RAD_SCALE before conversion and restore it afterward. */
 #ifndef RAD_SCALE
 #define RAD_SCALE 1e25
 #endif

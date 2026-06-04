@@ -49,6 +49,11 @@ static inline double prj_flux_prim_face_value(const double *W, int v, int dir,
         } else {
             q[n] = W[VIDX(v, i, j, k + offset)];
         }
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+        if (prj_flux_prim_var_radiation(v)) {
+            q[n] = prj_rad_mixed_round(q[n]);
+        }
+#endif
     }
 
     if (prj_flux_prim_var_radiation(v)) {

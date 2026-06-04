@@ -4,6 +4,23 @@
 #define PRJ_CLIGHT 2.99792458e10
 #define PRJ_HPLANCK 6.62607015e-27
 
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+static inline float prj_rad_mixed_pack(double x)
+{
+    return (float)(x / RAD_SCALE);
+}
+
+static inline double prj_rad_mixed_unpack(float x)
+{
+    return RAD_SCALE * (double)x;
+}
+
+static inline double prj_rad_mixed_round(double x)
+{
+    return prj_rad_mixed_unpack(prj_rad_mixed_pack(x));
+}
+#endif
+
 void prj_rad_init(prj_rad *rad);
 void prj_rad_prim2cons(const double *W, double *U);
 void prj_rad_cons2prim(const double *U, double *W);
