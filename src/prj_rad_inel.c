@@ -287,7 +287,10 @@ void prj_rad_eleinel_init(prj_rad *rad)
         double hc2pi = 2.0 * pi * hbar * clt;
 
         rad->eleinel_factf = (hc2pi * hc2pi * hc2pi) / clt / 1.60217733e-6;
-        rad->eleinel_constin = fourpi * (bigG * bigG) / (hc2pi * hc2pi * hc2pi * hc2pi * hc2pi * hc2pi) * 1.60217733e-6;
+        /* constin scales the emission (source) term; dividing by RAD_SCALE
+           expresses it in the internal RAD_SCALE*erg units.  constout drives
+           the sink/scatter rates, which are scale-invariant and unchanged. */
+        rad->eleinel_constin = fourpi * (bigG * bigG) / (hc2pi * hc2pi * hc2pi * hc2pi * hc2pi * hc2pi) * 1.60217733e-6 / RAD_SCALE;
         rad->eleinel_constout = fourpi * (bigG * bigG) / (hc2pi * hc2pi * hc2pi) / clt;
     }
 
@@ -482,7 +485,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
             double E_g = u[PRJ_CONS_RAD_E(nu, g)];
             double he_mag = 0.0;
 
-            je[idx] = PRJ_CLIGHT * E_g * eta_factor * PRJ_MEV_TO_ERG / rad->degroup_erg[nu][g];
+            je[idx] = PRJ_CLIGHT * E_g * RAD_SCALE * eta_factor * PRJ_MEV_TO_ERG / rad->degroup_erg[nu][g];
             if (je[idx] < 0.0) je[idx] = 0.0;
 
             for (d = 0; d < PRJ_NDIM; d++) {
@@ -493,7 +496,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
                 case 1: F_gd = u[PRJ_CONS_RAD_F2(nu, g)]; break;
                 default: F_gd = u[PRJ_CONS_RAD_F3(nu, g)]; break;
                 }
-                he[fidx] = F_gd * eta_factor * PRJ_MEV_TO_ERG / rad->degroup_erg[nu][g];
+                he[fidx] = F_gd * RAD_SCALE * eta_factor * PRJ_MEV_TO_ERG / rad->degroup_erg[nu][g];
                 he_mag += (he[fidx] / (je[idx] + 1.0e-15))
                     * (he[fidx] / (je[idx] + 1.0e-15));
             }
@@ -526,7 +529,9 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
         }
     }
 
-    Uint_new = Uint_old - du;
+    /* du is a change in RAD_SCALE*erg units; multiply back to erg for the gas.
+       dy already carries RAD_SCALE through x_e. */
+    Uint_new = Uint_old - du * RAD_SCALE;
     u[PRJ_CONS_ETOT] = Uint_new + KE + Emag;
     u[PRJ_CONS_YE] += dy;
 }
@@ -842,7 +847,9 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
             dy += rad->x_e[2][g] * (E_new_g - E_old[2 * PRJ_NEGROUP + g]);
         }
 
-        Uint_new = Uint_old - du;
+        /* du is in RAD_SCALE*erg units; multiply back to erg for the gas.
+           dy already carries RAD_SCALE through x_e. */
+        Uint_new = Uint_old - du * RAD_SCALE;
         u[PRJ_CONS_ETOT] = Uint_new + KE + Emag;
         u[PRJ_CONS_YE] += dy;
     }

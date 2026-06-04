@@ -545,7 +545,10 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
         }
     }
 
-    *F1 = Uint_new - Uint_old + sum_dE;
+    /* sum_dE is a radiation-energy change in RAD_SCALE*erg units; multiply back
+       to erg to balance the gas internal energy.  sum_dE_xe already carries
+       RAD_SCALE through x_e, so the lepton residual needs no extra factor. */
+    *F1 = Uint_new - Uint_old + sum_dE * RAD_SCALE;
     *F2 = rho * Ye - rho * Ye_old + sum_dE_xe;
 
     if (kappa_out != 0) {
@@ -910,10 +913,12 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
         }
     }
 
-    u[PRJ_CONS_MOM1] -= dmom[0];
-    u[PRJ_CONS_MOM2] -= dmom[1];
-    u[PRJ_CONS_MOM3] -= dmom[2];
-    u[PRJ_CONS_ETOT] -= detot;
+    /* dmom/detot accumulate radiation-flux changes in RAD_SCALE*erg units;
+       multiply back to erg for the gas momentum/energy back-reaction. */
+    u[PRJ_CONS_MOM1] -= dmom[0] * RAD_SCALE;
+    u[PRJ_CONS_MOM2] -= dmom[1] * RAD_SCALE;
+    u[PRJ_CONS_MOM3] -= dmom[2] * RAD_SCALE;
+    u[PRJ_CONS_ETOT] -= detot * RAD_SCALE;
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {

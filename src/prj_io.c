@@ -1164,13 +1164,22 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
             const prj_block *block = &mesh->blocks[run_start + ridx];
 
             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                double wscale = 1.0;
+#if PRJ_NRAD > 0
+                /* Radiation vars (v >= PRJ_NHYDRO) live in RAD_SCALE*erg units
+                   internally; write them in physical erg so restart files stay
+                   bit-identical to the pre-scaling format. */
+                if (v >= PRJ_NHYDRO) {
+                    wscale = RAD_SCALE;
+                }
+#endif
                 for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                     for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                         for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            buffer[offset] = block->W[VIDX(v, i, j, k)];
+                            buffer[offset] = block->W[VIDX(v, i, j, k)] * wscale;
                         }
                     }
                 }
@@ -1389,13 +1398,21 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
             prj_block *block = &mesh->blocks[run_start + ridx];
 
             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                double wscale = 1.0;
+#if PRJ_NRAD > 0
+                /* On-disk radiation vars are in physical erg; convert back to
+                   the internal RAD_SCALE*erg units on read. */
+                if (v >= PRJ_NHYDRO) {
+                    wscale = 1.0 / RAD_SCALE;
+                }
+#endif
                 for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                     for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                         for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            block->W[VIDX(v, i, j, k)] = buffer[offset];
+                            block->W[VIDX(v, i, j, k)] = buffer[offset] * wscale;
                         }
                     }
                 }
@@ -1623,9 +1640,10 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
 #endif
 #if PRJ_NRAD > 0
     hsize_t dims_rad[5];
-    /* E and F can exceed the range of single-precision float; scale them down
-       on dump by dividing by RAD_SCALE to avoid overflow. */
-    const double rad_dump_scale = 1.0 / RAD_SCALE;
+    /* E and F are stored internally in RAD_SCALE*erg units, which already match
+       the previously dumped (E/RAD_SCALE) on-disk representation, so no further
+       scaling is applied on dump. */
+    const double rad_dump_scale = 1.0;
 #endif
     static const char hydro_names[6][PRJ_IO_DUMP_NAME_SIZE] = {
         "density", "v1", "v2", "v3", "eint", "ye"

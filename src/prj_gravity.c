@@ -1219,10 +1219,13 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 
                             for (field = 0; field < PRJ_NRAD; ++field) {
                                 for (group = 0; group < PRJ_NEGROUP; ++group) {
-                                    double e_rad = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
-                                    double f1 = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
-                                    double f2 = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
-                                    double f3 = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
+                                    /* Radiation E/F are stored in RAD_SCALE*erg
+                                       units; convert back to physical erg for the
+                                       gravitational source. */
+                                    double e_rad = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)] * RAD_SCALE;
+                                    double f1 = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)] * RAD_SCALE;
+                                    double f2 = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)] * RAD_SCALE;
+                                    double f3 = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)] * RAD_SCALE;
                                     double fr = r > 0.0 ? (f1 * dx1 + f2 * dx2 + f3 * dx3) / r : 0.0;
 
                                     erad += e_rad / (PRJ_CLIGHT * PRJ_CLIGHT);

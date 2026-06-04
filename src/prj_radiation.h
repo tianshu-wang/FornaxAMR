@@ -5,14 +5,16 @@
 #define PRJ_HPLANCK 6.62607015e-27
 
 #if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+/* Radiation E/F are stored internally in RAD_SCALE*erg units, so they are
+   already O(1) and fit in single precision without any further rescaling. */
 static inline float prj_rad_mixed_pack(double x)
 {
-    return (float)(x / RAD_SCALE);
+    return (float)x;
 }
 
 static inline double prj_rad_mixed_unpack(float x)
 {
-    return RAD_SCALE * (double)x;
+    return (double)x;
 }
 
 static inline double prj_rad_mixed_round(double x)

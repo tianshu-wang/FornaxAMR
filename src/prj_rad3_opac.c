@@ -97,10 +97,17 @@ static void prj_rad3_build_egroups(prj_rad *rad)
                 rad->spec_factor[nu][g] = pow(PRJ_CLIGHT * PRJ_HPLANCK, 3)
                     / (4.0 * M_PI * derg * erg * erg * erg);
             }
+            /* spec_factor converts radiation energy density to occupation
+               number; with E stored in RAD_SCALE*erg units the conversion
+               carries an extra RAD_SCALE so the occupation stays physical. */
+            rad->spec_factor[nu][g] *= RAD_SCALE;
+            /* x_e converts a radiation-energy change to a lepton-number change;
+               RAD_SCALE is baked in here so all Ye couplings need no further
+               rescaling. */
             if (nu == 0) {
-                rad->x_e[nu][g] = 1.0 / (PRJ_AVOGADRO * erg);
+                rad->x_e[nu][g] = RAD_SCALE / (PRJ_AVOGADRO * erg);
             } else if (nu == 1) {
-                rad->x_e[nu][g] = -1.0 / (PRJ_AVOGADRO * erg);
+                rad->x_e[nu][g] = -RAD_SCALE / (PRJ_AVOGADRO * erg);
             } else {
                 rad->x_e[nu][g] = 0.0;
             }
@@ -451,7 +458,9 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
 
     double factor;
     if (eta != 0) {
-        factor = 4.0 * M_PI / PRJ_MEV_TO_ERG;
+        /* Emissivity is divided by RAD_SCALE so it adds radiation energy in
+           the internal RAD_SCALE*erg units. */
+        factor = 4.0 * M_PI / PRJ_MEV_TO_ERG / RAD_SCALE;
     }
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
