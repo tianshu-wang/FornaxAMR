@@ -63,7 +63,7 @@ void prj_mpi_barrier(const struct prj_mpi *mpi);
         prj_mpi_barrier((mpi)); \
     } while (0)
 #define PRJ_TIMER_BARRIER_STOP(timer, mpi, name) do { \
-        prj_mpi_barrier((mpi)); \
+        (void)(mpi); \
         PRJ_TIMER_STOP((timer), (name)); \
     } while (0)
 #else
