@@ -679,9 +679,25 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
             double lam_min;
             double lam_max;
             double c_abs;
+            double cE;
+            double Fmag;
+            double f;
 
-            /* prj_rad_m1_wavespeeds treats F1 as the direction-normal flux. */
-            prj_rad_m1_wavespeeds(E, F1, F2, F3, &lam_min, &lam_max);
+            /* Fmag and f are rotation-invariant, so compute them once and
+             * reuse across the three direction-normal wavespeed evaluations. */
+            cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+            Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+            if (cE > 0.0) {
+                f = Fmag / cE;
+                if (f > 1.0) {
+                    f = 1.0;
+                }
+            } else {
+                f = 0.0;
+            }
+
+            /* The first flux argument is the direction-normal component. */
+            prj_rad_m1_wavespeeds_with_fluxmag(E, F1, Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
             if (fabs(lam_max) > c_abs) {
                 c_abs = fabs(lam_max);
@@ -691,7 +707,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
                 cdir[0] = c_abs;
             }
 
-            prj_rad_m1_wavespeeds(E, F2, F3, F1, &lam_min, &lam_max);
+            prj_rad_m1_wavespeeds_with_fluxmag(E, F2, Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
             if (fabs(lam_max) > c_abs) {
                 c_abs = fabs(lam_max);
@@ -701,7 +717,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
                 cdir[1] = c_abs;
             }
 
-            prj_rad_m1_wavespeeds(E, F3, F1, F2, &lam_min, &lam_max);
+            prj_rad_m1_wavespeeds_with_fluxmag(E, F3, Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
             if (fabs(lam_max) > c_abs) {
                 c_abs = fabs(lam_max);

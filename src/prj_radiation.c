@@ -335,7 +335,7 @@ static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double
     *f_out = f;
 }
 
-static void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double f,
+void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double f,
     double *lam_min, double *lam_max)
 {
     double mu;
@@ -350,11 +350,6 @@ static void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag,
     }
 
     mu = F1 / Fmag;
-    if (mu > 1.0) {
-        mu = 1.0;
-    } else if (mu < -1.0) {
-        mu = -1.0;
-    }
 
     fsq = f * f;
     ffac = sqrt(4.0 - 3.0 * fsq);

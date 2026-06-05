@@ -35,6 +35,8 @@ void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, dou
 #if PRJ_NRAD > 0
 void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
     double *lam_min, double *lam_max);
+void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double f,
+    double *lam_min, double *lam_max);
 #endif
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);
