@@ -19,6 +19,7 @@ void prj_eos_init(prj_eos *eos, const prj_mpi *mpi);
 void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quantities);
 double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye);
 void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_quantities);
+double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye);
 void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W);
 void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage);
 void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage);

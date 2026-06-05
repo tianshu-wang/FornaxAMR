@@ -256,6 +256,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.E_floor = -1.0;
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
+    sim->eos.E_injected = 0.0;
     sim->rad.maxiter = 20;
     sim->rad.implicit_err_tol = 1.0e-6;
 #if PRJ_NRAD > 0

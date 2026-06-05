@@ -175,6 +175,7 @@ struct prj_eos {
     double ln10_dlogT;
     size_t table_bytes;
     double *table;
+    double E_injected;
 };
 
 struct prj_grav {

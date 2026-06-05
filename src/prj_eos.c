@@ -672,6 +672,64 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }
 
+double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye)
+{
+    double rl;
+    double drho;
+    double dye;
+    int jr;
+    int jrp;
+    int jy;
+    int jyp;
+    double coeff0;
+    double coeff1;
+    double coeff2;
+    double coeff3;
+    int base_eint;
+    int off_y_r;
+    int off_yp_r;
+    int off_y_rp;
+    int off_yp_rp;
+
+    /* The internal-energy offset only exists for the tabulated EOS; for the
+     * ideal-gas EOS the floor is applied directly so there is no boundary. */
+    if (eos == 0 || eos->kind != PRJ_EOS_KIND_TABLE || eos->filename[0] == '\0' ||
+        prj_eos_prepare_table(eos, 0) != 0 || eos->table_loaded != 1) {
+        return 0.0;
+    }
+
+    if (rho < eos->rho_min || rho > eos->rho_max) {
+        prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max);
+    }
+    if (ye < eos->y1c || ye > eos->y2c) {
+        prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
+    }
+
+    rl = log10(rho);
+    jr = 1 + (int)((rl - eos->r1) * eos->inv_dlogrho);
+    jy = 1 + (int)((ye - eos->y1c) * eos->inv_dYe);
+    jr = jr < 1 ? 1 : (jr >= eos->nr ? eos->nr - 1 : jr);
+    jy = jy < 1 ? 1 : (jy >= eos->ny ? eos->ny - 1 : jy);
+    jrp = jr + 1;
+    jyp = jy + 1;
+    drho = prj_eos_clamp_double((rl - (eos->r1 + (double)(jr - 1) * eos->dlogrho)) * eos->inv_dlogrho, 0.0, 1.0);
+    dye = prj_eos_clamp_double((ye - (eos->y1c + (double)(jy - 1) * eos->dYe)) * eos->inv_dYe, 0.0, 1.0);
+    coeff0 = (1.0 - drho) * (1.0 - dye);
+    coeff1 = (1.0 - drho) * dye;
+    coeff2 = drho * (1.0 - dye);
+    coeff3 = drho * dye;
+
+    base_eint = prj_eos_rec_to_compact(PRJ_EOS_REC_EINT) * eos->ny * eos->nr * eos->nt;
+    off_y_r   = (jy  - 1) * eos->nr * eos->nt + (jr  - 1) * eos->nt;
+    off_yp_r  = (jyp - 1) * eos->nr * eos->nt + (jr  - 1) * eos->nt;
+    off_y_rp  = (jy  - 1) * eos->nr * eos->nt + (jrp - 1) * eos->nt;
+    off_yp_rp = (jyp - 1) * eos->nr * eos->nt + (jrp - 1) * eos->nt;
+
+    /* jt = 1 is the lowest-temperature slice of the table. */
+    return prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp,
+        off_yp_rp, 1, coeff0, coeff1, coeff2, coeff3) * PRJ_EOS_ENERGY_SCALE;
+}
+
 void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W)
 {
     int i;
