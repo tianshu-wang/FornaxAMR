@@ -12,6 +12,13 @@
 
 #include "prj.h"
 
+#ifndef PRJ_BRANCH
+#define PRJ_BRANCH "unknown"
+#endif
+#ifndef PRJ_COMMIT
+#define PRJ_COMMIT "unknown"
+#endif
+
 #if PRJ_TIMER
 static void prj_write_timer_report(const prj_timer *timer, int rank)
 {
@@ -203,6 +210,8 @@ static void prj_print_config(const prj_sim *sim, int rank)
     prj_amr_estimator_label(sim, amr_estimator_label, sizeof(amr_estimator_label));
 
     fprintf(stderr, "config:\n");
+    fprintf(stderr, "git branch: %s\n", PRJ_BRANCH);
+    fprintf(stderr, "git commit: %s\n", PRJ_COMMIT);
     fprintf(stderr, "mpi: %s\n",
 #if defined(PRJ_ENABLE_MPI)
         "on"
@@ -262,6 +271,7 @@ int main(int argc, char *argv[])
     double restart_x_com[3] = {0.0, 0.0, 0.0};
     int resolution = -1;
     int max_level_override = -1;
+    int restart_latest_id = -1;
     double next_output_time = -1.0;
     double next_restart_time = -1.0;
     double last_output_time = -1.0;
@@ -291,14 +301,12 @@ int main(int argc, char *argv[])
     }
     init_fn = prj_select_problem(sim.problem_name);
     if (sim.restart_from_latest != 0) {
-        int latest_id = -1;
         if (prj_io_find_latest_restart("output", sim.restart_file_name,
-                sizeof(sim.restart_file_name), &latest_id) != 0) {
+                sizeof(sim.restart_file_name), &restart_latest_id) != 0) {
             fprintf(stderr, "restart_from_latest is enabled but no restart_*.h5 found in output/\n");
             return 1;
         }
         sim.restart_from_file = 1;
-        fprintf(stderr, "restart_from_latest selected %s (id %d)\n", sim.restart_file_name, latest_id);
     }
     if (sim.restart_from_file != 0 && sim.restart_file_name[0] == '\0') {
         fprintf(stderr, "restart_from_file is enabled but restart_file_name is empty\n");
@@ -315,8 +323,11 @@ int main(int argc, char *argv[])
 
     init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn || init_fn == prj_problem_sedov);
     prj_mpi_init(&argc, &argv, &mpi);
-    prj_print_config(&sim, mpi.rank);
+    if (sim.restart_from_latest != 0 && mpi.rank == 0) {
+        fprintf(stderr, "restart_from_latest selected %s (id %d)\n", sim.restart_file_name, restart_latest_id);
+    }
     if (sim.restart_from_file == 0) {
+        prj_print_config(&sim, mpi.rank);
         prj_eos_init(&sim.eos, &mpi);
         init_fn(&sim, &mpi);
         if (!init_with_mpi) {
