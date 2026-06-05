@@ -143,7 +143,7 @@
 #error "PRJ_NGHOST - PRJ_NGHOST_RAD must be even for AMR prolongation alignment"
 #endif
 #ifndef PRJ_AMR_BUFFER_ZONE
-#define PRJ_AMR_BUFFER_ZONE 4
+#define PRJ_AMR_BUFFER_ZONE 2
 #endif
 #if PRJ_AMR_BUFFER_ZONE > PRJ_BLOCK_SIZE
 #error "PRJ_AMR_BUFFER_ZONE must not exceed PRJ_BLOCK_SIZE"
