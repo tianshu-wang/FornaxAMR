@@ -491,7 +491,12 @@ int main(int argc, char *argv[])
             }
 #endif
             prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1);
+            double E_injected_before = sim.eos.E_injected;
             int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi, &sim.grav);
+            if (mpi.rank == 0 && sim.eos.E_injected != E_injected_before) {
+                fprintf(stderr, "E_injected changed after amr_adapt: %.6e -> %.6e (delta=%.6e)\n",
+                    E_injected_before, sim.eos.E_injected, sim.eos.E_injected - E_injected_before);
+            }
             if (block_changed) {
                 prj_mpi_rebalance(&sim.mesh, &mpi);
 #if PRJ_USE_GRAVITY
