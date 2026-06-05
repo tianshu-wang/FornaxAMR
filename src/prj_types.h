@@ -123,6 +123,7 @@ struct prj_block {
 struct prj_mesh {
     int nblocks;
     int nblocks_max;
+    int max_blocks;
     int max_level;
     double min_dx;
     int max_active_level;

@@ -235,6 +235,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.root_nx[2] = 8;
     sim->mesh.max_level = 0;
     sim->mesh.min_dx = 0.0;
+    sim->mesh.max_blocks = 131072;
     {
         int amr_idx;
 
@@ -403,6 +404,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.root_nx[2] = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "max_level") == 0) {
             sim->mesh.max_level = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "max_blocks") == 0) {
+            sim->mesh.max_blocks = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "min_dx") == 0) {
             sim->mesh.min_dx = strtod(value, &endptr);
         } else if (prj_io_parse_amr_slot_key(key, "amr_estimator", &amr_slot)) {
@@ -1308,6 +1311,13 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         prj_io_fail("prj_io_read_restart: mesh init failed");
     }
     mesh->min_dx = min_dx;
+    if (nblocks > mesh->nblocks_max) {
+        fprintf(stderr,
+            "prj_io_read_restart: restart has nblocks=%d > max_blocks=%d. "
+            "Increase max_blocks in the param file.\n",
+            nblocks, mesh->nblocks_max);
+        prj_io_fail("prj_io_read_restart: block capacity exceeded");
+    }
     mesh->nblocks = nblocks;
 
     metadata = (double *)calloc((size_t)nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));

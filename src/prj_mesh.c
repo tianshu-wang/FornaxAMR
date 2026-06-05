@@ -1027,6 +1027,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     double saved_amr_init_scale_factor;
     double saved_E_floor;
     double saved_min_dx;
+    int saved_max_blocks;
     int amr_idx;
 
     if (mesh == 0 || coord == 0 || root_nx1 <= 0 || root_nx2 <= 0 || root_nx3 <= 0) {
@@ -1047,6 +1048,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     saved_amr_init_scale_factor = mesh->amr_init_scale_factor;
     saved_E_floor = mesh->E_floor;
     saved_min_dx = mesh->min_dx;
+    saved_max_blocks = mesh->max_blocks;
 
     mesh->nblocks = 0;
     mesh->nblocks_max = 0;
@@ -1070,6 +1072,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->use_BJ = saved_use_BJ;
     mesh->amr_init_scale_factor = saved_amr_init_scale_factor;
     mesh->E_floor = saved_E_floor;
+    mesh->max_blocks = saved_max_blocks;
     mesh->amr_init_refine_fn = 0;
     mesh->amr_init_refine_userdata = 0;
     mesh->blocks = 0;
@@ -1079,7 +1082,11 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->morton_lookup_count = 0;
 
     nroot = root_nx1 * root_nx2 * root_nx3;
-    capacity = 65536;
+    capacity = mesh->max_blocks > 0 ? mesh->max_blocks : 131072;
+    if (capacity < nroot) {
+        capacity = nroot;
+    }
+    mesh->max_blocks = capacity;
 
     mesh->blocks = (prj_block *)malloc((size_t)capacity * sizeof(*mesh->blocks));
     if (mesh->blocks == 0) {

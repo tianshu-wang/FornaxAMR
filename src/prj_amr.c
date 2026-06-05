@@ -377,7 +377,14 @@ static int prj_find_free_block_slot(prj_mesh *mesh)
         mesh->nblocks += 1;
         return i;
     }
-    return -1;
+    fprintf(stderr,
+        "prj_find_free_block_slot: block capacity exceeded "
+        "(nblocks=%d >= max_blocks=%d). Increase max_blocks in the param file.\n",
+        mesh->nblocks, mesh->nblocks_max);
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+#endif
+    exit(EXIT_FAILURE);
 }
 
 static int prj_boxes_overlap_or_touch(double amin, double amax, double bmin, double bmax, double tol)
