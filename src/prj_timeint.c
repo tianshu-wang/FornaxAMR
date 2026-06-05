@@ -681,12 +681,14 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
             double c_abs;
             double cE;
             double Fmag;
+            double inv_Fmag;
             double f;
 
-            /* Fmag and f are rotation-invariant, so compute them once and
-             * reuse across the three direction-normal wavespeed evaluations. */
+            /* Fmag, inv_Fmag and f are rotation-invariant, so compute them once
+             * and reuse across the three direction-normal wavespeed evaluations. */
             cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
             Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+            inv_Fmag = (Fmag > 0.0) ? (1.0 / Fmag) : 0.0;
             if (cE > 0.0) {
                 f = Fmag / cE;
                 if (f > 1.0) {
@@ -697,7 +699,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
             }
 
             /* The first flux argument is the direction-normal component. */
-            prj_rad_m1_wavespeeds_with_fluxmag(E, F1, Fmag, f, &lam_min, &lam_max);
+            prj_rad_m1_wavespeeds_with_fluxmag(E, F1, Fmag, inv_Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
             if (fabs(lam_max) > c_abs) {
                 c_abs = fabs(lam_max);
@@ -707,7 +709,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
                 cdir[0] = c_abs;
             }
 
-            prj_rad_m1_wavespeeds_with_fluxmag(E, F2, Fmag, f, &lam_min, &lam_max);
+            prj_rad_m1_wavespeeds_with_fluxmag(E, F2, Fmag, inv_Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
             if (fabs(lam_max) > c_abs) {
                 c_abs = fabs(lam_max);
@@ -717,7 +719,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
                 cdir[1] = c_abs;
             }
 
-            prj_rad_m1_wavespeeds_with_fluxmag(E, F3, Fmag, f, &lam_min, &lam_max);
+            prj_rad_m1_wavespeeds_with_fluxmag(E, F3, Fmag, inv_Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
             if (fabs(lam_max) > c_abs) {
                 c_abs = fabs(lam_max);

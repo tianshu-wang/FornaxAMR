@@ -644,8 +644,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                             double sR_o = sigma_R[idx];
                             double k_sum = kL + kR;
                             double s_sum = sL_o + sR_o;
-                            double k_face = (k_sum > 0.0) ? (2.0 * kL * kR / k_sum) : 0.0;
-                            double s_face = (s_sum > 0.0) ? (2.0 * sL_o * sR_o / s_sum) : 0.0;
+                            double k_face = 2.0 * kL * kR / k_sum;
+                            double s_face = 2.0 * sL_o * sR_o / s_sum;
                             chi_face[idx] = k_face + s_face;
                         }
 

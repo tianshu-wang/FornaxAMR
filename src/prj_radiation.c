@@ -260,7 +260,7 @@ static void prj_rad_m1_third_moment(const prj_rad *rad, double E, double F1, dou
 }
 
 static void prj_rad_m1_phys_flux_with_fluxmag(const prj_rad *rad, double E, double F1,
-    double F2, double F3, double Fmag, double f,
+    double F2, double F3, double Fmag, double inv_Fmag, double f,
     double *fE, double *fF1, double *fF2, double *fF3)
 {
     double chi;
@@ -285,9 +285,9 @@ static void prj_rad_m1_phys_flux_with_fluxmag(const prj_rad *rad, double E, doub
 
     chi = prj_rad_m1_chi(rad, f);
 
-    n1 = F1 / Fmag;
-    n2 = F2 / Fmag;
-    n3 = F3 / Fmag;
+    n1 = F1 * inv_Fmag;
+    n2 = F2 * inv_Fmag;
+    n3 = F3 * inv_Fmag;
 
     {
         double a = 0.5 * (1.0 - chi);
@@ -304,7 +304,7 @@ static void prj_rad_m1_phys_flux_with_fluxmag(const prj_rad *rad, double E, doub
 }
 
 static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double *F3,
-    double *Fmag_out, double *f_out)
+    double *Fmag_out, double *inv_Fmag_out, double *f_out)
 {
     double Fmag;
     double cE;
@@ -332,15 +332,17 @@ static void prj_rad_enforce_flux_limit(double *E, double *F1, double *F2, double
         f = 0.0;
     }
     *Fmag_out = Fmag;
+    *inv_Fmag_out = (Fmag > 0.0) ? (1.0 / Fmag) : 0.0;
     *f_out = f;
 }
 
-void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double f,
-    double *lam_min, double *lam_max)
+void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double inv_Fmag,
+    double f, double *lam_min, double *lam_max)
 {
     double mu;
     double fsq;
     double ffac;
+    double inv_ffac;
     double lterm;
 
     if (E <= 0.0 || Fmag <= 0.0) {
@@ -349,13 +351,14 @@ void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double
         return;
     }
 
-    mu = F1 / Fmag;
+    mu = F1 * inv_Fmag;
 
     fsq = f * f;
     ffac = sqrt(4.0 - 3.0 * fsq);
+    inv_ffac = 1.0 / ffac;
     lterm = sqrt(fabs((2.0 / 3.0) * (4.0 - 3.0 * fsq - ffac) + 2.0 * mu * mu * (2.0 - fsq - ffac)));
-    *lam_min = (mu * f - lterm) / ffac;
-    *lam_max = (mu * f + lterm) / ffac;
+    *lam_min = (mu * f - lterm) * inv_ffac;
+    *lam_max = (mu * f + lterm) * inv_ffac;
     if (*lam_min < -1.0) {
         *lam_min = -1.0;
     }
@@ -368,11 +371,13 @@ void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
     double *lam_min, double *lam_max)
 {
     double Fmag;
+    double inv_Fmag;
     double cE;
     double f;
 
     cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
     Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+    inv_Fmag = (Fmag > 0.0) ? (1.0 / Fmag) : 0.0;
     if (cE > 0.0) {
         f = Fmag / cE;
         if (f > 1.0) {
@@ -381,7 +386,7 @@ void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
     } else {
         f = 0.0;
     }
-    prj_rad_m1_wavespeeds_with_fluxmag(E, F1, Fmag, f, lam_min, lam_max);
+    prj_rad_m1_wavespeeds_with_fluxmag(E, F1, Fmag, inv_Fmag, f, lam_min, lam_max);
 }
 #endif
 
@@ -406,8 +411,10 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
                 double F2R = WR[PRJ_PRIM_RAD_F2(field, group)];
                 double F3R = WR[PRJ_PRIM_RAD_F3(field, group)];
                 double Fmag_L;
+                double inv_Fmag_L;
                 double f_L;
                 double Fmag_R;
+                double inv_Fmag_R;
                 double f_R;
                 double fLE;
                 double fLF1;
@@ -424,21 +431,22 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
                 double sL;
                 double sR;
                 double denom;
+                double inv_denom;
                 double chi_ext;
                 double tau;
                 double eps;
 
-                prj_rad_enforce_flux_limit(&EL, &F1L, &F2L, &F3L, &Fmag_L, &f_L);
-                prj_rad_enforce_flux_limit(&ER, &F1R, &F2R, &F3R, &Fmag_R, &f_R);
+                prj_rad_enforce_flux_limit(&EL, &F1L, &F2L, &F3L, &Fmag_L, &inv_Fmag_L, &f_L);
+                prj_rad_enforce_flux_limit(&ER, &F1R, &F2R, &F3R, &Fmag_R, &inv_Fmag_R, &f_R);
 
-                prj_rad_m1_phys_flux_with_fluxmag(rad, EL, F1L, F2L, F3L, Fmag_L, f_L,
+                prj_rad_m1_phys_flux_with_fluxmag(rad, EL, F1L, F2L, F3L, Fmag_L, inv_Fmag_L, f_L,
                     &fLE, &fLF1, &fLF2, &fLF3);
-                prj_rad_m1_phys_flux_with_fluxmag(rad, ER, F1R, F2R, F3R, Fmag_R, f_R,
+                prj_rad_m1_phys_flux_with_fluxmag(rad, ER, F1R, F2R, F3R, Fmag_R, inv_Fmag_R, f_R,
                     &fRE, &fRF1, &fRF2, &fRF3);
 
-                prj_rad_m1_wavespeeds_with_fluxmag(EL, F1L, Fmag_L, f_L,
+                prj_rad_m1_wavespeeds_with_fluxmag(EL, F1L, Fmag_L, inv_Fmag_L, f_L,
                     &lamL_min, &lamL_max);
-                prj_rad_m1_wavespeeds_with_fluxmag(ER, F1R, Fmag_R, f_R,
+                prj_rad_m1_wavespeeds_with_fluxmag(ER, F1R, Fmag_R, inv_Fmag_R, f_R,
                     &lamR_min, &lamR_max);
                 sL = PRJ_CLIGHT * (lamL_min < lamR_min ? lamL_min : lamR_min);
                 sR = PRJ_CLIGHT * (lamL_max > lamR_max ? lamL_max : lamR_max);
@@ -453,6 +461,7 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
                     sR = PRJ_CLIGHT;
                 }
                 denom = sR - sL;
+                inv_denom = 1.0 / denom;
 
                 chi_ext = chi_face[idx];
                 tau = chi_ext * dx_dir;
@@ -462,13 +471,13 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
                 }
 
                 flux[PRJ_CONS_RAD_E(field, group)] = lapse *
-                    (sR * fLE - sL * fRE + eps * sL * sR * (ER - EL)) / denom;
+                    (sR * fLE - sL * fRE + eps * sL * sR * (ER - EL)) * inv_denom;
                 flux[PRJ_CONS_RAD_F1(field, group)] = lapse *
-                    (sR * fLF1 - sL * fRF1 + sL * sR * (F1R - F1L)) / denom;
+                    (sR * fLF1 - sL * fRF1 + sL * sR * (F1R - F1L)) * inv_denom;
                 flux[PRJ_CONS_RAD_F2(field, group)] = lapse *
-                    (sR * fLF2 - sL * fRF2 + sL * sR * (F2R - F2L)) / denom;
+                    (sR * fLF2 - sL * fRF2 + sL * sR * (F2R - F2L)) * inv_denom;
                 flux[PRJ_CONS_RAD_F3(field, group)] = lapse *
-                    (sR * fLF3 - sL * fRF3 + sL * sR * (F3R - F3L)) / denom;
+                    (sR * fLF3 - sL * fRF3 + sL * sR * (F3R - F3L)) * inv_denom;
 
                 /* O(v/c) fluid advection: upwinded v_face * {E, F_i} term. */
                 {
