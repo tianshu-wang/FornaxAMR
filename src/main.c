@@ -485,12 +485,11 @@ int main(int argc, char *argv[])
         sim.step += 1;
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "amr");
-#if PRJ_USE_GRAVITY
-            if (prj_amr_criteria_need_gravity(&sim.mesh)) {
-                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
-                prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
-            }
-#endif
+            /* The pressure_scale_height criterion reads per-cell b->grav, which
+             * is already current from the just-completed step's stage-2 ghost
+             * fill (prj_boundary_fill_ghosts_and_bf runs reduce+integrate). The
+             * mesh/density/x_com are unchanged since, so no pre-tag rebuild is
+             * needed here; the post-adapt rebuild below handles grid changes. */
             prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1);
             double E_injected_before = sim.eos.E_injected;
             int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi, &sim.grav);
