@@ -25,22 +25,26 @@ static inline void prj_flux_face_cells(int dir, int i, int j, int k,
     }
 }
 
-static inline double prj_flux_positive_face_value(const double q[PRJ_RECON_NCELLS],
-    double target, int recon);
-static inline double prj_flux_mc_face_value(const double q[PRJ_RECON_NCELLS],
-    double target);
 static inline int prj_flux_prim_var_radiation(int v);
-static inline int prj_flux_prim_var_positive(int v);
 
+/* Reconstruct a single primitive face value.  The variable-type decisions
+ * (radiation? which reconstruction scheme?) are loop-invariant for a fixed
+ * variable, so callers precompute them once per variable via
+ * prj_flux_prim_var_kind() and pass them in here, keeping the per-face inner loop
+ * branch-free on variable type.  The reconstruction-scheme value is returned
+ * as-is (no positivity guard). */
 static inline double prj_flux_prim_face_value(const double *W, int v, int dir,
-    int i, int j, int k, double target)
+    int i, int j, int k, double target, int is_rad, int recon_scheme)
 {
     double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
     int n;
 
+#if !(PRJ_NRAD > 0 && PRJ_MIXED_PRECISION)
+    (void)is_rad;
+#endif
+
     for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
-        int offset = n - half;
+        int offset = n - (PRJ_RECON_NCELLS / 2);
 
         if (dir == X1DIR) {
             q[n] = W[VIDX(v, i + offset, j, k)];
@@ -50,47 +54,21 @@ static inline double prj_flux_prim_face_value(const double *W, int v, int dir,
             q[n] = W[VIDX(v, i, j, k + offset)];
         }
 #if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
-        if (prj_flux_prim_var_radiation(v)) {
+        if (is_rad) {
             q[n] = prj_rad_mixed_round(q[n]);
         }
 #endif
     }
 
-    if (prj_flux_prim_var_radiation(v)) {
-        if (prj_flux_prim_var_positive(v)) {
-            return prj_flux_positive_face_value(q, target, PRJ_RECON_RADIATION);
-        }
-        return prj_reconstruct_radiation_face_value(q, target);
-    } else if (prj_flux_prim_var_positive(v)) {
-        return prj_flux_positive_face_value(q, target, PRJ_RECON_HYDRO);
-    }
-    return prj_reconstruct_hydro_face_value(q, target);
+    return prj_reconstruct_face_value_for_scheme(q, target, recon_scheme);
 }
 
-static inline double prj_flux_mc_face_value(const double q[PRJ_RECON_NCELLS],
-    double target)
+/* Resolve the (radiation, scheme) reconstruction kind for a variable.
+ * Mirrors the dispatch that prj_flux_prim_face_value() previously did per face. */
+static inline void prj_flux_prim_var_kind(int v, int *is_rad, int *recon_scheme)
 {
-    const int half = PRJ_RECON_NCELLS / 2;
-
-    return prj_reconstruct_mc_face(q[half - 1], q[half], q[half + 1], target);
-}
-
-static inline double prj_flux_positive_face_value(const double q[PRJ_RECON_NCELLS],
-    double target, int recon)
-{
-    const int half = PRJ_RECON_NCELLS / 2;
-    double value = prj_reconstruct_face_value_for_scheme(q, target, recon);
-
-    if (isfinite(value) && value > 0.0) {
-        return value;
-    }
-
-    value = prj_flux_mc_face_value(q, target);
-    if (isfinite(value) && value > 0.0) {
-        return value;
-    }
-
-    return q[half];
+    *is_rad = prj_flux_prim_var_radiation(v);
+    *recon_scheme = *is_rad ? PRJ_RECON_RADIATION : PRJ_RECON_HYDRO;
 }
 
 static inline int prj_flux_prim_var_radiation(int v)
@@ -101,19 +79,6 @@ static inline int prj_flux_prim_var_radiation(int v)
     (void)v;
     return 0;
 #endif
-}
-
-static inline int prj_flux_prim_var_positive(int v)
-{
-    if (v == PRJ_PRIM_RHO || v == PRJ_PRIM_EINT) {
-        return 1;
-    }
-#if PRJ_NRAD > 0
-    if (v >= PRJ_NHYDRO && ((v - PRJ_NHYDRO) % PRJ_RAD_GROUP_STRIDE) == 0) {
-        return 1;
-    }
-#endif
-    return 0;
 }
 
 static inline double prj_flux_eos_face_value(const double *eosvar, int v, int dir,
@@ -135,77 +100,67 @@ static inline double prj_flux_eos_face_value(const double *eosvar, int v, int di
         }
     }
 
-    return prj_flux_positive_face_value(q, target, PRJ_RECON_HYDRO);
+    return prj_reconstruct_face_value_for_scheme(q, target, PRJ_RECON_HYDRO);
 }
 
-static void prj_flux_face_states_local(double *W, int dir, int i, int j, int k,
-    double *WL, double *WR)
+/* Build the local->global primitive index permutation for direction `dir`.
+ * The sweep-normal velocity/B/flux component is rotated into the local X1 slot
+ * so the Riemann solver always sees the sweep direction as its normal. The map
+ * is a permutation over all PRJ_NVAR_PRIM indices. */
+static void prj_flux_build_var_map(int dir, int *gmap)
 {
-    int il;
-    int jl;
-    int kl;
-    int ir;
-    int jr;
-    int kr;
-    int field=0;
-    int group=0;
+    int field = 0;
+    int group = 0;
 
-    prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
-
-#define PRJ_FACE_STATE(local_var, global_var) do { \
-        WL[(local_var)] = prj_flux_prim_face_value(W, (global_var), dir, il, jl, kl, 0.5); \
-        WR[(local_var)] = prj_flux_prim_face_value(W, (global_var), dir, ir, jr, kr, -0.5); \
-    } while (0)
-
-    PRJ_FACE_STATE(PRJ_PRIM_RHO, PRJ_PRIM_RHO);
-    PRJ_FACE_STATE(PRJ_PRIM_EINT, PRJ_PRIM_EINT);
-    PRJ_FACE_STATE(PRJ_PRIM_YE, PRJ_PRIM_YE);
+    gmap[PRJ_PRIM_RHO] = PRJ_PRIM_RHO;
+    gmap[PRJ_PRIM_EINT] = PRJ_PRIM_EINT;
+    gmap[PRJ_PRIM_YE] = PRJ_PRIM_YE;
 
     if (dir == X1DIR) {
-        PRJ_FACE_STATE(PRJ_PRIM_V1, PRJ_PRIM_V1);
-        PRJ_FACE_STATE(PRJ_PRIM_V2, PRJ_PRIM_V2);
-        PRJ_FACE_STATE(PRJ_PRIM_V3, PRJ_PRIM_V3);
+        gmap[PRJ_PRIM_V1] = PRJ_PRIM_V1;
+        gmap[PRJ_PRIM_V2] = PRJ_PRIM_V2;
+        gmap[PRJ_PRIM_V3] = PRJ_PRIM_V3;
 #if PRJ_MHD
-        PRJ_FACE_STATE(PRJ_PRIM_B1, PRJ_PRIM_B1);
-        PRJ_FACE_STATE(PRJ_PRIM_B2, PRJ_PRIM_B2);
-        PRJ_FACE_STATE(PRJ_PRIM_B3, PRJ_PRIM_B3);
+        gmap[PRJ_PRIM_B1] = PRJ_PRIM_B1;
+        gmap[PRJ_PRIM_B2] = PRJ_PRIM_B2;
+        gmap[PRJ_PRIM_B3] = PRJ_PRIM_B3;
 #endif
     } else if (dir == X2DIR) {
-        PRJ_FACE_STATE(PRJ_PRIM_V1, PRJ_PRIM_V2);
-        PRJ_FACE_STATE(PRJ_PRIM_V2, PRJ_PRIM_V3);
-        PRJ_FACE_STATE(PRJ_PRIM_V3, PRJ_PRIM_V1);
+        gmap[PRJ_PRIM_V1] = PRJ_PRIM_V2;
+        gmap[PRJ_PRIM_V2] = PRJ_PRIM_V3;
+        gmap[PRJ_PRIM_V3] = PRJ_PRIM_V1;
 #if PRJ_MHD
-        PRJ_FACE_STATE(PRJ_PRIM_B1, PRJ_PRIM_B2);
-        PRJ_FACE_STATE(PRJ_PRIM_B2, PRJ_PRIM_B3);
-        PRJ_FACE_STATE(PRJ_PRIM_B3, PRJ_PRIM_B1);
+        gmap[PRJ_PRIM_B1] = PRJ_PRIM_B2;
+        gmap[PRJ_PRIM_B2] = PRJ_PRIM_B3;
+        gmap[PRJ_PRIM_B3] = PRJ_PRIM_B1;
 #endif
     } else {
-        PRJ_FACE_STATE(PRJ_PRIM_V1, PRJ_PRIM_V3);
-        PRJ_FACE_STATE(PRJ_PRIM_V2, PRJ_PRIM_V1);
-        PRJ_FACE_STATE(PRJ_PRIM_V3, PRJ_PRIM_V2);
+        gmap[PRJ_PRIM_V1] = PRJ_PRIM_V3;
+        gmap[PRJ_PRIM_V2] = PRJ_PRIM_V1;
+        gmap[PRJ_PRIM_V3] = PRJ_PRIM_V2;
 #if PRJ_MHD
-        PRJ_FACE_STATE(PRJ_PRIM_B1, PRJ_PRIM_B3);
-        PRJ_FACE_STATE(PRJ_PRIM_B2, PRJ_PRIM_B1);
-        PRJ_FACE_STATE(PRJ_PRIM_B3, PRJ_PRIM_B2);
+        gmap[PRJ_PRIM_B1] = PRJ_PRIM_B3;
+        gmap[PRJ_PRIM_B2] = PRJ_PRIM_B1;
+        gmap[PRJ_PRIM_B3] = PRJ_PRIM_B2;
 #endif
     }
 
 #if PRJ_NRAD > 0
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
-            PRJ_FACE_STATE(PRJ_PRIM_RAD_E(field, group), PRJ_PRIM_RAD_E(field, group));
+            gmap[PRJ_PRIM_RAD_E(field, group)] = PRJ_PRIM_RAD_E(field, group);
             if (dir == X1DIR) {
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F1(field, group), PRJ_PRIM_RAD_F1(field, group));
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F2(field, group), PRJ_PRIM_RAD_F2(field, group));
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F3(field, group), PRJ_PRIM_RAD_F3(field, group));
+                gmap[PRJ_PRIM_RAD_F1(field, group)] = PRJ_PRIM_RAD_F1(field, group);
+                gmap[PRJ_PRIM_RAD_F2(field, group)] = PRJ_PRIM_RAD_F2(field, group);
+                gmap[PRJ_PRIM_RAD_F3(field, group)] = PRJ_PRIM_RAD_F3(field, group);
             } else if (dir == X2DIR) {
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F1(field, group), PRJ_PRIM_RAD_F2(field, group));
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F2(field, group), PRJ_PRIM_RAD_F3(field, group));
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F3(field, group), PRJ_PRIM_RAD_F1(field, group));
+                gmap[PRJ_PRIM_RAD_F1(field, group)] = PRJ_PRIM_RAD_F2(field, group);
+                gmap[PRJ_PRIM_RAD_F2(field, group)] = PRJ_PRIM_RAD_F3(field, group);
+                gmap[PRJ_PRIM_RAD_F3(field, group)] = PRJ_PRIM_RAD_F1(field, group);
             } else {
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F1(field, group), PRJ_PRIM_RAD_F3(field, group));
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F2(field, group), PRJ_PRIM_RAD_F1(field, group));
-                PRJ_FACE_STATE(PRJ_PRIM_RAD_F3(field, group), PRJ_PRIM_RAD_F2(field, group));
+                gmap[PRJ_PRIM_RAD_F1(field, group)] = PRJ_PRIM_RAD_F3(field, group);
+                gmap[PRJ_PRIM_RAD_F2(field, group)] = PRJ_PRIM_RAD_F1(field, group);
+                gmap[PRJ_PRIM_RAD_F3(field, group)] = PRJ_PRIM_RAD_F2(field, group);
             }
         }
     }
@@ -213,8 +168,94 @@ static void prj_flux_face_states_local(double *W, int dir, int i, int j, int k,
     (void)field;
     (void)group;
 #endif
+}
 
-#undef PRJ_FACE_STATE
+/* Reconstruct every primitive (and the pressure/gamma EOS vars) onto the dir
+ * faces of a block, with the *variable* loop outermost.  Results are written to
+ * block-wide buffers: WL_block/WR_block use layout [local_var * PRJ_BLOCK_NCELLS
+ * + IDX(i, j, k)]; the pL/pR/gL/gR buffers are indexed by IDX(i, j, k).  The
+ * Riemann sweep in prj_flux_update consumes these per face. */
+static void prj_flux_reconstruct_block(double *W, const double *eosvar, int dir,
+    int istart, int iend, int jstart, int jend, int kstart, int kend,
+    double *WL_block, double *WR_block,
+    double *pL_block, double *pR_block, double *gL_block, double *gR_block)
+{
+    int gmap[PRJ_NVAR_PRIM];
+    int lv;
+    int i;
+    int j;
+    int k;
+
+    prj_flux_build_var_map(dir, gmap);
+
+    for (lv = 0; lv < PRJ_NVAR_PRIM; ++lv) {
+        int gv = gmap[lv];
+        double *wl = &WL_block[(size_t)lv * PRJ_BLOCK_NCELLS];
+        double *wr = &WR_block[(size_t)lv * PRJ_BLOCK_NCELLS];
+        int is_rad;
+        int recon_scheme;
+
+        /* Variable-type dispatch hoisted out of the per-face loop below. */
+        prj_flux_prim_var_kind(gv, &is_rad, &recon_scheme);
+
+        for (i = istart; i <= iend; ++i) {
+            for (j = jstart; j <= jend; ++j) {
+                for (k = kstart; k <= kend; ++k) {
+                    int il;
+                    int jl;
+                    int kl;
+                    int ir;
+                    int jr;
+                    int kr;
+
+                    prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
+                    wl[IDX(i, j, k)] = prj_flux_prim_face_value(W, gv, dir, il, jl, kl, 0.5,
+                        is_rad, recon_scheme);
+                    wr[IDX(i, j, k)] = prj_flux_prim_face_value(W, gv, dir, ir, jr, kr, -0.5,
+                        is_rad, recon_scheme);
+                }
+            }
+        }
+    }
+
+    if (eosvar == 0) {
+        return;
+    }
+
+    {
+        const int eos_var[2] = { PRJ_EOSVAR_PRESSURE, PRJ_EOSVAR_GAMMA };
+        double *eosL[2];
+        double *eosR[2];
+        int e;
+
+        eosL[0] = pL_block;
+        eosL[1] = gL_block;
+        eosR[0] = pR_block;
+        eosR[1] = gR_block;
+
+        for (e = 0; e < 2; ++e) {
+            int ev = eos_var[e];
+            double *el = eosL[e];
+            double *er = eosR[e];
+
+            for (i = istart; i <= iend; ++i) {
+                for (j = jstart; j <= jend; ++j) {
+                    for (k = kstart; k <= kend; ++k) {
+                        int il;
+                        int jl;
+                        int kl;
+                        int ir;
+                        int jr;
+                        int kr;
+
+                        prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
+                        el[IDX(i, j, k)] = prj_flux_eos_face_value(eosvar, ev, dir, il, jl, kl, 0.5);
+                        er[IDX(i, j, k)] = prj_flux_eos_face_value(eosvar, ev, dir, ir, jr, kr, -0.5);
+                    }
+                }
+            }
+        }
+    }
 }
 
 static void prj_flux_store_face_velocity(prj_block *block, int dir, int i, int j, int k,
@@ -375,20 +416,6 @@ static void prj_flux_velocity_deltas(double *W, int dir,
     }
 }
 
-static void prj_flux_face_eosvar(const double *eosvar, int var, int dir, int i, int j, int k,
-    double *left_value, double *right_value)
-{
-    int il;
-    int jl;
-    int kl;
-    int ir;
-    int jr;
-    int kr;
-    prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
-    *left_value = prj_flux_eos_face_value(eosvar, var, dir, il, jl, kl, 0.5);
-    *right_value = prj_flux_eos_face_value(eosvar, var, dir, ir, jr, kr, -0.5);
-}
-
 #if PRJ_NRAD > 0
 /* Transport absorption/scattering opacity for one cell, stored per group in
  * block->kappa_cell / block->sigma_cell. Used by the radiation flux. */
@@ -503,6 +530,15 @@ void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
 void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     double *eosvar, double *flux[3], int use_bf1)
 {
+    /* Block-wide face-state scratch for the variable-outermost reconstruction
+     * pass.  Reused across calls (this code path is serial); WL/WR use layout
+     * [local_var * PRJ_BLOCK_NCELLS + IDX(i, j, k)]. */
+    static double WL_block[PRJ_NVAR_PRIM * PRJ_BLOCK_NCELLS];
+    static double WR_block[PRJ_NVAR_PRIM * PRJ_BLOCK_NCELLS];
+    static double pL_block[PRJ_BLOCK_NCELLS];
+    static double pR_block[PRJ_BLOCK_NCELLS];
+    static double gL_block[PRJ_BLOCK_NCELLS];
+    static double gR_block[PRJ_BLOCK_NCELLS];
     int dir;
 #if PRJ_NRAD == 0
     (void)rad;
@@ -527,6 +563,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
         int kend = PRJ_BLOCK_SIZE;
 
 #if PRJ_MHD
+        /* MHD needs one extra transverse face layer (CT/EMF reconstruction). */
         if (dir != X1DIR) {
             istart = -1;
         }
@@ -536,10 +573,25 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
         if (dir != X3DIR) {
             kstart = -1;
         }
+#else
+        /* Transverse directions carry one face per cell ([0, PRJ_BLOCK_SIZE - 1]);
+         * only the sweep-normal direction has PRJ_BLOCK_SIZE + 1 faces. */
+        if (dir != X1DIR) {
+            iend = PRJ_BLOCK_SIZE - 1;
+        }
+        if (dir != X2DIR) {
+            jend = PRJ_BLOCK_SIZE - 1;
+        }
+        if (dir != X3DIR) {
+            kend = PRJ_BLOCK_SIZE - 1;
+        }
 #endif
 
-#if PRJ_TIMER
-#endif
+        /* Variable-outermost reconstruction pass over the block. */
+        prj_flux_reconstruct_block(W, eosvar, dir,
+            istart, iend, jstart, jend, kstart, kend,
+            WL_block, WR_block, pL_block, pR_block, gL_block, gR_block);
+
         for (i = istart; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
                 for (k = kstart; k <= kend; ++k) {
@@ -556,31 +608,32 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     int ir;
                     int jr;
                     int kr;
+                    int v;
+                    size_t fidx;
 
-#if !PRJ_MHD
-                    if ((dir == X1DIR && (j >= PRJ_BLOCK_SIZE || k >= PRJ_BLOCK_SIZE)) ||
-                        (dir == X2DIR && (i >= PRJ_BLOCK_SIZE || k >= PRJ_BLOCK_SIZE)) ||
-                        (dir == X3DIR && (i >= PRJ_BLOCK_SIZE || j >= PRJ_BLOCK_SIZE))) {
-                        continue;
+                    double v_face_loc[3] = {0.0, 0.0, 0.0};
+                    double deltau;
+                    double deltav;
+                    double deltaw;
+
+                    /* Gather the reconstructed left/right states for this face. */
+                    fidx = (size_t)IDX(i, j, k);
+                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                        WL[v] = WL_block[(size_t)v * PRJ_BLOCK_NCELLS + fidx];
+                        WR[v] = WR_block[(size_t)v * PRJ_BLOCK_NCELLS + fidx];
                     }
-#endif
-
-                    prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
-                    prj_flux_face_states_local(W, dir, i, j, k, WL, WR);
                     if (eosvar != 0) {
-                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_PRESSURE, dir, i, j, k, &pL, &pR);
-                        prj_flux_face_eosvar(eosvar, PRJ_EOSVAR_GAMMA, dir, i, j, k, &gL, &gR);
+                        pL = pL_block[fidx];
+                        pR = pR_block[fidx];
+                        gL = gL_block[fidx];
+                        gR = gR_block[fidx];
                     } else {
                         pL = 0.0;
                         pR = 0.0;
                         gL = 0.0;
                         gR = 0.0;
                     }
-                    double v_face_loc[3] = {0.0, 0.0, 0.0};
-                    double deltau;
-                    double deltav;
-                    double deltaw;
-
+                    prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
                     prj_flux_velocity_deltas(W, dir, il, jl, kl, ir, jr, kr,
                         &deltau, &deltav, &deltaw);
 #if PRJ_MHD
@@ -656,8 +709,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                 }
             }
         }
-#if PRJ_TIMER
-#endif
     }
 }
 
