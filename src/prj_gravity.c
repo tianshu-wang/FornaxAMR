@@ -815,48 +815,105 @@ static double prj_gravity_pow_int(double x, int n)
     return value;
 }
 
-static double prj_gravity_block_multipole_phi_at(const prj_grav *grav, const prj_block *block,
-    int i, int j, int k)
+static void prj_gravity_fill_block_multipole_phi(const prj_grav *grav, const prj_block *block,
+    double *Phi)
 {
+    double r_l[PRJ_BLOCK_NCELLS];
+    double inv_r_l1[PRJ_BLOCK_NCELLS];
+    double inv_r[PRJ_BLOCK_NCELLS];
+    int inside[PRJ_BLOCK_NCELLS];
+    int outside[PRJ_BLOCK_NCELLS];
+    int n_inside = 0;
+    int n_outside = 0;
     int cache_idx;
-    int idx;
-    double r;
-    double fr;
-    double phi = 0.0;
     int l;
 
+    if (Phi == 0) {
+        return;
+    }
+    for (cache_idx = 0; cache_idx < PRJ_BLOCK_NCELLS; ++cache_idx) {
+        Phi[cache_idx] = 0.0;
+        r_l[cache_idx] = 1.0;
+        inv_r_l1[cache_idx] = 0.0;
+        inv_r[cache_idx] = 0.0;
+    }
     if (block == 0 || grav == 0 || grav->nbins <= 0 || block->ridx == 0 ||
         block->fr == 0 || block->r_com == 0) {
-        return 0.0;
+        return;
     }
-    cache_idx = prj_block_cache_index(i, j, k);
-    idx = block->ridx[cache_idx];
-    if (idx == PRJ_GRAVITY_CACHE_INVALID) {
-        return 0.0;
-    }
-    r = block->r_com[cache_idx];
-    if (r <= 0.0) {
-        return 0.0;
-    }
-    fr = block->fr[cache_idx];
-    for (l = 1; l < LMAX; ++l) {
-        double r_l = prj_gravity_pow_int(r, l);
-        double inv_r_l1 = 1.0 / (r_l * r);
-        int cidx = fr < PRJ_GRAVITY_CACHE_SKIP_REDUCE ? idx - 1 : idx;
-        int m;
 
-        for (m = -l; m <= l; ++m) {
-            int yidx = PRJ_YLM_INDEX(l, m);
-            double ylm = block->Ylm[yidx] != 0 ? block->Ylm[yidx][cache_idx] : 0.0;
-            double coeff = cidx >= 0 ? grav->Clm[yidx][cidx] * inv_r_l1 : 0.0;
+    for (cache_idx = 0; cache_idx < PRJ_BLOCK_NCELLS; ++cache_idx) {
+        int idx = block->ridx[cache_idx];
+        double r = block->r_com[cache_idx];
+        double fr = block->fr[cache_idx];
 
-            if (fr < PRJ_GRAVITY_CACHE_SKIP_REDUCE) {
-                coeff += grav->Dlm[yidx][idx] * r_l;
-            }
-            phi += coeff * ylm;
+        if (idx == PRJ_GRAVITY_CACHE_INVALID || r <= 0.0) {
+            continue;
+        }
+        inv_r[cache_idx] = 1.0 / r;
+        inv_r_l1[cache_idx] = inv_r[cache_idx];
+        if (fr < PRJ_GRAVITY_CACHE_SKIP_REDUCE) {
+            inside[n_inside] = cache_idx;
+            n_inside += 1;
+        } else {
+            outside[n_outside] = cache_idx;
+            n_outside += 1;
         }
     }
-    return -PRJ_GNEWT * phi;
+
+    for (l = 1; l < LMAX; ++l) {
+        int n;
+        int yidx;
+        int yidx_end;
+
+        for (n = 0; n < n_inside; ++n) {
+            cache_idx = inside[n];
+            r_l[cache_idx] *= block->r_com[cache_idx];
+            inv_r_l1[cache_idx] *= inv_r[cache_idx];
+        }
+        for (n = 0; n < n_outside; ++n) {
+            cache_idx = outside[n];
+            r_l[cache_idx] *= block->r_com[cache_idx];
+            inv_r_l1[cache_idx] *= inv_r[cache_idx];
+        }
+
+        yidx = PRJ_YLM_INDEX(l, -l);
+        yidx_end = PRJ_YLM_INDEX(l, l) + 1;
+        for (; yidx < yidx_end; ++yidx) {
+            const double *Ylm = block->Ylm[yidx];
+            const double *Clm = grav->Clm[yidx];
+            const double *Dlm = grav->Dlm[yidx];
+
+            if (Ylm == 0 || Clm == 0 || Dlm == 0) {
+                continue;
+            }
+            for (n = 0; n < n_inside; ++n) {
+                int idx;
+                int cidx;
+                double coeff;
+
+                cache_idx = inside[n];
+                idx = block->ridx[cache_idx];
+                cidx = idx - 1;
+                coeff = Dlm[idx] * r_l[cache_idx];
+                if (cidx >= 0) {
+                    coeff += Clm[cidx] * inv_r_l1[cache_idx];
+                }
+                Phi[cache_idx] += coeff * Ylm[cache_idx];
+            }
+            for (n = 0; n < n_outside; ++n) {
+                int idx;
+
+                cache_idx = outside[n];
+                idx = block->ridx[cache_idx];
+                Phi[cache_idx] +=
+                    Clm[idx] * inv_r_l1[cache_idx] * Ylm[cache_idx];
+            }
+        }
+    }
+    for (cache_idx = 0; cache_idx < PRJ_BLOCK_NCELLS; ++cache_idx) {
+        Phi[cache_idx] *= -PRJ_GNEWT;
+    }
 }
 
 static double prj_gravity_phi_axis_gradient(const double *Phi, int axis, int i, int j, int k,
@@ -909,13 +966,7 @@ static void prj_gravity_add_block_multipole_fields(const prj_grav *grav, prj_blo
         !prj_gravity_multipole_arrays_valid(grav)) {
         return;
     }
-    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                Phi[IDX(i, j, k)] = prj_gravity_block_multipole_phi_at(grav, block, i, j, k);
-            }
-        }
-    }
+    prj_gravity_fill_block_multipole_phi(grav, block, Phi);
     for (i = field_lo; i < field_hi; ++i) {
         for (j = field_lo; j < field_hi; ++j) {
             for (k = field_lo; k < field_hi; ++k) {
