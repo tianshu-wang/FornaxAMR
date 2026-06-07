@@ -541,9 +541,7 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
     int k;
     int d;
 
-    if (eos == 0) {
-        prj_mhd_fail("prj_mhd_bf2bc: eos is null");
-    }
+    (void)eos;
     prj_mhd_check_block_storage(block);
 
     W = use_bf1 != 0 ? block->W1 : block->W;
@@ -554,12 +552,14 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
         for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
             for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                double wcell[PRJ_NVAR_PRIM];
-                double ucell[PRJ_NVAR_CONS];
                 double b1;
                 double b2;
                 double b3;
-                int v;
+                double rho;
+                double v1;
+                double v2;
+                double v3;
+                double eint;
 
                 if (use_cell_derived_mask != 0 &&
                     block->cell_derived_done != 0 &&
@@ -573,19 +573,21 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
                     prj_mhd_fail("prj_mhd_bf2bc: non-finite cell-centered magnetic field");
                 }
 
-                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                    wcell[v] = W[VIDX(v, i, j, k)];
-                }
-                wcell[PRJ_PRIM_B1] = b1;
-                wcell[PRJ_PRIM_B2] = b2;
-                wcell[PRJ_PRIM_B3] = b3;
-                prj_eos_prim2cons(eos, wcell, ucell);
-                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                    W[VIDX(v, i, j, k)] = wcell[v];
-                }
-                for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                    block->U[VIDX(v, i, j, k)] = ucell[v];
-                }
+                rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+                v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
+                v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
+                v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
+                eint = W[VIDX(PRJ_PRIM_EINT, i, j, k)];
+
+                W[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                W[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                W[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                block->U[VIDX(PRJ_CONS_ETOT, i, j, k)] =
+                    rho * eint + 0.5 * rho * (v1 * v1 + v2 * v2 + v3 * v3) +
+                    0.5 * (b1 * b1 + b2 * b2 + b3 * b3);
+                block->U[VIDX(PRJ_CONS_B1, i, j, k)] = b1;
+                block->U[VIDX(PRJ_CONS_B2, i, j, k)] = b2;
+                block->U[VIDX(PRJ_CONS_B3, i, j, k)] = b3;
             }
         }
     }

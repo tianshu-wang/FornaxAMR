@@ -393,7 +393,8 @@ int main(int argc, char *argv[])
             sim.perturbation_gaussian_norm, sim.perturbation_seed);
     }
     prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1);
-    prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos, 0, &sim.rad);
+    prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos, 0,
+        &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1);
     prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
 #if PRJ_USE_GRAVITY
@@ -505,7 +506,8 @@ int main(int argc, char *argv[])
             }
             if (block_changed) {
                 prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1);
-                prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos, 0, &sim.rad);
+                prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0,
+                    &sim.eos, 0, &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1);
                 prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
             #if PRJ_USE_GRAVITY

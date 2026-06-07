@@ -937,7 +937,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
      * run inside the same-level pass of this ghost fill, overlapped with the
      * in-flight exchange. */
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_ghost_mpi");
-    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 2, 1, eos, grav, rad);
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 2, 1, eos, grav, rad,
+        PRJ_BOUNDARY_TIMER_SCOPE_STAGE1);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_ghost_mpi");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_mesh");
@@ -1019,7 +1020,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
      * run inside the same-level pass of this ghost fill, overlapped with the
      * in-flight exchange. */
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_ghost_mpi");
-    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad);
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad,
+        PRJ_BOUNDARY_TIMER_SCOPE_STAGE2);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_ghost_mpi");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_mesh");

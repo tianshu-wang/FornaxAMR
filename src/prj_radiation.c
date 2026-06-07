@@ -674,7 +674,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     const double alpha_ls = 1.0e-4;
     const double tol2 = rad->implicit_err_tol * rad->implicit_err_tol;
 
-    PRJ_TIMER_CURRENT_START("rad_implicit_energy_update");
     rho = u[PRJ_CONS_RHO];
     KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
@@ -936,7 +935,6 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             kappa_out[i] = last_kappa[i];
         }
     }
-    PRJ_TIMER_CURRENT_STOP("rad_implicit_energy_update");
 }
 
 void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature, const double *kappa_in)
