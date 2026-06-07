@@ -535,6 +535,58 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }
 
+/* Like prj_eos_rty() but returns only the internal energy (skipping the pressure
+ * and gamma interpolations) plus its derivatives d(eint)/d(lnT) and
+ * d(eint)/d(Ye).  Used in the radiation implicit-solver residual.  The table's
+ * temperature axis is log10(T); the chain rule d(lgT)/d(lnT) = 1/M_LN10
+ * converts the log10-T slope to a natural-log-T slope. */
+double prj_eos_rty_eint(prj_eos *eos, double rho, double T, double ye,
+    double *deint_dlnT, double *deint_dYe)
+{
+    if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
+        eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
+        int jy;
+        int jyp;
+        int jr;
+        int jrp;
+        int jt;
+        int jtp;
+        double dye;
+        double drho;
+        double dtemp;
+        double v[8];
+        double dfd_dye;
+        double dfd_drho;
+        double dfd_dtemp;
+        double e_raw;
+
+        prj_eos_table_interp_base(eos, rho, T, ye, &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp);
+        /* Corner bit order for prj_trilinear_with_deriv: d0=dye, d1=drho, d2=dtemp. */
+        v[0] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jy,  jr,  jt);
+        v[1] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jyp, jr,  jt);
+        v[2] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jy,  jrp, jt);
+        v[3] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jyp, jrp, jt);
+        v[4] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jy,  jr,  jtp);
+        v[5] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jyp, jr,  jtp);
+        v[6] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jy,  jrp, jtp);
+        v[7] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jyp, jrp, jtp);
+        e_raw = prj_trilinear_with_deriv(v, dye, drho, dtemp, &dfd_dye, &dfd_drho, &dfd_dtemp);
+
+        *deint_dYe = PRJ_EOS_ENERGY_SCALE * dfd_dye * eos->inv_dYe;
+        *deint_dlnT = PRJ_EOS_ENERGY_SCALE * dfd_dtemp * eos->inv_dlogT / M_LN10;
+        return e_raw * PRJ_EOS_ENERGY_SCALE;
+    }
+
+    {
+        double eint = PRJ_EOS_ENERGY_SCALE * T / (prj_eos_gamma_value() - 1.0);
+
+        /* eint is linear in T, so d(eint)/d(lnT) = T d(eint)/dT = eint. */
+        *deint_dlnT = eint;
+        *deint_dYe = 0.0;
+        return eint;
+    }
+}
+
 double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye)
 {
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&

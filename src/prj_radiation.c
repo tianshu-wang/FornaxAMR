@@ -512,15 +512,32 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
 }
 
 #if PRJ_NRAD > 0
+/* Building-block derivatives of the implicit residual w.r.t. (lnT, Ye), filled
+ * on request by prj_rad_implicit_residuals().  These feed the analytic Jacobian
+ * (assembled in a later step). */
+typedef struct prj_rad_resid_deriv {
+    double dlnkappa_dlnT[PRJ_NRAD * PRJ_NEGROUP];
+    double dlnkappa_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double dlneta_dlnT[PRJ_NRAD * PRJ_NEGROUP];
+    double dlneta_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double deint_dlnT;
+    double deint_dYe;
+} prj_rad_resid_deriv;
+
 static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     double dt, double lapse, double rho, double Uint_old, double Ye_old,
     const double *E_nu_old, double T, double Ye, double *F1, double *F2,
-    double *E_nu_new_out, double *kappa_out)
+    double *E_nu_new_out, double *kappa_out, prj_rad_resid_deriv *deriv)
 {
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
     double eta[PRJ_NRAD * PRJ_NEGROUP];
-    double eos_q[PRJ_EOS_NQUANT];
+    double dlnkappa_dlnT[PRJ_NRAD * PRJ_NEGROUP];
+    double dlnkappa_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double dlneta_dlnT[PRJ_NRAD * PRJ_NEGROUP];
+    double dlneta_dYe[PRJ_NRAD * PRJ_NEGROUP];
     double eint_new;
+    double deint_dlnT;
+    double deint_dYe;
     double Uint_new;
     double sum_dE = 0.0;
     double sum_dE_xe = 0.0;
@@ -528,9 +545,9 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     int g;
 
     (void)u;
-    prj_rad3_opac_lookup(rad, rho, T, Ye, kappa, 0, 0, eta);
-    prj_eos_rty(eos, rho, T, Ye, eos_q);
-    eint_new = eos_q[PRJ_EOS_EINT];
+    prj_rad3_opac_lookup_ke(rad, rho, T, Ye, kappa, eta,
+        dlnkappa_dlnT, dlnkappa_dYe, dlneta_dlnT, dlneta_dYe);
+    eint_new = prj_eos_rty_eint(eos, rho, T, Ye, &deint_dlnT, &deint_dYe);
     Uint_new = rho * eint_new;
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
@@ -560,6 +577,18 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
         for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
             kappa_out[i] = kappa[i];
         }
+    }
+
+    if (deriv != 0) {
+        int i;
+        for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
+            deriv->dlnkappa_dlnT[i] = dlnkappa_dlnT[i];
+            deriv->dlnkappa_dYe[i] = dlnkappa_dYe[i];
+            deriv->dlneta_dlnT[i] = dlneta_dlnT[i];
+            deriv->dlneta_dYe[i] = dlneta_dYe[i];
+        }
+        deriv->deint_dlnT = deint_dlnT;
+        deriv->deint_dYe = deint_dYe;
     }
 }
 
@@ -665,7 +694,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             have_final_residual = 1;
         } else {
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, T, Ye, &F1, &F2, E_nu_new, last_kappa);
+                E_nu_old, T, Ye, &F1, &F2, E_nu_new, last_kappa, 0);
             f1 = F1 / err_scale_1;
             f2 = F2 / err_scale_2;
             res_cur = 0.5 * (f1 * f1 + f2 * f2);
@@ -682,12 +711,12 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         // hY = pow(2.0, round(log(hY) / log(2.0)));
 
         prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-            E_nu_old, T + hT, Ye, &F1_p, &F2_p, 0, 0);
+            E_nu_old, T + hT, Ye, &F1_p, &F2_p, 0, 0, 0);
         dFdT_1 = (F1_p - F1) / hT;
         dFdT_2 = (F2_p - F2) / hT;
 
         prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-            E_nu_old, T, Ye + hY, &F1_p, &F2_p, 0, 0);
+            E_nu_old, T, Ye + hY, &F1_p, &F2_p, 0, 0, 0);
         dFdY_1 = (F1_p - F1) / hY;
         dFdY_2 = (F2_p - F2) / hY;
 
@@ -765,7 +794,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             Ttrial = T + lam * dT;
             Ytrial = Ye + lam * dY;
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, Ttrial, Ytrial, &F1_trial, &F2_trial, E_nu_new, 0);
+                E_nu_old, Ttrial, Ytrial, &F1_trial, &F2_trial, E_nu_new, last_kappa, 0);
             ft1 = F1_trial / err_scale_1;
             ft2 = F2_trial / err_scale_2;
             res_trial = 0.5 * (ft1 * ft1 + ft2 * ft2);
@@ -843,7 +872,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             double F2_final;
 
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa);
+                E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa, 0);
         }
         prj_eos_rty(eos, rho, T, Ye, eos_q);
         eint_new = eos_q[PRJ_EOS_EINT];

@@ -375,6 +375,137 @@ void prj_rad3_opac_free(prj_rad *rad)
     rad->log_enuk = 0;
 }
 
+/* Specialized opacity lookup for the radiation implicit solver: always returns
+ * both kappa and eta (no scattering/delta, no per-output NULL checks).  The
+ * interpolation is identical to prj_rad3_opac_lookup(); this variant just drops
+ * the branches the hot path doesn't need. */
+void prj_rad3_opac_lookup_ke(const prj_rad *rad, double rho, double temp, double ye,
+    double *kappa, double *eta,
+    double *dlnkappa_dlnT, double *dlnkappa_dYe,
+    double *dlneta_dlnT, double *dlneta_dYe)
+{
+    int nromax = rad->nromax;
+    int ntmax = rad->ntmax;
+    int nyemax = rad->nyemax;
+    double rl = log(rho);
+    double tl = log(temp);
+    double ye_c = ye;
+    double tl_c = tl;
+    double deltar;
+    double deltat;
+    double deltaye;
+    int jr;
+    int jt;
+    int jye;
+    double r1i;
+    double r2i;
+    double t1i;
+    double t2i;
+    double ye1i;
+    double ye2i;
+    double dri;
+    double dti;
+    double dyei;
+    size_t corner[8];
+    double factor;
+    int nu;
+    int ng;
+
+    if (ye_c > rad->yemax) ye_c = rad->yemax;
+    if (ye_c < rad->yemin) ye_c = rad->yemin;
+    if (tl_c > rad->log_tmax) tl_c = rad->log_tmax;
+    if (tl_c < rad->log_tmin) tl_c = rad->log_tmin;
+
+    deltar = (rl - rad->log_romin) * rad->inv_logrho_span * (double)(nromax - 1);
+    deltat = (tl_c - rad->log_tmin) * rad->inv_logtemp_span * (double)(ntmax - 1);
+    deltaye = (ye_c - rad->yemin) * rad->inv_ye_span * (double)(nyemax - 1);
+
+    jr = (int)deltar;
+    jt = (int)deltat;
+    jye = (int)deltaye;
+    if (jr < 0) jr = 0;
+    if (jr > nromax - 2) jr = nromax - 2;
+    if (jt < 0) jt = 0;
+    if (jt > ntmax - 2) jt = ntmax - 2;
+    if (jye < 0) jye = 0;
+    if (jye > nyemax - 2) jye = nyemax - 2;
+
+    r1i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)jr / (double)(nromax - 1);
+    r2i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)(jr + 1) / (double)(nromax - 1);
+    dri = (rl - r1i) / (r2i - r1i);
+    if (dri < 0.0) dri = 0.0;
+
+    t1i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)jt / (double)(ntmax - 1);
+    t2i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)(jt + 1) / (double)(ntmax - 1);
+    dti = (tl_c - t1i) / (t2i - t1i);
+    if (dti < 0.0) dti = 0.0;
+
+    ye1i = rad->yemin + (rad->yemax - rad->yemin) * (double)jye / (double)(nyemax - 1);
+    ye2i = rad->yemin + (rad->yemax - rad->yemin) * (double)(jye + 1) / (double)(nyemax - 1);
+    dyei = (ye_c - ye1i) / (ye2i - ye1i);
+
+    corner[0] = OPAC_CELL_IDX(jr,     jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[1] = OPAC_CELL_IDX(jr + 1, jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[2] = OPAC_CELL_IDX(jr,     jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[3] = OPAC_CELL_IDX(jr + 1, jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[4] = OPAC_CELL_IDX(jr,     jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[5] = OPAC_CELL_IDX(jr + 1, jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[6] = OPAC_CELL_IDX(jr,     jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[7] = OPAC_CELL_IDX(jr + 1, jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+
+    /* Emissivity is divided by RAD_SCALE so it adds radiation energy in the
+       internal RAD_SCALE*erg units. */
+    factor = 4.0 * M_PI / PRJ_MEV_TO_ERG / RAD_SCALE;
+
+    {
+        /* Inverse grid spacings for the temperature (natural log) and Ye axes;
+         * used to turn normalized-cell-coordinate slopes into coordinate
+         * derivatives.  No log10->ln conversion is needed: this table's T axis
+         * is already natural log. */
+        double inv_dlnT = (t2i != t1i) ? 1.0 / (t2i - t1i) : 0.0;
+        double inv_dYe = (ye2i != ye1i) ? 1.0 / (ye2i - ye1i) : 0.0;
+
+        for (nu = 0; nu < PRJ_NRAD; ++nu) {
+            const double *absopac = rad->absopac[nu];
+            const double *emis = rad->emis[nu];
+
+            for (ng = 0; ng < PRJ_NEGROUP; ++ng) {
+                size_t base = (size_t)nu * (size_t)PRJ_NEGROUP + (size_t)ng;
+                double vk[8];
+                double vj[8];
+                double kv;
+                double jv;
+                double dk_dr;
+                double dk_dt;
+                double dk_dye;
+                double dj_dr;
+                double dj_dt;
+                double dj_dye;
+                int c;
+
+                /* Corner bit order for prj_trilinear_with_deriv: d0=rho, d1=T, d2=Ye. */
+                for (c = 0; c < 8; ++c) {
+                    vk[c] = absopac[corner[c] + (size_t)ng];
+                    vj[c] = emis[corner[c] + (size_t)ng];
+                }
+                kv = prj_trilinear_with_deriv(vk, dri, dti, dyei, &dk_dr, &dk_dt, &dk_dye);
+                jv = prj_trilinear_with_deriv(vj, dri, dti, dyei, &dj_dr, &dj_dt, &dj_dye);
+
+                kappa[base] = exp(kv + rl);
+                eta[base] = exp(jv + rl) * factor * rad->degroup_erg[nu][ng];
+
+                /* ln(kappa) = kv + rl and ln(eta) = jv + rl + const; the rl term
+                 * is rho-only, so T/Ye log-derivatives come straight from the
+                 * interpolated log-table slopes. */
+                dlnkappa_dlnT[base] = dk_dt * inv_dlnT;
+                dlnkappa_dYe[base] = dk_dye * inv_dYe;
+                dlneta_dlnT[base] = dj_dt * inv_dlnT;
+                dlneta_dYe[base] = dj_dye * inv_dYe;
+            }
+        }
+    }
+}
+
 void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye,
     double *kappa, double *sigma, double *delta, double *eta)
 {
