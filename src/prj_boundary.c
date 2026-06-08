@@ -35,129 +35,6 @@ static int prj_boundary_active_block(const prj_mpi *mpi, const prj_block *block)
         (mpi == 0 || block->rank == mpi->rank);
 }
 
-enum {
-    PRJ_BOUNDARY_TIMER_PHYSICAL_FACE = 0,
-    PRJ_BOUNDARY_TIMER_BF_PHYSICAL_FACE,
-    PRJ_BOUNDARY_TIMER_OPACITY_ACTIVE,
-    PRJ_BOUNDARY_TIMER_PHYSICAL_ALL,
-    PRJ_BOUNDARY_TIMER_BF_PHYSICAL_ALL,
-    PRJ_BOUNDARY_TIMER_BF2BC,
-    PRJ_BOUNDARY_TIMER_COUNT
-};
-
-enum {
-    PRJ_BOUNDARY_TIMER_PASS_POST = 0,
-    PRJ_BOUNDARY_TIMER_PASS_LOCAL_PRIM,
-    PRJ_BOUNDARY_TIMER_PASS_LOCAL_BF,
-    PRJ_BOUNDARY_TIMER_PASS_WAIT,
-    PRJ_BOUNDARY_TIMER_PASS_COUNT
-};
-
-static const char *prj_boundary_timer_name(int timer_scope, int timer_id)
-{
-    static const char *const stage1_names[PRJ_BOUNDARY_TIMER_COUNT] = {
-        "stage1_ghost_physical_face",
-        "stage1_ghost_bf_physical_face",
-        "stage1_ghost_opacity_active",
-        "stage1_ghost_physical_all",
-        "stage1_ghost_bf_physical_all",
-        "stage1_ghost_bf2bc"
-    };
-    static const char *const stage2_names[PRJ_BOUNDARY_TIMER_COUNT] = {
-        "stage2_ghost_physical_face",
-        "stage2_ghost_bf_physical_face",
-        "stage2_ghost_opacity_active",
-        "stage2_ghost_physical_all",
-        "stage2_ghost_bf_physical_all",
-        "stage2_ghost_bf2bc"
-    };
-    if (timer_id < 0 || timer_id >= PRJ_BOUNDARY_TIMER_COUNT) {
-        return 0;
-    }
-    if (timer_scope == PRJ_BOUNDARY_TIMER_SCOPE_STAGE1) {
-        return stage1_names[timer_id];
-    }
-    if (timer_scope == PRJ_BOUNDARY_TIMER_SCOPE_STAGE2) {
-        return stage2_names[timer_id];
-    }
-    return 0;
-}
-
-static int prj_boundary_timer_pass_index(int fill_kind)
-{
-    if (fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
-        return 0;
-    }
-    if (fill_kind == PRJ_BOUNDARY_FILL_RESTRICTION) {
-        return 1;
-    }
-    if (fill_kind == PRJ_BOUNDARY_FILL_PROLONGATION) {
-        return 2;
-    }
-    return -1;
-}
-
-static const char *prj_boundary_timer_pass_name(int timer_scope, int fill_kind, int timer_id)
-{
-    static const char *const stage1_names[PRJ_BOUNDARY_TIMER_PASS_COUNT][3] = {
-        {
-            "stage1_ghost_post_same",
-            "stage1_ghost_post_restrict",
-            "stage1_ghost_post_prolong"
-        },
-        {
-            "stage1_ghost_local_prim_same",
-            "stage1_ghost_local_prim_restrict",
-            "stage1_ghost_local_prim_prolong"
-        },
-        {
-            "stage1_ghost_local_bf_same",
-            "stage1_ghost_local_bf_restrict",
-            "stage1_ghost_local_bf_prolong"
-        },
-        {
-            "stage1_ghost_wait_same",
-            "stage1_ghost_wait_restrict",
-            "stage1_ghost_wait_prolong"
-        }
-    };
-    static const char *const stage2_names[PRJ_BOUNDARY_TIMER_PASS_COUNT][3] = {
-        {
-            "stage2_ghost_post_same",
-            "stage2_ghost_post_restrict",
-            "stage2_ghost_post_prolong"
-        },
-        {
-            "stage2_ghost_local_prim_same",
-            "stage2_ghost_local_prim_restrict",
-            "stage2_ghost_local_prim_prolong"
-        },
-        {
-            "stage2_ghost_local_bf_same",
-            "stage2_ghost_local_bf_restrict",
-            "stage2_ghost_local_bf_prolong"
-        },
-        {
-            "stage2_ghost_wait_same",
-            "stage2_ghost_wait_restrict",
-            "stage2_ghost_wait_prolong"
-        }
-    };
-    int pass_idx = prj_boundary_timer_pass_index(fill_kind);
-
-    if (timer_id < 0 || timer_id >= PRJ_BOUNDARY_TIMER_PASS_COUNT ||
-        pass_idx < 0 || pass_idx >= 3) {
-        return 0;
-    }
-    if (timer_scope == PRJ_BOUNDARY_TIMER_SCOPE_STAGE1) {
-        return stage1_names[timer_id][pass_idx];
-    }
-    if (timer_scope == PRJ_BOUNDARY_TIMER_SCOPE_STAGE2) {
-        return stage2_names[timer_id][pass_idx];
-    }
-    return 0;
-}
-
 static int prj_boundary_fraction_case(double frac)
 {
     const double tol = 1.0e-2;
@@ -1284,27 +1161,20 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
 
     (void)grav;
     (void)rad;
+    (void)timer_scope;
 
-    PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_PHYSICAL_FACE));
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
         }
     }
-    PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_PHYSICAL_FACE));
 #if PRJ_MHD
-    PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_BF_PHYSICAL_FACE));
     prj_boundary_init_face_fidelity(mesh, mpi);
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
-    PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_BF_PHYSICAL_FACE));
 #else
     (void)use_bf1;
     (void)eos;
@@ -1317,30 +1187,18 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * reads only active cells; the local copies write only ghost zones, so
          * the two never touch the same memory. The wait completes the exchange
          * after the local work is done. */
-        PRJ_TIMER_CURRENT_START(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_POST));
         prj_mpi_post_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
-        PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_POST));
-        PRJ_TIMER_CURRENT_START(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_LOCAL_PRIM));
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
                 prj_boundary_send(mesh, mpi, &mesh->blocks[i], stage, fill_kind);
             }
         }
-        PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_LOCAL_PRIM));
 #if PRJ_MHD
-        PRJ_TIMER_CURRENT_START(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_LOCAL_BF));
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
                 prj_boundary_send_bf(mesh, mpi, &mesh->blocks[i], use_bf1, fill_kind);
             }
         }
-        PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_LOCAL_BF));
 #endif
 #if PRJ_USE_GRAVITY
         /* Overlap the gravity radial reduce/integrate with the in-flight
@@ -1359,45 +1217,25 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * writes the active region of kappa_cell/sigma_cell. The 1-ghost halo
          * is filled by the caller after eos_fill_mesh. */
         if (rad != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
-            PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_OPACITY_ACTIVE));
             prj_flux_fill_transport_opacity_active(mesh, rad, mpi, stage);
-            PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_OPACITY_ACTIVE));
         }
-        PRJ_TIMER_CURRENT_START(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_WAIT));
         prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
-        PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_pass_name(timer_scope, fill_kind,
-                PRJ_BOUNDARY_TIMER_PASS_WAIT));
     }
-    PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_PHYSICAL_ALL));
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
         }
     }
-    PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_PHYSICAL_ALL));
 #if PRJ_MHD
-    PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_BF_PHYSICAL_ALL));
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
-    PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_BF_PHYSICAL_ALL));
-    PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_BF2BC));
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_mhd_bf2bc_all(eos, &mesh->blocks[i], use_bf1);
         }
     }
-    PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-            PRJ_BOUNDARY_TIMER_BF2BC));
 #endif
 }
