@@ -4,18 +4,6 @@
 
 #include "prj.h"
 
-#if PRJ_TIMER
-#define PRJ_FLUX_TIMER_BEGIN(t0) do { \
-        (t0) = prj_timer_now(); \
-    } while (0)
-#define PRJ_FLUX_TIMER_END(total, t0) do { \
-        (total) += prj_timer_now() - (t0); \
-    } while (0)
-#else
-#define PRJ_FLUX_TIMER_BEGIN(t0) ((void)(t0))
-#define PRJ_FLUX_TIMER_END(total, t0) ((void)(total), (void)(t0))
-#endif
-
 static inline void prj_flux_face_cells_x1(int i, int j, int k,
     int *il, int *jl, int *kl, int *ir, int *jr, int *kr)
 {
@@ -658,22 +646,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     static double gL_block[PRJ_BLOCK_NCELLS];
     static double gR_block[PRJ_BLOCK_NCELLS];
     int dir;
-#if PRJ_TIMER
-    double flux_t0 = 0.0;
-    double flux_t_reconstruct = 0.0;
-    double flux_t_gather_states = 0.0;
-    double flux_t_velocity_deltas = 0.0;
-    double flux_t_riemann = 0.0;
-    double flux_t_store_face_velocity = 0.0;
-    double flux_t_store_flux = 0.0;
-#if PRJ_MHD
-    double flux_t_mhd_face = 0.0;
-#endif
-#if PRJ_NRAD > 0
-    double flux_t_rad_chi = 0.0;
-    double flux_t_rad_flux = 0.0;
-#endif
-#endif
 #if PRJ_NRAD == 0
     (void)rad;
 #endif
@@ -722,11 +694,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 #endif
 
         /* Variable-outermost reconstruction pass over the block. */
-        PRJ_FLUX_TIMER_BEGIN(flux_t0);
         prj_flux_reconstruct_block(W, eosvar, dir,
             istart, iend, jstart, jend, kstart, kend,
             WL_block, WR_block, pL_block, pR_block, gL_block, gR_block);
-        PRJ_FLUX_TIMER_END(flux_t_reconstruct, flux_t0);
 
         for (i = istart; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
@@ -753,7 +723,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     double deltaw;
 
                     /* Gather the reconstructed left/right states for this face. */
-                    PRJ_FLUX_TIMER_BEGIN(flux_t0);
                     fidx = (size_t)IDX(i, j, k);
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                         WL[v] = WL_block[(size_t)v * PRJ_BLOCK_NCELLS + fidx];
@@ -764,12 +733,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     gL = gL_block[fidx];
                     gR = gR_block[fidx];
                     prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
-                    PRJ_FLUX_TIMER_END(flux_t_gather_states, flux_t0);
 
-                    PRJ_FLUX_TIMER_BEGIN(flux_t0);
                     prj_flux_velocity_deltas(W, dir, il, jl, kl, ir, jr, kr,
                         &deltau, &deltav, &deltaw);
-                    PRJ_FLUX_TIMER_END(flux_t_velocity_deltas, flux_t0);
 #if PRJ_MHD
                     {
                         double *bf_dir = use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
@@ -781,41 +747,29 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                             fprintf(stderr, "prj_flux_update: missing MHD face storage for dir=%d\n", dir);
                             exit(1);
                         }
-                        PRJ_FLUX_TIMER_BEGIN(flux_t0);
                         bn = bf_dir[FACE_IDX(dir, i, j, k)];
                         WL[PRJ_PRIM_B1] = bn;
                         WR[PRJ_PRIM_B1] = bn;
-                        PRJ_FLUX_TIMER_END(flux_t_mhd_face, flux_t0);
 
 #if PRJ_LHLLD_RIEMANN
                         /* PRJ_LHLLD_RIEMANN=1 is the default Minoshima &
                          * Miyoshi LHLLD path.  Set LHLLD_RIEMANN=0 at build
                          * time for the legacy current-HLLD comparison path. */
-                        PRJ_FLUX_TIMER_BEGIN(flux_t0);
                         prj_riemann_lhlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl,
                             v_face_loc, &bv1, &bv2, deltau, deltav, deltaw);
-                        PRJ_FLUX_TIMER_END(flux_t_riemann, flux_t0);
 #else
                         /* Legacy current-HLLD comparison path. */
-                        PRJ_FLUX_TIMER_BEGIN(flux_t0);
                         prj_riemann_hlld(WL, WR, pL, pR, gL, gR, eos, bn, Fl,
                             v_face_loc, &bv1, &bv2, deltau, deltav, deltaw);
-                        PRJ_FLUX_TIMER_END(flux_t_riemann, flux_t0);
 #endif
-                        PRJ_FLUX_TIMER_BEGIN(flux_t0);
                         block->Bv1[dir][IDX(i, j, k)] = bv1;
                         block->Bv2[dir][IDX(i, j, k)] = bv2;
-                        PRJ_FLUX_TIMER_END(flux_t_mhd_face, flux_t0);
                     }
 #else
-                    PRJ_FLUX_TIMER_BEGIN(flux_t0);
                     prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl,
                         v_face_loc, deltau, deltav, deltaw);
-                    PRJ_FLUX_TIMER_END(flux_t_riemann, flux_t0);
 #endif
-                    PRJ_FLUX_TIMER_BEGIN(flux_t0);
                     prj_flux_store_face_velocity(block, dir, i, j, k, v_face_loc);
-                    PRJ_FLUX_TIMER_END(flux_t_store_face_velocity, flux_t0);
 #if PRJ_NRAD > 0
                     {
                         double dx_dir;
@@ -830,7 +784,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         const double *sigma_R = &block->sigma_cell[off_R];
                         int idx;
 
-                        PRJ_FLUX_TIMER_BEGIN(flux_t0);
                         if (block->lapse != 0) {
                             lapse_face = 0.5 *
                                 (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
@@ -848,36 +801,15 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                             double s_face = 2.0 * sL_o * sR_o / s_sum;
                             chi_face[idx] = k_face + s_face;
                         }
-                        PRJ_FLUX_TIMER_END(flux_t_rad_chi, flux_t0);
 
-                        PRJ_FLUX_TIMER_BEGIN(flux_t0);
                         prj_rad_flux(rad, WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
-                        PRJ_FLUX_TIMER_END(flux_t_rad_flux, flux_t0);
                     }
 #endif
-                    PRJ_FLUX_TIMER_BEGIN(flux_t0);
                     prj_flux_store_local_flux(flux[dir], dir, i, j, k, Fl);
-                    PRJ_FLUX_TIMER_END(flux_t_store_flux, flux_t0);
                 }
             }
         }
     }
-
-#if PRJ_TIMER
-    PRJ_TIMER_CURRENT_ADD("flux_reconstruct", flux_t_reconstruct);
-    PRJ_TIMER_CURRENT_ADD("flux_gather_states", flux_t_gather_states);
-    PRJ_TIMER_CURRENT_ADD("flux_velocity_deltas", flux_t_velocity_deltas);
-#if PRJ_MHD
-    PRJ_TIMER_CURRENT_ADD("flux_mhd_face", flux_t_mhd_face);
-#endif
-    PRJ_TIMER_CURRENT_ADD("flux_riemann", flux_t_riemann);
-    PRJ_TIMER_CURRENT_ADD("flux_store_face_velocity", flux_t_store_face_velocity);
-#if PRJ_NRAD > 0
-    PRJ_TIMER_CURRENT_ADD("flux_rad_chi", flux_t_rad_chi);
-    PRJ_TIMER_CURRENT_ADD("flux_rad_flux", flux_t_rad_flux);
-#endif
-    PRJ_TIMER_CURRENT_ADD("flux_store_flux", flux_t_store_flux);
-#endif
 }
 
 void prj_flux_div(double *flux[3], double area[3], double vol, int i, int j, int k, double *fluxdiv)

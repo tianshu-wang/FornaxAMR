@@ -882,9 +882,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             prj_flux_update(eos, rad, block, block->W, block->eosvar, block->flux, 0);
         }
     }
-    PRJ_TIMER_CURRENT_START("flux_send");
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_TIMER_CURRENT_STOP("flux_send");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_flux");
 
 #if PRJ_MHD
@@ -967,9 +965,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             prj_flux_update(eos, rad, block, block->W1, block->eosvar, block->flux, 1);
         }
     }
-    PRJ_TIMER_CURRENT_START("flux_send");
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_TIMER_CURRENT_STOP("flux_send");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_flux");
 
 #if PRJ_MHD

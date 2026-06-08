@@ -218,36 +218,6 @@ int prj_timer_stop_cached(prj_timer *timer, const char *name, int *cache_idx)
     return prj_timer_stop_idx(timer, idx);
 }
 
-int prj_timer_add(prj_timer *timer, const char *name, double elapsed)
-{
-    return prj_timer_add_cached(timer, name, 0, elapsed);
-}
-
-int prj_timer_add_cached(prj_timer *timer, const char *name, int *cache_idx, double elapsed)
-{
-    int idx;
-
-    if (timer == 0 || name == 0 || elapsed < 0.0) {
-        return -1;
-    }
-    idx = prj_timer_cache_lookup(timer, name, cache_idx, 1);
-    if (idx < 0) {
-        return -1;
-    }
-    timer->entry[idx].total += elapsed;
-    timer->entry[idx].inclusive_total += elapsed;
-    timer->entry[idx].count += 1;
-    if (timer->stack_depth > 0) {
-        int parent_idx = timer->stack[timer->stack_depth - 1];
-        prj_timer_entry *parent = &timer->entry[parent_idx];
-
-        if (parent_idx != idx && parent->active != 0 && parent->start > 0.0) {
-            parent->start += elapsed;
-        }
-    }
-    return 0;
-}
-
 double prj_timer_total(const prj_timer *timer, const char *name)
 {
     int idx = prj_timer_find(timer, name);
