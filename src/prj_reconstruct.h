@@ -508,38 +508,69 @@ static inline double prj_reconstruct_weno7_face(const double q[7], double target
     return q[3];
 }
 
-static inline double prj_reconstruct_face_value_for_scheme(const double q[PRJ_RECON_NCELLS],
-    double target, int recon)
+static inline double prj_reconstruct_mc_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
 {
     const int half = PRJ_RECON_NCELLS / 2;
 
     if (q == 0) {
         return 0.0;
     }
-    if (recon == PRJ_RECON_WENO3) {
-        return prj_reconstruct_weno3_face(q[half - 1], q[half], q[half + 1],
-            target);
-    }
-    if (recon == PRJ_RECON_WENO7) {
-#if PRJ_RECON_NCELLS >= 7
-        return prj_reconstruct_weno7_face(q, target);
-#else
-        return q[half];
-#endif
-    }
     return prj_reconstruct_mc_face(q[half - 1], q[half], q[half + 1], target);
+}
+
+static inline double prj_reconstruct_weno3_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+    const int half = PRJ_RECON_NCELLS / 2;
+
+    if (q == 0) {
+        return 0.0;
+    }
+    return prj_reconstruct_weno3_face(q[half - 1], q[half], q[half + 1],
+        target);
+}
+
+static inline double prj_reconstruct_weno7_face_value(const double q[PRJ_RECON_NCELLS],
+    double target)
+{
+#if PRJ_RECON_NCELLS < 7
+    const int half = PRJ_RECON_NCELLS / 2;
+#endif
+
+    if (q == 0) {
+        return 0.0;
+    }
+#if PRJ_RECON_NCELLS >= 7
+    return prj_reconstruct_weno7_face(q, target);
+#else
+    (void)target;
+    return q[half];
+#endif
 }
 
 static inline double prj_reconstruct_hydro_face_value(const double q[PRJ_RECON_NCELLS],
     double target)
 {
-    return prj_reconstruct_face_value_for_scheme(q, target, PRJ_RECON_HYDRO);
+#if PRJ_RECON_HYDRO == PRJ_RECON_WENO3
+    return prj_reconstruct_weno3_face_value(q, target);
+#elif PRJ_RECON_HYDRO == PRJ_RECON_WENO7
+    return prj_reconstruct_weno7_face_value(q, target);
+#else
+    return prj_reconstruct_mc_face_value(q, target);
+#endif
 }
 
 static inline double prj_reconstruct_radiation_face_value(const double q[PRJ_RECON_NCELLS],
     double target)
 {
-    return prj_reconstruct_face_value_for_scheme(q, target, PRJ_RECON_RADIATION);
+#if PRJ_RECON_RADIATION == PRJ_RECON_WENO3
+    return prj_reconstruct_weno3_face_value(q, target);
+#elif PRJ_RECON_RADIATION == PRJ_RECON_WENO7
+    return prj_reconstruct_weno7_face_value(q, target);
+#else
+    return prj_reconstruct_mc_face_value(q, target);
+#endif
 }
 
 int prj_reconstruct_step(void);

@@ -84,9 +84,6 @@ static double prj_rad_closure_lookup(const double values[NCLOSURE + 1], double f
     }
     scaled = f * (double)NCLOSURE;
     idx = (int)scaled;
-    if (idx >= NCLOSURE) {
-        return values[NCLOSURE];
-    }
     w = scaled - (double)idx;
     return values[idx] + w * (values[idx + 1] - values[idx]);
 }
