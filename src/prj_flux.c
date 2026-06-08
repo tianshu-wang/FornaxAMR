@@ -531,7 +531,7 @@ static void prj_flux_opacity_cell(prj_rad *rad, prj_block *block, const double *
     const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
     double rho = W[VIDX(PRJ_PRIM_RHO, ii, jj, kk)];
     double ye = W[VIDX(PRJ_PRIM_YE, ii, jj, kk)];
-    double T = (eosvar != 0) ? eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ii, jj, kk)] : 0.0;
+    double T = eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ii, jj, kk)];
     size_t off = (size_t)IDX(ii, jj, kk) * stride;
 
     prj_rad3_opac_lookup(rad, rho, T, ye,
@@ -743,14 +743,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         double bv2 = 0.0;
                         double bn;
 
-                        if (bf_dir == 0 || block->Bv1[dir] == 0 || block->Bv2[dir] == 0) {
-                            fprintf(stderr, "prj_flux_update: missing MHD face storage for dir=%d\n", dir);
-                            exit(1);
-                        }
                         bn = bf_dir[FACE_IDX(dir, i, j, k)];
                         WL[PRJ_PRIM_B1] = bn;
                         WR[PRJ_PRIM_B1] = bn;
-
 #if PRJ_LHLLD_RIEMANN
                         /* PRJ_LHLLD_RIEMANN=1 is the default Minoshima &
                          * Miyoshi LHLLD path.  Set LHLLD_RIEMANN=0 at build
@@ -783,11 +778,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         const double *kappa_R = &block->kappa_cell[off_R];
                         const double *sigma_R = &block->sigma_cell[off_R];
                         int idx;
-
-                        if (block->lapse != 0) {
-                            lapse_face = 0.5 *
-                                (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
-                        }
+                        lapse_face = 0.5 *
+                            (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
                         dx_dir = block->dx[dir];
 
                         for (idx = 0; idx < PRJ_NRAD * PRJ_NEGROUP; ++idx) {
