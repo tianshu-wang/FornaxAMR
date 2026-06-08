@@ -39,6 +39,8 @@ int prj_timer_start(prj_timer *timer, const char *name);
 int prj_timer_stop(prj_timer *timer, const char *name);
 int prj_timer_start_cached(prj_timer *timer, const char *name, int *cache_idx);
 int prj_timer_stop_cached(prj_timer *timer, const char *name, int *cache_idx);
+int prj_timer_add(prj_timer *timer, const char *name, double elapsed);
+int prj_timer_add_cached(prj_timer *timer, const char *name, int *cache_idx, double elapsed);
 double prj_timer_total(const prj_timer *timer, const char *name);
 double prj_timer_inclusive_total(const prj_timer *timer, const char *name);
 int prj_timer_count(const prj_timer *timer, const char *name);
@@ -56,8 +58,13 @@ void prj_mpi_barrier(const struct prj_mpi *mpi);
         static int prj_timer_cache_idx = -1; \
         prj_timer_stop_cached((timer), (name), &prj_timer_cache_idx); \
     } while (0)
+#define PRJ_TIMER_ADD(timer, name, elapsed) do { \
+        static int prj_timer_cache_idx = -1; \
+        prj_timer_add_cached((timer), (name), &prj_timer_cache_idx, (elapsed)); \
+    } while (0)
 #define PRJ_TIMER_CURRENT_START(name) PRJ_TIMER_START(prj_timer_current(), (name))
 #define PRJ_TIMER_CURRENT_STOP(name) PRJ_TIMER_STOP(prj_timer_current(), (name))
+#define PRJ_TIMER_CURRENT_ADD(name, elapsed) PRJ_TIMER_ADD(prj_timer_current(), (name), (elapsed))
 #define PRJ_TIMER_BARRIER_START(timer, mpi, name) do { \
         prj_mpi_barrier((mpi)); \
         PRJ_TIMER_START((timer), (name)); \
@@ -69,8 +76,10 @@ void prj_mpi_barrier(const struct prj_mpi *mpi);
 #else
 #define PRJ_TIMER_START(timer, name) ((void)(timer), (void)(name))
 #define PRJ_TIMER_STOP(timer, name) ((void)(timer), (void)(name))
+#define PRJ_TIMER_ADD(timer, name, elapsed) ((void)(timer), (void)(name), (void)(elapsed))
 #define PRJ_TIMER_CURRENT_START(name) ((void)(name))
 #define PRJ_TIMER_CURRENT_STOP(name) ((void)(name))
+#define PRJ_TIMER_CURRENT_ADD(name, elapsed) ((void)(name), (void)(elapsed))
 #define PRJ_TIMER_BARRIER_START(timer, mpi, name) \
         ((void)(timer), (void)(mpi), (void)(name))
 #define PRJ_TIMER_BARRIER_STOP(timer, mpi, name) \

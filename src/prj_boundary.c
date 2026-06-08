@@ -38,9 +38,6 @@ static int prj_boundary_active_block(const prj_mpi *mpi, const prj_block *block)
 enum {
     PRJ_BOUNDARY_TIMER_PHYSICAL_FACE = 0,
     PRJ_BOUNDARY_TIMER_BF_PHYSICAL_FACE,
-    PRJ_BOUNDARY_TIMER_GRAVITY,
-    PRJ_BOUNDARY_TIMER_GRAVITY_REDUCE,
-    PRJ_BOUNDARY_TIMER_GRAVITY_INTEGRATE,
     PRJ_BOUNDARY_TIMER_OPACITY_ACTIVE,
     PRJ_BOUNDARY_TIMER_PHYSICAL_ALL,
     PRJ_BOUNDARY_TIMER_BF_PHYSICAL_ALL,
@@ -61,9 +58,6 @@ static const char *prj_boundary_timer_name(int timer_scope, int timer_id)
     static const char *const stage1_names[PRJ_BOUNDARY_TIMER_COUNT] = {
         "stage1_ghost_physical_face",
         "stage1_ghost_bf_physical_face",
-        "stage1_ghost_gravity",
-        "stage1_ghost_gravity_reduce",
-        "stage1_ghost_gravity_integrate",
         "stage1_ghost_opacity_active",
         "stage1_ghost_physical_all",
         "stage1_ghost_bf_physical_all",
@@ -72,9 +66,6 @@ static const char *prj_boundary_timer_name(int timer_scope, int timer_id)
     static const char *const stage2_names[PRJ_BOUNDARY_TIMER_COUNT] = {
         "stage2_ghost_physical_face",
         "stage2_ghost_bf_physical_face",
-        "stage2_ghost_gravity",
-        "stage2_ghost_gravity_reduce",
-        "stage2_ghost_gravity_integrate",
         "stage2_ghost_opacity_active",
         "stage2_ghost_physical_all",
         "stage2_ghost_bf_physical_all",
@@ -1359,20 +1350,8 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * neither touches the W ghost zones the exchange is filling. The two
          * allreduces inside the reduce progress the posted Isend/Irecv. */
         if (grav != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
-            PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_GRAVITY));
-            PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_GRAVITY_REDUCE));
             prj_gravity_monopole_reduce(mesh, grav, mpi, stage);
-            PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_GRAVITY_REDUCE));
-            PRJ_TIMER_CURRENT_START(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_GRAVITY_INTEGRATE));
             prj_gravity_monopole_integrate(mesh, grav, mpi);
-            PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_GRAVITY_INTEGRATE));
-            PRJ_TIMER_CURRENT_STOP(prj_boundary_timer_name(timer_scope,
-                    PRJ_BOUNDARY_TIMER_GRAVITY));
         }
 #endif
         /* Transport opacity for active cells overlaps the same-level exchange

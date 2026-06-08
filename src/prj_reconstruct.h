@@ -352,15 +352,18 @@ static inline double prj_reconstruct_mc_face(double qm, double q0, double qp,
     double sr = qp - q0;
     double slope = 0.0;
 
-    if (sl != 0.0 && sr != 0.0 && sl * sr > 0.0) {
-        double v = sl / sr;
-        double a = 0.5 * (1.0 + v);
-        double b = 2.0 * v;
-        double phi = (a < b) ? a : b;
+    if ((sl > 0.0 && sr > 0.0) || (sl < 0.0 && sr < 0.0)) {
+        double c0 = 2.0 * sl;
+        double c1 = sl + 0.5 * (sr - sl);
+        double c2 = 2.0 * sr;
 
-        if (phi > 2.0) phi = 2.0;
-        if (phi < 0.0) phi = 0.0;
-        slope = sr * phi;
+        if (sl > 0.0) {
+            slope = c0 < c1 ? c0 : c1;
+            slope = slope < c2 ? slope : c2;
+        } else {
+            slope = c0 > c1 ? c0 : c1;
+            slope = slope > c2 ? slope : c2;
+        }
     }
     return q0 + target * slope;
 }
