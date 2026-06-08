@@ -662,7 +662,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     double cached_F1 = 0.0;
     double cached_F2 = 0.0;
     double cached_res = 0.0;
-    prj_rad_resid_deriv cached_deriv;
+    prj_rad_resid_deriv cached_deriv = {0};
     int have_cached_residual = 0;
     int have_final_residual = 0;
     int iter;
