@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
     memset(&eos, 0, sizeof(eos));
     eos.kind = PRJ_EOS_KIND_TABLE;
     strncpy(eos.filename, TEST_EOS_FILE, sizeof(eos.filename) - 1);
-    prj_eos_init(&eos);
+    prj_eos_init(&eos, 0);
     if (eos.table_loaded != 1) die("EOS table failed to load");
 
     etael = prj_eos_rty_geteta(&eos, rho, T, Ye);

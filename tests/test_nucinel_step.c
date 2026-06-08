@@ -129,7 +129,7 @@ int main(int argc, char *argv[])
     memset(&eos, 0, sizeof(eos));
     eos.kind = PRJ_EOS_KIND_TABLE;
     strncpy(eos.filename, TEST_EOS_FILE, sizeof(eos.filename) - 1);
-    prj_eos_init(&eos);
+    prj_eos_init(&eos, 0);
     if (eos.table_loaded != 1) die("EOS table failed to load");
 
     /* Get eint at the requested (rho, T, Ye) and stash it into u[ETOT] so that
@@ -178,7 +178,7 @@ int main(int argc, char *argv[])
     }
 
     /* --- Run the Kompaneets step. --- */
-    status = prj_rad_nucinel_step(&rad, &eos, u, dt);
+    status = prj_rad_nucinel_step(&rad, &eos, u, dt, T);
     if (status != 1) {
         fprintf(stderr, "test_nucinel_step: prj_rad_nucinel_step reported status=%d\n",
             status);

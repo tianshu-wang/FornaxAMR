@@ -56,6 +56,19 @@ static double prj_block_cell_size(const prj_block *block)
     return cell_size;
 }
 
+#if defined(PRJ_ENABLE_MPI)
+#define PRJ_AMR_CHILD_TRANSFER_TAG 300
+
+static void prj_amr_fatal(const char *message)
+{
+    if (message != 0) {
+        fprintf(stderr, "%s\n", message);
+    }
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+    exit(EXIT_FAILURE);
+}
+#endif
+
 static int prj_clamp_storage_index(int idx)
 {
     if (idx < -PRJ_NGHOST) {
@@ -252,7 +265,6 @@ static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, const prj_mpi *
         int child_id;
         prj_block *child;
         int source_rank;
-        int tag;
 
         child_id = parent->children[oct];
         if (child_id < 0 || child_id >= mesh->nblocks) {
@@ -264,14 +276,18 @@ static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, const prj_mpi *
             continue;
         }
 
-        tag = 300 + child_id;
         if (mpi->rank == parent_rank) {
             if (child->W == 0 && prj_block_alloc_data(child) != 0) {
-                continue;
+                prj_amr_fatal("prj_amr_move_children_to_parent_rank: failed to allocate receiving child data");
             }
-            MPI_Recv(child->W, (int)data_count, MPI_DOUBLE, source_rank, tag, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        } else if (mpi->rank == source_rank && child->W != 0) {
-            MPI_Send(child->W, (int)data_count, MPI_DOUBLE, parent_rank, tag, MPI_COMM_WORLD);
+            MPI_Recv(child->W, (int)data_count, MPI_DOUBLE, source_rank,
+                PRJ_AMR_CHILD_TRANSFER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        } else if (mpi->rank == source_rank) {
+            if (child->W == 0) {
+                prj_amr_fatal("prj_amr_move_children_to_parent_rank: source child is missing block data");
+            }
+            MPI_Send(child->W, (int)data_count, MPI_DOUBLE, parent_rank,
+                PRJ_AMR_CHILD_TRANSFER_TAG, MPI_COMM_WORLD);
             prj_block_free_data(child);
         }
         child->rank = parent_rank;
@@ -1418,7 +1434,7 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi)
         if (global_pos[i] > 0) {
             int allowed = (b->can_refine != 0) &&
                 (mesh->max_level < 0 || b->level < mesh->max_level) &&
-                (mesh->min_dx <= 0.0 || prj_block_cell_size(b) >= mesh->min_dx) &&
+                (mesh->min_dx <= 0.0 || prj_block_cell_size(b) > mesh->min_dx) &&
                 !prj_has_face_neighbor_coarser_than(mesh, b, b->level - 1);
 
             b->refine_flag = allowed ? 1 : 0;
@@ -2012,7 +2028,7 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id, cons
         parent->refine_flag = 0;
         return;
     }
-    if (mesh->min_dx > 0.0 && prj_block_cell_size(parent) < mesh->min_dx) {
+    if (mesh->min_dx > 0.0 && prj_block_cell_size(parent) <= mesh->min_dx) {
         parent->refine_flag = 0;
         return;
     }

@@ -18,7 +18,19 @@
 #define PRJ_MPI_GHOST_FILL_KIND_N 6
 #define PRJ_MPI_GHOST_TAG_DOUBLE 120
 #define PRJ_MPI_GHOST_TAG_RAD 121
+#define PRJ_MPI_MIGRATE_BLOCK_TAG 500
 #define PRJ_MPI_SAMPLE_SAME_LEVEL_OFFSET 4
+
+static void prj_mpi_fatal(const char *message)
+{
+    if (message != 0) {
+        fprintf(stderr, "%s\n", message);
+    }
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+#endif
+    exit(EXIT_FAILURE);
+}
 
 static int prj_block_is_active(const prj_block *block)
 {
@@ -282,7 +294,9 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh, const prj_mpi *mpi)
             continue;
         }
         if (block->W == 0) {
-            prj_block_alloc_data(block);
+            if (prj_block_alloc_data(block) != 0) {
+                prj_mpi_fatal("prj_mpi_assign_block_storage: failed to allocate block data");
+            }
         }
     }
     prj_mesh_update_cell_derived_mask(mesh);
@@ -388,7 +402,6 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const prj_mpi *mpi, co
         prj_block *block = &mesh->blocks[bidx];
         int old_rank;
         int new_rank;
-        int tag;
 
         if (!prj_block_is_active(block)) {
             continue;
@@ -398,7 +411,6 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const prj_mpi *mpi, co
         if (old_rank == new_rank) {
             continue;
         }
-        tag = 500 + bidx;
         if (mpi->rank == new_rank || mpi->rank == old_rank) {
             double *sendbuf = 0;
             double *recvbuf = 0;
@@ -409,23 +421,26 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const prj_mpi *mpi, co
 
             if (mpi->rank == new_rank) {
                 if (block->W == 0 && prj_block_alloc_data(block) != 0) {
-                    continue;
+                    prj_mpi_fatal("prj_mpi_migrate_active_blocks: failed to allocate receiving block data");
                 }
                 recvbuf = block->W;
                 recvcount = (int)data_count;
                 source = old_rank;
             }
-            if (mpi->rank == old_rank && block->W != 0) {
+            if (mpi->rank == old_rank) {
+                if (block->W == 0) {
+                    prj_mpi_fatal("prj_mpi_migrate_active_blocks: old owner is missing block data");
+                }
                 sendbuf = block->W;
                 sendcount = (int)data_count;
                 dest = new_rank;
             }
 
-            MPI_Sendrecv(sendbuf, sendcount, MPI_DOUBLE, dest, tag,
-                recvbuf, recvcount, MPI_DOUBLE, source, tag,
+            MPI_Sendrecv(sendbuf, sendcount, MPI_DOUBLE, dest, PRJ_MPI_MIGRATE_BLOCK_TAG,
+                recvbuf, recvcount, MPI_DOUBLE, source, PRJ_MPI_MIGRATE_BLOCK_TAG,
                 MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-            if (mpi->rank == old_rank && block->W != 0) {
+            if (mpi->rank == old_rank) {
                 prj_block_free_data(block);
             }
         }
