@@ -1082,7 +1082,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->morton_lookup_count = 0;
 
     nroot = root_nx1 * root_nx2 * root_nx3;
-    capacity = mesh->max_blocks > 0 ? mesh->max_blocks : 131072;
+    capacity = mesh->max_blocks > 0 ? mesh->max_blocks : 65536;
     if (capacity < nroot) {
         capacity = nroot;
     }

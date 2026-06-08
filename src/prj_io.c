@@ -235,7 +235,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.root_nx[2] = 8;
     sim->mesh.max_level = 0;
     sim->mesh.min_dx = 0.0;
-    sim->mesh.max_blocks = 131072;
+    sim->mesh.max_blocks = 65536;
     {
         int amr_idx;
 
