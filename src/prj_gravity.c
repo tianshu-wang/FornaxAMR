@@ -1414,6 +1414,9 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
     double *restrict enclosed_face;
     double *restrict baryon_mass_face;
     double *restrict gamma_face;
+#if PRJ_GRAVITY_USE_GR
+    double *restrict accel_face;
+#endif
     int idx;
 
     if (grav == 0 || grav->nbins <= 0) {
@@ -1423,7 +1426,17 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
     enclosed_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*enclosed_face));
     baryon_mass_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*baryon_mass_face));
     gamma_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*gamma_face));
-    if (enclosed_face == 0 || baryon_mass_face == 0 || gamma_face == 0) {
+#if PRJ_GRAVITY_USE_GR
+    accel_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*accel_face));
+#endif
+    if (enclosed_face == 0 || baryon_mass_face == 0 || gamma_face == 0
+#if PRJ_GRAVITY_USE_GR
+        || accel_face == 0
+#endif
+        ) {
+#if PRJ_GRAVITY_USE_GR
+        free(accel_face);
+#endif
         free(gamma_face);
         free(baryon_mass_face);
         free(enclosed_face);
@@ -1526,7 +1539,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
         double enthalpy_term;
 
         if (rho_edge <= 0.0) {
-            grav->accel[idx] = 0.0;
+            accel_face[idx + 1] = 0.0;
             continue;
         }
         numerator = -PRJ_GNEWT * (enclosed_face[idx + 1] +
@@ -1538,14 +1551,17 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
         }
         enthalpy_term = (rho_edge + (uedge + pgas_edge) /
             (PRJ_CLIGHT * PRJ_CLIGHT)) / rho_edge;
-        grav->accel[idx] = numerator / (gamma_term * gamma_term) * enthalpy_term;
+        accel_face[idx + 1] = numerator / (gamma_term * gamma_term) * enthalpy_term;
     }
     grav->phi[grav->nbins] =
         -PRJ_GNEWT * baryon_mass_face[grav->nbins] / grav->rmax;
     for (idx = grav->nbins - 1; idx >= 0; --idx) {
         grav->phi[idx] = grav->phi[idx + 1] + 0.5 *
             (grav->rf[idx + 1] - grav->rf[idx]) *
-            (idx == grav->nbins - 1 ? grav->accel[idx] : grav->accel[idx + 1] + grav->accel[idx]);
+            (accel_face[idx] + accel_face[idx + 1]);
+    }
+    for (idx = 0; idx < grav->nbins; ++idx) {
+        grav->accel[idx] = 0.5 * (accel_face[idx] + accel_face[idx + 1]);
     }
     for (idx = 0; idx <= grav->nbins; ++idx) {
         grav->lapse[idx] = exp(grav->phi[idx] / (PRJ_CLIGHT * PRJ_CLIGHT));
@@ -1571,6 +1587,9 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
     }
 #endif
 
+#if PRJ_GRAVITY_USE_GR
+    free(accel_face);
+#endif
     free(gamma_face);
     free(baryon_mass_face);
     free(enclosed_face);
