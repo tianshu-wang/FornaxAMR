@@ -235,6 +235,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.root_nx[2] = 8;
     sim->mesh.max_level = 0;
     sim->mesh.min_dx = 0.0;
+    sim->mesh.min_allowable_cell_size = 0.0;
     sim->mesh.max_blocks = 65536;
     {
         int amr_idx;
@@ -1311,6 +1312,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         prj_io_fail("prj_io_read_restart: mesh init failed");
     }
     mesh->min_dx = min_dx;
+    prj_mesh_update_min_allowable_cell_size(mesh);
     if (nblocks > mesh->nblocks_max) {
         fprintf(stderr,
             "prj_io_read_restart: restart has nblocks=%d > max_blocks=%d. "

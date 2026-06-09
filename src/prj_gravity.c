@@ -402,41 +402,7 @@ static void prj_gravity_cache_block_clear(prj_block *block, const prj_grav *grav
     }
 }
 
-static double prj_gravity_min_cell_size(const prj_mesh *mesh, const prj_mpi *mpi)
-{
-    double min_cell = 0.0;
-    int b;
-
-    if (mesh != 0) {
-        for (b = 0; b < mesh->nblocks; ++b) {
-            const prj_block *block = &mesh->blocks[b];
-            double dx;
-
-            if (!prj_gravity_block_is_local_active(mpi, block)) {
-                continue;
-            }
-            dx = prj_gravity_min_double(block->dx[0],
-                prj_gravity_min_double(block->dx[1], block->dx[2]));
-            if (min_cell == 0.0 || dx < min_cell) {
-                min_cell = dx;
-            }
-        }
-    }
-#if defined(PRJ_ENABLE_MPI)
-    if (mpi != 0 && mpi->totrank > 1) {
-        double sentinel = min_cell > 0.0 ? min_cell : 1.0e300;
-        double global_min = sentinel;
-
-        MPI_Allreduce(&sentinel, &global_min, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
-        if (global_min < 1.0e300) {
-            min_cell = global_min;
-        }
-    }
-#endif
-    return min_cell;
-}
-
-static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh, const prj_mpi *mpi)
+static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh)
 {
     double min_cell;
     double log_span;
@@ -446,9 +412,9 @@ static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh, const prj
         grav->rmax <= 0.0) {
         return;
     }
-    min_cell = prj_gravity_min_cell_size(mesh, mpi);
+    min_cell = mesh != 0 ? mesh->min_allowable_cell_size : 0.0;
     grav->min_cell = min_cell;
-    grav->dr_min = 1.5 * min_cell;
+    grav->dr_min = 0.5 * min_cell;
     if (grav->dr_min <= 0.0 || grav->rmax <= grav->dr_min) {
         grav->dr_min = grav->rmax / (double)grav->nbins;
     }
@@ -534,7 +500,7 @@ void prj_gravity_rebuild_grid(prj_sim *sim, const prj_mpi *mpi)
     if (sim == 0) {
         return;
     }
-    prj_gravity_build_rf(&sim->grav, &sim->mesh, mpi);
+    prj_gravity_build_rf(&sim->grav, &sim->mesh);
     if (sim->grav.accel != 0) {
         for (i = 0; i < sim->grav.nbins; ++i) {
             sim->grav.accel[i] = 0.0;
@@ -674,7 +640,7 @@ void prj_gravity_init(prj_sim *sim, const prj_mpi *mpi)
         return;
     }
 
-    prj_gravity_build_rf(grav, &sim->mesh, mpi);
+    prj_gravity_build_rf(grav, &sim->mesh);
     for (i = 0; i <= grav->nbins; ++i) {
         grav->lapse[i] = 1.0;
     }

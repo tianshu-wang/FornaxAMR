@@ -126,6 +126,7 @@ struct prj_mesh {
     int max_blocks;
     int max_level;
     double min_dx;
+    double min_allowable_cell_size;
     int max_active_level;
     int root_nx[3];
     prj_block *blocks;

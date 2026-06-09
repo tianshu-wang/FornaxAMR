@@ -369,6 +369,7 @@ int main(int argc, char *argv[])
         sim.mesh.use_amr_angular_resolution_limit = saved_use_amr_angular_resolution_limit;
         sim.mesh.use_BJ = saved_use_BJ;
         sim.mesh.min_dx = saved_min_dx;
+        prj_mesh_update_min_allowable_cell_size(&sim.mesh);
         next_output_time = prj_next_event_time(last_output_time, sim.output_dt, sim.time);
         next_restart_time = prj_next_event_time(last_restart_time, sim.restart_dt, sim.time);
         prj_print_config(&sim, mpi.rank);

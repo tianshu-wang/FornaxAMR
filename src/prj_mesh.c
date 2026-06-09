@@ -647,6 +647,58 @@ double prj_mesh_min_cell_size(const prj_mesh *mesh)
     return found != 0 ? min_cell_size : 0.0;
 }
 
+void prj_mesh_update_min_allowable_cell_size(prj_mesh *mesh)
+{
+    double dx[3];
+    double root_cell_size;
+    int level = 0;
+
+    if (mesh == 0 ||
+        mesh->root_nx[0] <= 0 || mesh->root_nx[1] <= 0 || mesh->root_nx[2] <= 0) {
+        return;
+    }
+
+    dx[0] = fabs(mesh->coord.x1max - mesh->coord.x1min) /
+        ((double)mesh->root_nx[0] * (double)PRJ_BLOCK_SIZE);
+    dx[1] = fabs(mesh->coord.x2max - mesh->coord.x2min) /
+        ((double)mesh->root_nx[1] * (double)PRJ_BLOCK_SIZE);
+    dx[2] = fabs(mesh->coord.x3max - mesh->coord.x3min) /
+        ((double)mesh->root_nx[2] * (double)PRJ_BLOCK_SIZE);
+    root_cell_size = dx[0];
+    if (dx[1] > root_cell_size) {
+        root_cell_size = dx[1];
+    }
+    if (dx[2] > root_cell_size) {
+        root_cell_size = dx[2];
+    }
+    if (root_cell_size <= 0.0) {
+        mesh->min_allowable_cell_size = 0.0;
+        return;
+    }
+
+    if (mesh->max_level >= 0) {
+        level = mesh->max_level;
+    }
+    if (mesh->min_dx > 0.0) {
+        int min_dx_level = 0;
+        double cell_size = root_cell_size;
+
+        /* Match AMR's cap: a parent whose cell size is still above min_dx
+         * may refine once more, so the finest allowed child can fall below it. */
+        while (cell_size > mesh->min_dx) {
+            cell_size *= 0.5;
+            ++min_dx_level;
+        }
+        if (mesh->max_level < 0 || min_dx_level < level) {
+            level = min_dx_level;
+        }
+    }
+    if (level < 0) {
+        level = 0;
+    }
+    mesh->min_allowable_cell_size = ldexp(root_cell_size, -level);
+}
+
 void prj_mesh_update_max_active_level(prj_mesh *mesh)
 {
     int i;
@@ -1059,6 +1111,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->root_nx[1] = root_nx2;
     mesh->root_nx[2] = root_nx3;
     mesh->coord = *coord;
+    prj_mesh_update_min_allowable_cell_size(mesh);
     for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
         mesh->amr_refine_thresh[amr_idx] = saved_amr_refine_thresh[amr_idx];
         mesh->amr_derefine_thresh[amr_idx] = saved_amr_derefine_thresh[amr_idx];
