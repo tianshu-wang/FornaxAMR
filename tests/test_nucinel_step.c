@@ -134,7 +134,7 @@ int main(int argc, char *argv[])
 
     /* Get eint at the requested (rho, T, Ye) and stash it into u[ETOT] so that
      * prj_rad_nucinel_step's internal prj_eos_rey roundtrip recovers T. */
-    prj_eos_rty(&eos, rho, T, Ye, eos_q);
+    prj_eos_rty(&eos, rho, T, Ye, eos_q, PRJ_EOS_CTX_MAIN);
 
     u = (double *)calloc((size_t)PRJ_NVAR_CONS, sizeof(double));
     if (u == 0) die("u allocation failed");

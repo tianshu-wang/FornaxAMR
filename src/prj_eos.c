@@ -81,11 +81,24 @@ static double prj_eos_clamp_double(double x, double lo, double hi)
     return x;
 }
 
-static void prj_eos_table_range_fail(const char *name, double value, double lo, double hi)
+static const char *prj_eos_call_ctx_label(enum prj_eos_call_ctx ctx)
+{
+    switch (ctx) {
+    case PRJ_EOS_CTX_AMR:
+        return "amr";
+    case PRJ_EOS_CTX_MAIN:
+    default:
+        return "main loop";
+    }
+}
+
+static void prj_eos_table_range_fail(const char *name, double value, double lo, double hi,
+    double rho, double ye, enum prj_eos_call_ctx ctx)
 {
     fprintf(stderr,
-        "tabulated EOS lookup out of range for %s: value=%.17e allowed=[%.17e, %.17e]\n",
-        name, value, lo, hi);
+        "tabulated EOS lookup out of range for %s: value=%.17e allowed=[%.17e, %.17e] "
+        "(cell rho=%.17e ye=%.17e, called from %s)\n",
+        name, value, lo, hi, rho, ye, prj_eos_call_ctx_label(ctx));
 #if defined(PRJ_ENABLE_MPI)
     MPI_Abort(MPI_COMM_WORLD, 1);
 #endif
@@ -227,7 +240,8 @@ static void prj_eos_fail_zero_rho_in_block(const char *caller, const prj_block *
     exit(1);
 }
 
-static void prj_eos_fill_cell(prj_eos *eos, prj_block *block, double *W, int i, int j, int k)
+static void prj_eos_fill_cell(prj_eos *eos, prj_block *block, double *W, int i, int j, int k,
+    enum prj_eos_call_ctx ctx)
 {
     double eos_quantities[PRJ_EOS_NQUANT];
 
@@ -242,22 +256,24 @@ static void prj_eos_fill_cell(prj_eos *eos, prj_block *block, double *W, int i, 
         W[VIDX(PRJ_PRIM_RHO, i, j, k)],
         W[VIDX(PRJ_PRIM_EINT, i, j, k)],
         W[VIDX(PRJ_PRIM_YE, i, j, k)],
-        eos_quantities);
+        eos_quantities,
+        ctx);
     block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] = eos_quantities[PRJ_EOS_PRESSURE];
     block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)] = eos_quantities[PRJ_EOS_TEMPERATURE];
     block->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)] = eos_quantities[PRJ_EOS_GAMMA];
 }
 
-static void prj_eos_table_check_rty_inputs(const prj_eos *eos, double rho, double T, double ye)
+static void prj_eos_table_check_rty_inputs(const prj_eos *eos, double rho, double T, double ye,
+    enum prj_eos_call_ctx ctx)
 {
     if (rho < eos->rho_min || rho > eos->rho_max) {
-        prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max);
+        prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max, rho, ye, ctx);
     }
     if (T < eos->temp_min || T > eos->temp_max) {
-        prj_eos_table_range_fail("T", T, eos->temp_min, eos->temp_max);
+        prj_eos_table_range_fail("T", T, eos->temp_min, eos->temp_max, rho, ye, ctx);
     }
     if (ye < eos->y1c || ye > eos->y2c) {
-        prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
+        prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c, rho, ye, ctx);
     }
 }
 
@@ -425,12 +441,12 @@ void prj_eos_init(prj_eos *eos, const prj_mpi *mpi)
 
 static void prj_eos_table_interp_base(const prj_eos *eos, double rho, double T, double ye,
     int *restrict jy, int *restrict jyp, int *restrict jr, int *restrict jrp, int *restrict jt, int *restrict jtp,
-    double *restrict dye, double *restrict drho, double *restrict dtemp)
+    double *restrict dye, double *restrict drho, double *restrict dtemp, enum prj_eos_call_ctx ctx)
 {
     double rl;
     double tl;
-    
-    prj_eos_table_check_rty_inputs(eos, rho, T, ye);
+
+    prj_eos_table_check_rty_inputs(eos, rho, T, ye, ctx);
     rl = log10(rho);
     tl = log10(T);
 
@@ -491,7 +507,8 @@ static double prj_eos_rey_slice_eint(const prj_eos *eos,
            coeff3 * t[base_eint + off_yp_rp + jt_off];
 }
 
-void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quantities)
+void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quantities,
+    enum prj_eos_call_ctx ctx)
 {
     double gamma;
     double eint;
@@ -512,7 +529,7 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
         double dtemp;
         double pressure_log;
 
-        prj_eos_table_interp_base(eos, rho, T, ye, &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp);
+        prj_eos_table_interp_base(eos, rho, T, ye, &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp, ctx);
         eint = prj_eos_table_interp_trilinear(eos, PRJ_EOS_REC_EINT,
             jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp) * PRJ_EOS_ENERGY_SCALE;
         pressure_log = prj_eos_pressure_log_interp(eos,
@@ -541,7 +558,7 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
  * temperature axis is log10(T); the chain rule d(lgT)/d(lnT) = 1/M_LN10
  * converts the log10-T slope to a natural-log-T slope. */
 double prj_eos_rty_eint(prj_eos *eos, double rho, double T, double ye,
-    double *deint_dlnT, double *deint_dYe)
+    double *deint_dlnT, double *deint_dYe, enum prj_eos_call_ctx ctx)
 {
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
@@ -560,7 +577,7 @@ double prj_eos_rty_eint(prj_eos *eos, double rho, double T, double ye,
         double dfd_dtemp;
         double e_raw;
 
-        prj_eos_table_interp_base(eos, rho, T, ye, &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp);
+        prj_eos_table_interp_base(eos, rho, T, ye, &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp, ctx);
         /* Corner bit order for prj_trilinear_with_deriv: d0=dye, d1=drho, d2=dtemp. */
         v[0] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jy,  jr,  jt);
         v[1] = prj_eos_tab_elem(eos, PRJ_EOS_REC_EINT, jyp, jr,  jt);
@@ -587,7 +604,8 @@ double prj_eos_rty_eint(prj_eos *eos, double rho, double T, double ye,
     }
 }
 
-double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye)
+double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye,
+    enum prj_eos_call_ctx ctx)
 {
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
@@ -596,7 +614,7 @@ double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye)
         double eta_raw;
 
         prj_eos_table_interp_base(eos, rho, T, ye,
-            &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp);
+            &jy, &jyp, &jr, &jrp, &jt, &jtp, &dye, &drho, &dtemp, ctx);
         eta_raw = prj_eos_table_interp_trilinear(eos, 15,
             jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp);
         if (T > 0.0) {
@@ -608,7 +626,8 @@ double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye)
     return 0.0;
 }
 
-void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_quantities)
+void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_quantities,
+    enum prj_eos_call_ctx ctx)
 {
     double gamma;
     double T;
@@ -644,10 +663,10 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
 
         e_table = eint / PRJ_EOS_ENERGY_SCALE;
         if (rho < eos->rho_min || rho > eos->rho_max) {
-            prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max);
+            prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max, rho, ye, ctx);
         }
         if (ye < eos->y1c || ye > eos->y2c) {
-            prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
+            prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c, rho, ye, ctx);
         }
         rl = log10(rho);
         jrf = (rl - eos->r1) * eos->inv_dlogrho;
@@ -674,7 +693,7 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         elo = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, 1, coeff0, coeff1, coeff2, coeff3);
         ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r, off_y_rp, off_yp_rp, eos->nt, coeff0, coeff1, coeff2, coeff3);
         if (e_table < elo || e_table > ehi) {
-            prj_eos_table_range_fail("eint/PRJ_EOS_ENERGY_SCALE", e_table, elo, ehi);
+            prj_eos_table_range_fail("eint/PRJ_EOS_ENERGY_SCALE", e_table, elo, ehi, rho, ye, ctx);
         }
         if (e_table == elo) {
             jt = 1;
@@ -724,7 +743,7 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }
 
-double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye)
+double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye, enum prj_eos_call_ctx ctx)
 {
     double rl;
     double drho;
@@ -751,10 +770,10 @@ double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye)
     }
 
     if (rho < eos->rho_min || rho > eos->rho_max) {
-        prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max);
+        prj_eos_table_range_fail("rho", rho, eos->rho_min, eos->rho_max, rho, ye, ctx);
     }
     if (ye < eos->y1c || ye > eos->y2c) {
-        prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c);
+        prj_eos_table_range_fail("ye", ye, eos->y1c, eos->y2c, rho, ye, ctx);
     }
 
     rl = log10(rho);
@@ -782,7 +801,7 @@ double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye)
         off_yp_rp, 1, coeff0, coeff1, coeff2, coeff3) * PRJ_EOS_ENERGY_SCALE;
 }
 
-void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W)
+void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W, enum prj_eos_call_ctx ctx)
 {
     int i;
     int j;
@@ -798,13 +817,14 @@ void prj_eos_fill_block(prj_eos *eos, prj_block *block, double *W)
                 if (block->cell_derived_done != 0 && block->cell_derived_done[IDX(i, j, k)] != 0) {
                     continue;
                 }
-                prj_eos_fill_cell(eos, block, W, i, j, k);
+                prj_eos_fill_cell(eos, block, W, i, j, k, ctx);
             }
         }
     }
 }
 
-void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
+void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage,
+    enum prj_eos_call_ctx ctx)
 {
     int bidx;
 
@@ -828,14 +848,15 @@ void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    prj_eos_fill_cell(eos, block, W, i, j, k);
+                    prj_eos_fill_cell(eos, block, W, i, j, k, ctx);
                 }
             }
         }
     }
 }
 
-void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
+void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage,
+    enum prj_eos_call_ctx ctx)
 {
     int bidx;
 
@@ -853,13 +874,19 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int sta
         if (mpi != 0 && block->rank != mpi->rank) {
             continue;
         }
-        prj_eos_fill_block(eos, block, W);
+        prj_eos_fill_block(eos, block, W, ctx);
     }
 }
 
-void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage)
+void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int stage,
+    enum prj_eos_call_ctx ctx)
 {
     int bidx;
+
+    /* This routine rebuilds conserved ghost values via prj_eos_prim2cons and
+     * never performs a tabulated lookup, so it cannot trigger a range failure;
+     * ctx is accepted only for call-site consistency with the other fillers. */
+    (void)ctx;
 
     if (mesh == 0) {
         return;

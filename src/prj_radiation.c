@@ -543,7 +543,7 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     (void)u;
     prj_rad3_opac_lookup_ke(rad, rho, T, Ye, kappa, eta,
         dlnkappa_dlnT, dlnkappa_dYe, dlneta_dlnT, dlneta_dYe);
-    eint_new = prj_eos_rty_eint(eos, rho, T, Ye, &deint_dlnT, &deint_dYe);
+    eint_new = prj_eos_rty_eint(eos, rho, T, Ye, &deint_dlnT, &deint_dYe, PRJ_EOS_CTX_MAIN);
     Uint_new = rho * eint_new;
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
@@ -690,7 +690,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         }
     }
 
-    prj_eos_rey(eos, rho, eint_old, Ye_old, eos_q);
+    prj_eos_rey(eos, rho, eint_old, Ye_old, eos_q, PRJ_EOS_CTX_MAIN);
     T = eos_q[PRJ_EOS_TEMPERATURE];
     Ye = Ye_old;
     err_scale_1 = fabs(Uint_old) > 0.0 ? Uint_old : 1.0;
@@ -912,7 +912,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
                 E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa, 0);
         }
-        prj_eos_rty(eos, rho, T, Ye, eos_q);
+        prj_eos_rty(eos, rho, T, Ye, eos_q, PRJ_EOS_CTX_MAIN);
         eint_new = eos_q[PRJ_EOS_EINT];
         u[PRJ_CONS_ETOT] = rho * eint_new + KE + Emag;
         u[PRJ_CONS_YE] = rho * Ye;

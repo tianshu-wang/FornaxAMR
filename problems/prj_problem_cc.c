@@ -80,7 +80,7 @@ static int prj_cc_init_amr_ctx_build(prj_cc_init_amr_ctx *ctx, const prj_cc_prof
             continue;
         }
         prj_eos_rty(eos, profile->rho[i],
-            profile->temp[i] / PRJ_CC_KELVIN_PER_MEV, profile->ye[i], eos_q);
+            profile->temp[i] / PRJ_CC_KELVIN_PER_MEV, profile->ye[i], eos_q, PRJ_EOS_CTX_MAIN);
         pressure[i] = eos_q[PRJ_EOS_PRESSURE];
     }
     for (i = i_lo; i <= i_hi; ++i) {
@@ -546,7 +546,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_cc_prof
                         prj_problem_print_fill_neighbors(block, x1, x2, x3);
                         exit(EXIT_FAILURE);
                     }
-                    prj_eos_rty(&sim->eos, rho, prj_cc_kelvin_to_mev(temp), ye, eos_q);
+                    prj_eos_rty(&sim->eos, rho, prj_cc_kelvin_to_mev(temp), ye, eos_q, PRJ_EOS_CTX_MAIN);
                     W[PRJ_PRIM_RHO] = rho;
                     if (r > 0.0) {
                         W[PRJ_PRIM_V1] = vr * x1 / r;
@@ -600,7 +600,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
     }
 
     prj_cc_fill_mesh(sim, mpi, profile);
-    prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
+    prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
     prj_gravity_init(sim, mpi);
     prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
@@ -611,9 +611,9 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
         return;
     }
 
-    prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1);
+    prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
-    prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
+    prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
     prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
     prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
@@ -633,9 +633,9 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
     #endif
         prj_cc_fill_mesh(sim, mpi, profile);
 
-        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1);
+        prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
         prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
-        prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1);
+        prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     #if PRJ_USE_GRAVITY
         prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
         prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);

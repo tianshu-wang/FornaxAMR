@@ -476,7 +476,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     Uint_old = u[PRJ_CONS_ETOT] - KE - Emag;
     Ye = u[PRJ_CONS_YE] / rho;
 
-    etael = prj_eos_rty_geteta(eos, rho, T_cell, Ye);
+    etael = prj_eos_rty_geteta(eos, rho, T_cell, Ye, PRJ_EOS_CTX_MAIN);
     if (etael < -20.0) etael = -20.0;
 
     for (nu = 0; nu < PRJ_NRAD; nu++) {

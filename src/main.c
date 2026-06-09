@@ -393,10 +393,10 @@ int main(int argc, char *argv[])
         prj_set_perturbation(&sim.mesh, &sim.eos, &mpi,
             sim.perturbation_gaussian_norm, sim.perturbation_seed);
     }
-    prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1);
+    prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos, 0,
         &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
-    prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1);
+    prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
 #if PRJ_USE_GRAVITY
     prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
@@ -492,7 +492,7 @@ int main(int argc, char *argv[])
              * fill (prj_boundary_fill_ghosts_and_bf runs reduce+integrate). The
              * mesh/density/x_com are unchanged since, so no pre-tag rebuild is
              * needed here; the post-adapt rebuild below handles grid changes. */
-            prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1);
+            prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
             double E_injected_before = sim.eos.E_injected;
             int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi, &sim.grav);
             if (mpi.rank == 0 && sim.eos.E_injected != E_injected_before) {
@@ -506,10 +506,10 @@ int main(int argc, char *argv[])
 #endif
             }
             if (block_changed) {
-                prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1);
+                prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
                 prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0,
                     &sim.eos, 0, &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
-                prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1);
+                prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
                 prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
             #if PRJ_USE_GRAVITY
                 prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);

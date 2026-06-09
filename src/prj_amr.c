@@ -705,7 +705,7 @@ static void prj_apply_eint_floor(prj_eos *eos, double E_floor, double cell_vol,
     /* For the tabulated EOS the floor is measured relative to the table's
      * low-temperature boundary internal energy (a function of rho and Ye);
      * the helper returns 0 for the ideal-gas EOS so the floor is unchanged. */
-    eint_floor = E_floor + prj_eos_low_temp_eint(eos, rho, W[PRJ_PRIM_YE]);
+    eint_floor = E_floor + prj_eos_low_temp_eint(eos, rho, W[PRJ_PRIM_YE], PRJ_EOS_CTX_AMR);
 
     if (W[PRJ_PRIM_EINT] >= eint_floor) {
         return;

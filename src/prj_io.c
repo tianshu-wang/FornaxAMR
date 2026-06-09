@@ -1503,9 +1503,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     if (prj_io_is_root_rank(mpi)) {
         fprintf(stderr, "read restart file %s with %d blocks\n", filename, prj_mesh_count_active(mesh));
     }
-    prj_eos_fill_active_cells(mesh, (prj_eos *)eos, mpi, 1);
+    prj_eos_fill_active_cells(mesh, (prj_eos *)eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_boundary_fill_ghosts(mesh, mpi, &bc, 1);
-    prj_eos_fill_mesh(mesh, (prj_eos *)eos, mpi, 1);
+    prj_eos_fill_mesh(mesh, (prj_eos *)eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     free(metadata);
 }
 

@@ -137,7 +137,7 @@ int main(int argc, char *argv[])
     prj_eos_init(&eos, 0);
     if (eos.table_loaded != 1) die("EOS table failed to load");
 
-    etael = prj_eos_rty_geteta(&eos, rho, T, Ye);
+    etael = prj_eos_rty_geteta(&eos, rho, T, Ye, PRJ_EOS_CTX_MAIN);
     if (etael < -20.0) etael = -20.0;
 
     /* --- Build je / he exactly the way prj_rad_eleinel_step does, then look up. --- */

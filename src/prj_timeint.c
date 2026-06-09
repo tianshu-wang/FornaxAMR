@@ -930,7 +930,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_cell_update");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_active");
-    prj_eos_fill_active_cells(mesh, eos, mpi, 2);
+    prj_eos_fill_active_cells(mesh, eos, mpi, 2, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_eos_fill_active");
 
     /* The gravity radial reduce/integrate and the active-cell transport opacity
@@ -942,7 +942,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_ghost_mpi");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_mesh");
-    prj_eos_fill_mesh(mesh, eos, mpi, 2);
+    prj_eos_fill_mesh(mesh, eos, mpi, 2, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_eos_fill_mesh");
 
     /* The 1-ghost halo opacity needs ghost W/eosvar, so fill it now that all
@@ -1013,7 +1013,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_cell_update");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_active");
-    prj_eos_fill_active_cells(mesh, eos, mpi, 1);
+    prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_eos_fill_active");
 
     /* The gravity radial reduce/integrate and the active-cell transport opacity
@@ -1025,7 +1025,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_ghost_mpi");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_mesh");
-    prj_eos_fill_mesh(mesh, eos, mpi, 1);
+    prj_eos_fill_mesh(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_eos_fill_mesh");
 
     /* The 1-ghost halo opacity needs ghost W/eosvar, so fill it now that all
