@@ -1247,8 +1247,9 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 
                                     erad += e_rad / (PRJ_CLIGHT * PRJ_CLIGHT);
                                     prad += (e_rad / 3.0) / (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);
+                                    /* v.F/c^4 has mass-density units for the TOV integrand. */
                                     vdotF += (v1 * f1 + v2 * f2 + v3 * f3) /
-                                        (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);
+                                        (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);
                                     (void)fr;
                                 }
                             }
