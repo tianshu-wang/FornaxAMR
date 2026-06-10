@@ -946,10 +946,9 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     double delta[PRJ_NRAD * PRJ_NEGROUP];
     double rho;
     double Ye;
-    double v[3];
     double inv_c2;
     double dmom[3];
-    double detot;
+    double e_unchanged;
     int nu;
     int g;
     int d;
@@ -958,9 +957,6 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
 
     rho = u[PRJ_CONS_RHO];
     Ye = u[PRJ_CONS_YE] / rho;
-    v[0] = u[PRJ_CONS_MOM1] / rho;
-    v[1] = u[PRJ_CONS_MOM2] / rho;
-    v[2] = u[PRJ_CONS_MOM3] / rho;
     inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
 
     prj_rad3_opac_lookup(rad, rho, temperature, Ye, 0, sigma, delta, 0);
@@ -968,7 +964,9 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     dmom[0] = 0.0;
     dmom[1] = 0.0;
     dmom[2] = 0.0;
-    detot = 0.0;
+    e_unchanged = u[PRJ_CONS_ETOT] - 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
+                                            u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
+                                            u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
         for (g = 0; g < PRJ_NEGROUP; ++g) {
@@ -980,12 +978,30 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
             fi[0] = PRJ_CONS_RAD_F1(nu, g);
             fi[1] = PRJ_CONS_RAD_F2(nu, g);
             fi[2] = PRJ_CONS_RAD_F3(nu, g);
+
+            double F_old[PRJ_NDIM];
             for (d = 0; d < 3; ++d) {
-                double F_old = u[fi[d]];
-                double dF = F_old * factor;
-                u[fi[d]] = F_old + dF;
-                dmom[d] += dF * inv_c2;
-                detot += v[d] * dF * inv_c2;
+                F_old[d] = u[fi[d]];
+                double dF = F_old[d] * factor;
+                u[fi[d]] = F_old[d] + dF;
+            }
+            
+            double E = u[PRJ_CONS_RAD_E(nu, g)];
+            double F1 = u[fi[0]];
+            double F2 = u[fi[1]];
+            double F3 = u[fi[2]];
+            double Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
+            double cE = PRJ_CLIGHT * E;
+
+            if (E > 0.0 && Fmag > cE) {
+                double scale = cE / Fmag;
+                u[fi[0]] = F1 * scale;
+                u[fi[1]] = F2 * scale;
+                u[fi[2]] = F3 * scale;
+            }
+
+            for (d = 0; d < 3; ++d) {
+                dmom[d] += (u[fi[d]]-F_old[d]) * inv_c2;
             }
         }
     }
@@ -995,25 +1011,9 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     u[PRJ_CONS_MOM1] -= dmom[0] * RAD_SCALE;
     u[PRJ_CONS_MOM2] -= dmom[1] * RAD_SCALE;
     u[PRJ_CONS_MOM3] -= dmom[2] * RAD_SCALE;
-    u[PRJ_CONS_ETOT] -= detot * RAD_SCALE;
-
-    for (nu = 0; nu < PRJ_NRAD; ++nu) {
-        for (g = 0; g < PRJ_NEGROUP; ++g) {
-            double E = u[PRJ_CONS_RAD_E(nu, g)];
-            double F1 = u[PRJ_CONS_RAD_F1(nu, g)];
-            double F2 = u[PRJ_CONS_RAD_F2(nu, g)];
-            double F3 = u[PRJ_CONS_RAD_F3(nu, g)];
-            double Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
-            double cE = PRJ_CLIGHT * E;
-
-            if (E > 0.0 && Fmag > cE) {
-                double scale = 0.99999 * cE / Fmag;
-                u[PRJ_CONS_RAD_F1(nu, g)] = F1 * scale;
-                u[PRJ_CONS_RAD_F2(nu, g)] = F2 * scale;
-                u[PRJ_CONS_RAD_F3(nu, g)] = F3 * scale;
-            }
-        }
-    }
+    u[PRJ_CONS_ETOT] = e_unchanged + 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
+                                            u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
+                                            u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
 }
 
 /* Koren slope-limiter function φ(r) = max(0, min(2r, (2+r)/3, 2)). */
