@@ -432,6 +432,7 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
                 double chi_ext;
                 double tau;
                 double eps;
+                double eps2;
 
                 prj_rad_enforce_flux_limit(&EL, &F1L, &F2L, &F3L, &Fmag_L, &inv_Fmag_L, &f_L);
                 prj_rad_enforce_flux_limit(&ER, &F1R, &F2R, &F3R, &Fmag_R, &inv_Fmag_R, &f_R);
@@ -466,15 +467,20 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
                 if (eps > 1.0) {
                     eps = 1.0;
                 }
+                eps2 = eps*eps;
 
+                /* Equation 49 and 50 of Audit et al. 2002 */
                 flux[PRJ_CONS_RAD_E(field, group)] = lapse *
                     (sR * fLE - sL * fRE + eps * sL * sR * (ER - EL)) * inv_denom;
                 flux[PRJ_CONS_RAD_F1(field, group)] = lapse *
-                    (sR * fLF1 - sL * fRF1 + sL * sR * (F1R - F1L)) * inv_denom;
+                    ((eps2*(sR * fLF1 - sL * fRF1) + eps * sL * sR * (F1R - F1L)) * inv_denom
+                    +(1-eps2)*(fLF1+fRF1)*0.5);
                 flux[PRJ_CONS_RAD_F2(field, group)] = lapse *
-                    (sR * fLF2 - sL * fRF2 + sL * sR * (F2R - F2L)) * inv_denom;
+                    ((eps2*(sR * fLF2 - sL * fRF2) + eps * sL * sR * (F2R - F2L)) * inv_denom
+                    +(1-eps2)*(fLF2+fRF2)*0.5);
                 flux[PRJ_CONS_RAD_F3(field, group)] = lapse *
-                    (sR * fLF3 - sL * fRF3 + sL * sR * (F3R - F3L)) * inv_denom;
+                    ((eps2*(sR * fLF3 - sL * fRF3) + eps * sL * sR * (F3R - F3L)) * inv_denom
+                    +(1-eps2)*(fLF3+fRF3)*0.5);
 
                 /* O(v/c) fluid advection: upwinded v_face * {E, F_i} term. */
                 {
