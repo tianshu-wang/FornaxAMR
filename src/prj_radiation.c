@@ -1166,6 +1166,15 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
          * closure tensors P, Q are reconstructed (donor cell) to each frequency
          * face from the upwind group and scaled by the face frequency ν. */
         {
+            /* CAVEAT: choosing the single upwind side from the sign of div(v)
+             * only guarantees a stable energy-space flux in bulk flows, where
+             * the (isotropic) compression/expansion divergence is the dominant
+             * part of the velocity gradient.  In turbulent or strongly shearing
+             * flows the off-diagonal/anisotropic parts of ∂_j v_i can exceed the
+             * trace, so the trace-based upwind direction may disagree with the
+             * actual sign of an individual tensor component and absolute
+             * stability is no longer assured.  It is robust for the smooth
+             * infall/contraction regime this code targets. */
             double divv = dvdx[0][0] + dvdx[1][1] + dvdx[2][2];
             int d = (divv >= 0.0) ? 0 : -1; /* donor offset: upwind group = gf + d */
             int gf;

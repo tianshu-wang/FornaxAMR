@@ -649,6 +649,26 @@ static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, in
     return b->W[VIDX(v, i, j, k)];
 }
 
+/* Total pressure used by the AMR estimators: gas pressure plus magnetic
+ * pressure.  In this code's units the magnetic pressure equals the magnetic
+ * energy density, P_mag = 0.5*|B|^2 (the same 0.5*B^2 that enters the conserved
+ * total energy in prj_eos_cons2prim / prj_mhd_bf2bc and the total pressure in
+ * prj_riemann), with B the cell-centred field in the primitive state.  Without
+ * MHD this reduces to the gas pressure.  Indices are raw storage indices, to
+ * match the eosvar access in the estimators. */
+static double prj_amr_total_pressure_at(const prj_block *b, int i, int j, int k)
+{
+    double pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+#if PRJ_MHD
+    double b1 = b->W[VIDX(PRJ_PRIM_B1, i, j, k)];
+    double b2 = b->W[VIDX(PRJ_PRIM_B2, i, j, k)];
+    double b3 = b->W[VIDX(PRJ_PRIM_B3, i, j, k)];
+
+    pressure += 0.5 * (b1 * b1 + b2 * b2 + b3 * b3);
+#endif
+    return pressure;
+}
+
 static double prj_block_sound_speed_at(const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     double rho;
@@ -662,7 +682,9 @@ static double prj_block_sound_speed_at(const prj_block *b, prj_eos *eos, int i, 
     if (rho <= 0.0 || eint < 0.0) {
         return 0.0;
     }
-    pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    /* Use total (gas + magnetic) pressure so the velocity estimator normalises
+     * by a fast-magnetosonic-like speed in MHD runs. */
+    pressure = prj_amr_total_pressure_at(b, i, j, k);
     gamma = b->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)];
     if (pressure <= 0.0 || gamma <= 0.0) {
         return 0.0;
@@ -749,7 +771,7 @@ static double prj_loehner_cell_value(const prj_mesh *mesh, const prj_block *b, i
     if (lohner_var == PRJ_LOHNER_VAR_TEMPERATURE) {
         return b->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
     }
-    return b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    return prj_amr_total_pressure_at(b, i, j, k);
 }
 
 static double prj_loehner_cell_indicator(
@@ -865,7 +887,7 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
 
     cache_idx = prj_block_cache_index(i, j, k);
     rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
-    pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    pressure = prj_amr_total_pressure_at(b, i, j, k);
     g1 = b->grav[0][cache_idx];
     g2 = b->grav[1][cache_idx];
     g3 = b->grav[2][cache_idx];
@@ -892,7 +914,7 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
 static double prj_fractional_jump_cell_value(const prj_block *b, int jump_var, int i, int j, int k)
 {
     if (jump_var == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
-        return b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+        return prj_amr_total_pressure_at(b, i, j, k);
     }
     return b->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
 }
