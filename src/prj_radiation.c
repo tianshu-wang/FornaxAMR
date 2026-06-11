@@ -1139,9 +1139,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         int g;
         int ii;
         int jj;
-        int kk;
 
-        /* Per-group cell-centred state and M1 pressure tensor. */
+        /* Per-group cell-centred state and closure tensors.  P and Q are built
+         * once here and shared: P by the GR redshift terms below, and both P, Q
+         * by the SR frequency flux (reconstructed to the frequency faces). */
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             Eg[g] = W_state[VIDX(PRJ_PRIM_RAD_E(field, g), ic, jc, kc)];
             Fg[g][0] = W_state[VIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
@@ -1155,65 +1156,49 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             dF_acc[g][2] = 0.0;
         }
 
-        /* Energy: dE_g/dt += Σ_{i,j} v^i_{;j} · [(ν P^{ji})_{g+1/2} - (ν P^{ji})_{g-1/2}]. */
-        for (jj = 0; jj < 3; ++jj) {
-            for (ii = 0; ii < 3; ++ii) {
-                double vij = dvdx[jj][ii];
-                double q[PRJ_NEGROUP];
-                double face_val[PRJ_NEGROUP + 1];
-                int gf;
+        /* SR velocity-gradient energy-space flux (Eqs. 21a/21b).  The whole
+         * frequency flux is upwinded once by the sign of the velocity divergence
+         * div(v) = tr(∂_j v_i): compression (div < 0) blueshifts and expansion
+         * (div > 0) redshifts the entire spectrum, so a single upwind side is
+         * used for every energy group and every tensor component (replacing the
+         * earlier per-component upwinding, which summed nine independently
+         * upwinded ν-fluxes and drove a grid-scale instability).  The centred
+         * closure tensors P, Q are reconstructed (donor cell) to each frequency
+         * face from the upwind group and scaled by the face frequency ν. */
+        {
+            double divv = dvdx[0][0] + dvdx[1][1] + dvdx[2][2];
+            int d = (divv >= 0.0) ? 0 : -1; /* donor offset: upwind group = gf + d */
+            int gf;
+            int kk;
 
-                if (vij == 0.0) {
-                    continue;
-                }
-                for (g = 0; g < PRJ_NEGROUP; ++g) {
-                    q[g] = Pg[g][jj][ii];
-                }
+            /* Sweep interior frequency faces (the domain-edge faces 0 and
+             * PRJ_NEGROUP carry zero flux and are skipped).  Each face gf has a
+             * single upwind donor group gu = gf + d (gf for div v >= 0, else
+             * gf-1); its flux ν_face[gf]·{P,Q}[gu] is the upper (g+1/2) face of
+             * group gf-1 and the lower (g-1/2) face of group gf, so it is
+             * scattered into both with opposite signs.  This accumulates the
+             * energy (P) and flux (Q) updates together without materialising the
+             * per-face tensors.  (For a Koren-limited version, replace Pg[gu] /
+             * Qg[gu] by q[gu] + 0.5·φ(r)·(q[gu] − q[gu+up]) per component, with
+             * upwind-neighbour offset up = (div v >= 0) ? +1 : -1.) */
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                int gu = gf + d;
+                double nu = nu_face[gf];
 
-                face_val[0] = 0.0;
-                face_val[PRJ_NEGROUP] = 0.0;
-                for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
-                    /* Face gf sits between cells gf-1 (lower ν) and gf (upper ν). */
-                    double pick = (vij >= 0.0)
-                        ? prj_rad_recon_face(q, gf, -1)      /* R: left edge of cell gf  */
-                        : prj_rad_recon_face(q, gf - 1, +1); /* L: right edge of cell gf-1 */
-                    face_val[gf] = nu_face[gf] * pick;
-                }
+                for (jj = 0; jj < 3; ++jj) {
+                    for (ii = 0; ii < 3; ++ii) {
+                        double pf = nu * Pg[gu][jj][ii] * dvdx[jj][ii];
 
-                for (g = 0; g < PRJ_NEGROUP; ++g) {
-                    dE_acc[g] += vij * (face_val[g + 1] - face_val[g]);
-                }
-            }
-        }
-
-        /* Flux: dF_{gj}/dt += Σ_{i,k} v^i_{;k} · [(ν Q^{kji})_{g+1/2} - (ν Q^{kji})_{g-1/2}].
-         * Closure: Q^{kji}_g from the Levermore/Vaytet third moment. */
-        for (jj = 0; jj < 3; ++jj) {
-            for (kk = 0; kk < 3; ++kk) {
-                for (ii = 0; ii < 3; ++ii) {
-                    double vik = dvdx[kk][ii];
-                    double q[PRJ_NEGROUP];
-                    double face_val[PRJ_NEGROUP + 1];
-                    int gf;
-
-                    if (vik == 0.0) {
-                        continue;
+                        dE_acc[gf - 1] += pf;
+                        dE_acc[gf] -= pf;
                     }
-                    for (g = 0; g < PRJ_NEGROUP; ++g) {
-                        q[g] = Qg[g][kk][jj][ii];
-                    }
+                    for (kk = 0; kk < 3; ++kk) {
+                        for (ii = 0; ii < 3; ++ii) {
+                            double qf = nu * Qg[gu][kk][jj][ii] * dvdx[kk][ii];
 
-                    face_val[0] = 0.0;
-                    face_val[PRJ_NEGROUP] = 0.0;
-                    for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
-                        double pick = (vik >= 0.0)
-                            ? prj_rad_recon_face(q, gf, -1)
-                            : prj_rad_recon_face(q, gf - 1, +1);
-                        face_val[gf] = nu_face[gf] * pick;
-                    }
-
-                    for (g = 0; g < PRJ_NEGROUP; ++g) {
-                        dF_acc[g][jj] += vik * (face_val[g + 1] - face_val[g]);
+                            dF_acc[gf - 1][jj] += qf;
+                            dF_acc[gf][jj] -= qf;
+                        }
                     }
                 }
             }

@@ -1,0 +1,1 @@
+setups/magnetized_ccsn.mk
