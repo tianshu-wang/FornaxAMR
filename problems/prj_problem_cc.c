@@ -523,6 +523,11 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_cc_prof
                     double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                     double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
                     double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
+                    /* Sample the progenitor profile at the volume-averaged radius
+                       about the center of mass (r_com) rather than the cell-centered
+                       radius; fall back to r if r_com is unavailable. */
+                    double r_interp = (block->r_com != 0) ?
+                        block->r_com[prj_block_cache_index(i, j, k)] : r;
                     double rho;
                     double temp;
                     double ye;
@@ -531,7 +536,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_cc_prof
                     double W[PRJ_NVAR_PRIM] = {0.0};
                     double U[PRJ_NVAR_CONS] = {0.0};
 
-                    prj_cc_profile_sample(profile, r, &rho, &temp, &ye, &vr);
+                    prj_cc_profile_sample(profile, r_interp, &rho, &temp, &ye, &vr);
                     if (rho == 0.0) {
                         fprintf(stderr,
                             "prj_cc_fill_mesh: rho=0 before prj_eos_rty for current_block id=%d current_rank=%d level=%d "
