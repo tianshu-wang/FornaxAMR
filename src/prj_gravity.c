@@ -849,40 +849,45 @@ static void prj_gravity_fill_block_multipole_phi(const prj_grav *grav, const prj
     }
 }
 
-static double prj_gravity_phi_axis_gradient(const double *Phi, int axis, int i, int j, int k,
-    const double dx[3])
+/* Isotropic 3D Sobel gradient of Phi at cell (i,j,k). Along each axis the
+   central derivative kernel [-1, 0, +1] is smoothed in the two perpendicular
+   directions with the isotropic weights [1, sqrt(2), 1] (sum 2+sqrt(2)),
+   which minimises the angular error of the discrete gradient relative to the
+   plain [1, 2, 1] Sobel. The caller (fill_block_fields, over the field range)
+   guarantees the full 3x3x3 stencil lies inside the filled Phi region, so no
+   edge handling is required. */
+static void prj_gravity_phi_sobel_gradient(const double *Phi, int i, int j, int k,
+    const double dx[3], double grad[3])
 {
-    int lo = -PRJ_NGHOST;
-    int hi = PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
+    static const double w[3] = {1.0, PRJ_GRAVITY_SQRT2, 1.0};
+    const double norm = (2.0 + PRJ_GRAVITY_SQRT2) * (2.0 + PRJ_GRAVITY_SQRT2);
+    double gx = 0.0;
+    double gy = 0.0;
+    double gz = 0.0;
+    int a;
+    int b;
 
-    if (Phi == 0 || dx[axis] <= 0.0) {
-        return 0.0;
+    grad[0] = 0.0;
+    grad[1] = 0.0;
+    grad[2] = 0.0;
+    if (Phi == 0) {
+        return;
     }
-    if (axis == 0) {
-        if (i <= lo) {
-            return (Phi[IDX(i + 1, j, k)] - Phi[IDX(i, j, k)]) / dx[0];
+    for (a = -1; a <= 1; ++a) {
+        for (b = -1; b <= 1; ++b) {
+            double wab = w[a + 1] * w[b + 1];
+
+            /* d/dx: derivative along x, smoothing over (y, z) = (a, b). */
+            gx += wab * (Phi[IDX(i + 1, j + a, k + b)] - Phi[IDX(i - 1, j + a, k + b)]);
+            /* d/dy: derivative along y, smoothing over (x, z) = (a, b). */
+            gy += wab * (Phi[IDX(i + a, j + 1, k + b)] - Phi[IDX(i + a, j - 1, k + b)]);
+            /* d/dz: derivative along z, smoothing over (x, y) = (a, b). */
+            gz += wab * (Phi[IDX(i + a, j + b, k + 1)] - Phi[IDX(i + a, j + b, k - 1)]);
         }
-        if (i >= hi) {
-            return (Phi[IDX(i, j, k)] - Phi[IDX(i - 1, j, k)]) / dx[0];
-        }
-        return 0.5 * (Phi[IDX(i + 1, j, k)] - Phi[IDX(i - 1, j, k)]) / dx[0];
     }
-    if (axis == 1) {
-        if (j <= lo) {
-            return (Phi[IDX(i, j + 1, k)] - Phi[IDX(i, j, k)]) / dx[1];
-        }
-        if (j >= hi) {
-            return (Phi[IDX(i, j, k)] - Phi[IDX(i, j - 1, k)]) / dx[1];
-        }
-        return 0.5 * (Phi[IDX(i, j + 1, k)] - Phi[IDX(i, j - 1, k)]) / dx[1];
-    }
-    if (k <= lo) {
-        return (Phi[IDX(i, j, k + 1)] - Phi[IDX(i, j, k)]) / dx[2];
-    }
-    if (k >= hi) {
-        return (Phi[IDX(i, j, k)] - Phi[IDX(i, j, k - 1)]) / dx[2];
-    }
-    return 0.5 * (Phi[IDX(i, j, k + 1)] - Phi[IDX(i, j, k - 1)]) / dx[2];
+    grad[0] = dx[0] > 0.0 ? gx / (norm * 2.0 * dx[0]) : 0.0;
+    grad[1] = dx[1] > 0.0 ? gy / (norm * 2.0 * dx[1]) : 0.0;
+    grad[2] = dx[2] > 0.0 ? gz / (norm * 2.0 * dx[2]) : 0.0;
 }
 
 double prj_gravity_block_lapse_at(const prj_grav *grav, const prj_block *block, int i, int j, int k)
@@ -953,15 +958,15 @@ static void prj_gravity_fill_block_fields(const prj_mesh *mesh, prj_block *block
     for (i = field_lo; i < field_hi; ++i) {
         for (j = field_lo; j < field_hi; ++j) {
             for (k = field_lo; k < field_hi; ++k) {
+                double grad[3];
+
                 cache_idx = prj_block_cache_index(i, j, k);
 
                 block->lapse[cache_idx] = prj_gravity_block_cached_lapse_at(grav, block, i, j, k);
-                block->grav[0][cache_idx] =
-                    -prj_gravity_phi_axis_gradient(Phi, 0, i, j, k, block->dx);
-                block->grav[1][cache_idx] =
-                    -prj_gravity_phi_axis_gradient(Phi, 1, i, j, k, block->dx);
-                block->grav[2][cache_idx] =
-                    -prj_gravity_phi_axis_gradient(Phi, 2, i, j, k, block->dx);
+                prj_gravity_phi_sobel_gradient(Phi, i, j, k, block->dx, grad);
+                block->grav[0][cache_idx] = -grad[0];
+                block->grav[1][cache_idx] = -grad[1];
+                block->grav[2][cache_idx] = -grad[2];
             }
         }
     }
