@@ -425,7 +425,7 @@ int main(int argc, char *argv[])
         PRJ_TIMER_BARRIER_START(&timer, &mpi, "main_loop");
 
         {
-            PRJ_TIMER_BARRIER_START(&timer, &mpi, "mesh_update_x_com");
+            PRJ_TIMER_BARRIER_START(&timer, &mpi, "mesh_update_x_com_grav");
 #if PRJ_USE_GRAVITY
             if (prj_mesh_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol)) {
                 prj_gravity_cache_mesh(&sim.mesh, &sim.grav);
@@ -435,7 +435,7 @@ int main(int argc, char *argv[])
 #else
             (void)prj_mesh_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol);
 #endif
-            PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "mesh_update_x_com");
+            PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "mesh_update_x_com_grav");
         }
         {
             double dt_new;

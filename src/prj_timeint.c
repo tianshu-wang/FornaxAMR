@@ -884,7 +884,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     (void)coord;
     (void)bc;
 
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_flux");
+    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_flux_send");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -893,7 +893,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         }
     }
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_flux");
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_flux_send");
 
 #if PRJ_MHD
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_mhd_emf");
@@ -917,7 +917,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_mhd_update_bf");
 #endif
 
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_cell_update");
+    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_src_cell_update");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -937,7 +937,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             }
         }
     }
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_cell_update");
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_src_cell_update");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_active");
     prj_eos_fill_active_cells(mesh, eos, mpi, 2, PRJ_EOS_CTX_MAIN);
@@ -946,10 +946,10 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     /* The gravity radial reduce/integrate and the active-cell transport opacity
      * run inside the same-level pass of this ghost fill, overlapped with the
      * in-flight exchange. */
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_ghost_mpi");
+    PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_ghost_grav_opac");
     prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 2, 1, eos, grav, rad,
         PRJ_BOUNDARY_TIMER_SCOPE_STAGE1);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_ghost_mpi");
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_ghost_grav_opac");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_mesh");
     prj_eos_fill_mesh(mesh, eos, mpi, 2, PRJ_EOS_CTX_MAIN);
@@ -967,7 +967,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
     (void)coord;
 
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_flux");
+    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_flux_send");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -976,7 +976,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         }
     }
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_flux");
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_flux_send");
 
 #if PRJ_MHD
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_mhd_emf");
@@ -1000,7 +1000,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_mhd_update_bf");
 #endif
 
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_cell_update");
+    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_src_cell_update");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -1020,7 +1020,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             }
         }
     }
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_cell_update");
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_src_cell_update");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_active");
     prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
@@ -1029,10 +1029,10 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     /* The gravity radial reduce/integrate and the active-cell transport opacity
      * run inside the same-level pass of this ghost fill, overlapped with the
      * in-flight exchange. */
-    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_ghost_mpi");
+    PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_ghost_grav_opac");
     prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad,
         PRJ_BOUNDARY_TIMER_SCOPE_STAGE2);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_ghost_mpi");
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_ghost_grav_opac");
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_mesh");
     prj_eos_fill_mesh(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
