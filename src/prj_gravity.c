@@ -992,6 +992,105 @@ static void prj_gravity_fill_mesh_fields(prj_mesh *mesh, const prj_grav *grav, c
     }
 }
 
+static double prj_gravity_shell_volume(const prj_grav *grav, int idx)
+{
+    double r0 = grav->rf[idx];
+    double r1 = grav->rf[idx + 1];
+
+    return (4.0 / 3.0) * M_PI * (r1 * r1 * r1 - r0 * r0 * r0);
+}
+
+/* Spread the donor bin j's accumulated content uniformly (per unit shell
+   volume) over bins i..j, conserving the total. After this every bin in
+   [i, j] holds content proportional to its own shell volume, so dividing by
+   shell volume later yields an identical average across the range. */
+static void prj_gravity_spread_bins(double *arr, const prj_grav *grav,
+                                    int i, int j, double inv_total_vol)
+{
+    double donor = arr[j];
+    int k;
+
+    for (k = i; k <= j; ++k) {
+        arr[k] = donor * prj_gravity_shell_volume(grav, k) * inv_total_vol;
+    }
+}
+
+/* The radial face grid (grav->rf) need not align with cell centers, so a
+   shell can contain no cells and reduce to an empty bin (zero mass/volume).
+   For each maximal run of empty bins [i, j-1] bounded below by a non-empty
+   bin (or i == 0) and above by the non-empty bin j, redistribute bin j's
+   accumulated reductions over bins i..j weighted by shell volume, so the
+   per-volume averages are uniform across the run and the totals (mass and
+   multipole moments) are conserved. */
+static void prj_gravity_fill_empty_bins(prj_grav *grav, int use_multipole)
+{
+    int i;
+
+    if (grav == 0 || grav->nbins <= 0 || grav->rf == 0 || grav->vol == 0) {
+        return;
+    }
+
+    i = 0;
+    while (i < grav->nbins) {
+        int j;
+        int k;
+        double total_vol;
+        double inv_total_vol;
+
+        if (grav->vol[i] > 0.0) {
+            ++i;
+            continue;
+        }
+        /* Empty run starts at i (by construction i == 0 or bin i-1 is
+           non-empty). Find the first non-empty bin j above it. */
+        j = i;
+        while (j < grav->nbins && grav->vol[j] <= 0.0) {
+            ++j;
+        }
+        if (j >= grav->nbins) {
+            /* Trailing empty bins with no donor above: nothing to spread. */
+            break;
+        }
+
+        total_vol = 0.0;
+        for (k = i; k <= j; ++k) {
+            total_vol += prj_gravity_shell_volume(grav, k);
+        }
+        if (total_vol <= 0.0) {
+            i = j + 1;
+            continue;
+        }
+        inv_total_vol = 1.0 / total_vol;
+
+        prj_gravity_spread_bins(grav->ms,        grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->vol,       grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->rho_avg,   grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->vr_avg,    grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->pgas_avg,  grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->uavg_int,  grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->erad_avg,  grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->prad_avg,  grav, i, j, inv_total_vol);
+        prj_gravity_spread_bins(grav->vdotF_avg, grav, i, j, inv_total_vol);
+
+        if (use_multipole) {
+            int yidx;
+
+            for (yidx = 0; yidx < LMAX * LMAX; ++yidx) {
+                if (grav->Clm[yidx] != 0) {
+                    prj_gravity_spread_bins(grav->Clm[yidx], grav, i, j,
+                        inv_total_vol);
+                }
+                if (grav->Dlm[yidx] != 0) {
+                    prj_gravity_spread_bins(grav->Dlm[yidx], grav, i, j,
+                        inv_total_vol);
+                }
+            }
+        }
+
+        i = j + 1;
+    }
+}
+
 void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi, int stage)
 {
     int bidx;
@@ -1223,6 +1322,11 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         }
     }
 #endif
+
+    /* Fill radial bins that no cell mapped into by spreading the neighboring
+       outer bin's reductions across the gap (volume-weighted), before the
+       cumulative-sum and shell-average steps consume them. */
+    prj_gravity_fill_empty_bins(grav, use_multipole);
 
     if (use_multipole) {
         {
