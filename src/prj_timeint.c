@@ -337,9 +337,9 @@ static double *prj_timeint_stage2_array(prj_block *block)
 }
 #endif
 
-static void prj_timeint_update_dt_src_values(const prj_grav *grav, const prj_block *block,
-    double rho, double mom1, double mom2, double mom3, double etot,
-    int i, int j, int k, const prj_mpi *mpi, double *dt_src)
+static void prj_timeint_update_dt_src_values(const prj_mesh *mesh, const prj_grav *grav,
+    const prj_block *block, double rho, double mom1, double mom2, double mom3,
+    double etot, int i, int j, int k, const prj_mpi *mpi, double *dt_src)
 {
     double dt_src_local;
 
@@ -353,6 +353,7 @@ static void prj_timeint_update_dt_src_values(const prj_grav *grav, const prj_blo
         *dt_src = dt_src_local;
     }
 #if !PRJ_GRAV_DEBUG
+    (void)mesh;
     (void)grav;
     (void)mpi;
     (void)rho;
@@ -367,7 +368,7 @@ static void prj_timeint_update_dt_src_values(const prj_grav *grav, const prj_blo
         double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
         double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
         double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-        double accel = prj_gravity_block_accel_at(grav, block, i, j, k);
+        double accel = prj_gravity_block_accel_at(mesh, grav, block, i, j, k);
 
         fprintf(stderr,
             "[grav debug] shortest dt_src rank=%d block=%d cell=(%d,%d,%d) "
@@ -380,13 +381,14 @@ static void prj_timeint_update_dt_src_values(const prj_grav *grav, const prj_blo
 }
 
 #if !(PRJ_MHD && PRJ_NRAD > 0)
-static void prj_timeint_update_dt_src(const prj_grav *grav, const prj_block *block,
-    const double *u, int i, int j, int k, const prj_mpi *mpi, double *dt_src)
+static void prj_timeint_update_dt_src(const prj_mesh *mesh, const prj_grav *grav,
+    const prj_block *block, const double *u, int i, int j, int k,
+    const prj_mpi *mpi, double *dt_src)
 {
     if (u == 0) {
         return;
     }
-    prj_timeint_update_dt_src_values(grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
+    prj_timeint_update_dt_src_values(mesh, grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
         u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
 }
 #endif
@@ -524,7 +526,7 @@ static void prj_timeint_store_mhd_rad_cell(prj_block *block,
 }
 #endif
 
-static void prj_timeint_update_cell_stage1_mhd_rad(prj_rad *rad, prj_eos *eos,
+static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad *rad, prj_eos *eos,
     prj_block *block, int i, int j, int k,
     double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src)
 {
@@ -534,7 +536,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(prj_rad *rad, prj_eos *eos,
     int group;
 
     prj_timeint_cell_cons_from_prim_mhd_rad(block->W, i, j, k, u);
-    prj_timeint_update_dt_src_values(grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
+    prj_timeint_update_dt_src_values(mesh, grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
         u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
 
 #define PRJ_STAGE1_UPDATE(v) do { \
@@ -584,7 +586,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(prj_rad *rad, prj_eos *eos,
     prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
     prj_timeint_cell_prim(block->W, i, j, k, w);
     prj_eos_prim2cons(eos, w, u);
-    prj_timeint_update_dt_src(grav, block, u, i, j, k, mpi, dt_src);
+    prj_timeint_update_dt_src(mesh, grav, block, u, i, j, k, mpi, dt_src);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u1[v] = u[v] + dt * (block->dUdt[VIDX(v, i, j, k)] + fluxdiv[v]);
     }
@@ -612,7 +614,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(prj_rad *rad, prj_eos *eos,
 #endif
 }
 
-static void prj_timeint_update_cell_stage2_mhd_rad(prj_rad *rad, prj_eos *eos,
+static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad *rad, prj_eos *eos,
     prj_block *block, int i, int j, int k,
     double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src)
 {
@@ -643,7 +645,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(prj_rad *rad, prj_eos *eos,
         &rho0, &mom10, &mom20, &mom30, &etot0, &ye0, &b10, &b20, &b30);
     prj_timeint_mhd_hydro_cons_from_prim(block->W1, i, j, k,
         &rho1, &mom11, &mom21, &mom31, &etot1, &ye1, &b11, &b21, &b31);
-    prj_timeint_update_dt_src_values(grav, block, rho0, mom10, mom20, mom30, etot0,
+    prj_timeint_update_dt_src_values(mesh, grav, block, rho0, mom10, mom20, mom30, etot0,
         i, j, k, mpi, dt_src);
 
 #define PRJ_STAGE2_UPDATE(v, u0v, u1v) do { \
@@ -707,7 +709,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(prj_rad *rad, prj_eos *eos,
     prj_eos_prim2cons(eos, w, u);
     prj_timeint_cell_prim(block->W1, i, j, k, w);
     prj_eos_prim2cons(eos, w, u1);
-    prj_timeint_update_dt_src(grav, block, u, i, j, k, mpi, dt_src);
+    prj_timeint_update_dt_src(mesh, grav, block, u, i, j, k, mpi, dt_src);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u[v] = 0.5 * u[v] + 0.5 *
             (u1[v] + dt * (block->dUdt[VIDX(v, i, j, k)] + fluxdiv[v]));
@@ -920,7 +922,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                        prj_timeint_update_cell_stage1_mhd_rad(rad, eos, block,
+                        prj_timeint_update_cell_stage1_mhd_rad(mesh, rad, eos, block,
                             i, j, k, dt, grav, mpi, dt_src);
                     }
                 }
@@ -1003,7 +1005,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                        prj_timeint_update_cell_stage2_mhd_rad(rad, eos, block,
+                        prj_timeint_update_cell_stage2_mhd_rad(mesh, rad, eos, block,
                             i, j, k, dt, grav, mpi, dt_src);
                     }
                 }

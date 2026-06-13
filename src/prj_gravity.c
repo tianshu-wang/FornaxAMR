@@ -430,9 +430,10 @@ static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh)
     }
 }
 
-void prj_gravity_cache_block(prj_block *block, const prj_grav *grav)
+void prj_gravity_cache_block(prj_block *block, const prj_mesh *mesh, const prj_grav *grav)
 {
     int use_multipole = prj_gravity_use_multipole(grav);
+    double x_com[3] = {0.0, 0.0, 0.0};
     int i;
     int j;
     int k;
@@ -444,6 +445,11 @@ void prj_gravity_cache_block(prj_block *block, const prj_grav *grav)
         prj_gravity_cache_block_clear(block, grav);
         return;
     }
+    if (mesh != 0) {
+        x_com[0] = mesh->x_com[0];
+        x_com[1] = mesh->x_com[1];
+        x_com[2] = mesh->x_com[2];
+    }
 
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
         for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
@@ -451,9 +457,9 @@ void prj_gravity_cache_block(prj_block *block, const prj_grav *grav)
                 double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                 double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                 double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                double dx1 = x1 - (grav != 0 ? grav->x_com[0] : 0.0);
-                double dx2 = x2 - (grav != 0 ? grav->x_com[1] : 0.0);
-                double dx3 = x3 - (grav != 0 ? grav->x_com[2] : 0.0);
+                double dx1 = x1 - x_com[0];
+                double dx2 = x2 - x_com[1];
+                double dx3 = x3 - x_com[2];
                 int cache_idx = prj_block_cache_index(i, j, k);
 
                 block->r_com[cache_idx] = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
@@ -489,7 +495,7 @@ void prj_gravity_cache_mesh(prj_mesh *mesh, const prj_grav *grav)
         return;
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        prj_gravity_cache_block(&mesh->blocks[bidx], grav);
+        prj_gravity_cache_block(&mesh->blocks[bidx], mesh, grav);
     }
 }
 
@@ -568,12 +574,6 @@ void prj_gravity_free(prj_grav *grav)
     grav->dr_min = 0.0;
     grav->rmax = 0.0;
     grav->min_cell = 0.0;
-    grav->x_com[0] = 0.0;
-    grav->x_com[1] = 0.0;
-    grav->x_com[2] = 0.0;
-    grav->x_com_new[0] = 0.0;
-    grav->x_com_new[1] = 0.0;
-    grav->x_com_new[2] = 0.0;
 }
 
 void prj_gravity_init(prj_sim *sim, const prj_mpi *mpi)
@@ -600,10 +600,6 @@ void prj_gravity_init(prj_sim *sim, const prj_mpi *mpi)
     grav->rmax = 0.5 * prj_gravity_min_double(span1, prj_gravity_min_double(span2, span3));
 
     grav->nbins = PRJ_GRAVITY_DEFAULT_NBINS;
-    for (i = 0; i < 3; ++i) {
-        grav->x_com[i] = 0.0;
-        grav->x_com_new[i] = 0.0;
-    }
 
     grav->rf = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*grav->rf));
     grav->ms = (double *)calloc((size_t)grav->nbins, sizeof(*grav->ms));
@@ -949,19 +945,30 @@ static void prj_gravity_add_block_multipole_fields(const prj_grav *grav, prj_blo
     }
 }
 
-double prj_gravity_block_accel_at(const prj_grav *grav, const prj_block *block, int i, int j, int k)
+double prj_gravity_block_accel_at(const prj_mesh *mesh, const prj_grav *grav,
+    const prj_block *block, int i, int j, int k)
 {
     if (block != 0 && block->grav[0] != 0 && block->grav[1] != 0 && block->grav[2] != 0) {
         int cache_idx = prj_block_cache_index(i, j, k);
+        double x_com[3] = {0.0, 0.0, 0.0};
         double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
         double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
         double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-        double dx1 = x1 - (grav != 0 ? grav->x_com[0] : 0.0);
-        double dx2 = x2 - (grav != 0 ? grav->x_com[1] : 0.0);
-        double dx3 = x3 - (grav != 0 ? grav->x_com[2] : 0.0);
-        double r = block->r_com != 0 ? block->r_com[cache_idx] :
-            sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+        double dx1;
+        double dx2;
+        double dx3;
+        double r;
 
+        if (mesh != 0) {
+            x_com[0] = mesh->x_com[0];
+            x_com[1] = mesh->x_com[1];
+            x_com[2] = mesh->x_com[2];
+        }
+        dx1 = x1 - x_com[0];
+        dx2 = x2 - x_com[1];
+        dx3 = x3 - x_com[2];
+        r = block->r_com != 0 ? block->r_com[cache_idx] :
+            sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
         if (r > 0.0) {
             return (block->grav[0][cache_idx] * dx1 +
                 block->grav[1][cache_idx] * dx2 +
@@ -994,10 +1001,11 @@ static void prj_gravity_fill_block_field_defaults(prj_block *block)
     }
 }
 
-static void prj_gravity_fill_block_fields(prj_block *block, const prj_grav *grav)
+static void prj_gravity_fill_block_fields(const prj_mesh *mesh, prj_block *block, const prj_grav *grav)
 {
     const int field_lo = PRJ_NGHOST > 0 ? -1 : 0;
     const int field_hi = PRJ_BLOCK_SIZE + (PRJ_NGHOST > 0 ? 1 : 0);
+    double x_com[3] = {0.0, 0.0, 0.0};
     int i;
     int j;
     int k;
@@ -1011,6 +1019,11 @@ static void prj_gravity_fill_block_fields(prj_block *block, const prj_grav *grav
         prj_gravity_fill_block_field_defaults(block);
         return;
     }
+    if (mesh != 0) {
+        x_com[0] = mesh->x_com[0];
+        x_com[1] = mesh->x_com[1];
+        x_com[2] = mesh->x_com[2];
+    }
 
     for (i = field_lo; i < field_hi; ++i) {
         for (j = field_lo; j < field_hi; ++j) {
@@ -1018,9 +1031,9 @@ static void prj_gravity_fill_block_fields(prj_block *block, const prj_grav *grav
                 double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                 double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                 double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                double dx1 = x1 - grav->x_com[0];
-                double dx2 = x2 - grav->x_com[1];
-                double dx3 = x3 - grav->x_com[2];
+                double dx1 = x1 - x_com[0];
+                double dx2 = x2 - x_com[1];
+                double dx3 = x3 - x_com[2];
                 int cache_idx = prj_block_cache_index(i, j, k);
                 double r = block->r_com[cache_idx];
                 double accel = prj_gravity_block_cached_accel_at(grav, block, i, j, k);
@@ -1054,100 +1067,8 @@ static void prj_gravity_fill_mesh_fields(prj_mesh *mesh, const prj_grav *grav, c
         if (!prj_gravity_block_is_local_active(mpi, &mesh->blocks[bidx])) {
             continue;
         }
-        prj_gravity_fill_block_fields(&mesh->blocks[bidx], grav);
+        prj_gravity_fill_block_fields(mesh, &mesh->blocks[bidx], grav);
     }
-}
-
-int prj_gravity_update_center_of_mass(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi,
-    double x_com_err_tol)
-{
-    double local[4] = {0.0, 0.0, 0.0, 0.0};
-    double global[4] = {0.0, 0.0, 0.0, 0.0};
-    double dx0;
-    double dx1;
-    double dx2;
-    double distance;
-    double min_cell;
-    double threshold;
-    int bidx;
-    int d;
-
-    if (mesh == 0 || grav == 0) {
-        return 0;
-    }
-
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        const prj_block *block = &mesh->blocks[bidx];
-        int i;
-        int j;
-        int k;
-
-        if (!prj_gravity_block_is_local_active(mpi, block) || block->W == 0) {
-            continue;
-        }
-        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    double rho = block->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
-                    double dm = rho * block->vol;
-                    double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-                    double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-                    double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-
-                    local[0] += dm;
-                    local[1] += dm * x1;
-                    local[2] += dm * x2;
-                    local[3] += dm * x3;
-                }
-            }
-        }
-    }
-
-#if defined(PRJ_ENABLE_MPI)
-    if (mpi != 0 && mpi->totrank > 1) {
-        MPI_Allreduce(local, global, 4, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-    } else {
-        for (d = 0; d < 4; ++d) {
-            global[d] = local[d];
-        }
-    }
-#else
-    for (d = 0; d < 4; ++d) {
-        global[d] = local[d];
-    }
-#endif
-
-    if (global[0] > 0.0) {
-        grav->x_com_new[0] = global[1] / global[0];
-        grav->x_com_new[1] = global[2] / global[0];
-        grav->x_com_new[2] = global[3] / global[0];
-    } else {
-        for (d = 0; d < 3; ++d) {
-            grav->x_com_new[d] = grav->x_com[d];
-        }
-    }
-
-    dx0 = grav->x_com_new[0] - grav->x_com[0];
-    dx1 = grav->x_com_new[1] - grav->x_com[1];
-    dx2 = grav->x_com_new[2] - grav->x_com[2];
-    distance = sqrt(dx0 * dx0 + dx1 * dx1 + dx2 * dx2);
-    min_cell = grav->min_cell;
-    threshold = x_com_err_tol * min_cell;
-    if (threshold < 0.0) {
-        threshold = 0.0;
-    }
-
-    if (min_cell <= 0.0 || distance <= threshold) {
-        return 0;
-    }
-
-    for (d = 0; d < 3; ++d) {
-        grav->x_com[d] = grav->x_com_new[d];
-    }
-    prj_gravity_cache_mesh(mesh, grav);
-    prj_gravity_monopole_reduce(mesh, grav, mpi, 1);
-    prj_gravity_monopole_integrate(mesh, grav, mpi);
-    return 1;
 }
 
 void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi, int stage)
@@ -1155,6 +1076,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
     int bidx;
     int idx;
     int use_multipole;
+    double x_com[3];
 
     if (mesh == 0 || grav == 0 || grav->ms == 0 || grav->vol == 0 ||
         grav->rho_avg == 0 || grav->vr_avg == 0 || grav->pgas_avg == 0 ||
@@ -1162,6 +1084,9 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         grav->vdotF_avg == 0) {
         return;
     }
+    x_com[0] = mesh->x_com[0];
+    x_com[1] = mesh->x_com[1];
+    x_com[2] = mesh->x_com[2];
     use_multipole = prj_gravity_use_multipole(grav);
     if (use_multipole && !prj_gravity_multipole_arrays_valid(grav)) {
         return;
@@ -1200,9 +1125,9 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                     double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                     double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                     double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                    double dx1 = x1 - grav->x_com[0];
-                    double dx2 = x2 - grav->x_com[1];
-                    double dx3 = x3 - grav->x_com[2];
+                    double dx1 = x1 - x_com[0];
+                    double dx2 = x2 - x_com[1];
+                    double dx3 = x3 - x_com[2];
                     double r = block->r_com != 0 ? block->r_com[cache_idx] :
                         sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
                     double fr = block->fr != 0 ? block->fr[cache_idx] : 0.0;
@@ -1304,9 +1229,9 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                                     double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                                     double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                                     double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                                    double dx1 = x1 - grav->x_com[0];
-                                    double dx2 = x2 - grav->x_com[1];
-                                    double dx3 = x3 - grav->x_com[2];
+                                    double dx1 = x1 - x_com[0];
+                                    double dx2 = x2 - x_com[1];
+                                    double dx3 = x3 - x_com[2];
 
                                     r = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
                                 }

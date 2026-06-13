@@ -111,7 +111,7 @@ static void prj_problem_fill_until_amr_converged(prj_sim *sim, prj_mpi *mpi)
         prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
         prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
-        prj_amr_adapt(&sim->mesh, &sim->eos, mpi, &sim->grav);
+        prj_amr_adapt(&sim->mesh, &sim->eos, mpi);
         prj_problem_fill_mesh(sim, mpi, prj_problem_initial_condition);
         next_sig = prj_problem_mesh_signature(&sim->mesh);
     } while (next_sig != prev_sig);

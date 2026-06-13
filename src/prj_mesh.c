@@ -10,6 +10,12 @@
 
 #include "prj.h"
 
+static int prj_mesh_block_is_local_active(const prj_mpi *mpi, const prj_block *block)
+{
+    return block != 0 && block->id >= 0 && block->active == 1 &&
+        (mpi == 0 || block->rank == mpi->rank);
+}
+
 static int prj_neighbor_slot_index(int ox, int oy, int oz)
 {
     int index;
@@ -476,7 +482,7 @@ void prj_block_setup_geometry(prj_block *b, const prj_coord *coord)
     b->area[2] = b->dx[0] * b->dx[1];
 }
 
-static double prj_block_max_cell_dx_over_rcom(const prj_block *b, const prj_grav *grav)
+static double prj_block_max_cell_dx_over_rcom(const prj_block *b, const prj_mesh *mesh)
 {
     double x_com[3] = {0.0, 0.0, 0.0};
     double dx_max;
@@ -486,10 +492,10 @@ static double prj_block_max_cell_dx_over_rcom(const prj_block *b, const prj_grav
     if (b == 0) {
         return 0.0;
     }
-    if (grav != 0) {
-        x_com[0] = grav->x_com[0];
-        x_com[1] = grav->x_com[1];
-        x_com[2] = grav->x_com[2];
+    if (mesh != 0) {
+        x_com[0] = mesh->x_com[0];
+        x_com[1] = mesh->x_com[1];
+        x_com[2] = mesh->x_com[2];
     }
 
     dx_max = b->dx[0];
@@ -533,7 +539,7 @@ static double prj_block_max_cell_dx_over_rcom(const prj_block *b, const prj_grav
     return max_ratio;
 }
 
-void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh, const prj_grav *grav)
+void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh)
 {
     double ratio;
     double xc[3];
@@ -552,10 +558,10 @@ void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh, const prj_g
         return;
     }
 
-    if (grav != 0) {
-        x_com[0] = grav->x_com[0];
-        x_com[1] = grav->x_com[1];
-        x_com[2] = grav->x_com[2];
+    if (mesh != 0) {
+        x_com[0] = mesh->x_com[0];
+        x_com[1] = mesh->x_com[1];
+        x_com[2] = mesh->x_com[2];
     }
 
     xc[0] = 0.5 * (b->xmin[0] + b->xmax[0]);
@@ -570,7 +576,7 @@ void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh, const prj_g
         return;
     }
 
-    ratio = prj_block_max_cell_dx_over_rcom(b, grav);
+    ratio = prj_block_max_cell_dx_over_rcom(b, mesh);
     if (ratio < limit) {
         b->can_refine = 0;
     }
@@ -645,6 +651,95 @@ double prj_mesh_min_cell_size(const prj_mesh *mesh)
         }
     }
     return found != 0 ? min_cell_size : 0.0;
+}
+
+int prj_mesh_update_center_of_mass(prj_mesh *mesh, const prj_mpi *mpi, double x_com_err_tol)
+{
+    double local[4] = {0.0, 0.0, 0.0, 0.0};
+    double global[4] = {0.0, 0.0, 0.0, 0.0};
+    double x_com_new[3];
+    double dx0;
+    double dx1;
+    double dx2;
+    double distance;
+    double min_cell;
+    double threshold;
+    int bidx;
+    int d;
+
+    if (mesh == 0) {
+        return 0;
+    }
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        const prj_block *block = &mesh->blocks[bidx];
+        int i;
+        int j;
+        int k;
+
+        if (!prj_mesh_block_is_local_active(mpi, block) || block->W == 0) {
+            continue;
+        }
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    double rho = block->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+                    double dm = rho * block->vol;
+                    double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                    double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                    double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+
+                    local[0] += dm;
+                    local[1] += dm * x1;
+                    local[2] += dm * x2;
+                    local[3] += dm * x3;
+                }
+            }
+        }
+    }
+
+#if defined(PRJ_ENABLE_MPI)
+    if (mpi != 0 && mpi->totrank > 1) {
+        MPI_Allreduce(local, global, 4, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    } else {
+        for (d = 0; d < 4; ++d) {
+            global[d] = local[d];
+        }
+    }
+#else
+    for (d = 0; d < 4; ++d) {
+        global[d] = local[d];
+    }
+#endif
+
+    if (global[0] > 0.0) {
+        x_com_new[0] = global[1] / global[0];
+        x_com_new[1] = global[2] / global[0];
+        x_com_new[2] = global[3] / global[0];
+    } else {
+        for (d = 0; d < 3; ++d) {
+            x_com_new[d] = mesh->x_com[d];
+        }
+    }
+
+    dx0 = x_com_new[0] - mesh->x_com[0];
+    dx1 = x_com_new[1] - mesh->x_com[1];
+    dx2 = x_com_new[2] - mesh->x_com[2];
+    distance = sqrt(dx0 * dx0 + dx1 * dx1 + dx2 * dx2);
+    min_cell = mesh->min_allowable_cell_size;
+    threshold = x_com_err_tol * min_cell;
+    if (threshold < 0.0) {
+        threshold = 0.0;
+    }
+
+    if (min_cell <= 0.0 || distance <= threshold) {
+        return 0;
+    }
+
+    for (d = 0; d < 3; ++d) {
+        mesh->x_com[d] = x_com_new[d];
+    }
+    return 1;
 }
 
 void prj_mesh_update_min_allowable_cell_size(prj_mesh *mesh)
@@ -1110,6 +1205,9 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->root_nx[0] = root_nx1;
     mesh->root_nx[1] = root_nx2;
     mesh->root_nx[2] = root_nx3;
+    mesh->x_com[0] = 0.0;
+    mesh->x_com[1] = 0.0;
+    mesh->x_com[2] = 0.0;
     mesh->coord = *coord;
     prj_mesh_update_min_allowable_cell_size(mesh);
     for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
@@ -1177,7 +1275,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                 b->dx[1] = block_dx[1] / (double)PRJ_BLOCK_SIZE;
                 b->dx[2] = block_dx[2] / (double)PRJ_BLOCK_SIZE;
                 prj_block_setup_geometry(b, coord);
-                prj_block_update_can_refine(b, mesh, 0);
+                prj_block_update_can_refine(b, mesh);
                 if (prj_block_alloc_data(b) != 0) {
                     prj_mesh_destroy(mesh);
                     return 3;

@@ -269,7 +269,6 @@ int main(int argc, char *argv[])
     int saved_use_amr_angular_resolution_limit;
     int saved_use_BJ;
     double saved_min_dx;
-    double restart_x_com[3] = {0.0, 0.0, 0.0};
     int resolution = -1;
     int max_level_override = -1;
     int restart_latest_id = -1;
@@ -356,7 +355,7 @@ int main(int argc, char *argv[])
         saved_use_BJ = sim.mesh.use_BJ;
         saved_min_dx = sim.mesh.min_dx;
         prj_io_read_restart(&sim.mesh, &sim.eos, &mpi, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
-            &last_output_time, &last_restart_time, &sim.dt, restart_x_com);
+            &last_output_time, &last_restart_time, &sim.dt);
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
@@ -377,14 +376,6 @@ int main(int argc, char *argv[])
     prj_rad_init(&sim.rad);
  #if PRJ_USE_GRAVITY
     prj_gravity_init(&sim, &mpi);
-    if (sim.restart_from_file != 0) {
-        sim.grav.x_com[0] = restart_x_com[0];
-        sim.grav.x_com[1] = restart_x_com[1];
-        sim.grav.x_com[2] = restart_x_com[2];
-        sim.grav.x_com_new[0] = restart_x_com[0];
-        sim.grav.x_com_new[1] = restart_x_com[1];
-        sim.grav.x_com_new[2] = restart_x_com[2];
-    }
  #endif
 
     if (sim.restart_from_file == 0 &&
@@ -433,11 +424,19 @@ int main(int argc, char *argv[])
 
         PRJ_TIMER_BARRIER_START(&timer, &mpi, "main_loop");
 
+        {
+            PRJ_TIMER_BARRIER_START(&timer, &mpi, "mesh_update_x_com");
 #if PRJ_USE_GRAVITY
-        PRJ_TIMER_BARRIER_START(&timer, &mpi, "gravity_update_x_com");
-        prj_gravity_update_center_of_mass(&sim.mesh, &sim.grav, &mpi, sim.x_com_err_tol);
-        PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "gravity_update_x_com");
+            if (prj_mesh_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol)) {
+                prj_gravity_cache_mesh(&sim.mesh, &sim.grav);
+                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
+                prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
+            }
+#else
+            (void)prj_mesh_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol);
 #endif
+            PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "mesh_update_x_com");
+        }
         {
             double dt_new;
 
@@ -494,7 +493,7 @@ int main(int argc, char *argv[])
              * needed here; the post-adapt rebuild below handles grid changes. */
             prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
             double E_injected_before = sim.eos.E_injected;
-            int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi, &sim.grav);
+            int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi);
             if (mpi.rank == 0 && sim.eos.E_injected != E_injected_before) {
                 fprintf(stderr, "E_injected changed after amr_adapt: %.6e -> %.6e (delta=%.6e)\n",
                     E_injected_before, sim.eos.E_injected, sim.eos.E_injected - E_injected_before);
@@ -559,8 +558,7 @@ int main(int argc, char *argv[])
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_restart");
             prj_io_write_restart(&sim.mesh, &mpi, sim.time, sim.step, sim.dump_count,
                 prj_last_event_time(next_output_time, sim.output_dt),
-                prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt,
-                sim.grav.x_com);
+                prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt);
             PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "write_restart");
         }
         if (mpi.rank == 0) {
@@ -602,8 +600,7 @@ int main(int argc, char *argv[])
 
     prj_io_write_restart(&sim.mesh, &mpi, sim.time, sim.step, sim.dump_count,
         prj_last_event_time(next_output_time, sim.output_dt),
-        prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt,
-        sim.grav.x_com);
+        prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt);
     if (mpi.rank == 0) {
         char final_restart[64];
 

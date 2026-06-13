@@ -1208,8 +1208,7 @@ void prj_amr_enforce_two_to_one(prj_mesh *mesh, const prj_mpi *mpi)
 }
 
 static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
-    const prj_mpi *mpi, const prj_grav *grav, int *neighbor_dirty,
-    int *changed_blocks)
+    const prj_mpi *mpi, int *neighbor_dirty, int *changed_blocks)
 {
     int i;
     int changed = 0;
@@ -1225,7 +1224,7 @@ static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
             int oct;
 
             prj_amr_mark_dirty_block_and_neighbors(mesh, i, neighbor_dirty);
-            prj_amr_refine_block(mesh, mpi, i, grav);
+            prj_amr_refine_block(mesh, mpi, i);
             if (neighbor_dirty != 0) {
                 neighbor_dirty[i] = 1;
             }
@@ -1251,9 +1250,9 @@ static int prj_amr_refine_marked_blocks_with_dirty(prj_mesh *mesh,
     return changed;
 }
 
-int prj_amr_refine_marked_blocks(prj_mesh *mesh, const prj_mpi *mpi, const prj_grav *grav)
+int prj_amr_refine_marked_blocks(prj_mesh *mesh, const prj_mpi *mpi)
 {
-    return prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, grav, 0, 0);
+    return prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, 0, 0);
 }
 
 static void prj_amr_init_neighbors_with_mask(prj_mesh *mesh,
@@ -2031,7 +2030,7 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
 #endif
 }
 
-void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id, const prj_grav *grav)
+void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
 {
     prj_block *parent;
     int oct;
@@ -2093,7 +2092,7 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id, cons
         child->dx[0] = parent->dx[0] * 0.5;
         child->dx[1] = parent->dx[1] * 0.5;
         child->dx[2] = parent->dx[2] * 0.5;
-        prj_block_update_can_refine(child, mesh, grav);
+        prj_block_update_can_refine(child, mesh);
         if (owner_local) {
             if (prj_block_alloc_data(child) != 0) {
                 child->id = -1;
@@ -2204,7 +2203,7 @@ int prj_amr_coarsen_block(prj_mesh *mesh, const prj_mpi *mpi, int parent_id)
     return 1;
 }
 
-int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi, const prj_grav *grav)
+int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
 {
     int i;
     int refined = 0;
@@ -2229,7 +2228,7 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi, const prj_grav *gr
 #if PRJ_MHD
     prj_mpi_exchange_amr_mhd_prolongate_bf(mesh, mpi);
 #endif
-    refined = prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, grav, neighbor_dirty, changed_blocks);
+    refined = prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, neighbor_dirty, changed_blocks);
     if (refined) {
         if (neighbor_dirty != 0) {
             prj_amr_init_neighbors_with_mask(mesh, neighbor_dirty);

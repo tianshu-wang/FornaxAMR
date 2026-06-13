@@ -233,6 +233,9 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.root_nx[0] = 8;
     sim->mesh.root_nx[1] = 8;
     sim->mesh.root_nx[2] = 8;
+    sim->mesh.x_com[0] = 0.0;
+    sim->mesh.x_com[1] = 0.0;
+    sim->mesh.x_com[2] = 0.0;
     sim->mesh.max_level = 0;
     sim->mesh.min_dx = 0.0;
     sim->mesh.min_allowable_cell_size = 0.0;
@@ -1049,7 +1052,7 @@ int prj_io_find_latest_restart(const char *dir, char *out_filename, size_t out_s
 }
 
 void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time, int step, int dump_count,
-    double last_output_time, double last_restart_time, double dt, const double x_com[3])
+    double last_output_time, double last_restart_time, double dt)
 {
     char filename[64];
     hid_t file;
@@ -1099,10 +1102,10 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     {
         double x_com_values[3] = {0.0, 0.0, 0.0};
 
-        if (x_com != 0) {
-            x_com_values[0] = x_com[0];
-            x_com_values[1] = x_com[1];
-            x_com_values[2] = x_com[2];
+        if (mesh != 0) {
+            x_com_values[0] = mesh->x_com[0];
+            x_com_values[1] = mesh->x_com[1];
+            x_com_values[2] = mesh->x_com[2];
         }
         prj_io_write_attr_double3(file, "x_com", x_com_values);
     }
@@ -1254,7 +1257,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
 
 void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const char *filename,
     double *time, int *step, int *dump_count, double *last_output_time, double *last_restart_time,
-    double *dt, double x_com[3])
+    double *dt)
 {
     hid_t file;
     hid_t dset_data;
@@ -1299,17 +1302,17 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     min_dx = prj_io_read_attr_double_optional(file, "min_dx", 0.0);
     prj_io_read_attr_int3(file, "root_nx", root_nx);
     prj_io_read_attr_double6(file, "coord", &coord);
-    if (x_com != 0) {
-        double defaults[3] = {0.0, 0.0, 0.0};
-
-        prj_io_read_attr_double3_optional(file, "x_com", x_com, defaults);
-    }
     if (nvar_prim != PRJ_NVAR_PRIM || block_size != PRJ_BLOCK_SIZE) {
         prj_io_fail("prj_io_read_restart: incompatible restart metadata");
     }
 
     if (prj_mesh_init(mesh, root_nx[0], root_nx[1], root_nx[2], max_level, &coord) != 0) {
         prj_io_fail("prj_io_read_restart: mesh init failed");
+    }
+    {
+        double defaults[3] = {0.0, 0.0, 0.0};
+
+        prj_io_read_attr_double3_optional(file, "x_com", mesh->x_com, defaults);
     }
     mesh->min_dx = min_dx;
     prj_mesh_update_min_allowable_cell_size(mesh);
@@ -1337,7 +1340,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
 
         prj_io_unpack_metadata(block, meta_row);
         prj_block_setup_geometry(block, &coord);
-        prj_block_update_can_refine(block, mesh, 0);
+        prj_block_update_can_refine(block, mesh);
     }
 
     for (bidx = 0; bidx < nblocks; ++bidx) {
