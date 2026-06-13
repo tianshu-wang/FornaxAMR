@@ -671,8 +671,13 @@ static double prj_gravity_block_cached_phi_at(const prj_grav *grav, const prj_bl
     idx = block->ridx[cache_idx];
     fr = block->fr[cache_idx];
     if (idx == PRJ_GRAVITY_CACHE_INVALID) {
-        /* Outside the binned region: extrapolate the monopole potential as
-           Phi(r) = Phi(rmax) * rmax / r, the exact vacuum (1/r) tail. */
+        /* Cell could not be binned (degenerate radial grid): flat asymptotic
+           potential, i.e. no gravitational force. */
+        return grav->phi[grav->nbins];
+    }
+    if (fr >= PRJ_GRAVITY_CACHE_SKIP_REDUCE) {
+        /* r >= rmax: extrapolate the monopole potential as the exact vacuum
+           tail Phi(r) = Phi(rmax) * rmax / r. */
         double phi_rmax = grav->phi[grav->nbins];
 
         if (block->r_com != 0 && grav->rmax > 0.0) {
