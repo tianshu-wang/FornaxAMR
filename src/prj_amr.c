@@ -2100,6 +2100,7 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
                 return;
             }
             prj_block_setup_geometry(child, &mesh->coord);
+            prj_mesh_update_block_r_com(child, mesh);
             prj_amr_prolongate(mesh, mpi, parent, child, oct);
         } else {
             child->W = 0;
@@ -2181,6 +2182,7 @@ int prj_amr_coarsen_block(prj_mesh *mesh, const prj_mpi *mpi, int parent_id)
         if (parent->W == 0) {
             prj_block_alloc_data(parent);
             prj_block_setup_geometry(parent, &mesh->coord);
+            prj_mesh_update_block_r_com(parent, mesh);
         }
         prj_amr_restrict(children, parent);
     }
@@ -2286,6 +2288,7 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
             mesh->blocks[i].refine_flag = 0;
         }
     }
+    prj_mesh_update_r_com(mesh);
     prj_mesh_update_max_active_level(mesh);
     {
         double injected_local = 0.0;

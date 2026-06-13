@@ -587,6 +587,55 @@ int prj_block_cache_index(int i, int j, int k)
     return IDX(i, j, k);
 }
 
+void prj_mesh_update_block_r_com(prj_block *block, const prj_mesh *mesh)
+{
+    double x_com[3] = {0.0, 0.0, 0.0};
+    int i;
+    int j;
+    int k;
+
+    if (block == 0 || block->r_com == 0) {
+        return;
+    }
+    if (block->id < 0 || block->dx[0] <= 0.0 || block->dx[1] <= 0.0 || block->dx[2] <= 0.0) {
+        prj_fill(block->r_com, (size_t)PRJ_BLOCK_NCELLS, 0.0);
+        return;
+    }
+    if (mesh != 0) {
+        x_com[0] = mesh->x_com[0];
+        x_com[1] = mesh->x_com[1];
+        x_com[2] = mesh->x_com[2];
+    }
+
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                double dx1 = x1 - x_com[0];
+                double dx2 = x2 - x_com[1];
+                double dx3 = x3 - x_com[2];
+                int cache_idx = prj_block_cache_index(i, j, k);
+
+                block->r_com[cache_idx] = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+            }
+        }
+    }
+}
+
+void prj_mesh_update_r_com(prj_mesh *mesh)
+{
+    int bidx;
+
+    if (mesh == 0) {
+        return;
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_mesh_update_block_r_com(&mesh->blocks[bidx], mesh);
+    }
+}
+
 prj_block *prj_mesh_get_block(prj_mesh *mesh, int id)
 {
     if (mesh == 0 || id < 0 || id >= mesh->nblocks) {
@@ -739,6 +788,7 @@ int prj_mesh_update_center_of_mass(prj_mesh *mesh, const prj_mpi *mpi, double x_
     for (d = 0; d < 3; ++d) {
         mesh->x_com[d] = x_com_new[d];
     }
+    prj_mesh_update_r_com(mesh);
     return 1;
 }
 
@@ -1285,6 +1335,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
         }
     }
     mesh->nblocks = nroot;
+    prj_mesh_update_r_com(mesh);
     prj_mesh_update_max_active_level(mesh);
 
     for (i = 0; i < root_nx1; ++i) {

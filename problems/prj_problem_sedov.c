@@ -49,6 +49,7 @@ static void prj_problem_ensure_data_allocated(prj_mesh *mesh)
         if (block->id >= 0 && block->active == 1 && block->W == 0) {
             prj_block_alloc_data(block);
             prj_block_setup_geometry(block, &mesh->coord);
+            prj_mesh_update_block_r_com(block, mesh);
         }
     }
 }

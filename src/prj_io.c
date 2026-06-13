@@ -1366,6 +1366,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     if (mpi != 0) {
         prj_mpi_prepare(mesh, mpi);
     }
+    prj_mesh_update_r_com(mesh);
 
     dset_data = H5Dopen2(file, "Data", H5P_DEFAULT);
 #if PRJ_MHD

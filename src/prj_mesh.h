@@ -9,6 +9,8 @@ void prj_block_free_data(prj_block *b);
 void prj_block_setup_geometry(prj_block *b, const prj_coord *coord);
 void prj_block_update_can_refine(prj_block *b, const prj_mesh *mesh);
 int prj_block_cache_index(int i, int j, int k);
+void prj_mesh_update_block_r_com(prj_block *block, const prj_mesh *mesh);
+void prj_mesh_update_r_com(prj_mesh *mesh);
 prj_block *prj_mesh_get_block(prj_mesh *mesh, int id);
 int prj_mesh_count_active(const prj_mesh *mesh);
 double prj_mesh_min_cell_size(const prj_mesh *mesh);

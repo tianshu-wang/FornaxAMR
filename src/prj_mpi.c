@@ -298,6 +298,7 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh, const prj_mpi *mpi)
                 prj_mpi_fatal("prj_mpi_assign_block_storage: failed to allocate block data");
             }
         }
+        prj_mesh_update_block_r_com(block, mesh);
     }
     prj_mesh_update_cell_derived_mask(mesh);
 }
