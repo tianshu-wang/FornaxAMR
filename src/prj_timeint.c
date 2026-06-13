@@ -368,7 +368,15 @@ static void prj_timeint_update_dt_src_values(const prj_mesh *mesh, const prj_gra
         double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
         double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
         double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-        double accel = prj_gravity_block_accel_at(mesh, grav, block, i, j, k);
+        int gidx = prj_block_cache_index(i, j, k);
+        double dx1 = x1 - mesh->x_com[0];
+        double dx2 = x2 - mesh->x_com[1];
+        double dx3 = x3 - mesh->x_com[2];
+        double rcom = block->r_com != 0 ? block->r_com[gidx] :
+            sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+        double accel = (block->grav[0] != 0 && rcom > 0.0) ?
+            (block->grav[0][gidx] * dx1 + block->grav[1][gidx] * dx2 +
+             block->grav[2][gidx] * dx3) / rcom : 0.0;
 
         fprintf(stderr,
             "[grav debug] shortest dt_src rank=%d block=%d cell=(%d,%d,%d) "

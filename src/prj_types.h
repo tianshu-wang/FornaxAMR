@@ -190,7 +190,6 @@ struct prj_grav {
     double *rf;
     double *ms;
     double *phi;
-    double *accel;
     double *lapse;
     double *Clm[LMAX*LMAX];
     double *Dlm[LMAX*LMAX];

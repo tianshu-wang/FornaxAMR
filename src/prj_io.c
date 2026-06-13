@@ -1915,28 +1915,28 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     H5Sclose(space_rad);
 #endif
     {
-        if (grav != 0 && grav->nbins > 0 && grav->accel != 0 && grav->lapse != 0) {
-            hsize_t dims_accel[1] = {(hsize_t)grav->nbins};
+        if (grav != 0 && grav->nbins > 0 && grav->phi != 0 && grav->lapse != 0) {
+            hsize_t dims_phi[1] = {(hsize_t)grav->nbins + 1};
             hsize_t dims_lapse[1] = {(hsize_t)grav->nbins + 1};
-            hid_t space_accel = H5Screate_simple(1, dims_accel, dims_accel);
+            hid_t space_phi = H5Screate_simple(1, dims_phi, dims_phi);
             hid_t space_lapse = H5Screate_simple(1, dims_lapse, dims_lapse);
-            hid_t dset_accel = H5Dcreate2(file, "accel", H5T_NATIVE_DOUBLE, space_accel,
+            hid_t dset_phi = H5Dcreate2(file, "phi", H5T_NATIVE_DOUBLE, space_phi,
                                           H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
             hid_t dset_lapse = H5Dcreate2(file, "lapse", H5T_NATIVE_DOUBLE, space_lapse,
                                           H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
 
             if (prj_io_is_root_rank(mpi)) {
-                hid_t dxpl_accel = prj_io_data_xfer_plist(mpi);
+                hid_t dxpl_phi = prj_io_data_xfer_plist(mpi);
                 hid_t dxpl_lapse = prj_io_data_xfer_plist(mpi);
 
-                H5Dwrite(dset_accel, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_accel, grav->accel);
+                H5Dwrite(dset_phi, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_phi, grav->phi);
                 H5Dwrite(dset_lapse, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, dxpl_lapse, grav->lapse);
-                prj_io_close_dxpl(dxpl_accel);
+                prj_io_close_dxpl(dxpl_phi);
                 prj_io_close_dxpl(dxpl_lapse);
             }
-            H5Dclose(dset_accel);
+            H5Dclose(dset_phi);
             H5Dclose(dset_lapse);
-            H5Sclose(space_accel);
+            H5Sclose(space_phi);
             H5Sclose(space_lapse);
         }
     }
