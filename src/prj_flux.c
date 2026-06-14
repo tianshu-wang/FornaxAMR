@@ -61,11 +61,11 @@ static inline double prj_flux_radiation_stencil_value(double q)
 static inline double prj_flux_hydro_prim_face_value_x1(const double *W, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_HYDRO_NCELLS];
+    const int half = PRJ_RECON_HYDRO_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
         q[n] = W[VIDX(v, i + offset, j, k)];
     }
@@ -76,11 +76,11 @@ static inline double prj_flux_hydro_prim_face_value_x1(const double *W, int v,
 static inline double prj_flux_hydro_prim_face_value_x2(const double *W, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_HYDRO_NCELLS];
+    const int half = PRJ_RECON_HYDRO_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
         q[n] = W[VIDX(v, i, j + offset, k)];
     }
@@ -91,11 +91,11 @@ static inline double prj_flux_hydro_prim_face_value_x2(const double *W, int v,
 static inline double prj_flux_hydro_prim_face_value_x3(const double *W, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_HYDRO_NCELLS];
+    const int half = PRJ_RECON_HYDRO_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
         q[n] = W[VIDX(v, i, j, k + offset)];
     }
@@ -106,11 +106,11 @@ static inline double prj_flux_hydro_prim_face_value_x3(const double *W, int v,
 static inline double prj_flux_radiation_prim_face_value_x1(const double *W, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_RADIATION_NCELLS];
+    const int half = PRJ_RECON_RADIATION_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_RADIATION_NCELLS; ++n) {
         int offset = n - half;
         q[n] = prj_flux_radiation_stencil_value(W[VIDX(v, i + offset, j, k)]);
     }
@@ -121,11 +121,11 @@ static inline double prj_flux_radiation_prim_face_value_x1(const double *W, int 
 static inline double prj_flux_radiation_prim_face_value_x2(const double *W, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_RADIATION_NCELLS];
+    const int half = PRJ_RECON_RADIATION_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_RADIATION_NCELLS; ++n) {
         int offset = n - half;
         q[n] = prj_flux_radiation_stencil_value(W[VIDX(v, i, j + offset, k)]);
     }
@@ -136,11 +136,11 @@ static inline double prj_flux_radiation_prim_face_value_x2(const double *W, int 
 static inline double prj_flux_radiation_prim_face_value_x3(const double *W, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_RADIATION_NCELLS];
+    const int half = PRJ_RECON_RADIATION_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_RADIATION_NCELLS; ++n) {
         int offset = n - half;
         q[n] = prj_flux_radiation_stencil_value(W[VIDX(v, i, j, k + offset)]);
     }
@@ -151,11 +151,11 @@ static inline double prj_flux_radiation_prim_face_value_x3(const double *W, int 
 static inline double prj_flux_eos_face_value_x1(const double *eosvar, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_HYDRO_NCELLS];
+    const int half = PRJ_RECON_HYDRO_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
         q[n] = eosvar[EIDX(v, i + offset, j, k)];
     }
@@ -166,11 +166,11 @@ static inline double prj_flux_eos_face_value_x1(const double *eosvar, int v,
 static inline double prj_flux_eos_face_value_x2(const double *eosvar, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_HYDRO_NCELLS];
+    const int half = PRJ_RECON_HYDRO_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
         q[n] = eosvar[EIDX(v, i, j + offset, k)];
     }
@@ -181,11 +181,11 @@ static inline double prj_flux_eos_face_value_x2(const double *eosvar, int v,
 static inline double prj_flux_eos_face_value_x3(const double *eosvar, int v,
     int i, int j, int k, double target)
 {
-    double q[PRJ_RECON_NCELLS];
-    const int half = PRJ_RECON_NCELLS / 2;
+    double q[PRJ_RECON_HYDRO_NCELLS];
+    const int half = PRJ_RECON_HYDRO_NCELLS / 2;
     int n;
 
-    for (n = 0; n < PRJ_RECON_NCELLS; ++n) {
+    for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
         q[n] = eosvar[EIDX(v, i, j, k + offset)];
     }
