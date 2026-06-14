@@ -516,27 +516,18 @@ static inline double prj_reconstruct_weno7_face(const double q[7], double target
 static inline double prj_reconstruct_mc_face_value(const double q[3],
     double target)
 {
-    if (q == 0) {
-        return 0.0;
-    }
     return prj_reconstruct_mc_face(q[0], q[1], q[2], target);
 }
 
 static inline double prj_reconstruct_weno3_face_value(const double q[3],
     double target)
 {
-    if (q == 0) {
-        return 0.0;
-    }
     return prj_reconstruct_weno3_face(q[0], q[1], q[2], target);
 }
 
 static inline double prj_reconstruct_weno7_face_value(const double q[7],
     double target)
 {
-    if (q == 0) {
-        return 0.0;
-    }
     return prj_reconstruct_weno7_face(q, target);
 }
 
