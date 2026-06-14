@@ -91,29 +91,6 @@ static void prj_rad_eleinel_phi_interp_make(double log10xtemp, double etalep,
     *coeff5_out = sp * sq;
 }
 
-static inline void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype,
-    int nf, int nfp, int jeta, int jq,
-    double coeff0, double coeff1, double coeff2,
-    double coeff3, double coeff4, double coeff5,
-    double *phi0e, double *phi1e)
-{
-    const double *table = rad->eleinel_phi_ee[nutype];
-    int ng = PRJ_NEGROUP;
-
-    *phi0e = coeff0 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta, jq - 1, ng)
-        + coeff1 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta - 1, jq, ng)
-        + coeff2 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta, jq, ng)
-        + coeff3 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta + 1, jq, ng)
-        + coeff4 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta, jq + 1, ng)
-        + coeff5 * INEL_ELEM_ELE(table, 0, nf, nfp, jeta + 1, jq + 1, ng);
-    *phi1e = coeff0 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta, jq - 1, ng)
-        + coeff1 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta - 1, jq, ng)
-        + coeff2 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta, jq, ng)
-        + coeff3 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta + 1, jq, ng)
-        + coeff4 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta, jq + 1, ng)
-        + coeff5 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta + 1, jq + 1, ng);
-}
-
 static void prj_rad_eleinel_read_table(const prj_rad *rad, int nu,
     double *dest, size_t count)
 {
@@ -338,6 +315,7 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
 
     for (nu = 0; nu < PRJ_NRAD; nu++) {
         const double *freqe = rad->egroup[nu];
+        const double *table = rad->eleinel_phi_ee[nu];
         const double *freqe2_dnue = &rad->eleinel_freqe2_dnue[nu * PRJ_NEGROUP];
         const double *factf_over_freqe3 = &rad->eleinel_factf_over_freqe3[nu * PRJ_NEGROUP];
         const double *je_nu = &je[nu * PRJ_NEGROUP];
@@ -392,38 +370,44 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             double xjpe = xj[nfp];
             double one_minus_xjpe = 1.0 - xjpe;
             double term = freqe2_dnue[nfp];
+            const double *expe_nfp = &rad->expe[nu][nfp * INEL_PHI_NT + expe_jq];
+            /* phi(g) is a fixed 6-point (jeta,jq) stencil; ke=g is the table's
+             * fastest axis, so each stencil point is a contiguous run over g.
+             * Hoist the six base pointers per m and reconstruct phi0/phi1 in a
+             * loop that vectorizes across g. Bit-identical: per-g independent,
+             * same operand order, nfp reduction order unchanged; inactive groups
+             * are masked (+= 0) instead of skipped. */
+            const double *a0 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta,     jq - 1, nfreq);
+            const double *a1 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta - 1, jq,     nfreq);
+            const double *a2 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta,     jq,     nfreq);
+            const double *a3 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta + 1, jq,     nfreq);
+            const double *a4 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta,     jq + 1, nfreq);
+            const double *a5 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta + 1, jq + 1, nfreq);
+            const double *c0 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta,     jq - 1, nfreq);
+            const double *c1 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta - 1, jq,     nfreq);
+            const double *c2 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta,     jq,     nfreq);
+            const double *c3 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta + 1, jq,     nfreq);
+            const double *c4 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta,     jq + 1, nfreq);
+            const double *c5 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta + 1, jq + 1, nfreq);
 
             for (g = 0; g < nfreq; g++) {
-                const double *xh_g;
-                double one_minus_xje;
-                double fdotf;
-                double expe;
-                double phi0;
-                double phi1;
-                double half_phi0;
-                double flux_phi1;
+                double phi0 = coeff0 * a0[g] + coeff1 * a1[g] + coeff2 * a2[g]
+                            + coeff3 * a3[g] + coeff4 * a4[g] + coeff5 * a5[g];
+                double phi1 = coeff0 * c0[g] + coeff1 * c1[g] + coeff2 * c2[g]
+                            + coeff3 * c3[g] + coeff4 * c4[g] + coeff5 * c5[g];
+                const double *ep = &expe_nfp[g * PRJ_NEGROUP * INEL_PHI_NT];
+                double expe = expe_coeff0 * ep[0] + expe_coeff1 * ep[1];
+                double fdotf = xh[g][0] * xh_nfp0 + xh[g][1] * xh_nfp1 + xh[g][2] * xh_nfp2;
+                double half_phi0 = 0.5 * phi0;
+                double flux_phi1 = czero * 1.5 * phi1;
+                double mask = active[g] ? 1.0 : 0.0;
 
-                if (!active[g]) {
-                    continue;
-                }
-
-                xh_g = xh[g];
-                one_minus_xje = one_minus_xj[g];
-                fdotf = xh_g[0] * xh_nfp0 + xh_g[1] * xh_nfp1 + xh_g[2] * xh_nfp2;
-                expe = expe_coeff0 * rad->expe[nu][(g * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq]
-                     + expe_coeff1 * rad->expe[nu][(g * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq + 1];
-                prj_rad_eleinel_phifind_interp(rad, nu, g, nfp,
-                    jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
-                    &phi0, &phi1);
-
-                half_phi0 = 0.5 * phi0;
-                flux_phi1 = czero * 1.5 * phi1;
-                sumin[g] += term * expe *
-                    (half_phi0 * xjpe * one_minus_xje - flux_phi1 * fdotf);
-                sumout[g] += term *
-                    (half_phi0 * one_minus_xjpe - flux_phi1 * fdotf * inv_xj[g]);
+                sumin[g] += mask * (term * expe *
+                    (half_phi0 * xjpe * one_minus_xj[g] - flux_phi1 * fdotf));
+                sumout[g] += mask * (term *
+                    (half_phi0 * one_minus_xjpe - flux_phi1 * fdotf * inv_xj[g]));
                 if (want_scatt) {
-                    ssum[g] += term * (half_phi0 * (one_minus_xjpe + expe * xjpe));
+                    ssum[g] += mask * (term * (half_phi0 * (one_minus_xjpe + expe * xjpe)));
                 }
             }
         }
