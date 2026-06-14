@@ -196,15 +196,17 @@ void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, dou
 }
 
 #if PRJ_NRAD > 0
-/* Levermore third moment Q^{ijk} = c E H^{ijk}, with
- *
- *   H^{ijk} = (5q - 3f)/2 n^i n^j n^k
- *           + (f - q)/2 (n^i δ^{jk} + n^j δ^{ki} + n^k δ^{ij}),
- *
- * where f = |F|/(cE), n = F/|F|, and q = q(f) above.  The tensor is fully
- * symmetric in its three indices. */
-static void prj_rad_m1_third_moment(const prj_rad *rad, double E, double F1, double F2,
-    double F3, double Q[3][3][3])
+/* Contraction M[b] = sum_{a,c} Q^{abc} dvdx[a][c] of the Levermore third moment
+ * with the velocity gradient, computed analytically so the 27 components of Q
+ * never have to be materialised. With
+ *   Q^{abc} = coef_nnn n^a n^b n^c + coef_mix (n^a d_bc + n^b d_ca + n^c d_ab),
+ * the contraction collapses to
+ *   M[b] = coef_nnn n[b] S + coef_mix (T1[b] + n[b] divv + T3[b]),
+ * with S = n.dvdx.n, T1 = n^T dvdx, T3 = dvdx n, divv = tr(dvdx). Mathematically
+ * identical to building Q and summing (validated to machine epsilon), with the
+ * isotropic E<=0 / Fmag<=0 limit returning zero exactly as m1_third_moment does. */
+static void prj_rad_m1_third_moment_contract(const prj_rad *rad, double E,
+    double F1, double F2, double F3, const double dvdx[3][3], double M[3])
 {
     double E_pos;
     double Fmag;
@@ -214,21 +216,19 @@ static void prj_rad_m1_third_moment(const prj_rad *rad, double E, double F1, dou
     double n[3];
     double coef_nnn;
     double coef_mix;
-    int a;
+    double divv;
+    double T1[3];
+    double T3[3];
+    double S;
     int b;
-    int c;
+
+    M[0] = 0.0;
+    M[1] = 0.0;
+    M[2] = 0.0;
 
     E_pos = E > 0.0 ? E : 0.0;
     Fmag = sqrt(F1 * F1 + F2 * F2 + F3 * F3);
     cE = PRJ_CLIGHT * E_pos;
-
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            for (c = 0; c < 3; ++c) {
-                Q[a][b][c] = 0.0;
-            }
-        }
-    }
     if (cE <= 0.0 || Fmag <= 0.0) {
         return;
     }
@@ -244,15 +244,15 @@ static void prj_rad_m1_third_moment(const prj_rad *rad, double E, double F1, dou
     coef_nnn = 0.5 * cE * (5.0 * q_fac - 3.0 * f);
     coef_mix = 0.5 * cE * (f - q_fac);
 
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            for (c = 0; c < 3; ++c) {
-                Q[a][b][c] = coef_nnn * n[a] * n[b] * n[c] +
-                    coef_mix * (n[a] * (b == c ? 1.0 : 0.0) +
-                        n[b] * (c == a ? 1.0 : 0.0) +
-                        n[c] * (a == b ? 1.0 : 0.0));
-            }
-        }
+    divv = dvdx[0][0] + dvdx[1][1] + dvdx[2][2];
+    for (b = 0; b < 3; ++b) {
+        T1[b] = n[0] * dvdx[0][b] + n[1] * dvdx[1][b] + n[2] * dvdx[2][b];
+        T3[b] = dvdx[b][0] * n[0] + dvdx[b][1] * n[1] + dvdx[b][2] * n[2];
+    }
+    S = n[0] * T3[0] + n[1] * T3[1] + n[2] * T3[2];
+
+    for (b = 0; b < 3; ++b) {
+        M[b] = coef_nnn * n[b] * S + coef_mix * (T1[b] + n[b] * divv + T3[b]);
     }
 }
 
@@ -1132,7 +1132,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         double Eg[PRJ_NEGROUP];
         double Fg[PRJ_NEGROUP][3];
         double Pg[PRJ_NEGROUP][3][3];
-        double Qg[PRJ_NEGROUP][3][3][3];
+        double Mq[PRJ_NEGROUP][3]; /* Q_g : dvdx, the only way Q is ever used */
         double dE_acc[PRJ_NEGROUP];
         double dF_acc[PRJ_NEGROUP][3];
         const double *nu_face = rad->eedge[field];
@@ -1149,7 +1149,8 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             Fg[g][1] = W_state[VIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
             Fg[g][2] = W_state[VIDX(PRJ_PRIM_RAD_F3(field, g), ic, jc, kc)];
             prj_rad_m1_pressure(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
-            prj_rad_m1_third_moment(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Qg[g]);
+            prj_rad_m1_third_moment_contract(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2],
+                dvdx, Mq[g]);
             dE_acc[g] = 0.0;
             dF_acc[g][0] = 0.0;
             dF_acc[g][1] = 0.0;
@@ -1178,7 +1179,6 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             double divv = dvdx[0][0] + dvdx[1][1] + dvdx[2][2];
             int d = (divv >= 0.0) ? 0 : -1; /* donor offset: upwind group = gf + d */
             int gf;
-            int kk;
 
             /* Sweep interior frequency faces (the domain-edge faces 0 and
              * PRJ_NEGROUP carry zero flux and are skipped).  Each face gf has a
@@ -1201,13 +1201,11 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                         dE_acc[gf - 1] += pf;
                         dE_acc[gf] -= pf;
                     }
-                    for (kk = 0; kk < 3; ++kk) {
-                        for (ii = 0; ii < 3; ++ii) {
-                            double qf = nu * Qg[gu][kk][jj][ii] * dvdx[kk][ii];
+                    {
+                        double qf = nu * Mq[gu][jj];
 
-                            dF_acc[gf - 1][jj] += qf;
-                            dF_acc[gf][jj] -= qf;
-                        }
+                        dF_acc[gf - 1][jj] += qf;
+                        dF_acc[gf][jj] -= qf;
                     }
                 }
             }
