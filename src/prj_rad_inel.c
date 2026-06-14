@@ -343,6 +343,8 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         const double *je_nu = &je[nu * PRJ_NEGROUP];
         const double *he_nu = &he[nu * PRJ_NEGROUP * PRJ_NDIM];
         double xj[PRJ_NEGROUP];
+        double one_minus_xj[PRJ_NEGROUP];
+        double inv_xj[PRJ_NEGROUP];
         double xh[PRJ_NEGROUP][PRJ_NDIM];
         double sumin[PRJ_NEGROUP];
         double sumout[PRJ_NEGROUP];
@@ -368,6 +370,8 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         for (g = 0; g < PRJ_NEGROUP; g++) {
             int idx = nu * PRJ_NEGROUP + g;
             active[g] = (je_nu[g] > 0.0);
+            one_minus_xj[g] = 1.0 - xj[g];
+            inv_xj[g] = active[g] ? 1.0 / xj[g] : 0.0;
             sumin[g] = 0.0;
             sumout[g] = 0.0;
             if (want_scatt) {
@@ -382,37 +386,44 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
 
         for (nfp = 0; nfp < nfreq; nfp++) {
             const double *xh_nfp = xh[nfp];
+            double xh_nfp0 = xh_nfp[0];
+            double xh_nfp1 = xh_nfp[1];
+            double xh_nfp2 = xh_nfp[2];
             double xjpe = xj[nfp];
             double one_minus_xjpe = 1.0 - xjpe;
             double term = freqe2_dnue[nfp];
 
             for (g = 0; g < nfreq; g++) {
                 const double *xh_g;
-                double xje;
+                double one_minus_xje;
                 double fdotf;
                 double expe;
                 double phi0;
                 double phi1;
+                double half_phi0;
+                double flux_phi1;
 
                 if (!active[g]) {
                     continue;
                 }
 
                 xh_g = xh[g];
-                xje = xj[g];
-                fdotf = xh_g[0] * xh_nfp[0] + xh_g[1] * xh_nfp[1] + xh_g[2] * xh_nfp[2];
+                one_minus_xje = one_minus_xj[g];
+                fdotf = xh_g[0] * xh_nfp0 + xh_g[1] * xh_nfp1 + xh_g[2] * xh_nfp2;
                 expe = expe_coeff0 * rad->expe[nu][(g * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq]
                      + expe_coeff1 * rad->expe[nu][(g * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq + 1];
                 prj_rad_eleinel_phifind_interp(rad, nu, g, nfp,
                     jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
                     &phi0, &phi1);
 
+                half_phi0 = 0.5 * phi0;
+                flux_phi1 = czero * 1.5 * phi1;
                 sumin[g] += term * expe *
-                    (0.5 * phi0 * xjpe * (1.0 - xje) - czero * 1.5 * phi1 * fdotf);
+                    (half_phi0 * xjpe * one_minus_xje - flux_phi1 * fdotf);
                 sumout[g] += term *
-                    (0.5 * phi0 * one_minus_xjpe - czero * 1.5 * phi1 * fdotf / xje);
+                    (half_phi0 * one_minus_xjpe - flux_phi1 * fdotf * inv_xj[g]);
                 if (want_scatt) {
-                    ssum[g] += term * (0.5 * phi0 * (one_minus_xjpe + expe * xjpe));
+                    ssum[g] += term * (half_phi0 * (one_minus_xjpe + expe * xjpe));
                 }
             }
         }
