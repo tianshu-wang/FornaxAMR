@@ -4,6 +4,15 @@
 
 #include "prj.h"
 
+/* The per-cell MC slope fast path (prj_flux_recon_var_mc) replaces the per-face
+ * reconstruction when both physics use the MC scheme. The per-face face-value
+ * helpers and macros below are only needed for the WENO fallback. */
+#if PRJ_RECON_HYDRO == PRJ_RECON_MC && PRJ_RECON_RADIATION == PRJ_RECON_MC
+#define PRJ_FLUX_RECON_MC_FASTPATH 1
+#else
+#define PRJ_FLUX_RECON_MC_FASTPATH 0
+#endif
+
 static inline void prj_flux_face_cells_x1(int i, int j, int k,
     int *il, int *jl, int *kl, int *ir, int *jr, int *kr)
 {
@@ -49,6 +58,7 @@ static inline void prj_flux_face_cells(int dir, int i, int j, int k,
     }
 }
 
+#if !PRJ_FLUX_RECON_MC_FASTPATH
 static inline double prj_flux_radiation_stencil_value(double q)
 {
 #if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
@@ -192,6 +202,7 @@ static inline double prj_flux_eos_face_value_x3(const double *eosvar, int v,
 
     return prj_reconstruct_hydro_face_value(q, target);
 }
+#endif /* !PRJ_FLUX_RECON_MC_FASTPATH */
 
 /* Build the local->global primitive index permutation for direction `dir`.
  * The sweep-normal velocity/B/flux component is rotated into the local X1 slot
@@ -259,6 +270,84 @@ static void prj_flux_build_var_map(int dir, int *gmap)
     (void)group;
 #endif
 }
+
+#if PRJ_FLUX_RECON_MC_FASTPATH
+static inline double prj_flux_recon_stencil_val(double q, int is_rad)
+{
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+    return is_rad ? prj_rad_mixed_round(q) : q;
+#else
+    (void)is_rad;
+    return q;
+#endif
+}
+
+/* MC fast path for one variable: compute each cell's limited slope ONCE along the
+ * sweep, then emit both faces it touches (q0 - 0.5*slope as the right state of the
+ * lower face, q0 + 0.5*slope as the left state of the upper face). This halves the
+ * limiter evaluations vs reconstructing each face/side independently, and is
+ * bit-identical because both faces share the same slope. `slab` is the source
+ * variable plane (W or eosvar), `wl`/`wr` the left/right output planes. */
+static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
+    int dir, int istart, int iend, int jstart, int jend, int kstart, int kend,
+    int is_rad)
+{
+    int i;
+    int j;
+    int k;
+
+    /* k (the contiguous IDX axis) is kept innermost in every direction for cache
+     * locality and vectorization; the sweep axis is outer, and the +S "upper
+     * face" write simply lands in the next sweep plane. The boundary tests on the
+     * sweep axis are loop-invariant w.r.t. the inner k loop for X1/X2. */
+    if (dir == X1DIR) {
+        const size_t S = (size_t)PRJ_BS * PRJ_BS;
+        for (i = istart - 1; i <= iend; ++i) {
+            for (j = jstart; j <= jend; ++j) {
+                for (k = kstart; k <= kend; ++k) {
+                    size_t idx = (size_t)IDX(i, j, k);
+                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
+                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
+                    double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
+                    if (i >= istart) wr[idx] = q0 - h;
+                    if (i < iend) wl[idx + S] = q0 + h;
+                }
+            }
+        }
+    } else if (dir == X2DIR) {
+        const size_t S = (size_t)PRJ_BS;
+        for (i = istart; i <= iend; ++i) {
+            for (j = jstart - 1; j <= jend; ++j) {
+                for (k = kstart; k <= kend; ++k) {
+                    size_t idx = (size_t)IDX(i, j, k);
+                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
+                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
+                    double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
+                    if (j >= jstart) wr[idx] = q0 - h;
+                    if (j < jend) wl[idx + S] = q0 + h;
+                }
+            }
+        }
+    } else {
+        const size_t S = 1;
+        for (i = istart; i <= iend; ++i) {
+            for (j = jstart; j <= jend; ++j) {
+                for (k = kstart - 1; k <= kend; ++k) {
+                    size_t idx = (size_t)IDX(i, j, k);
+                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
+                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
+                    double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
+                    if (k >= kstart) wr[idx] = q0 - h;
+                    if (k < kend) wl[idx + S] = q0 + h;
+                }
+            }
+        }
+    }
+}
+#endif
 
 /* Reconstruct every primitive (and the pressure/gamma EOS vars) onto the dir
  * faces of a block, with the *variable* loop outermost.  Results are written to
@@ -343,6 +432,32 @@ static void prj_flux_reconstruct_block(double *W, const double *eosvar, int dir,
 
     prj_flux_build_var_map(dir, gmap);
 
+#if PRJ_FLUX_RECON_MC_FASTPATH
+    {
+        int lv;
+
+        for (lv = 0; lv < PRJ_NHYDRO; ++lv) {
+            int gv = gmap[lv];
+            prj_flux_recon_var_mc(&W[(size_t)gv * PRJ_BLOCK_NCELLS],
+                &WL_block[(size_t)lv * PRJ_BLOCK_NCELLS],
+                &WR_block[(size_t)lv * PRJ_BLOCK_NCELLS],
+                dir, istart, iend, jstart, jend, kstart, kend, 0);
+        }
+        for (lv = PRJ_NHYDRO; lv < PRJ_NVAR_PRIM; ++lv) {
+            int gv = gmap[lv];
+            prj_flux_recon_var_mc(&W[(size_t)gv * PRJ_BLOCK_NCELLS],
+                &WL_block[(size_t)lv * PRJ_BLOCK_NCELLS],
+                &WR_block[(size_t)lv * PRJ_BLOCK_NCELLS],
+                dir, istart, iend, jstart, jend, kstart, kend, 1);
+        }
+        if (eosvar != 0) {
+            prj_flux_recon_var_mc(&eosvar[(size_t)PRJ_EOSVAR_PRESSURE * PRJ_BLOCK_NCELLS],
+                pL_block, pR_block, dir, istart, iend, jstart, jend, kstart, kend, 0);
+            prj_flux_recon_var_mc(&eosvar[(size_t)PRJ_EOSVAR_GAMMA * PRJ_BLOCK_NCELLS],
+                gL_block, gR_block, dir, istart, iend, jstart, jend, kstart, kend, 0);
+        }
+    }
+#else
     if (dir == X1DIR) {
         PRJ_FLUX_RECONSTRUCT_PRIM_DIR(prj_flux_face_cells_x1,
             prj_flux_hydro_prim_face_value_x1, prj_flux_radiation_prim_face_value_x1);
@@ -356,6 +471,7 @@ static void prj_flux_reconstruct_block(double *W, const double *eosvar, int dir,
             prj_flux_hydro_prim_face_value_x3, prj_flux_radiation_prim_face_value_x3);
         PRJ_FLUX_RECONSTRUCT_EOS_DIR(prj_flux_face_cells_x3, prj_flux_eos_face_value_x3);
     }
+#endif
 }
 
 #undef PRJ_FLUX_RECONSTRUCT_PRIM_RANGE

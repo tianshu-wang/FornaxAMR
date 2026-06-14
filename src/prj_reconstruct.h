@@ -347,8 +347,12 @@ static inline void prj_reconstruct_for_riemann(const double stencil[3],
  * only the stencil width its own scheme requires.
  */
 
-static inline double prj_reconstruct_mc_face(double qm, double q0, double qp,
-    double target)
+/* MC (monotonized-central) limited slope used by prj_reconstruct_mc_face, from
+ * the 3-cell stencil (qm, q0, qp). The face value is q0 + target * slope, so both
+ * faces of a cell (target = +/-0.5) share one slope -- callers that need both can
+ * compute the slope once. (Distinct from prj_reconstruct_mc_slope above, which is
+ * the prolongation limiter.) */
+static inline double prj_reconstruct_mc_face_slope(double qm, double q0, double qp)
 {
     double sl = q0 - qm;
     double sr = qp - q0;
@@ -367,7 +371,13 @@ static inline double prj_reconstruct_mc_face(double qm, double q0, double qp,
             slope = slope > c2 ? slope : c2;
         }
     }
-    return q0 + target * slope;
+    return slope;
+}
+
+static inline double prj_reconstruct_mc_face(double qm, double q0, double qp,
+    double target)
+{
+    return q0 + target * prj_reconstruct_mc_face_slope(qm, q0, qp);
 }
 
 /* WENO-Z3 reconstruction (Don & Borges 2013) of a face value from the 3-cell
