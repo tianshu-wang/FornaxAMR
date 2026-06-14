@@ -356,22 +356,22 @@ static inline double prj_reconstruct_mc_face_slope(double qm, double q0, double 
 {
     double sl = q0 - qm;
     double sr = qp - q0;
-    double slope = 0.0;
+    double c0 = 2.0 * sl;
+    double c1 = sl + 0.5 * (sr - sl);
+    double c2 = 2.0 * sr;
+    /* Branchless, bit-identical to the if-form: when sl,sr share a sign the
+     * limited slope is min(c0,c1,c2) (positive) or max(c0,c1,c2) (negative),
+     * otherwise 0. Compute both min and max unconditionally (the ternaries lower
+     * to vmin/vmax), select by sign, and mask out the opposite-sign/zero case --
+     * no data-dependent branch, so the reconstruction loop can vectorize. */
+    double mn = c0 < c1 ? c0 : c1;
+    double mx = c0 > c1 ? c0 : c1;
+    double slope;
 
-    if ((sl > 0.0 && sr > 0.0) || (sl < 0.0 && sr < 0.0)) {
-        double c0 = 2.0 * sl;
-        double c1 = sl + 0.5 * (sr - sl);
-        double c2 = 2.0 * sr;
-
-        if (sl > 0.0) {
-            slope = c0 < c1 ? c0 : c1;
-            slope = slope < c2 ? slope : c2;
-        } else {
-            slope = c0 > c1 ? c0 : c1;
-            slope = slope > c2 ? slope : c2;
-        }
-    }
-    return slope;
+    mn = mn < c2 ? mn : c2;
+    mx = mx > c2 ? mx : c2;
+    slope = sl > 0.0 ? mn : mx;
+    return (sl * sr > 0.0) ? slope : 0.0;
 }
 
 static inline double prj_reconstruct_mc_face(double qm, double q0, double qp,
