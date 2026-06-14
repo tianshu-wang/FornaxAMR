@@ -114,66 +114,6 @@ static inline void prj_rad_eleinel_phifind_interp(const prj_rad *rad, int nutype
         + coeff5 * INEL_ELEM_ELE(table, 1, nf, nfp, jeta + 1, jq + 1, ng);
 }
 
-static inline void prj_rad_eleinel_resourcesink(const prj_rad *rad,
-    int nutype, int nfreq, int nf,
-    const double *xj, const double *xh,
-    const double *freqe, const double *freqe2_dnue,
-    double species_cut, double czero, int jeta, int jq,
-    int expe_jq, double expe_coeff0, double expe_coeff1,
-    double coeff0, double coeff1, double coeff2,
-    double coeff3, double coeff4, double coeff5,
-    double *srce, double *sinke, double *scatte)
-{
-    double constin = rad->eleinel_constin;
-    double constout = rad->eleinel_constout;
-    double xje;
-    double sumin;
-    double sumout;
-    double ssum;
-    int nfp;
-    double enu;
-    double enu3;
-
-    xje = xj[nf];
-
-    sumin = 0.0;
-    sumout = 0.0;
-    ssum = 0.0;
-    enu = freqe[nf];
-    enu3 = enu * enu * enu;
-
-    for (nfp = 0; nfp < nfreq; nfp++) {
-        double xjpe = xj[nfp];
-        double fdotf = 0.0;
-        double expe;
-        double phi0;
-        double phi1;
-        double term = freqe2_dnue[nfp];
-        double phi0ee;
-        double phi1ee;
-        int did;
-
-        for (did = 0; did < PRJ_NDIM; did++) {
-            fdotf += xh[nf * PRJ_NDIM + did] * xh[nfp * PRJ_NDIM + did];
-        }
-        expe = expe_coeff0 * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq]
-             + expe_coeff1 * rad->expe[nutype][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq + 1];
-        prj_rad_eleinel_phifind_interp(rad, nutype, nf, nfp,
-            jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
-            &phi0ee, &phi1ee);
-        phi0 = phi0ee;
-        phi1 = phi1ee;
-        sumin += term * expe * (0.5 * phi0 * xjpe * (1.0 - xje) - czero * 3.0 * 0.5 * phi1 * fdotf);
-        sumout += term * (0.5 * phi0 * (1.0 - xjpe) - czero * 3.0 * 0.5 * phi1 * fdotf / xje);
-        ssum += term * (0.5 * phi0 * (1.0 - xjpe + expe * xjpe));
-    }
-
-    sumin *= species_cut;
-    *srce = constin * enu3 * sumin;
-    *sinke = constout * sumout;
-    *scatte = constout * ssum;
-}
-
 static void prj_rad_eleinel_read_table(const prj_rad *rad, int nu,
     double *dest, size_t count)
 {
@@ -401,9 +341,16 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         const double *he_nu = &he[nu * PRJ_NEGROUP * PRJ_NDIM];
         double xj[PRJ_NEGROUP];
         double xh[PRJ_NEGROUP][PRJ_NDIM];
+        double sumin[PRJ_NEGROUP];
+        double sumout[PRJ_NEGROUP];
+        double ssum[PRJ_NEGROUP];
+        int active[PRJ_NEGROUP];
         double species_cut = (nu == 2) ? 4.0 : 1.0;
         double czero = (nu == 2) ? 0.0 : 1.0;
+        double constin = rad->eleinel_constin;
+        double constout = rad->eleinel_constout;
         int nfreq = PRJ_NEGROUP;
+        int nfp;
 
         for (g = 0; g < PRJ_NEGROUP; g++) {
             double fac = factf_over_freqe3[g] / species_cut;
@@ -417,23 +364,64 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
 
         for (g = 0; g < PRJ_NEGROUP; g++) {
             int idx = nu * PRJ_NEGROUP + g;
-            double xxj = je_nu[g];
+            active[g] = (je_nu[g] > 0.0);
+            sumin[g] = 0.0;
+            sumout[g] = 0.0;
+            ssum[g] = 0.0;
+            source[idx] = 0.0;
+            sink[idx] = 0.0;
+            scatt[idx] = 0.0;
+        }
 
-            if (xxj > 0.0) {
-                prj_rad_eleinel_resourcesink(rad, nu, nfreq, g,
-                    xj, &xh[0][0], freqe, freqe2_dnue, species_cut, czero,
-                    jeta, jq, expe_jq, expe_coeff0, expe_coeff1,
-                    coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
-                    &source[idx], &sink[idx], &scatt[idx]);
-            } else {
-                source[idx] = 0.0;
-                sink[idx] = 0.0;
-                scatt[idx] = 0.0;
+        for (nfp = 0; nfp < nfreq; nfp++) {
+            const double *xh_nfp = xh[nfp];
+            double xjpe = xj[nfp];
+            double one_minus_xjpe = 1.0 - xjpe;
+            double term = freqe2_dnue[nfp];
+
+            for (g = 0; g < nfreq; g++) {
+                const double *xh_g;
+                double xje;
+                double fdotf;
+                double expe;
+                double phi0;
+                double phi1;
+
+                if (!active[g]) {
+                    continue;
+                }
+
+                xh_g = xh[g];
+                xje = xj[g];
+                fdotf = xh_g[0] * xh_nfp[0] + xh_g[1] * xh_nfp[1] + xh_g[2] * xh_nfp[2];
+                expe = expe_coeff0 * rad->expe[nu][(g * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq]
+                     + expe_coeff1 * rad->expe[nu][(g * PRJ_NEGROUP + nfp) * INEL_PHI_NT + expe_jq + 1];
+                prj_rad_eleinel_phifind_interp(rad, nu, g, nfp,
+                    jeta, jq, coeff0, coeff1, coeff2, coeff3, coeff4, coeff5,
+                    &phi0, &phi1);
+
+                sumin[g] += term * expe *
+                    (0.5 * phi0 * xjpe * (1.0 - xje) - czero * 1.5 * phi1 * fdotf);
+                sumout[g] += term *
+                    (0.5 * phi0 * one_minus_xjpe - czero * 1.5 * phi1 * fdotf / xje);
+                ssum[g] += term * (0.5 * phi0 * (one_minus_xjpe + expe * xjpe));
+            }
+        }
+
+        for (g = 0; g < PRJ_NEGROUP; g++) {
+            int idx = nu * PRJ_NEGROUP + g;
+            double enu;
+            double enu3;
+
+            if (!active[g]) {
+                continue;
             }
 
-            source[idx] /= rho_cut;
-            sink[idx] /= rho_cut;
-            scatt[idx] /= rho_cut;
+            enu = freqe[g];
+            enu3 = enu * enu * enu;
+            source[idx] = constin * enu3 * species_cut * sumin[g] / rho_cut;
+            sink[idx] = constout * sumout[g] / rho_cut;
+            scatt[idx] = constout * ssum[g] / rho_cut;
 
             source[idx] = PRJ_MAX(source[idx], 0.0);
             sink[idx] = PRJ_MAX(sink[idx], 0.0);

@@ -234,6 +234,7 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     int j;
     int k;
 
+    PRJ_SUBTIMER_START("sub_src_zero");
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -243,8 +244,17 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
             }
         }
     }
+    PRJ_SUBTIMER_STOP("sub_src_zero");
+    PRJ_SUBTIMER_START("sub_src_geom");
     prj_src_geom(eos, W, dUdt);
+    PRJ_SUBTIMER_STOP("sub_src_geom");
+    PRJ_SUBTIMER_START("sub_src_user");
     prj_src_user(eos, W, dUdt);
+    PRJ_SUBTIMER_STOP("sub_src_user");
+    PRJ_SUBTIMER_START("sub_src_gravity");
     prj_src_monopole_gravity(block, grav, W, dUdt);
+    PRJ_SUBTIMER_STOP("sub_src_gravity");
+    PRJ_SUBTIMER_START("sub_src_rad_vel_grad");
     prj_src_radiation_vel_grad(rad, block, W, dUdt);
+    PRJ_SUBTIMER_STOP("sub_src_rad_vel_grad");
 }

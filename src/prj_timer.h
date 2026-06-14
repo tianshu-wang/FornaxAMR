@@ -83,8 +83,9 @@ void prj_mpi_barrier(const struct prj_mpi *mpi);
  * to enable. They attach to the current bucket via prj_timer_current(), so no
  * timer pointer needs threading through call sites. To remove permanently,
  * delete this block plus the PRJ_SUBTIMER_START/STOP call sites (grep
- * PRJ_SUBTIMER). Overhead: two clock reads per wrapped call; only used around
- * coarse, heavy calls so distortion is small. */
+ * PRJ_SUBTIMER). Probe names use sub_* prefixes and are intentionally kept
+ * localized to the current performance investigation. Overhead: two clock
+ * reads per wrapped call, so leave PRJ_SUBTIMER off for production timings. */
 #ifndef PRJ_SUBTIMER
 #define PRJ_SUBTIMER 0
 #endif

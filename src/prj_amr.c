@@ -2216,30 +2216,45 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
     if (mesh == 0) {
         return 0;
     }
+    PRJ_SUBTIMER_START("sub_amr_alloc");
     if (mesh->nblocks_max > 0) {
         neighbor_dirty = (int *)calloc((size_t)mesh->nblocks_max,
             sizeof(*neighbor_dirty));
         changed_blocks = (int *)calloc((size_t)mesh->nblocks_max,
             sizeof(*changed_blocks));
     }
+    PRJ_SUBTIMER_STOP("sub_amr_alloc");
 
+    PRJ_SUBTIMER_START("sub_amr_tag");
     prj_amr_tag(mesh, eos, mpi);
+    PRJ_SUBTIMER_STOP("sub_amr_tag");
+    PRJ_SUBTIMER_START("sub_amr_two_to_one");
     prj_amr_enforce_two_to_one(mesh, mpi);
+    PRJ_SUBTIMER_STOP("sub_amr_two_to_one");
+    PRJ_SUBTIMER_START("sub_amr_sync_flags");
     prj_amr_sync_refine_flags(mesh, mpi);
+    PRJ_SUBTIMER_STOP("sub_amr_sync_flags");
 
 #if PRJ_MHD
+    PRJ_SUBTIMER_START("sub_amr_mhd_exchange");
     prj_mpi_exchange_amr_mhd_prolongate_bf(mesh, mpi);
+    PRJ_SUBTIMER_STOP("sub_amr_mhd_exchange");
 #endif
+    PRJ_SUBTIMER_START("sub_amr_refine");
     refined = prj_amr_refine_marked_blocks_with_dirty(mesh, mpi, neighbor_dirty, changed_blocks);
+    PRJ_SUBTIMER_STOP("sub_amr_refine");
     if (refined) {
+        PRJ_SUBTIMER_START("sub_amr_refine_neighbors");
         if (neighbor_dirty != 0) {
             prj_amr_init_neighbors_with_mask(mesh, neighbor_dirty);
             prj_amr_clear_dirty_mask(neighbor_dirty, mesh->nblocks_max);
         } else {
             prj_amr_init_neighbors(mesh);
         }
+        PRJ_SUBTIMER_STOP("sub_amr_refine_neighbors");
     }
 
+    PRJ_SUBTIMER_START("sub_amr_coarsen_scan");
     for (i = 0; i < mesh->nblocks; ++i) {
         prj_block *parent = &mesh->blocks[i];
         int can_coarsen;
@@ -2263,25 +2278,31 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
             }
         }
     }
+    PRJ_SUBTIMER_STOP("sub_amr_coarsen_scan");
     if (coarsened) {
+        PRJ_SUBTIMER_START("sub_amr_coarsen_neighbors");
         if (neighbor_dirty != 0) {
             prj_amr_init_neighbors_with_mask(mesh, neighbor_dirty);
         } else {
             prj_amr_init_neighbors(mesh);
         }
+        PRJ_SUBTIMER_STOP("sub_amr_coarsen_neighbors");
     }
 
     if (!refined && !coarsened) {
+        PRJ_SUBTIMER_START("sub_amr_clear_flags");
         for (i = 0; i < mesh->nblocks; ++i) {
             if (mesh->blocks[i].id >= 0) {
                 mesh->blocks[i].refine_flag = 0;
             }
         }
+        PRJ_SUBTIMER_STOP("sub_amr_clear_flags");
         free(neighbor_dirty);
         free(changed_blocks);
         return 0;
     }
 
+    PRJ_SUBTIMER_START("sub_amr_geometry");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (mesh->blocks[i].id >= 0) {
             prj_block_setup_geometry(&mesh->blocks[i], &mesh->coord);
@@ -2290,11 +2311,13 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
     }
     prj_mesh_update_r_com(mesh);
     prj_mesh_update_max_active_level(mesh);
+    PRJ_SUBTIMER_STOP("sub_amr_geometry");
     {
         double injected_local = 0.0;
         int global_changed;
         double injected_global;
 
+        PRJ_SUBTIMER_START("sub_amr_sync_primitive");
         prj_sync_primitive_from_conserved(mesh, eos, mpi, changed_blocks, &injected_local);
 
         /* E_injected is only synchronized when the floor actually fired on some
@@ -2314,6 +2337,7 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
         if (global_changed) {
             eos->E_injected += injected_global;
         }
+        PRJ_SUBTIMER_STOP("sub_amr_sync_primitive");
     }
     free(neighbor_dirty);
     free(changed_blocks);
