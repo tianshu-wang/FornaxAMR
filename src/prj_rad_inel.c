@@ -303,13 +303,16 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
     double coeff4;
     double coeff5;
     const size_t total = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+    int want_scatt = (scatt != 0);
 
     (void)Ye;
 
     if (rad == 0 || !rad->eleinel_table_loaded || rho <= rad->min_inel_density) {
         memset(source, 0, total * sizeof(*source));
         memset(sink, 0, total * sizeof(*sink));
-        memset(scatt, 0, total * sizeof(*scatt));
+        if (want_scatt) {
+            memset(scatt, 0, total * sizeof(*scatt));
+        }
         return;
     }
 
@@ -367,10 +370,14 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             active[g] = (je_nu[g] > 0.0);
             sumin[g] = 0.0;
             sumout[g] = 0.0;
-            ssum[g] = 0.0;
+            if (want_scatt) {
+                ssum[g] = 0.0;
+            }
             source[idx] = 0.0;
             sink[idx] = 0.0;
-            scatt[idx] = 0.0;
+            if (want_scatt) {
+                scatt[idx] = 0.0;
+            }
         }
 
         for (nfp = 0; nfp < nfreq; nfp++) {
@@ -404,7 +411,9 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
                     (0.5 * phi0 * xjpe * (1.0 - xje) - czero * 1.5 * phi1 * fdotf);
                 sumout[g] += term *
                     (0.5 * phi0 * one_minus_xjpe - czero * 1.5 * phi1 * fdotf / xje);
-                ssum[g] += term * (0.5 * phi0 * (one_minus_xjpe + expe * xjpe));
+                if (want_scatt) {
+                    ssum[g] += term * (0.5 * phi0 * (one_minus_xjpe + expe * xjpe));
+                }
             }
         }
 
@@ -421,7 +430,9 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             enu3 = enu * enu * enu;
             source[idx] = constin * enu3 * species_cut * sumin[g] / rho_cut;
             sink[idx] = constout * sumout[g] / rho_cut;
-            scatt[idx] = constout * ssum[g] / rho_cut;
+            if (want_scatt) {
+                scatt[idx] = constout * ssum[g] / rho_cut;
+            }
 
             source[idx] = PRJ_MAX(source[idx], 0.0);
             sink[idx] = PRJ_MAX(sink[idx], 0.0);
@@ -440,7 +451,6 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     double he[PRJ_NRAD * PRJ_NEGROUP * PRJ_NDIM];
     double source_arr[PRJ_NRAD * PRJ_NEGROUP];
     double sink_arr[PRJ_NRAD * PRJ_NEGROUP];
-    double scatt_arr[PRJ_NRAD * PRJ_NEGROUP];
     double eta_factor = 1.0 / (4.0 * M_PI);
     double etael;
     double du;
@@ -453,6 +463,8 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     if (!rad->eleinel_table_loaded) return;
 
     rho = u[PRJ_CONS_RHO];
+    if (rho <= rad->min_inel_density) return;
+
     KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
         u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
@@ -498,7 +510,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     }
 
     prj_rad_eleinel_lookup(rad, rho, T_cell, Ye, etael, je, he,
-        source_arr, sink_arr, scatt_arr);
+        source_arr, sink_arr, 0);
 
     du = 0.0;
     dy = 0.0;
