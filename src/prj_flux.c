@@ -692,9 +692,11 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 #endif
 
         /* Variable-outermost reconstruction pass over the block. */
+        PRJ_SUBTIMER_START("sub_flux_reconstruct");
         prj_flux_reconstruct_block(W, eosvar, dir,
             istart, iend, jstart, jend, kstart, kend,
             WL_block, WR_block, pL_block, pR_block, gL_block, gR_block);
+        PRJ_SUBTIMER_STOP("sub_flux_reconstruct");
 
         for (i = istart; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
@@ -721,6 +723,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     double deltaw;
 
                     /* Gather the reconstructed left/right states for this face. */
+                    PRJ_SUBTIMER_START("sub_flux_gather");
                     fidx = (size_t)IDX(i, j, k);
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                         WL[v] = WL_block[(size_t)v * PRJ_BLOCK_NCELLS + fidx];
@@ -730,10 +733,14 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     pR = pR_block[fidx];
                     gL = gL_block[fidx];
                     gR = gR_block[fidx];
+                    PRJ_SUBTIMER_STOP("sub_flux_gather");
                     prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
 
+                    PRJ_SUBTIMER_START("sub_flux_veldelta");
                     prj_flux_velocity_deltas(W, dir, il, jl, kl, ir, jr, kr,
                         &deltau, &deltav, &deltaw);
+                    PRJ_SUBTIMER_STOP("sub_flux_veldelta");
+                    PRJ_SUBTIMER_START("sub_flux_riemann");
 #if PRJ_MHD
                     {
                         double *bf_dir = use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
@@ -762,8 +769,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl,
                         v_face_loc, deltau, deltav, deltaw);
 #endif
+                    PRJ_SUBTIMER_STOP("sub_flux_riemann");
                     prj_flux_store_face_velocity(block, dir, i, j, k, v_face_loc);
 #if PRJ_NRAD > 0
+                    PRJ_SUBTIMER_START("sub_flux_rad");
                     {
                         double dx_dir;
                         double lapse_face = 1.0;
@@ -794,8 +803,11 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 
                         prj_rad_flux(rad, WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
                     }
+                    PRJ_SUBTIMER_STOP("sub_flux_rad");
 #endif
+                    PRJ_SUBTIMER_START("sub_flux_store");
                     prj_flux_store_local_flux(flux[dir], dir, i, j, k, Fl);
+                    PRJ_SUBTIMER_STOP("sub_flux_store");
                 }
             }
         }

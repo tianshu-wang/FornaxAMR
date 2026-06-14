@@ -577,11 +577,21 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 
+        PRJ_SUBTIMER_START("sub_rad_freq_flux");
         prj_rad_freq_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt);
+        PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
+        PRJ_SUBTIMER_START("sub_rad_nucinel");
         prj_rad_nucinel_step(rad, eos, u, dt, T_cell);
+        PRJ_SUBTIMER_STOP("sub_rad_nucinel");
+        PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
+        PRJ_SUBTIMER_STOP("sub_rad_eleinel");
+        PRJ_SUBTIMER_START("sub_rad_energy");
         prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell, kappa);
+        PRJ_SUBTIMER_STOP("sub_rad_energy");
+        PRJ_SUBTIMER_START("sub_rad_momentum");
         prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell, kappa);
+        PRJ_SUBTIMER_STOP("sub_rad_momentum");
     }
     prj_timeint_store_mhd_rad_cell(block, block->W1, i, j, k, u);
 #else
@@ -698,11 +708,21 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 
+        PRJ_SUBTIMER_START("sub_rad_freq_flux");
         prj_rad_freq_flux_apply(rad, block, block->W1, u, i, j, k, lapse_cell, 0.5 * dt);
+        PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
+        PRJ_SUBTIMER_START("sub_rad_nucinel");
         prj_rad_nucinel_step(rad, eos, u, 0.5 * dt, T_cell);
+        PRJ_SUBTIMER_STOP("sub_rad_nucinel");
+        PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
+        PRJ_SUBTIMER_STOP("sub_rad_eleinel");
+        PRJ_SUBTIMER_START("sub_rad_energy");
         prj_rad_energy_update(rad, eos, u, 0.5 * dt, lapse_cell, &T_cell, kappa);
+        PRJ_SUBTIMER_STOP("sub_rad_energy");
+        PRJ_SUBTIMER_START("sub_rad_momentum");
         prj_rad_momentum_update(rad, eos, u, 0.5 * dt, lapse_cell, T_cell, kappa);
+        PRJ_SUBTIMER_STOP("sub_rad_momentum");
     }
     prj_timeint_store_mhd_rad_cell(block, block->W, i, j, k, u);
 #else
@@ -926,7 +946,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int j;
             int k;
 
+            PRJ_SUBTIMER_START("sub_cell_src_update");
             prj_src_update(eos, rad, grav, block, block->W, block->dUdt);
+            PRJ_SUBTIMER_STOP("sub_cell_src_update");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -1009,7 +1031,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int j;
             int k;
 
+            PRJ_SUBTIMER_START("sub_cell_src_update");
             prj_src_update(eos, rad, grav, block, block->W1, block->dUdt);
+            PRJ_SUBTIMER_STOP("sub_cell_src_update");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {

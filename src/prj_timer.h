@@ -77,4 +77,23 @@ void prj_mpi_barrier(const struct prj_mpi *mpi);
         ((void)(timer), (void)(mpi), (void)(name))
 #endif
 
+/* === TEMPORARY intra-bucket subtimers (diagnostic) ========================
+ * Guarded by PRJ_SUBTIMER (default off). Build with
+ *   make ... MACHINE_CPPFLAGS=-DPRJ_SUBTIMER=1
+ * to enable. They attach to the current bucket via prj_timer_current(), so no
+ * timer pointer needs threading through call sites. To remove permanently,
+ * delete this block plus the PRJ_SUBTIMER_START/STOP call sites (grep
+ * PRJ_SUBTIMER). Overhead: two clock reads per wrapped call; only used around
+ * coarse, heavy calls so distortion is small. */
+#ifndef PRJ_SUBTIMER
+#define PRJ_SUBTIMER 0
+#endif
+#if PRJ_SUBTIMER
+#define PRJ_SUBTIMER_START(name) PRJ_TIMER_CURRENT_START(name)
+#define PRJ_SUBTIMER_STOP(name) PRJ_TIMER_CURRENT_STOP(name)
+#else
+#define PRJ_SUBTIMER_START(name) ((void)(name))
+#define PRJ_SUBTIMER_STOP(name) ((void)(name))
+#endif
+
 #endif

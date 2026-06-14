@@ -52,8 +52,9 @@ static int prj_boundary_fraction_case(double frac)
 }
 
 enum {
-    PRJ_BOUNDARY_PHYS_FACE_ONLY = 0,
-    PRJ_BOUNDARY_PHYS_ALL = 1
+    PRJ_BOUNDARY_PHYS_FACE_ONLY = 0,  /* pure-face ghosts (1 transverse-interior slab) */
+    PRJ_BOUNDARY_PHYS_ALL = 1,        /* faces + edges + corners */
+    PRJ_BOUNDARY_PHYS_EDGE_CORNER = 2 /* edges + corners only (faces done separately) */
 };
 
 static double prj_boundary_read_value(const double *src, int var, int i, int j, int k, int is_eosvar)
@@ -402,101 +403,76 @@ static int prj_boundary_idx_outside(int idx)
     return idx < 0 || idx >= PRJ_BLOCK_SIZE;
 }
 
-static void prj_boundary_apply_axis(double *dst, int axis, int side, int bc_type, int face_only)
+/* Copy one boundary band for variables [v_begin, v_end).  Iterates only the
+ * NGHOST-thick slab normal to `axis` on `side` (no full-cube walk).  The
+ * transverse extent is set by `region`:
+ *   FACE_ONLY    -> transverse interior [0, BLOCK_SIZE)            (pure faces)
+ *   EDGE_CORNER  -> full transverse band, skipping pure-face cells (edges/corners)
+ *   ALL          -> full transverse band                          (faces+edges+corners)
+ * `do_special` enables the velocity sign-flip / user override (hydro band only). */
+static void prj_boundary_apply_axis_band(double *dst, int axis, int side, int bc_type,
+    int region, int ng, int v_begin, int v_end, int do_special)
 {
-    int i;
-    int j;
-    int k;
+    const int axis1 = (axis + 1) % 3;
+    const int axis2 = (axis + 2) % 3;
+    const int normal_v = axis == 0 ? PRJ_PRIM_V1 : (axis == 1 ? PRJ_PRIM_V2 : PRJ_PRIM_V3);
+    const int n_lo = side == 0 ? -ng : PRJ_BLOCK_SIZE;
+    const int n_hi = side == 0 ? 0 : PRJ_BLOCK_SIZE + ng; /* exclusive */
+    const int t_lo = region == PRJ_BOUNDARY_PHYS_FACE_ONLY ? 0 : -ng;
+    const int t_hi = region == PRJ_BOUNDARY_PHYS_FACE_ONLY
+        ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE + ng; /* exclusive */
+    int a;
+    int t1;
+    int t2;
 
-    /* Hydro primitives: iterate the full ghost range. */
-    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+    for (a = n_lo; a < n_hi; ++a) {
+        int src_a = side == 0 ? -a - 1 : 2 * PRJ_BLOCK_SIZE - 1 - a;
+
+        for (t1 = t_lo; t1 < t_hi; ++t1) {
+            for (t2 = t_lo; t2 < t_hi; ++t2) {
                 int idx[3];
                 int src_idx[3];
                 int v;
-                int normal_v;
 
-                idx[0] = i;
-                idx[1] = j;
-                idx[2] = k;
-                if (face_only != 0) {
-                    int axis1 = (axis + 1) % 3;
-                    int axis2 = (axis + 2) % 3;
-
-                    if (prj_boundary_idx_outside(idx[axis1]) ||
-                        prj_boundary_idx_outside(idx[axis2])) {
-                        continue;
-                    }
+                /* Edge/corner pass leaves the pure-face cells to the face pass. */
+                if (region == PRJ_BOUNDARY_PHYS_EDGE_CORNER &&
+                    !prj_boundary_idx_outside(t1) && !prj_boundary_idx_outside(t2)) {
+                    continue;
                 }
-                if (side == 0) {
-                    if (idx[axis] >= 0) {
-                        continue;
-                    }
-                    src_idx[axis] = -idx[axis] - 1;
-                } else {
-                    if (idx[axis] < PRJ_BLOCK_SIZE) {
-                        continue;
-                    }
-                    src_idx[axis] = 2 * PRJ_BLOCK_SIZE - 1 - idx[axis];
+                idx[axis] = a;
+                idx[axis1] = t1;
+                idx[axis2] = t2;
+                src_idx[axis] = src_a;
+                src_idx[axis1] = t1;
+                src_idx[axis2] = t2;
+                for (v = v_begin; v < v_end; ++v) {
+                    dst[VIDX(v, idx[0], idx[1], idx[2])] =
+                        dst[VIDX(v, src_idx[0], src_idx[1], src_idx[2])];
                 }
-                src_idx[(axis + 1) % 3] = idx[(axis + 1) % 3];
-                src_idx[(axis + 2) % 3] = idx[(axis + 2) % 3];
-                for (v = 0; v < PRJ_NHYDRO; ++v) {
-                    dst[VIDX(v, idx[0], idx[1], idx[2])] = dst[VIDX(v, src_idx[0], src_idx[1], src_idx[2])];
-                }
-                if (bc_type == PRJ_BC_REFLECT) {
-                    normal_v = axis == 0 ? PRJ_PRIM_V1 : (axis == 1 ? PRJ_PRIM_V2 : PRJ_PRIM_V3);
-                    dst[VIDX(normal_v, idx[0], idx[1], idx[2])] = -dst[VIDX(normal_v, src_idx[0], src_idx[1], src_idx[2])];
-                } else if (bc_type == PRJ_BC_USER) {
-                    if (axis == 0 && side == 0) {
-                        dst[VIDX(PRJ_PRIM_V1, idx[0], idx[1], idx[2])] = 5.0;
+                if (do_special) {
+                    if (bc_type == PRJ_BC_REFLECT) {
+                        dst[VIDX(normal_v, idx[0], idx[1], idx[2])] =
+                            -dst[VIDX(normal_v, src_idx[0], src_idx[1], src_idx[2])];
+                    } else if (bc_type == PRJ_BC_USER) {
+                        if (axis == 0 && side == 0) {
+                            dst[VIDX(PRJ_PRIM_V1, idx[0], idx[1], idx[2])] = 5.0;
+                        }
                     }
                 }
             }
         }
     }
+}
 
+static void prj_boundary_apply_axis(double *dst, int axis, int side, int bc_type, int region)
+{
+    /* Hydro primitives use the full NGHOST band. */
+    prj_boundary_apply_axis_band(dst, axis, side, bc_type, region, PRJ_NGHOST,
+        0, PRJ_NHYDRO, 1);
 #if PRJ_NRAD > 0
-    /* Radiation primitives: narrower ghost band [-PRJ_NGHOST_RAD, ...). */
-    for (i = -PRJ_NGHOST_RAD; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD; ++i) {
-        for (j = -PRJ_NGHOST_RAD; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD; ++j) {
-            for (k = -PRJ_NGHOST_RAD; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_RAD; ++k) {
-                int idx[3];
-                int src_idx[3];
-                int v;
-
-                idx[0] = i;
-                idx[1] = j;
-                idx[2] = k;
-                if (face_only != 0) {
-                    int axis1 = (axis + 1) % 3;
-                    int axis2 = (axis + 2) % 3;
-
-                    if (prj_boundary_idx_outside(idx[axis1]) ||
-                        prj_boundary_idx_outside(idx[axis2])) {
-                        continue;
-                    }
-                }
-                if (side == 0) {
-                    if (idx[axis] >= 0) {
-                        continue;
-                    }
-                    src_idx[axis] = -idx[axis] - 1;
-                } else {
-                    if (idx[axis] < PRJ_BLOCK_SIZE) {
-                        continue;
-                    }
-                    src_idx[axis] = 2 * PRJ_BLOCK_SIZE - 1 - idx[axis];
-                }
-                src_idx[(axis + 1) % 3] = idx[(axis + 1) % 3];
-                src_idx[(axis + 2) % 3] = idx[(axis + 2) % 3];
-                for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                    dst[VIDX(v, idx[0], idx[1], idx[2])] = dst[VIDX(v, src_idx[0], src_idx[1], src_idx[2])];
-                }
-            }
-        }
-    }
+    /* Radiation primitives use the (possibly narrower) NGHOST_RAD band. */
+    prj_boundary_apply_axis_band(dst, axis, side, bc_type, region, PRJ_NGHOST_RAD,
+        PRJ_NHYDRO, PRJ_NVAR_PRIM, 0);
 #endif
 }
 
@@ -505,27 +481,28 @@ void prj_boundary_physical(const prj_mesh *mesh, const prj_bc *bc, prj_block *bl
     double *dst = prj_boundary_stage_array(block, stage);
     const double tol = 1.0e-12;
     int pass;
+    /* Faces resolve in one pass; edges/corners need the per-axis copy to
+     * propagate (faces->edges->corners), so those modes run three passes. */
     int npass = mode == PRJ_BOUNDARY_PHYS_FACE_ONLY ? 1 : 3;
-    int face_only = mode == PRJ_BOUNDARY_PHYS_FACE_ONLY ? 1 : 0;
 
     for (pass = 0; pass < npass; ++pass) {
         if (prj_abs_double(block->xmin[0] - mesh->coord.x1min) < tol) {
-            prj_boundary_apply_axis(dst, 0, 0, bc->bc_x1_inner, face_only);
+            prj_boundary_apply_axis(dst, 0, 0, bc->bc_x1_inner, mode);
         }
         if (prj_abs_double(block->xmax[0] - mesh->coord.x1max) < tol) {
-            prj_boundary_apply_axis(dst, 0, 1, bc->bc_x1_outer, face_only);
+            prj_boundary_apply_axis(dst, 0, 1, bc->bc_x1_outer, mode);
         }
         if (prj_abs_double(block->xmin[1] - mesh->coord.x2min) < tol) {
-            prj_boundary_apply_axis(dst, 1, 0, bc->bc_x2_inner, face_only);
+            prj_boundary_apply_axis(dst, 1, 0, bc->bc_x2_inner, mode);
         }
         if (prj_abs_double(block->xmax[1] - mesh->coord.x2max) < tol) {
-            prj_boundary_apply_axis(dst, 1, 1, bc->bc_x2_outer, face_only);
+            prj_boundary_apply_axis(dst, 1, 1, bc->bc_x2_outer, mode);
         }
         if (prj_abs_double(block->xmin[2] - mesh->coord.x3min) < tol) {
-            prj_boundary_apply_axis(dst, 2, 0, bc->bc_x3_inner, face_only);
+            prj_boundary_apply_axis(dst, 2, 0, bc->bc_x3_inner, mode);
         }
         if (prj_abs_double(block->xmax[2] - mesh->coord.x3max) < tol) {
-            prj_boundary_apply_axis(dst, 2, 1, bc->bc_x3_outer, face_only);
+            prj_boundary_apply_axis(dst, 2, 1, bc->bc_x3_outer, mode);
         }
     }
 }
@@ -1143,7 +1120,7 @@ void prj_boundary_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, in
     }
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
-            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
+            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_EDGE_CORNER);
         }
     }
 }
@@ -1163,18 +1140,22 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
     (void)rad;
     (void)timer_scope;
 
+    PRJ_SUBTIMER_START("sub_ghost_phys_face");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
         }
     }
+    PRJ_SUBTIMER_STOP("sub_ghost_phys_face");
 #if PRJ_MHD
+    PRJ_SUBTIMER_START("sub_ghost_mhd_pre");
     prj_boundary_init_face_fidelity(mesh, mpi);
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
+    PRJ_SUBTIMER_STOP("sub_ghost_mhd_pre");
 #else
     (void)use_bf1;
     (void)eos;
@@ -1187,18 +1168,24 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * reads only active cells; the local copies write only ghost zones, so
          * the two never touch the same memory. The wait completes the exchange
          * after the local work is done. */
+        PRJ_SUBTIMER_START("sub_ghost_post");
         prj_mpi_post_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
+        PRJ_SUBTIMER_STOP("sub_ghost_post");
+        PRJ_SUBTIMER_START("sub_ghost_send");
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
                 prj_boundary_send(mesh, mpi, &mesh->blocks[i], stage, fill_kind);
             }
         }
+        PRJ_SUBTIMER_STOP("sub_ghost_send");
 #if PRJ_MHD
+        PRJ_SUBTIMER_START("sub_ghost_send_bf");
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
                 prj_boundary_send_bf(mesh, mpi, &mesh->blocks[i], use_bf1, fill_kind);
             }
         }
+        PRJ_SUBTIMER_STOP("sub_ghost_send_bf");
 #endif
 #if PRJ_USE_GRAVITY
         /* Overlap the gravity radial reduce/integrate with the in-flight
@@ -1208,8 +1195,10 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * neither touches the W ghost zones the exchange is filling. The two
          * allreduces inside the reduce progress the posted Isend/Irecv. */
         if (grav != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
+            PRJ_SUBTIMER_START("sub_ghost_grav");
             prj_gravity_monopole_reduce(mesh, grav, mpi, stage);
             prj_gravity_monopole_integrate(mesh, grav, mpi);
+            PRJ_SUBTIMER_STOP("sub_ghost_grav");
         }
 #endif
         /* Transport opacity for active cells overlaps the same-level exchange
@@ -1217,16 +1206,23 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * writes the active region of kappa_cell/sigma_cell. The 1-ghost halo
          * is filled by the caller after eos_fill_mesh. */
         if (rad != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
+            PRJ_SUBTIMER_START("sub_ghost_opac");
             prj_flux_fill_transport_opacity_active(mesh, rad, mpi, stage);
+            PRJ_SUBTIMER_STOP("sub_ghost_opac");
         }
+        PRJ_SUBTIMER_START("sub_ghost_wait");
         prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
+        PRJ_SUBTIMER_STOP("sub_ghost_wait");
     }
+    PRJ_SUBTIMER_START("sub_ghost_phys_all");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
-            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_ALL);
+            prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_EDGE_CORNER);
         }
     }
+    PRJ_SUBTIMER_STOP("sub_ghost_phys_all");
 #if PRJ_MHD
+    PRJ_SUBTIMER_START("sub_ghost_mhd_post");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
@@ -1237,5 +1233,6 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
             prj_mhd_bf2bc_all(eos, &mesh->blocks[i], use_bf1);
         }
     }
+    PRJ_SUBTIMER_STOP("sub_ghost_mhd_post");
 #endif
 }
