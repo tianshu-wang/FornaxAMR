@@ -236,7 +236,9 @@ void prj_rad_eleinel_init(prj_rad *rad)
                 for (jq = 0; jq < INEL_PHI_NT; jq++) {
                     double log10t_jq = -1.0 + 2.5 * (double)jq / (double)INEL_PHI_NT;
                     double T_jq = pow(10.0, log10t_jq);
-                    rad->expe[nu][(nf * PRJ_NEGROUP + nfp) * INEL_PHI_NT + jq] =
+                    /* Layout [nfp][jq][nf] so the lookup's nf(=g) loop is
+                     * contiguous (the fastest axis), matching the phi table. */
+                    rad->expe[nu][(nfp * INEL_PHI_NT + jq) * PRJ_NEGROUP + nf] =
                         exp(PRJ_MAX(PRJ_MIN(-omegae / T_jq, 207.0), -207.0));
                 }
             }
@@ -370,7 +372,10 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             double xjpe = xj[nfp];
             double one_minus_xjpe = 1.0 - xjpe;
             double term = freqe2_dnue[nfp];
-            const double *expe_nfp = &rad->expe[nu][nfp * INEL_PHI_NT + expe_jq];
+            /* expe is now [nfp][jq][nf], so the two jq samples are each a
+             * contiguous run over g (= nf) one PRJ_NEGROUP block apart. */
+            const double *expe_e0 = &rad->expe[nu][(nfp * INEL_PHI_NT + expe_jq) * PRJ_NEGROUP];
+            const double *expe_e1 = expe_e0 + PRJ_NEGROUP;
             /* phi(g) is a fixed 6-point (jeta,jq) stencil; ke=g is the table's
              * fastest axis, so each stencil point is a contiguous run over g.
              * Hoist the six base pointers per m and reconstruct phi0/phi1 in a
@@ -395,8 +400,7 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
                             + coeff3 * a3[g] + coeff4 * a4[g] + coeff5 * a5[g];
                 double phi1 = coeff0 * c0[g] + coeff1 * c1[g] + coeff2 * c2[g]
                             + coeff3 * c3[g] + coeff4 * c4[g] + coeff5 * c5[g];
-                const double *ep = &expe_nfp[g * PRJ_NEGROUP * INEL_PHI_NT];
-                double expe = expe_coeff0 * ep[0] + expe_coeff1 * ep[1];
+                double expe = expe_coeff0 * expe_e0[g] + expe_coeff1 * expe_e1[g];
                 double fdotf = xh[g][0] * xh_nfp0 + xh[g][1] * xh_nfp1 + xh[g][2] * xh_nfp2;
                 double half_phi0 = 0.5 * phi0;
                 double flux_phi1 = czero * 1.5 * phi1;
