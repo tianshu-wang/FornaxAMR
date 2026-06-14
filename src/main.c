@@ -491,9 +491,6 @@ int main(int argc, char *argv[])
              * fill (prj_boundary_fill_ghosts_and_bf runs reduce+integrate). The
              * mesh/density/x_com are unchanged since, so no pre-tag rebuild is
              * needed here; the post-adapt rebuild below handles grid changes. */
-            PRJ_SUBTIMER_START("sub_amr_eos_fill_ghost_cons");
-            prj_eos_fill_ghost_cons(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
-            PRJ_SUBTIMER_STOP("sub_amr_eos_fill_ghost_cons");
             double E_injected_before = sim.eos.E_injected;
             PRJ_SUBTIMER_START("sub_amr_adapt_total");
             int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi);
