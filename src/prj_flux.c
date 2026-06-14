@@ -643,6 +643,17 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     static double pR_block[PRJ_BLOCK_NCELLS];
     static double gL_block[PRJ_BLOCK_NCELLS];
     static double gR_block[PRJ_BLOCK_NCELLS];
+    /* Per-pencil (fixed i, j) face-major transpose of the variable-major block
+     * buffers above. Filled once per (i, j) strip as contiguous k-streams, then
+     * consumed face-by-face zero-copy: WLp[kk] holds all PRJ_NVAR_PRIM vars of
+     * face kk = k - kstart contiguously, the layout the Riemann/rad solvers
+     * want. Strip length kend - kstart + 1 <= PRJ_BS. */
+    static double WLp[PRJ_BS * PRJ_NVAR_PRIM];
+    static double WRp[PRJ_BS * PRJ_NVAR_PRIM];
+    static double pLp[PRJ_BS];
+    static double pRp[PRJ_BS];
+    static double gLp[PRJ_BS];
+    static double gRp[PRJ_BS];
     int dir;
 #if PRJ_NRAD == 0
     (void)rad;
@@ -700,13 +711,45 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 
         for (i = istart; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
+                int strip = kend - kstart + 1;
+
+                /* Transpose this (i, j) pencil from variable-major block buffers
+                 * into face-major strip buffers. The inner k-run is contiguous
+                 * in the block buffers (k is the fastest IDX axis), so each
+                 * variable streams sequentially instead of striding 13.8 KB per
+                 * face as the old per-face gather did. */
+                PRJ_SUBTIMER_START("sub_flux_gather");
+                {
+                    size_t base = (size_t)IDX(i, j, kstart);
+                    int v;
+                    int kk;
+                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                        const double *src_l =
+                            &WL_block[(size_t)v * PRJ_BLOCK_NCELLS + base];
+                        const double *src_r =
+                            &WR_block[(size_t)v * PRJ_BLOCK_NCELLS + base];
+                        for (kk = 0; kk < strip; ++kk) {
+                            WLp[(size_t)kk * PRJ_NVAR_PRIM + v] = src_l[kk];
+                            WRp[(size_t)kk * PRJ_NVAR_PRIM + v] = src_r[kk];
+                        }
+                    }
+                    for (kk = 0; kk < strip; ++kk) {
+                        pLp[kk] = pL_block[base + kk];
+                        pRp[kk] = pR_block[base + kk];
+                        gLp[kk] = gL_block[base + kk];
+                        gRp[kk] = gR_block[base + kk];
+                    }
+                }
+                PRJ_SUBTIMER_STOP("sub_flux_gather");
+
                 for (k = kstart; k <= kend; ++k) {
-                    double WL[PRJ_NVAR_PRIM];
-                    double WR[PRJ_NVAR_PRIM];
-                    double pL;
-                    double pR;
-                    double gL;
-                    double gR;
+                    int kk = k - kstart;
+                    double *WL = &WLp[(size_t)kk * PRJ_NVAR_PRIM];
+                    double *WR = &WRp[(size_t)kk * PRJ_NVAR_PRIM];
+                    double pL = pLp[kk];
+                    double pR = pRp[kk];
+                    double gL = gLp[kk];
+                    double gR = gRp[kk];
                     double Fl[PRJ_NVAR_CONS];
                     int il;
                     int jl;
@@ -714,26 +757,12 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     int ir;
                     int jr;
                     int kr;
-                    int v;
-                    size_t fidx;
 
                     double v_face_loc[3] = {0.0, 0.0, 0.0};
                     double deltau;
                     double deltav;
                     double deltaw;
 
-                    /* Gather the reconstructed left/right states for this face. */
-                    PRJ_SUBTIMER_START("sub_flux_gather");
-                    fidx = (size_t)IDX(i, j, k);
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        WL[v] = WL_block[(size_t)v * PRJ_BLOCK_NCELLS + fidx];
-                        WR[v] = WR_block[(size_t)v * PRJ_BLOCK_NCELLS + fidx];
-                    }
-                    pL = pL_block[fidx];
-                    pR = pR_block[fidx];
-                    gL = gL_block[fidx];
-                    gR = gR_block[fidx];
-                    PRJ_SUBTIMER_STOP("sub_flux_gather");
                     prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
 
                     PRJ_SUBTIMER_START("sub_flux_veldelta");
