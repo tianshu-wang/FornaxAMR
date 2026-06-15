@@ -399,6 +399,35 @@ static void prj_gravity_cache_block_clear(prj_block *block, const prj_grav *grav
     }
 }
 
+static double prj_gravity_current_min_cell_size(const prj_mesh *mesh)
+{
+    double dx0;
+    double dx1;
+    double dx2;
+    double min_cell;
+    int level;
+
+    if (mesh == 0 ||
+        mesh->root_nx[0] <= 0 || mesh->root_nx[1] <= 0 || mesh->root_nx[2] <= 0 ||
+        mesh->max_active_level < 0) {
+        return 0.0;
+    }
+
+    dx0 = fabs(mesh->coord.x1max - mesh->coord.x1min) /
+        ((double)mesh->root_nx[0] * (double)PRJ_BLOCK_SIZE);
+    dx1 = fabs(mesh->coord.x2max - mesh->coord.x2min) /
+        ((double)mesh->root_nx[1] * (double)PRJ_BLOCK_SIZE);
+    dx2 = fabs(mesh->coord.x3max - mesh->coord.x3min) /
+        ((double)mesh->root_nx[2] * (double)PRJ_BLOCK_SIZE);
+    min_cell = prj_gravity_min_double(dx0, prj_gravity_min_double(dx1, dx2));
+    if (min_cell <= 0.0) {
+        return 0.0;
+    }
+
+    level = mesh->max_active_level;
+    return ldexp(min_cell, -level);
+}
+
 static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh)
 {
     double min_cell;
@@ -409,9 +438,9 @@ static void prj_gravity_build_rf(prj_grav *grav, const prj_mesh *mesh)
         grav->rmax <= 0.0) {
         return;
     }
-    min_cell = mesh != 0 ? mesh->min_allowable_cell_size : 0.0;
+    min_cell = prj_gravity_current_min_cell_size(mesh);
     grav->min_cell = min_cell;
-    grav->dr_min = 0.5 * min_cell;
+    grav->dr_min = 1.5 * min_cell;
     if (grav->dr_min <= 0.0 || grav->rmax <= grav->dr_min) {
         grav->dr_min = grav->rmax / (double)grav->nbins;
     }
