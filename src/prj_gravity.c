@@ -1031,8 +1031,12 @@ static double prj_gravity_shell_volume(const prj_grav *grav, int idx)
 
 /* Spread the donor bin j's accumulated content uniformly (per unit shell
    volume) over bins i..j, conserving the total. After this every bin in
-   [i, j] holds content proportional to its own shell volume, so dividing by
-   shell volume later yields an identical average across the range. */
+   [i, j] holds content proportional to its own shell volume. grav->vol is
+   spread the same way, so each filled bin's accumulated volume is likewise
+   proportional to its shell volume; dividing the spread content by the spread
+   grav->vol (in prj_gravity_monopole_reduce) then yields an identical
+   volume-average across the range, and grav->vol * density used in the TOV
+   integral recovers the donor mass exactly. */
 static void prj_gravity_spread_bins(double *arr, const prj_grav *grav,
                                     int i, int j, double inv_total_vol)
 {
@@ -1373,18 +1377,24 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
     }
 
     for (idx = 0; idx < grav->nbins; ++idx) {
-        double r0 = grav->rf[idx];
-        double r1 = grav->rf[idx + 1];
-        double shell_vol = (4.0 / 3.0) * M_PI * (r1 * r1 * r1 - r0 * r0 * r0);
+        /* Divide by the ACTUAL accumulated cell volume in the bin, not the
+           analytical shell volume 4/3 pi (r1^3 - r0^3).  The gravity log-grid
+           is finer than the hydro cells, so the cells whose centers land in a
+           bin occupy a volume that differs from the analytical shell by a
+           radius-locked factor (~+/-30%); dividing by that analytical volume
+           biases these volume-averages and feeds a grid-locked spurious force.
+           grav->vol[idx] is the true accumulated cell volume, so this yields a
+           genuine volume-weighted average. */
+        double bin_vol = grav->vol[idx];
 
-        if (shell_vol > 0.0) {
-            grav->rho_avg[idx] /= shell_vol;
-            grav->vr_avg[idx] /= shell_vol;
-            grav->pgas_avg[idx] /= shell_vol;
-            grav->uavg_int[idx] /= shell_vol;
-            grav->erad_avg[idx] /= shell_vol;
-            grav->prad_avg[idx] /= shell_vol;
-            grav->vdotF_avg[idx] /= shell_vol;
+        if (bin_vol > 0.0) {
+            grav->rho_avg[idx] /= bin_vol;
+            grav->vr_avg[idx] /= bin_vol;
+            grav->pgas_avg[idx] /= bin_vol;
+            grav->uavg_int[idx] /= bin_vol;
+            grav->erad_avg[idx] /= bin_vol;
+            grav->prad_avg[idx] /= bin_vol;
+            grav->vdotF_avg[idx] /= bin_vol;
         }
     }
 }
@@ -1460,9 +1470,14 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
             double m_tov = 0.0;
 
             for (idx = 0; idx < grav->nbins; ++idx) {
-                double r0 = grav->rf[idx];
                 double r1 = grav->rf[idx + 1];
-                double shell_vol = (4.0 / 3.0) * M_PI * (r1 * r1 * r1 - r0 * r0 * r0);
+                /* Convert per-bin densities to extensive contributions with the
+                   ACTUAL accumulated cell volume (matches the volume-averaged
+                   rho_avg/uavg/erad above), so bin_vol*density recovers the
+                   deposited mass-energy and total mass is conserved exactly.
+                   Geometric factors below (r1, 4 pi r^3 P) keep the physical
+                   bin-face radius. */
+                double bin_vol = grav->vol[idx];
                 double vedge = idx < grav->nbins - 1 ?
                     0.5 * (grav->vr_avg[idx] + grav->vr_avg[idx + 1]) :
                     grav->vr_avg[idx];
@@ -1478,7 +1493,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
                 gamma_avg = 0.5 * (gamma_face[idx] + gamma_face[idx + 1]);
                 integrand = (rho + u / c2 + erad) * gamma_avg + vdF;
                 gsq = 1.0 + (vedge / PRJ_CLIGHT) * (vedge / PRJ_CLIGHT) -
-                    2.0 * PRJ_GNEWT * (m_tov + shell_vol * integrand) / (r1 * c2);
+                    2.0 * PRJ_GNEWT * (m_tov + bin_vol * integrand) / (r1 * c2);
                 if (gsq < 1.0e-12) {
                     gsq = 1.0e-12;
                 }
@@ -1487,7 +1502,7 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
                 /* Re-evaluate integrand with updated gamma_face[idx+1]. */
                 gamma_avg = 0.5 * (gamma_face[idx] + gamma_face[idx + 1]);
                 integrand = (rho + u / c2 + erad) * gamma_avg + vdF;
-                m_tov += shell_vol * integrand;
+                m_tov += bin_vol * integrand;
                 enclosed_face[idx + 1] = m_tov;
             }
             if (iter > 0) {
