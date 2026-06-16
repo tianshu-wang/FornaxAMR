@@ -9,17 +9,17 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 
 
 # User settings. Choose a dump variable name, or derived variables "B" or "vr".
-VARIABLE = "pressure"
+VARIABLE = "vr"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
 # Set these to None to show the full domain.
 # Ranges are in km.
-X_RANGE = [-1e2,1e2]
-Y_RANGE = [-1e2,1e2]
+X_RANGE = [-5e2,5e2]
+Y_RANGE = [-5e2,5e2]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
-COLOR_SCALE = "lognorm"
+COLOR_SCALE = "normalize"
 COLOR_VMIN = None #1e7
 COLOR_VMAX = None #1e15
 SYMLOG_LINTHRESH = 1.0e-6

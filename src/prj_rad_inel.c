@@ -233,12 +233,13 @@ void prj_rad_eleinel_init(prj_rad *rad)
             for (nfp = 0; nfp < PRJ_NEGROUP; nfp++) {
                 double omegae = rad->egroup[nu][nf] - rad->egroup[nu][nfp];
                 int jq;
-                for (jq = 0; jq < INEL_PHI_NT; jq++) {
-                    double log10t_jq = -1.0 + 2.5 * (double)jq / (double)INEL_PHI_NT;
+                for (jq = 0; jq < PRJ_EXPE_NT; jq++) {
+                    double log10t_jq = -1.0 + 2.5 * (double)jq / (double)PRJ_EXPE_NT;
                     double T_jq = pow(10.0, log10t_jq);
                     /* Layout [nfp][jq][nf] so the lookup's nf(=g) loop is
-                     * contiguous (the fastest axis), matching the phi table. */
-                    rad->expe[nu][(nfp * INEL_PHI_NT + jq) * PRJ_NEGROUP + nf] =
+                     * contiguous (the fastest axis). PRJ_EXPE_NT is deliberately
+                     * independent of the on-disk phi-table size INEL_PHI_NT. */
+                    rad->expe[nu][(nfp * PRJ_EXPE_NT + jq) * PRJ_NEGROUP + nf] =
                         exp(PRJ_MAX(PRJ_MIN(-omegae / T_jq, 207.0), -207.0));
                 }
             }
@@ -302,10 +303,10 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         double ql = (log10t + 1.0) / 2.5;
         double sq;
 
-        expe_jq = (int)((double)INEL_PHI_NT * ql);
+        expe_jq = (int)((double)PRJ_EXPE_NT * ql);
         if (expe_jq < 0) expe_jq = 0;
-        if (expe_jq > INEL_PHI_NT - 2) expe_jq = INEL_PHI_NT - 2;
-        sq = (double)INEL_PHI_NT * ql - (double)expe_jq;
+        if (expe_jq > PRJ_EXPE_NT - 2) expe_jq = PRJ_EXPE_NT - 2;
+        sq = (double)PRJ_EXPE_NT * ql - (double)expe_jq;
         expe_coeff0 = 1.0 - sq;
         expe_coeff1 = sq;
     }
@@ -374,7 +375,7 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             double term = freqe2_dnue[nfp];
             /* expe is now [nfp][jq][nf], so the two jq samples are each a
              * contiguous run over g (= nf) one PRJ_NEGROUP block apart. */
-            const double *expe_e0 = &rad->expe[nu][(nfp * INEL_PHI_NT + expe_jq) * PRJ_NEGROUP];
+            const double *expe_e0 = &rad->expe[nu][(nfp * PRJ_EXPE_NT + expe_jq) * PRJ_NEGROUP];
             const double *expe_e1 = expe_e0 + PRJ_NEGROUP;
             /* phi(g) is a fixed 6-point (jeta,jq) stencil; ke=g is the table's
              * fastest axis, so each stencil point is a contiguous run over g.

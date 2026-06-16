@@ -68,6 +68,9 @@
 #ifndef INEL_PHI_NT
 #define INEL_PHI_NT 30
 #endif
+#ifndef PRJ_EXPE_NT
+#define PRJ_EXPE_NT 1024
+#endif
 #if PRJ_MHD
 #define PRJ_NHYDRO 9
 #else
