@@ -91,6 +91,46 @@ static void prj_rad_eleinel_phi_interp_make(double log10xtemp, double etalep,
     *coeff5_out = sp * sq;
 }
 
+static double prj_rad_eleinel_phi_interp_value(const double *table,
+    int m, int ke, int le, int jeta, int jq, int ng,
+    double coeff0, double coeff1, double coeff2,
+    double coeff3, double coeff4, double coeff5)
+{
+    return coeff0 * INEL_ELEM_ELE(table, m, ke, le, jeta,     jq - 1, ng)
+         + coeff1 * INEL_ELEM_ELE(table, m, ke, le, jeta - 1, jq,     ng)
+         + coeff2 * INEL_ELEM_ELE(table, m, ke, le, jeta,     jq,     ng)
+         + coeff3 * INEL_ELEM_ELE(table, m, ke, le, jeta + 1, jq,     ng)
+         + coeff4 * INEL_ELEM_ELE(table, m, ke, le, jeta,     jq + 1, ng)
+         + coeff5 * INEL_ELEM_ELE(table, m, ke, le, jeta + 1, jq + 1, ng);
+}
+
+static int prj_rad_eleinel_positive_pair_ratio(double forward, double reverse,
+    double *ratio)
+{
+    if (isfinite(forward) && isfinite(reverse) &&
+        forward > 0.0 && reverse > 0.0) {
+        *ratio = reverse / forward;
+        return isfinite(*ratio) && *ratio > 0.0;
+    }
+
+    *ratio = 0.0;
+    return 0;
+}
+
+static int prj_rad_eleinel_signed_pair_ratio(double forward, double reverse,
+    double *ratio)
+{
+    if (isfinite(forward) && isfinite(reverse) &&
+        ((forward > 0.0 && reverse > 0.0) ||
+         (forward < 0.0 && reverse < 0.0))) {
+        *ratio = reverse / forward;
+        return isfinite(*ratio) && *ratio > 0.0;
+    }
+
+    *ratio = 0.0;
+    return 0;
+}
+
 static void prj_rad_eleinel_read_table(const prj_rad *rad, int nu,
     double *dest, size_t count)
 {
@@ -218,31 +258,13 @@ void prj_rad_eleinel_init(prj_rad *rad)
             double f3 = rad->egroup[nu][g] * rad->egroup[nu][g] * rad->egroup[nu][g];
             int gp = PRJ_MIN(g + 1, PRJ_NEGROUP - 1);
             int gm = PRJ_MAX(g - 1, 0);
-            double dnue = (rad->egroup[nu][gp] - rad->egroup[nu][gm]) / 2.0;
+            double dnue = (rad->degroup_erg[nu] != 0) ?
+                rad->degroup_erg[nu][g] / PRJ_MEV_TO_ERG :
+                (rad->egroup[nu][gp] - rad->egroup[nu][gm]) / 2.0;
 
             rad->eleinel_freqe3[idx] = f3;
             rad->eleinel_factf_over_freqe3[idx] = rad->eleinel_factf / f3;
             rad->eleinel_freqe2_dnue[idx] = rad->egroup[nu][g] * rad->egroup[nu][g] * dnue;
-        }
-    }
-
-    for (nu = 0; nu < PRJ_NRAD; nu++) {
-        int nf;
-        for (nf = 0; nf < PRJ_NEGROUP; nf++) {
-            int nfp;
-            for (nfp = 0; nfp < PRJ_NEGROUP; nfp++) {
-                double omegae = rad->egroup[nu][nf] - rad->egroup[nu][nfp];
-                int jq;
-                for (jq = 0; jq < PRJ_EXPE_NT; jq++) {
-                    double log10t_jq = -1.0 + 2.5 * (double)jq / (double)PRJ_EXPE_NT;
-                    double T_jq = pow(10.0, log10t_jq);
-                    /* Layout [nfp][jq][nf] so the lookup's nf(=g) loop is
-                     * contiguous (the fastest axis). PRJ_EXPE_NT is deliberately
-                     * independent of the on-disk phi-table size INEL_PHI_NT. */
-                    rad->expe[nu][(nfp * PRJ_EXPE_NT + jq) * PRJ_NEGROUP + nf] =
-                        exp(PRJ_MAX(PRJ_MIN(-omegae / T_jq, 207.0), -207.0));
-                }
-            }
         }
     }
 }
@@ -272,9 +294,6 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
     int jeta;
     int jq;
     double log10t;
-    int expe_jq;
-    double expe_coeff0;
-    double expe_coeff1;
     double rho_cut;
     double coeff0;
     double coeff1;
@@ -299,17 +318,6 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
     log10t = log10(T);
     prj_rad_eleinel_phi_interp_make(log10t, etael,
         &jeta, &jq, &coeff0, &coeff1, &coeff2, &coeff3, &coeff4, &coeff5);
-    {
-        double ql = (log10t + 1.0) / 2.5;
-        double sq;
-
-        expe_jq = (int)((double)PRJ_EXPE_NT * ql);
-        if (expe_jq < 0) expe_jq = 0;
-        if (expe_jq > PRJ_EXPE_NT - 2) expe_jq = PRJ_EXPE_NT - 2;
-        sq = (double)PRJ_EXPE_NT * ql - (double)expe_jq;
-        expe_coeff0 = 1.0 - sq;
-        expe_coeff1 = sq;
-    }
 
     rho_cut = 1.0;
     if (rho > 1e13) {
@@ -336,7 +344,22 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         double constin = rad->eleinel_constin;
         double constout = rad->eleinel_constout;
         int nfreq = PRJ_NEGROUP;
+        double phi0_interp[PRJ_NEGROUP][PRJ_NEGROUP];
+        double phi1_interp[PRJ_NEGROUP][PRJ_NEGROUP];
+        int ke;
+        int le;
         int nfp;
+
+        for (le = 0; le < nfreq; le++) {
+            for (ke = 0; ke < nfreq; ke++) {
+                phi0_interp[ke][le] = prj_rad_eleinel_phi_interp_value(table,
+                    0, ke, le, jeta, jq, nfreq,
+                    coeff0, coeff1, coeff2, coeff3, coeff4, coeff5);
+                phi1_interp[ke][le] = prj_rad_eleinel_phi_interp_value(table,
+                    1, ke, le, jeta, jq, nfreq,
+                    coeff0, coeff1, coeff2, coeff3, coeff4, coeff5);
+            }
+        }
 
         for (g = 0; g < PRJ_NEGROUP; g++) {
             double fac = factf_over_freqe3[g] / species_cut;
@@ -373,47 +396,41 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
             double xjpe = xj[nfp];
             double one_minus_xjpe = 1.0 - xjpe;
             double term = freqe2_dnue[nfp];
-            /* expe is now [nfp][jq][nf], so the two jq samples are each a
-             * contiguous run over g (= nf) one PRJ_NEGROUP block apart. */
-            const double *expe_e0 = &rad->expe[nu][(nfp * PRJ_EXPE_NT + expe_jq) * PRJ_NEGROUP];
-            const double *expe_e1 = expe_e0 + PRJ_NEGROUP;
-            /* phi(g) is a fixed 6-point (jeta,jq) stencil; ke=g is the table's
-             * fastest axis, so each stencil point is a contiguous run over g.
-             * Hoist the six base pointers per m and reconstruct phi0/phi1 in a
-             * loop that vectorizes across g. Bit-identical: per-g independent,
-             * same operand order, nfp reduction order unchanged; inactive groups
-             * are masked (+= 0) instead of skipped. */
-            const double *a0 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta,     jq - 1, nfreq);
-            const double *a1 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta - 1, jq,     nfreq);
-            const double *a2 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta,     jq,     nfreq);
-            const double *a3 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta + 1, jq,     nfreq);
-            const double *a4 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta,     jq + 1, nfreq);
-            const double *a5 = &INEL_ELEM_ELE(table, 0, 0, nfp, jeta + 1, jq + 1, nfreq);
-            const double *c0 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta,     jq - 1, nfreq);
-            const double *c1 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta - 1, jq,     nfreq);
-            const double *c2 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta,     jq,     nfreq);
-            const double *c3 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta + 1, jq,     nfreq);
-            const double *c4 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta,     jq + 1, nfreq);
-            const double *c5 = &INEL_ELEM_ELE(table, 1, 0, nfp, jeta + 1, jq + 1, nfreq);
 
             for (g = 0; g < nfreq; g++) {
-                double phi0 = coeff0 * a0[g] + coeff1 * a1[g] + coeff2 * a2[g]
-                            + coeff3 * a3[g] + coeff4 * a4[g] + coeff5 * a5[g];
-                double phi1 = coeff0 * c0[g] + coeff1 * c1[g] + coeff2 * c2[g]
-                            + coeff3 * c3[g] + coeff4 * c4[g] + coeff5 * c5[g];
-                double expe = expe_coeff0 * expe_e0[g] + expe_coeff1 * expe_e1[g];
+                double phi0 = phi0_interp[g][nfp];
+                double phi0_rev = phi0_interp[nfp][g];
+                double phi1 = phi1_interp[g][nfp];
+                double phi1_rev = phi1_interp[nfp][g];
+                double q0;
+                double q1;
+                int use_phi0 = prj_rad_eleinel_positive_pair_ratio(phi0, phi0_rev, &q0);
+                int use_phi1 = (czero != 0.0) &&
+                    prj_rad_eleinel_signed_pair_ratio(phi1, phi1_rev, &q1);
                 double fdotf = xh[g][0] * xh_nfp0 + xh[g][1] * xh_nfp1 + xh[g][2] * xh_nfp2;
-                double half_phi0 = 0.5 * phi0;
-                double flux_phi1 = czero * 1.5 * phi1;
+                double pair_source = 0.0;
+                double pair_sink = 0.0;
                 double mask = active[g] ? 1.0 : 0.0;
 
-                sumin[g] += mask * (term * expe *
-                    (half_phi0 * xjpe * one_minus_xj[g] - flux_phi1 * fdotf));
-                sumout[g] += mask * (term *
-                    (half_phi0 * one_minus_xjpe - flux_phi1 * fdotf * inv_xj[g]));
-                if (want_scatt) {
-                    ssum[g] += mask * (term * (half_phi0 * (one_minus_xjpe + expe * xjpe)));
+                /* Enforce detailed balance on the interpolated kernel itself:
+                   q_l(g,g') Phi_l(g,g') = Phi_l(g',g). */
+                if (use_phi0) {
+                    double half_phi0 = 0.5 * phi0;
+                    pair_source += q0 * half_phi0 * xjpe * one_minus_xj[g];
+                    pair_sink += half_phi0 * one_minus_xjpe;
+                    if (want_scatt) {
+                        ssum[g] += mask * (term *
+                            (half_phi0 * (one_minus_xjpe + q0 * xjpe)));
+                    }
                 }
+                if (use_phi1) {
+                    double flux_phi1 = 1.5 * phi1;
+                    pair_source -= q1 * flux_phi1 * fdotf;
+                    pair_sink -= flux_phi1 * fdotf * inv_xj[g];
+                }
+
+                sumin[g] += mask * (term * pair_source);
+                sumout[g] += mask * (term * pair_sink);
             }
         }
 
