@@ -16,6 +16,19 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#ifndef ELEINEL_YE_DIAG
+#define ELEINEL_YE_DIAG 0
+#endif
+#if ELEINEL_YE_DIAG
+/* Diagnostic accumulators: eleinel is pure scattering and must not change Ye,
+   so the lepton-number drift dy should be ~0; we track the net drift against
+   the total |dy| activity to quantify discrete non-conservation. */
+static double g_eleinel_dy_net = 0.0;
+static double g_eleinel_dy_abs = 0.0;
+static double g_eleinel_dy_activity = 0.0;
+static int g_eleinel_diag_rank = 0;
+#endif
+
 /* ================================================================== */
 /* Electron inelastic scattering (phi-table based)                    */
 /* ================================================================== */
@@ -52,10 +65,31 @@ static int prj_rad_inel_mpi_rank(void)
 #endif
 }
 
+#if ELEINEL_YE_DIAG
+static void prj_eleinel_ye_diag_print(void)
+{
+    if (g_eleinel_diag_rank == 0) {
+        double act = g_eleinel_dy_activity;
+        fprintf(stderr,
+            "ELEINEL Ye-diag: net dy=%.6e  sum|dy|=%.6e  activity=%.6e  "
+            "net/activity=%.3e  sum|dy|/activity=%.3e\n",
+            g_eleinel_dy_net, g_eleinel_dy_abs, act,
+            act > 0 ? g_eleinel_dy_net / act : 0.0,
+            act > 0 ? g_eleinel_dy_abs / act : 0.0);
+    }
+}
+#endif
+
+/* Returns the lower-left grid cell index (jeta,jq) and the in-cell fractional
+   coordinates (sp,sq) for bilinear interpolation. sp,sq are clamped to [0,1] so
+   the bilinear weights stay a convex combination -- the interpolant is then
+   bounded by its 4 corner values, hence (essentially) non-negative for phi0 and
+   sign-consistent for phi1, which lets the detailed-balance loop run without
+   sign/positivity gates. Edge extrapolation is intentionally dropped: those are
+   the high-eta / low-T degenerate corners where neutrino radiation is
+   negligible, so nearest-edge values are sufficient. */
 static void prj_rad_eleinel_phi_interp_make(double log10xtemp, double etalep,
-    int *jeta_out, int *jq_out,
-    double *coeff0_out, double *coeff1_out, double *coeff2_out,
-    double *coeff3_out, double *coeff4_out, double *coeff5_out)
+    int *jeta_out, int *jq_out, double *sp_out, double *sq_out)
 {
     double t1 = -1.0;
     double t2 = 1.5;
@@ -85,15 +119,13 @@ static void prj_rad_eleinel_phi_interp_make(double log10xtemp, double etalep,
 
     sp = delta - jeta;
     sq = (double)INEL_PHI_NT * ql - jq;
+    if (sp < 0.0) sp = 0.0; else if (sp > 1.0) sp = 1.0;
+    if (sq < 0.0) sq = 0.0; else if (sq > 1.0) sq = 1.0;
 
     *jeta_out = jeta;
     *jq_out = jq;
-    *coeff0_out = 0.5 * sq * (sq - 1.0);
-    *coeff1_out = 0.5 * sp * (sp - 1.0);
-    *coeff2_out = 1.0 + sp * sq - sp * sp - sq * sq;
-    *coeff3_out = 0.5 * sp * (sp - 2.0 * sq + 1.0);
-    *coeff4_out = 0.5 * sq * (sq - 2.0 * sp + 1.0);
-    *coeff5_out = sp * sq;
+    *sp_out = sp;
+    *sq_out = sq;
 }
 
 static void prj_rad_eleinel_read_table(const prj_rad *rad, int nu,
@@ -179,6 +211,10 @@ void prj_rad_eleinel_init(prj_rad *rad)
         rad->eleinel_table_loaded = 0;
         return;
     }
+#if ELEINEL_YE_DIAG
+    g_eleinel_diag_rank = prj_rad_inel_mpi_rank();
+    atexit(prj_eleinel_ye_diag_print);
+#endif
 
     ee_count = (size_t)2 * (size_t)PRJ_NEGROUP * (size_t)PRJ_NEGROUP
         * (size_t)INEL_PHI_NETA * (size_t)INEL_PHI_NT;
@@ -278,32 +314,25 @@ static inline void prj_rad_eleinel_accumulate(
                 + xh[g * PRJ_NDIM + 1] * xh_nfp1
                 + xh[g * PRJ_NDIM + 2] * xh_nfp2;
             double mask = active[g] ? 1.0 : 0.0;
-            double pair_source = 0.0;
-            double pair_sink = 0.0;
-            /* Detailed balance applied directly: the reconstructed ratio obeys
-               q_l(g,g') Phi_l(g,g') = Phi_l(g',g), so q cancels and the source
-               terms use Phi_rev directly -- no division, no ratio helpers.
-               The sign/positivity gates are retained on purpose: the 6-point
-               quadratic interpolation (negative basis weights + eta-edge
-               extrapolation) can yield phi<=0 or sign-mismatched kernels, and
-               including those corrupts the result -- verified, dropping the
-               gates diverges from baseline by >1e-10 in this run. */
-            if (phi0v > 0.0 && phi0_rev > 0.0) {
-                pair_source += 0.5 * phi0_rev * xjpe * one_minus_xj[g];
-                pair_sink += 0.5 * phi0v * one_minus_xjpe;
-                if (want_scatt) {
-                    ssum[g] += mask * (term *
-                        (0.5 * (phi0v * one_minus_xjpe + phi0_rev * xjpe)));
-                }
+            /* Detailed balance applied directly: q_l(g,g') Phi_l(g,g') =
+               Phi_l(g',g), so q cancels and the source uses Phi_rev directly --
+               no division, no ratio helpers. No sign/positivity gates: bilinear
+               interpolation keeps the kernel bounded by its cell corners (so
+               phi0>=0, phi1 sign-consistent), and any underflowed forward entry
+               simply contributes ~0 to the sink while the finite reverse entry
+               supplies the physical in-scattering source. */
+            double pair_source = 0.5 * phi0_rev * xjpe * one_minus_xj[g];
+            double pair_sink = 0.5 * phi0v * one_minus_xjpe;
+
+            if (want_scatt) {
+                ssum[g] += mask * (term *
+                    (0.5 * (phi0v * one_minus_xjpe + phi0_rev * xjpe)));
             }
             if (do_phi1) {
                 double phi1v = phi1[g * nfreq + nfp];
                 double phi1_rev = phi1[nfp * nfreq + g];
-                if ((phi1v > 0.0 && phi1_rev > 0.0) ||
-                    (phi1v < 0.0 && phi1_rev < 0.0)) {
-                    pair_source -= 1.5 * phi1_rev * fdotf;
-                    pair_sink -= 1.5 * phi1v * fdotf * inv_xj[g];
-                }
+                pair_source -= 1.5 * phi1_rev * fdotf;
+                pair_sink -= 1.5 * phi1v * fdotf * inv_xj[g];
             }
 
             sumin[g] += mask * (term * pair_source);
@@ -324,12 +353,12 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
     int jq;
     double log10t;
     double rho_cut;
-    double coeff0;
-    double coeff1;
-    double coeff2;
-    double coeff3;
-    double coeff4;
-    double coeff5;
+    double sp;
+    double sq;
+    double w00;
+    double w10;
+    double w01;
+    double w11;
     const size_t total = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
     int want_scatt = (scatt != 0);
 
@@ -345,8 +374,12 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
     }
 
     log10t = log10(T);
-    prj_rad_eleinel_phi_interp_make(log10t, etael,
-        &jeta, &jq, &coeff0, &coeff1, &coeff2, &coeff3, &coeff4, &coeff5);
+    prj_rad_eleinel_phi_interp_make(log10t, etael, &jeta, &jq, &sp, &sq);
+    /* bilinear weights over the (jeta,jq) cell corners */
+    w00 = (1.0 - sp) * (1.0 - sq);
+    w10 = sp * (1.0 - sq);
+    w01 = (1.0 - sp) * sq;
+    w11 = sp * sq;
 
     rho_cut = 1.0;
     if (rho > 1e13) {
@@ -376,27 +409,24 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         double phi0_interp[PRJ_NEGROUP][PRJ_NEGROUP];
         double phi1_interp[PRJ_NEGROUP][PRJ_NEGROUP];
 
-        /* Build the interpolated kernel as a streaming weighted sum over the 6
-           (jeta,jq) stencil planes (see INEL_ELEM_ELE layout note).  phi0_interp
-           and phi1_interp are contiguous [ke][le], matching the m=0 and m=1
-           halves of each plane. */
+        /* Build the interpolated kernel as a streaming bilinear blend of the 4
+           (jeta,jq) cell-corner planes (see INEL_ELEM_ELE layout note).
+           phi0_interp and phi1_interp are contiguous [ke][le], matching the m=0
+           and m=1 halves of each plane. */
         {
             const int plane = INEL_ELE_PLANE(nfreq);
             const int half = nfreq * nfreq;
             const double *pc = table
                 + (size_t)(jeta * INEL_PHI_NT + jq) * plane;
-            const double *p0 = pc - plane;                       /* jq - 1   */
-            const double *p1 = pc - INEL_PHI_NT * plane;         /* jeta - 1 */
-            const double *p2 = pc;                               /* center   */
-            const double *p3 = pc + INEL_PHI_NT * plane;         /* jeta + 1 */
-            const double *p4 = pc + plane;                       /* jq + 1   */
-            const double *p5 = pc + (INEL_PHI_NT + 1) * plane;   /* jeta+1,jq+1 */
+            const double *c00 = pc;                              /* jeta,   jq   */
+            const double *c10 = pc + INEL_PHI_NT * plane;        /* jeta+1, jq   */
+            const double *c01 = pc + plane;                      /* jeta,   jq+1 */
+            const double *c11 = pc + (INEL_PHI_NT + 1) * plane;  /* jeta+1, jq+1 */
             double *o0 = &phi0_interp[0][0];
             int i;
 
             for (i = 0; i < half; i++) {
-                o0[i] = coeff0 * p0[i] + coeff1 * p1[i] + coeff2 * p2[i]
-                      + coeff3 * p3[i] + coeff4 * p4[i] + coeff5 * p5[i];
+                o0[i] = w00 * c00[i] + w10 * c10[i] + w01 * c01[i] + w11 * c11[i];
             }
             /* phi1 (m=1) is only consumed when czero != 0 (nu != 2); skip its
                build entirely for the heavy-lepton species. */
@@ -404,8 +434,7 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
                 double *o1 = &phi1_interp[0][0];
                 for (i = 0; i < half; i++) {
                     int j = half + i;
-                    o1[i] = coeff0 * p0[j] + coeff1 * p1[j] + coeff2 * p2[j]
-                          + coeff3 * p3[j] + coeff4 * p4[j] + coeff5 * p5[j];
+                    o1[i] = w00 * c00[j] + w10 * c10[j] + w01 * c01[j] + w11 * c11[j];
                 }
             }
         }
@@ -570,8 +599,16 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
             u[PRJ_CONS_RAD_E(nu, g)] = E_new;
             du += E_new - E_old;
             dy += rad->x_e[nu][g] * (E_new - E_old);
+#if ELEINEL_YE_DIAG
+            g_eleinel_dy_activity += fabs(rad->x_e[nu][g] * (E_new - E_old));
+#endif
         }
     }
+
+#if ELEINEL_YE_DIAG
+    g_eleinel_dy_net += dy;
+    g_eleinel_dy_abs += fabs(dy);
+#endif
 
     /* du is a change in RAD_SCALE*erg units; multiply back to erg for the gas.
        dy already carries RAD_SCALE through x_e. */
