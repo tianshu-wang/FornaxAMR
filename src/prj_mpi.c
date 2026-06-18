@@ -388,6 +388,47 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh, const prj_mpi *mpi)
     free(items);
 }
 
+/* compute_decomposition only assigns ranks to active (leaf) blocks. Inactive
+   (refined parent) blocks keep whatever rank they had on entry. During a live
+   run that is harmless (parents stay put across rebalances and their data is
+   not migrated), but on a fresh restart every block enters with rank 0
+   (prj_io_fill_metadata stores the rank field as 0), so all parents stay on
+   rank 0. Because prj_mpi_assign_block_storage allocates cell storage for every
+   owned block regardless of the active flag, that collapses all parent storage
+   onto rank 0 and OOMs it. Propagate a rank to each parent from one of its
+   children, finest level first, so parent storage is distributed like the
+   leaves. Used only on the init/restart path (prj_mpi_decompose), never from
+   prj_mpi_rebalance, so run-time parent data is never disturbed. */
+static void prj_mpi_assign_inactive_ranks(prj_mesh *mesh)
+{
+    int lvl;
+
+    if (mesh == 0) {
+        return;
+    }
+    for (lvl = mesh->max_level - 1; lvl >= 0; --lvl) {
+        int b;
+
+        for (b = 0; b < mesh->nblocks; ++b) {
+            prj_block *block = &mesh->blocks[b];
+            int c;
+
+            if (block->id < 0 || block->level != lvl || prj_block_is_active(block)) {
+                continue;
+            }
+            for (c = 0; c < 8; ++c) {
+                int cid = block->children[c];
+
+                if (cid >= 0 && cid < mesh->nblocks && mesh->blocks[cid].id >= 0) {
+                    block->rank = mesh->blocks[cid].rank;
+                    break;
+                }
+            }
+        }
+    }
+    prj_mpi_sync_slot_ranks(mesh);
+}
+
 static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const prj_mpi *mpi, const int *old_ranks)
 {
 #if defined(PRJ_ENABLE_MPI)
@@ -3839,6 +3880,7 @@ void prj_mpi_init(int *argc, char ***argv, prj_mpi *mpi)
 void prj_mpi_decompose(prj_mesh *mesh, const prj_mpi *mpi)
 {
     prj_mpi_compute_decomposition(mesh, mpi);
+    prj_mpi_assign_inactive_ranks(mesh);
     prj_mpi_assign_block_storage(mesh, mpi);
 }
 
