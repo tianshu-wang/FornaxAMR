@@ -15,8 +15,8 @@ PLANES = ("xy", "yz", "xz")
 
 # Set these to None to show the full domain.
 # Ranges are in km.
-X_RANGE = [-5e2,5e2]
-Y_RANGE = [-5e2,5e2]
+X_RANGE = [-1e4,1e4]
+Y_RANGE = [-1e4,1e4]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
 COLOR_SCALE = "normalize"

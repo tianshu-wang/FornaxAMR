@@ -604,45 +604,6 @@ void prj_io_parser(prj_sim *sim, char *filename)
     fclose(fp);
 }
 
-#if PRJ_NRAD > 0
-static void prj_io_dataset_name(int var, char *name, size_t size)
-{
-    if (var == PRJ_PRIM_RHO) {
-        snprintf(name, size, "density");
-    } else if (var == PRJ_PRIM_V1) {
-        snprintf(name, size, "v1");
-    } else if (var == PRJ_PRIM_V2) {
-        snprintf(name, size, "v2");
-    } else if (var == PRJ_PRIM_V3) {
-        snprintf(name, size, "v3");
-    } else if (var == PRJ_PRIM_EINT) {
-        snprintf(name, size, "eint");
-    } else if (var == PRJ_PRIM_YE) {
-        snprintf(name, size, "ye");
-#if PRJ_MHD
-    } else if (var == PRJ_PRIM_B1) {
-        snprintf(name, size, "B1");
-    } else if (var == PRJ_PRIM_B2) {
-        snprintf(name, size, "B2");
-    } else if (var == PRJ_PRIM_B3) {
-        snprintf(name, size, "B3");
-#endif
-    } else {
-        int rad_idx = var - PRJ_NHYDRO;
-        int field = rad_idx / (PRJ_NEGROUP * PRJ_RAD_GROUP_STRIDE);
-        int local = rad_idx % (PRJ_NEGROUP * PRJ_RAD_GROUP_STRIDE);
-        int group = local / PRJ_RAD_GROUP_STRIDE;
-        int component = local % PRJ_RAD_GROUP_STRIDE;
-
-        if (component == 0) {
-            snprintf(name, size, "rad%d_g%02d_E", field, group);
-        } else {
-            snprintf(name, size, "rad%d_g%02d_F%d", field, group, component);
-        }
-    }
-}
-#endif
-
 static void prj_io_fail(const char *message)
 {
     fprintf(stderr, "%s\n", message);
@@ -807,30 +768,6 @@ static void prj_io_write_attr_double3(hid_t obj, const char *name, const double 
     H5Awrite(attr, H5T_NATIVE_DOUBLE, values);
     H5Aclose(attr);
     H5Sclose(space);
-}
-
-static void prj_io_write_attr_string_array(hid_t obj, const char *name,
-    const char values[][PRJ_IO_DUMP_NAME_SIZE], int nvalues)
-{
-    hsize_t dims[1];
-    hid_t type;
-    hid_t space;
-    hid_t attr;
-
-    if (nvalues <= 0) {
-        return;
-    }
-    dims[0] = (hsize_t)nvalues;
-    type = H5Tcopy(H5T_C_S1);
-    H5Tset_size(type, PRJ_IO_DUMP_NAME_SIZE);
-    H5Tset_strpad(type, H5T_STR_NULLTERM);
-    space = H5Screate_simple(1, dims, dims);
-    attr = H5Acreate2(obj, name, type, space, H5P_DEFAULT, H5P_DEFAULT);
-
-    H5Awrite(attr, type, values);
-    H5Aclose(attr);
-    H5Sclose(space);
-    H5Tclose(type);
 }
 
 static void prj_io_read_attr_double3(hid_t obj, const char *name, double values[3])
@@ -1513,407 +1450,283 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     free(metadata);
 }
 
-static void prj_io_write_dump_cell_group(hid_t dset, const prj_mpi *mpi, int active_idx,
-    int local_active, int nvar, const prj_block **active_blocks, const int *var_indices,
-    int from_eosvar, int scale_values, double value_scale)
+static int prj_io_dump_write_eos_block(const prj_block *block)
 {
-    size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
-    hsize_t start[5] = {(hsize_t)active_idx, 0, 0, 0, 0};
-    hsize_t count[5] = {
-        (hsize_t)local_active,
-        (hsize_t)nvar,
-        (hsize_t)PRJ_BLOCK_SIZE,
-        (hsize_t)PRJ_BLOCK_SIZE,
-        (hsize_t)PRJ_BLOCK_SIZE
-    };
-    prj_io_dump_real *buffer;
-    int local_idx;
-    int var_idx;
-
-    if (local_active <= 0 || nvar <= 0) {
-        return;
-    }
-    buffer = (prj_io_dump_real *)calloc((size_t)local_active * (size_t)nvar * ncells,
-        sizeof(*buffer));
-    if (buffer == 0) {
-        prj_io_fail("prj_io_write_dump: allocation failed");
-    }
-    for (local_idx = 0; local_idx < local_active; ++local_idx) {
-        const prj_block *block = active_blocks[local_idx];
-
-        for (var_idx = 0; var_idx < nvar; ++var_idx) {
-            int src_var = var_indices[var_idx];
-            int i;
-            int j;
-            int k;
-
-            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                        size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE +
-                            (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
-                        size_t offset = ((size_t)local_idx * (size_t)nvar +
-                            (size_t)var_idx) * ncells + cell;
-                        double value;
-
-                        if (from_eosvar) {
-                            value = block->eosvar[EIDX(src_var, i, j, k)];
-                        } else {
-                            value = block->W[VIDX(src_var, i, j, k)];
-                        }
-                        if (scale_values) {
-                            value *= value_scale;
-                        }
-                        buffer[offset] = (prj_io_dump_real)value;
-                    }
-                }
-            }
-        }
-    }
-    prj_io_write_hyperslab(dset, mpi, prj_io_dump_real_hdf5_type(), 5, start, count, buffer);
-    free(buffer);
+    return block != 0 && block->active == 1 && block->eosvar != 0;
 }
 
-#if PRJ_MHD && PRJ_MHD_DEBUG
-static void prj_io_write_dump_bf_group(hid_t dset, const prj_mpi *mpi, int active_idx,
-    int local_active, const prj_block **active_blocks, double value_scale)
-{
-    size_t nfaces = (size_t)PRJ_BLOCK_NFACES;
-    hsize_t start[3] = {(hsize_t)active_idx, 0, 0};
-    hsize_t count[3] = {(hsize_t)local_active, 3, (hsize_t)PRJ_BLOCK_NFACES};
-    prj_io_dump_real *buffer;
-    int local_idx;
+/* The dump now mirrors the restart on-disk layout: a small fixed number of fat
+   datasets written as contiguous per-rank runs, instead of ~18 thin per-variable
+   datasets. This collapses the collective HDF5 metadata work (dataset creates +
+   attributes), which dominated dump time at high MPI-rank/block counts.
 
-    if (local_active <= 0) {
-        return;
-    }
-    buffer = (prj_io_dump_real *)calloc((size_t)local_active * 3U * nfaces, sizeof(*buffer));
-    if (buffer == 0) {
-        prj_io_fail("prj_io_write_dump: Bf allocation failed");
-    }
-    for (local_idx = 0; local_idx < local_active; ++local_idx) {
-        const prj_block *block = active_blocks[local_idx];
-        int dir;
-
-        for (dir = 0; dir < 3; ++dir) {
-            int n;
-
-            if (block->Bf[dir] == 0) {
-                prj_io_fail("prj_io_write_dump: missing Bf storage");
-            }
-            for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
-                size_t offset = ((size_t)local_idx * 3U + (size_t)dir) * nfaces + (size_t)n;
-
-                buffer[offset] = (prj_io_dump_real)(block->Bf[dir][n] * value_scale);
-            }
-        }
-    }
-    prj_io_write_hyperslab(dset, mpi, prj_io_dump_real_hdf5_type(), 3, start, count, buffer);
-    free(buffer);
-}
-#endif
-
+   Datasets, all indexed by global block id (dim 0 = mesh->nblocks):
+     MetaData : double[nblocks][PRJ_IO_METADATA_SIZE]   (geometry/AMR tree, root)
+     Data     : real[nblocks][PRJ_NVAR_PRIM][BS^3]       (all primitive vars)
+     Eos      : real[nblocks][PRJ_NVAR_EOSVAR][BS^3]      (pressure,temp,gamma)
+     Bf       : double[nblocks][3][NFACES]                (MHD face fields)
+   Cell data uses the dump real type (single precision by default). Radiation
+   prims are written in physical erg (* RAD_SCALE) to match the restart format;
+   B is written unscaled (no sqrt(4*pi)) like the restart W. Only active blocks
+   that this rank owns (W/eosvar/Bf allocated) are filled; inactive rows are left
+   at the HDF5 fill value, exactly as prj_io_write_restart does. */
 void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi *mpi,
     int dump_index, int step, double time)
 {
     char filename[256];
     hid_t file;
-    hid_t dset_level;
-    hid_t dset_coord;
-    hid_t dset_hydro;
+    hid_t space_data;
+    hid_t dset_data;
+    hid_t space_eos;
     hid_t dset_eos;
-#if PRJ_MHD
-    hid_t dset_mhd;
-#if PRJ_MHD_DEBUG
+    hid_t space_meta;
+    hid_t dset_meta;
+#if PRJ_MHD && PRJ_MHD_DEBUG
+    hid_t space_bf;
     hid_t dset_bf;
 #endif
-#endif
-#if PRJ_NRAD > 0
-    hid_t dset_rad[PRJ_NRAD][PRJ_RAD_GROUP_STRIDE];
-#endif
-    hid_t space_level;
-    hid_t space_coord;
-    hid_t space_hydro;
-    hid_t space_eos;
-#if PRJ_MHD
-    hid_t space_mhd;
-#if PRJ_MHD_DEBUG
-    hid_t space_bf;
-#endif
-#endif
-#if PRJ_NRAD > 0
-    hid_t space_rad;
-#endif
-    hsize_t dims_level[1];
-    hsize_t dims_coord[2];
-    hsize_t dims_hydro[5];
-    hsize_t dims_eos[5];
-#if PRJ_MHD
-    hsize_t dims_mhd[5];
-#if PRJ_MHD_DEBUG
+    hsize_t dims_data[3];
+    hsize_t dims_eos[3];
+    hsize_t dims_meta[2];
+#if PRJ_MHD && PRJ_MHD_DEBUG
     hsize_t dims_bf[3];
 #endif
-    const double mhd_dump_scale = sqrt(4.0 * M_PI);
-#endif
-#if PRJ_NRAD > 0
-    hsize_t dims_rad[5];
-    /* E and F are stored internally in RAD_SCALE*erg units, which already match
-       the previously dumped (E/RAD_SCALE) on-disk representation, so no further
-       scaling is applied on dump. */
-    const double rad_dump_scale = 1.0;
-#endif
-    static const char hydro_names[6][PRJ_IO_DUMP_NAME_SIZE] = {
-        "density", "v1", "v2", "v3", "eint", "ye"
-    };
-    static const int hydro_vars[6] = {
-        PRJ_PRIM_RHO, PRJ_PRIM_V1, PRJ_PRIM_V2, PRJ_PRIM_V3, PRJ_PRIM_EINT, PRJ_PRIM_YE
-    };
-    static const char eos_names[PRJ_NVAR_EOSVAR][PRJ_IO_DUMP_NAME_SIZE] = {
-        "pressure", "temperature", "gamma"
-    };
-    static const int eos_vars[PRJ_NVAR_EOSVAR] = {
-        PRJ_EOSVAR_PRESSURE, PRJ_EOSVAR_TEMPERATURE, PRJ_EOSVAR_GAMMA
-    };
-#if PRJ_MHD
-    static const char mhd_names[3][PRJ_IO_DUMP_NAME_SIZE] = {"B1", "B2", "B3"};
-    static const int mhd_vars[3] = {PRJ_PRIM_B1, PRJ_PRIM_B2, PRJ_PRIM_B3};
-#if PRJ_MHD_DEBUG
-    static const char bf_names[3][PRJ_IO_DUMP_NAME_SIZE] = {"Bf1", "Bf2", "Bf3"};
-#endif
-#endif
-    int local_active = 0;
-    int nactive = 0;
-    int bidx;
-    int active_idx = 0;
-    int local_idx;
-    const prj_block **active_blocks = 0;
-    int *level_buffer = 0;
-    double *coord_buffer = 0;
     hid_t dump_real_type = prj_io_dump_real_hdf5_type();
+    size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
+    int bidx;
 
     snprintf(filename, sizeof(filename), "output/dump_%05d.h5", dump_index);
     if (prj_io_is_root_rank(mpi)) {
         fprintf(stderr, "save dump file %s\n", filename);
     }
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        if (mesh->blocks[bidx].id >= 0 && mesh->blocks[bidx].active == 1 &&
-            prj_io_is_local_owner(mpi, &mesh->blocks[bidx])) {
-            local_active += 1;
-        }
-    }
-    nactive = (int)prj_mpi_global_sum(mpi, (double)local_active);
-    dims_level[0] = (hsize_t)nactive;
-    dims_coord[0] = (hsize_t)nactive;
-    dims_coord[1] = 3;
-    dims_hydro[0] = (hsize_t)nactive;
-    dims_hydro[1] = 6;
-    dims_hydro[2] = PRJ_BLOCK_SIZE;
-    dims_hydro[3] = PRJ_BLOCK_SIZE;
-    dims_hydro[4] = PRJ_BLOCK_SIZE;
-    dims_eos[0] = (hsize_t)nactive;
-    dims_eos[1] = PRJ_NVAR_EOSVAR;
-    dims_eos[2] = PRJ_BLOCK_SIZE;
-    dims_eos[3] = PRJ_BLOCK_SIZE;
-    dims_eos[4] = PRJ_BLOCK_SIZE;
-#if PRJ_MHD
-    dims_mhd[0] = (hsize_t)nactive;
-    dims_mhd[1] = 3;
-    dims_mhd[2] = PRJ_BLOCK_SIZE;
-    dims_mhd[3] = PRJ_BLOCK_SIZE;
-    dims_mhd[4] = PRJ_BLOCK_SIZE;
-#if PRJ_MHD_DEBUG
-    dims_bf[0] = (hsize_t)nactive;
+
+    dims_data[0] = (hsize_t)mesh->nblocks;
+    dims_data[1] = (hsize_t)PRJ_NVAR_PRIM;
+    dims_data[2] = (hsize_t)ncells;
+    dims_eos[0] = (hsize_t)mesh->nblocks;
+    dims_eos[1] = (hsize_t)PRJ_NVAR_EOSVAR;
+    dims_eos[2] = (hsize_t)ncells;
+    dims_meta[0] = (hsize_t)mesh->nblocks;
+    dims_meta[1] = (hsize_t)PRJ_IO_METADATA_SIZE;
+#if PRJ_MHD && PRJ_MHD_DEBUG
+    dims_bf[0] = (hsize_t)mesh->nblocks;
     dims_bf[1] = 3;
     dims_bf[2] = (hsize_t)PRJ_BLOCK_NFACES;
 #endif
-#endif
-#if PRJ_NRAD > 0
-    dims_rad[0] = (hsize_t)nactive;
-    dims_rad[1] = PRJ_NEGROUP;
-    dims_rad[2] = PRJ_BLOCK_SIZE;
-    dims_rad[3] = PRJ_BLOCK_SIZE;
-    dims_rad[4] = PRJ_BLOCK_SIZE;
-#endif
+
     file = prj_io_create_file(mpi, filename);
-    prj_io_write_attr_int(file, "dump_format_version", 2);
+    prj_io_write_attr_int(file, "dump_format_version", 3);
     prj_io_write_attr_int(file, "dump_index", dump_index);
     prj_io_write_attr_int(file, "step", step);
     prj_io_write_attr_double(file, "time", time);
+    prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
+    prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
+    prj_io_write_attr_int(file, "nvar_eos", PRJ_NVAR_EOSVAR);
+    prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
+    prj_io_write_attr_int(file, "max_level", mesh->max_level);
+    prj_io_write_attr_double(file, "min_dx", mesh->min_dx);
     prj_io_write_attr_int3(file, "root_nx", mesh->root_nx);
     prj_io_write_attr_double6(file, "coord", &mesh->coord);
-    space_level = H5Screate_simple(1, dims_level, dims_level);
-    dset_level = H5Dcreate2(file, "level", H5T_NATIVE_INT, space_level, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-    space_coord = H5Screate_simple(2, dims_coord, dims_coord);
-    dset_coord = H5Dcreate2(file, "coordinate", H5T_NATIVE_DOUBLE, space_coord, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-
-    space_hydro = H5Screate_simple(5, dims_hydro, dims_hydro);
-    dset_hydro = H5Dcreate2(file, "hydro", dump_real_type, space_hydro,
-        H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    prj_io_write_attr_string_array(dset_hydro, "variable_names", hydro_names, 6);
-
-    space_eos = H5Screate_simple(5, dims_eos, dims_eos);
-    dset_eos = H5Dcreate2(file, "eos", dump_real_type, space_eos,
-        H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    prj_io_write_attr_string_array(dset_eos, "variable_names", eos_names, PRJ_NVAR_EOSVAR);
-#if PRJ_MHD
-    space_mhd = H5Screate_simple(5, dims_mhd, dims_mhd);
-    dset_mhd = H5Dcreate2(file, "mhd", dump_real_type, space_mhd,
-        H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    prj_io_write_attr_string_array(dset_mhd, "variable_names", mhd_names, 3);
-#if PRJ_MHD_DEBUG
-    space_bf = H5Screate_simple(3, dims_bf, dims_bf);
-    dset_bf = H5Dcreate2(file, "Bf", dump_real_type, space_bf,
-        H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-    prj_io_write_attr_string_array(dset_bf, "variable_names", bf_names, 3);
-#endif
-#endif
-#if PRJ_NRAD > 0
-    space_rad = H5Screate_simple(5, dims_rad, dims_rad);
-    for (bidx = 0; bidx < PRJ_NRAD; ++bidx) {
-        int component;
-
-        for (component = 0; component < PRJ_RAD_GROUP_STRIDE; ++component) {
-            char dset_name[32];
-            char var_names[PRJ_NEGROUP][PRJ_IO_DUMP_NAME_SIZE];
-            int group;
-
-            if (component == 0) {
-                snprintf(dset_name, sizeof(dset_name), "rad%d_E", bidx);
-            } else {
-                snprintf(dset_name, sizeof(dset_name), "rad%d_F%d", bidx, component);
-            }
-            for (group = 0; group < PRJ_NEGROUP; ++group) {
-                int src_var = PRJ_PRIM_RAD_E(bidx, group) + component;
-
-                prj_io_dataset_name(src_var, var_names[group], sizeof(var_names[group]));
-            }
-            dset_rad[bidx][component] = H5Dcreate2(file, dset_name, dump_real_type,
-                space_rad, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
-            prj_io_write_attr_string_array(dset_rad[bidx][component], "variable_names",
-                (const char (*)[PRJ_IO_DUMP_NAME_SIZE])var_names, PRJ_NEGROUP);
-        }
-    }
-#endif
     {
-        int offset = 0;
-#if defined(PRJ_ENABLE_MPI)
-        if (mpi != 0 && mpi->totrank > 1) {
-            MPI_Exscan(&local_active, &offset, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-            if (mpi->rank == 0) {
-                offset = 0;
-            }
-        }
-#endif
-        active_idx = offset;
-    }
-    if (local_active > 0) {
-        active_blocks = (const prj_block **)calloc((size_t)local_active, sizeof(*active_blocks));
-        level_buffer = (int *)calloc((size_t)local_active, sizeof(*level_buffer));
-        coord_buffer = (double *)calloc((size_t)local_active * 3U, sizeof(*coord_buffer));
+        double x_com_values[3] = {0.0, 0.0, 0.0};
 
-        if (active_blocks == 0 || level_buffer == 0 || coord_buffer == 0) {
+        if (mesh != 0) {
+            x_com_values[0] = mesh->x_com[0];
+            x_com_values[1] = mesh->x_com[1];
+            x_com_values[2] = mesh->x_com[2];
+        }
+        prj_io_write_attr_double3(file, "x_com", x_com_values);
+    }
+
+    space_data = H5Screate_simple(3, dims_data, dims_data);
+    dset_data = H5Dcreate2(file, "Data", dump_real_type, space_data, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    space_eos = H5Screate_simple(3, dims_eos, dims_eos);
+    dset_eos = H5Dcreate2(file, "Eos", dump_real_type, space_eos, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    space_meta = H5Screate_simple(2, dims_meta, dims_meta);
+    dset_meta = H5Dcreate2(file, "MetaData", H5T_NATIVE_DOUBLE, space_meta, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+#if PRJ_MHD && PRJ_MHD_DEBUG
+    space_bf = H5Screate_simple(3, dims_bf, dims_bf);
+    dset_bf = H5Dcreate2(file, "Bf", dump_real_type, space_bf, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+#endif
+
+    if (prj_io_is_root_rank(mpi) && mesh->nblocks > 0) {
+        hsize_t start_meta[2] = {0, 0};
+        hsize_t count_meta[2] = {(hsize_t)mesh->nblocks, (hsize_t)PRJ_IO_METADATA_SIZE};
+        double *metadata = (double *)calloc((size_t)mesh->nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
+
+        if (metadata == 0) {
             prj_io_fail("prj_io_write_dump: metadata allocation failed");
         }
-        local_idx = 0;
         for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-            const prj_block *block = &mesh->blocks[bidx];
+            prj_io_fill_metadata(&mesh->blocks[bidx], &metadata[(size_t)bidx * PRJ_IO_METADATA_SIZE]);
+        }
+        prj_io_write_hyperslab(dset_meta, mpi, H5T_NATIVE_DOUBLE, 2, start_meta, count_meta, metadata);
+        free(metadata);
+    }
 
-            if (block->id < 0 || block->active != 1 || !prj_io_is_local_owner(mpi, block)) {
-                continue;
-            }
-            if (block->W == 0) {
-                prj_io_fail("prj_io_write_dump: missing W storage");
-            }
-            if (block->eosvar == 0) {
-                prj_io_fail("prj_io_write_dump: missing eosvar storage");
-            }
-            active_blocks[local_idx] = block;
-            level_buffer[local_idx] = block->level;
-            coord_buffer[(size_t)local_idx * 3U + 0U] = block->xmin[0];
-            coord_buffer[(size_t)local_idx * 3U + 1U] = block->xmin[1];
-            coord_buffer[(size_t)local_idx * 3U + 2U] = block->xmin[2];
-            local_idx += 1;
-        }
-        if (local_idx != local_active) {
-            prj_io_fail("prj_io_write_dump: active block count changed");
-        }
-        {
-            hsize_t start_level[1] = {(hsize_t)active_idx};
-            hsize_t count_level[1] = {(hsize_t)local_active};
+    bidx = 0;
+    while (bidx < mesh->nblocks) {
+        int run_start;
+        int run_len;
+        hsize_t start_data[3];
+        hsize_t count_data[3];
+        prj_io_dump_real *buffer;
+        int ridx;
+        int v;
+        int i;
+        int j;
+        int k;
 
-            prj_io_write_hyperslab(dset_level, mpi, H5T_NATIVE_INT, 1, start_level, count_level, level_buffer);
+        while (bidx < mesh->nblocks && !prj_io_restart_write_data_block(&mesh->blocks[bidx])) {
+            bidx += 1;
         }
-        {
-            hsize_t start_coord[2] = {(hsize_t)active_idx, 0};
-            hsize_t count_coord[2] = {(hsize_t)local_active, 3};
+        run_start = bidx;
+        while (bidx < mesh->nblocks && prj_io_restart_write_data_block(&mesh->blocks[bidx])) {
+            bidx += 1;
+        }
+        run_len = bidx - run_start;
+        if (run_len == 0) {
+            continue;
+        }
+        start_data[0] = (hsize_t)run_start;
+        start_data[1] = 0;
+        start_data[2] = 0;
+        count_data[0] = (hsize_t)run_len;
+        count_data[1] = (hsize_t)PRJ_NVAR_PRIM;
+        count_data[2] = (hsize_t)ncells;
+        buffer = (prj_io_dump_real *)calloc((size_t)run_len * (size_t)PRJ_NVAR_PRIM * ncells, sizeof(*buffer));
+        if (buffer == 0) {
+            prj_io_fail("prj_io_write_dump: data allocation failed");
+        }
+        for (ridx = 0; ridx < run_len; ++ridx) {
+            const prj_block *block = &mesh->blocks[run_start + ridx];
 
-            prj_io_write_hyperslab(dset_coord, mpi, H5T_NATIVE_DOUBLE, 2, start_coord, count_coord, coord_buffer);
-        }
-        {
-            prj_io_write_dump_cell_group(dset_hydro, mpi, active_idx, local_active, 6,
-                active_blocks, hydro_vars, 0, 0, 1.0);
-            prj_io_write_dump_cell_group(dset_eos, mpi, active_idx, local_active,
-                PRJ_NVAR_EOSVAR, active_blocks, eos_vars, 1, 0, 1.0);
-        }
-#if PRJ_MHD
-        prj_io_write_dump_cell_group(dset_mhd, mpi, active_idx, local_active, 3,
-            active_blocks, mhd_vars, 0, 1, mhd_dump_scale);
-#if PRJ_MHD_DEBUG
-        prj_io_write_dump_bf_group(dset_bf, mpi, active_idx, local_active,
-            active_blocks, mhd_dump_scale);
-#endif
-#endif
+            for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                double wscale = 1.0;
 #if PRJ_NRAD > 0
-        {
-            int field;
+                if (v >= PRJ_NHYDRO) {
+                    wscale = RAD_SCALE;
+                }
+#endif
+                for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                    for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                        for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                            size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                            size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-            for (field = 0; field < PRJ_NRAD; ++field) {
-                int component;
-
-                for (component = 0; component < PRJ_RAD_GROUP_STRIDE; ++component) {
-                    int rad_vars[PRJ_NEGROUP];
-                    int group;
-
-                    for (group = 0; group < PRJ_NEGROUP; ++group) {
-                        rad_vars[group] = PRJ_PRIM_RAD_E(field, group) + component;
+                            buffer[offset] = (prj_io_dump_real)(block->W[VIDX(v, i, j, k)] * wscale);
+                        }
                     }
-                    prj_io_write_dump_cell_group(dset_rad[field][component], mpi, active_idx,
-                        local_active, PRJ_NEGROUP, active_blocks, rad_vars, 0, 1, rad_dump_scale);
                 }
             }
         }
-#endif
+        prj_io_write_hyperslab(dset_data, mpi, dump_real_type, 3, start_data, count_data, buffer);
+        free(buffer);
     }
-    free(coord_buffer);
-    free(level_buffer);
-    free(active_blocks);
-    H5Dclose(dset_level);
-    H5Sclose(space_level);
-    H5Dclose(dset_coord);
-    H5Sclose(space_coord);
-    H5Dclose(dset_hydro);
-    H5Sclose(space_hydro);
-    H5Dclose(dset_eos);
-    H5Sclose(space_eos);
-#if PRJ_MHD
-    H5Dclose(dset_mhd);
-    H5Sclose(space_mhd);
-#if PRJ_MHD_DEBUG
-    H5Dclose(dset_bf);
-    H5Sclose(space_bf);
-#endif
-#endif
-#if PRJ_NRAD > 0
-    for (bidx = 0; bidx < PRJ_NRAD; ++bidx) {
-        int component;
 
-        for (component = 0; component < PRJ_RAD_GROUP_STRIDE; ++component) {
-            H5Dclose(dset_rad[bidx][component]);
+    bidx = 0;
+    while (bidx < mesh->nblocks) {
+        int run_start;
+        int run_len;
+        hsize_t start_eos[3];
+        hsize_t count_eos[3];
+        prj_io_dump_real *buffer;
+        int ridx;
+        int v;
+        int i;
+        int j;
+        int k;
+
+        while (bidx < mesh->nblocks && !prj_io_dump_write_eos_block(&mesh->blocks[bidx])) {
+            bidx += 1;
         }
+        run_start = bidx;
+        while (bidx < mesh->nblocks && prj_io_dump_write_eos_block(&mesh->blocks[bidx])) {
+            bidx += 1;
+        }
+        run_len = bidx - run_start;
+        if (run_len == 0) {
+            continue;
+        }
+        start_eos[0] = (hsize_t)run_start;
+        start_eos[1] = 0;
+        start_eos[2] = 0;
+        count_eos[0] = (hsize_t)run_len;
+        count_eos[1] = (hsize_t)PRJ_NVAR_EOSVAR;
+        count_eos[2] = (hsize_t)ncells;
+        buffer = (prj_io_dump_real *)calloc((size_t)run_len * (size_t)PRJ_NVAR_EOSVAR * ncells, sizeof(*buffer));
+        if (buffer == 0) {
+            prj_io_fail("prj_io_write_dump: eos allocation failed");
+        }
+        for (ridx = 0; ridx < run_len; ++ridx) {
+            const prj_block *block = &mesh->blocks[run_start + ridx];
+
+            for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+                for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                    for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                        for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                            size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                            size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_EOSVAR + (size_t)v) * ncells + cell;
+
+                            buffer[offset] = (prj_io_dump_real)block->eosvar[EIDX(v, i, j, k)];
+                        }
+                    }
+                }
+            }
+        }
+        prj_io_write_hyperslab(dset_eos, mpi, dump_real_type, 3, start_eos, count_eos, buffer);
+        free(buffer);
     }
-    H5Sclose(space_rad);
+
+#if PRJ_MHD && PRJ_MHD_DEBUG
+    bidx = 0;
+    while (bidx < mesh->nblocks) {
+        int run_start;
+        int run_len;
+        hsize_t start_bf[3];
+        hsize_t count_bf[3];
+        prj_io_dump_real *buffer;
+        int ridx;
+        int d;
+        int n;
+
+        while (bidx < mesh->nblocks && !prj_io_restart_write_bf_block(&mesh->blocks[bidx])) {
+            bidx += 1;
+        }
+        run_start = bidx;
+        while (bidx < mesh->nblocks && prj_io_restart_write_bf_block(&mesh->blocks[bidx])) {
+            bidx += 1;
+        }
+        run_len = bidx - run_start;
+        if (run_len == 0) {
+            continue;
+        }
+        start_bf[0] = (hsize_t)run_start;
+        start_bf[1] = 0;
+        start_bf[2] = 0;
+        count_bf[0] = (hsize_t)run_len;
+        count_bf[1] = 3;
+        count_bf[2] = (hsize_t)PRJ_BLOCK_NFACES;
+        buffer = (prj_io_dump_real *)calloc((size_t)run_len * 3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*buffer));
+        if (buffer == 0) {
+            prj_io_fail("prj_io_write_dump: Bf allocation failed");
+        }
+        for (ridx = 0; ridx < run_len; ++ridx) {
+            const prj_block *block = &mesh->blocks[run_start + ridx];
+
+            for (d = 0; d < 3; ++d) {
+                for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
+                    size_t offset = ((size_t)ridx * 3U + (size_t)d) * (size_t)PRJ_BLOCK_NFACES + (size_t)n;
+
+                    buffer[offset] = (prj_io_dump_real)block->Bf[d][n];
+                }
+            }
+        }
+        prj_io_write_hyperslab(dset_bf, mpi, dump_real_type, 3, start_bf, count_bf, buffer);
+        free(buffer);
+    }
 #endif
+
     {
         if (grav != 0 && grav->nbins > 0 && grav->phi != 0 && grav->lapse != 0) {
             hsize_t dims_phi[1] = {(hsize_t)grav->nbins + 1};
@@ -1940,5 +1753,15 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
             H5Sclose(space_lapse);
         }
     }
+#if PRJ_MHD && PRJ_MHD_DEBUG
+    H5Dclose(dset_bf);
+    H5Sclose(space_bf);
+#endif
+    H5Dclose(dset_meta);
+    H5Sclose(space_meta);
+    H5Dclose(dset_eos);
+    H5Sclose(space_eos);
+    H5Dclose(dset_data);
+    H5Sclose(space_data);
     H5Fclose(file);
 }
