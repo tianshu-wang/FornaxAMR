@@ -1280,6 +1280,16 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         prj_block_update_can_refine(block, mesh);
     }
 
+    /* The metadata staging buffer (nblocks * PRJ_IO_METADATA_SIZE doubles,
+       allocated on every rank) is only needed to unpack the block tree above.
+       Free it here, before prj_mpi_prepare()/assign_block_storage and the Data
+       read allocate the bulk per-block cell storage; otherwise its ~5 KB/block
+       sits on every rank through the peak-memory phase and can OOM a restart
+       that runs on the same rank count as the writer (which only allocated this
+       buffer on the root rank). */
+    free(metadata);
+    metadata = 0;
+
     for (bidx = 0; bidx < nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
         int n;
@@ -1447,7 +1457,6 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     prj_eos_fill_active_cells(mesh, (prj_eos *)eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_boundary_fill_ghosts(mesh, mpi, &bc, 1);
     prj_eos_fill_mesh(mesh, (prj_eos *)eos, mpi, 1, PRJ_EOS_CTX_MAIN);
-    free(metadata);
 }
 
 static int prj_io_dump_write_eos_block(const prj_block *block)
