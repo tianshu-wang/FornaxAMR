@@ -434,27 +434,68 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh, const prj_mpi *mpi)
 static void prj_mpi_assign_inactive_ranks(prj_mesh *mesh)
 {
     int lvl;
+    int max_lvl;
+    int b;
 
     if (mesh == 0) {
         return;
     }
-    for (lvl = mesh->max_level - 1; lvl >= 0; --lvl) {
-        int b;
-
+    /* Use the ACTUAL deepest block level, not mesh->max_level (the refinement
+       cap), as the loop bound. If the cap were smaller than the real depth, the
+       finest parents would never be processed, stay at their entry rank (rank 0
+       on a fresh restart), and every ancestor would cascade to rank 0 -- which
+       is exactly the all-inactive-on-rank-0 failure observed at scale. */
+    max_lvl = 0;
+    for (b = 0; b < mesh->nblocks; ++b) {
+        if (mesh->blocks[b].id >= 0 && mesh->blocks[b].level > max_lvl) {
+            max_lvl = mesh->blocks[b].level;
+        }
+    }
+    for (lvl = max_lvl - 1; lvl >= 0; --lvl) {
         for (b = 0; b < mesh->nblocks; ++b) {
             prj_block *block = &mesh->blocks[b];
+            int cand_rank[8];
+            int cand_count[8];
+            int ncand = 0;
+            int best_rank = -1;
+            int best_count = 0;
             int c;
 
             if (block->id < 0 || block->level != lvl || prj_block_is_active(block)) {
                 continue;
             }
+            /* Assign the parent to the rank that owns the plurality of its
+               children (same rule as prj_amr_coarsen_block), processing finest
+               level first so children already have their final ranks. */
             for (c = 0; c < 8; ++c) {
                 int cid = block->children[c];
+                int crank;
+                int k;
 
-                if (cid >= 0 && cid < mesh->nblocks && mesh->blocks[cid].id >= 0) {
-                    block->rank = mesh->blocks[cid].rank;
-                    break;
+                if (cid < 0 || cid >= mesh->nblocks || mesh->blocks[cid].id < 0) {
+                    continue;
                 }
+                crank = mesh->blocks[cid].rank;
+                for (k = 0; k < ncand; ++k) {
+                    if (cand_rank[k] == crank) {
+                        cand_count[k] += 1;
+                        break;
+                    }
+                }
+                if (k == ncand) {
+                    cand_rank[ncand] = crank;
+                    cand_count[ncand] = 1;
+                    ncand += 1;
+                }
+            }
+            for (c = 0; c < ncand; ++c) {
+                if (cand_count[c] > best_count) {
+                    best_count = cand_count[c];
+                    best_rank = cand_rank[c];
+                }
+            }
+            if (best_rank >= 0) {
+                block->rank = best_rank;
             }
         }
     }
@@ -3917,13 +3958,19 @@ void prj_mpi_decompose(prj_mesh *mesh, const prj_mpi *mpi)
     /* DIAGNOSTIC: report owned-block balance across ranks before allocating cell
        storage, so a non-crashing run still shows whether rank 0 is overloaded. */
     if (mpi != 0 && mpi->totrank > 1) {
-        int b, act = 0, inact = 0, owned;
+        int b, act = 0, inact = 0, owned, actual_max_level = 0;
         int gmin = 0, gmax = 0, gsum = 0, gmax_inact = 0;
 
         for (b = 0; b < mesh->nblocks; ++b) {
             prj_block *bl = &mesh->blocks[b];
 
-            if (bl->id < 0 || bl->rank != mpi->rank) {
+            if (bl->id < 0) {
+                continue;
+            }
+            if (bl->level > actual_max_level) {
+                actual_max_level = bl->level;
+            }
+            if (bl->rank != mpi->rank) {
                 continue;
             }
             if (prj_block_is_active(bl)) {
@@ -3941,10 +3988,10 @@ void prj_mpi_decompose(prj_mesh *mesh, const prj_mpi *mpi)
             size_t per_block = prj_mpi_block_data_count() * sizeof(double);
 
             fprintf(stderr,
-                "[DECOMP] nblocks=%d max_blocks=%d struct-array=%.2f GB/rank | "
-                "owned/rank min=%d max=%d avg=%.1f | max-inactive/rank=%d | "
-                "max cell-data=%.2f GB/rank (per-block=%.1f MB)\n",
-                mesh->nblocks, mesh->max_blocks,
+                "[DECOMP] nblocks=%d max_blocks=%d mesh.max_level=%d actual_max_level=%d "
+                "struct-array=%.2f GB/rank | owned/rank min=%d max=%d avg=%.1f | "
+                "max-inactive/rank=%d | max cell-data=%.2f GB/rank (per-block=%.1f MB)\n",
+                mesh->nblocks, mesh->max_blocks, mesh->max_level, actual_max_level,
                 (double)mesh->max_blocks * sizeof(prj_block) / 1e9,
                 gmin, gmax, (double)gsum / mpi->totrank, gmax_inact,
                 (double)gmax * per_block / 1e9,
