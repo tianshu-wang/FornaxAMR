@@ -277,9 +277,12 @@ static int prj_mpi_sample_kind_from_code(int sample_code)
     return sample_code;
 }
 
+static size_t prj_mpi_block_data_count(void);   /* DIAGNOSTIC forward decl */
+
 static void prj_mpi_assign_block_storage(prj_mesh *mesh, const prj_mpi *mpi)
 {
     int bidx;
+    int allocated = 0;   /* DIAGNOSTIC: owned blocks whose data we allocated here */
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -295,8 +298,37 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh, const prj_mpi *mpi)
         }
         if (block->W == 0) {
             if (prj_block_alloc_data(block) != 0) {
+                /* DIAGNOSTIC: report how far we got vs. how much this rank owns,
+                   so we can tell "rank owns too many blocks" (large counts =>
+                   decomposition problem) from "rank is already out of memory on
+                   its fair share" (small counts => replicated baseline is the
+                   ceiling: EOS table + max_blocks struct array). */
+                int b, owned = 0, act = 0, inact = 0;
+
+                for (b = 0; b < mesh->nblocks; ++b) {
+                    prj_block *bl = &mesh->blocks[b];
+
+                    if (bl->id < 0 || (mpi != 0 && bl->rank != mpi->rank)) {
+                        continue;
+                    }
+                    owned += 1;
+                    if (prj_block_is_active(bl)) {
+                        act += 1;
+                    } else {
+                        inact += 1;
+                    }
+                }
+                fprintf(stderr,
+                    "[ALLOC-FAIL] rank %d: prj_block_alloc_data failed after allocating %d blocks; "
+                    "this rank owns %d total (active=%d inactive=%d) | per-block=%.1f MB, "
+                    "max_blocks=%d, struct-array=%.2f GB/rank\n",
+                    mpi != 0 ? mpi->rank : 0, allocated, owned, act, inact,
+                    (double)prj_mpi_block_data_count() * sizeof(double) / 1e6,
+                    mesh->max_blocks,
+                    (double)mesh->max_blocks * sizeof(prj_block) / 1e9);
                 prj_mpi_fatal("prj_mpi_assign_block_storage: failed to allocate block data");
             }
+            allocated += 1;
         }
         prj_mesh_update_block_r_com(block, mesh);
     }
@@ -3881,6 +3913,45 @@ void prj_mpi_decompose(prj_mesh *mesh, const prj_mpi *mpi)
 {
     prj_mpi_compute_decomposition(mesh, mpi);
     prj_mpi_assign_inactive_ranks(mesh);
+#if defined(PRJ_ENABLE_MPI)
+    /* DIAGNOSTIC: report owned-block balance across ranks before allocating cell
+       storage, so a non-crashing run still shows whether rank 0 is overloaded. */
+    if (mpi != 0 && mpi->totrank > 1) {
+        int b, act = 0, inact = 0, owned;
+        int gmin = 0, gmax = 0, gsum = 0, gmax_inact = 0;
+
+        for (b = 0; b < mesh->nblocks; ++b) {
+            prj_block *bl = &mesh->blocks[b];
+
+            if (bl->id < 0 || bl->rank != mpi->rank) {
+                continue;
+            }
+            if (prj_block_is_active(bl)) {
+                act += 1;
+            } else {
+                inact += 1;
+            }
+        }
+        owned = act + inact;
+        MPI_Reduce(&owned, &gmin, 1, MPI_INT, MPI_MIN, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&owned, &gmax, 1, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&owned, &gsum, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+        MPI_Reduce(&inact, &gmax_inact, 1, MPI_INT, MPI_MAX, 0, MPI_COMM_WORLD);
+        if (mpi->rank == 0) {
+            size_t per_block = prj_mpi_block_data_count() * sizeof(double);
+
+            fprintf(stderr,
+                "[DECOMP] nblocks=%d max_blocks=%d struct-array=%.2f GB/rank | "
+                "owned/rank min=%d max=%d avg=%.1f | max-inactive/rank=%d | "
+                "max cell-data=%.2f GB/rank (per-block=%.1f MB)\n",
+                mesh->nblocks, mesh->max_blocks,
+                (double)mesh->max_blocks * sizeof(prj_block) / 1e9,
+                gmin, gmax, (double)gsum / mpi->totrank, gmax_inact,
+                (double)gmax * per_block / 1e9,
+                (double)per_block / 1e6);
+        }
+    }
+#endif
     prj_mpi_assign_block_storage(mesh, mpi);
 }
 
