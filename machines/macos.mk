@@ -25,3 +25,13 @@ else
 HDF5_CFLAGS ?= -I$(HDF5_PREFIX)/include
 HDF5_LIBS ?= -L$(HDF5_PREFIX)/lib -lhdf5
 endif
+
+# Performance flags for Clang (Apple/Homebrew).
+# -fno-math-errno lets sqrt/division compile to inline hardware instructions
+# (and vectorize) instead of errno-setting libm calls; the M1 radiation flux
+# kernel (prj_rad_flux) is sqrt-bound, so this is the dominant win here.
+# -march=native tunes for the build host (enables AVX/FMA on Intel Macs).
+# NOTE: deliberately NOT -ffast-math / -ffinite-math-only -- the radiation
+# closure relies on NaN/Inf and E<=0 guards, which finite-math would break.
+# On Apple Silicon, drop -march=native (use -mcpu=native if needed).
+MACHINE_CFLAGS := -fno-math-errno -march=native
