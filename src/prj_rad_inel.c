@@ -16,19 +16,6 @@
 #define M_PI 3.14159265358979323846
 #endif
 
-#ifndef ELEINEL_YE_DIAG
-#define ELEINEL_YE_DIAG 0
-#endif
-#if ELEINEL_YE_DIAG
-/* Diagnostic accumulators: eleinel is pure scattering and must not change Ye,
-   so the lepton-number drift dy should be ~0; we track the net drift against
-   the total |dy| activity to quantify discrete non-conservation. */
-static double g_eleinel_dy_net = 0.0;
-static double g_eleinel_dy_abs = 0.0;
-static double g_eleinel_dy_activity = 0.0;
-static int g_eleinel_diag_rank = 0;
-#endif
-
 /* ================================================================== */
 /* Electron inelastic scattering (phi-table based)                    */
 /* ================================================================== */
@@ -64,21 +51,6 @@ static int prj_rad_inel_mpi_rank(void)
     return 0;
 #endif
 }
-
-#if ELEINEL_YE_DIAG
-static void prj_eleinel_ye_diag_print(void)
-{
-    if (g_eleinel_diag_rank == 0) {
-        double act = g_eleinel_dy_activity;
-        fprintf(stderr,
-            "ELEINEL Ye-diag: net dy=%.6e  sum|dy|=%.6e  activity=%.6e  "
-            "net/activity=%.3e  sum|dy|/activity=%.3e\n",
-            g_eleinel_dy_net, g_eleinel_dy_abs, act,
-            act > 0 ? g_eleinel_dy_net / act : 0.0,
-            act > 0 ? g_eleinel_dy_abs / act : 0.0);
-    }
-}
-#endif
 
 /* Returns the lower-left grid cell index (jeta,jq) and the in-cell fractional
    coordinates (sp,sq) for bilinear interpolation. sp,sq are clamped to [0,1] so
@@ -211,10 +183,6 @@ void prj_rad_eleinel_init(prj_rad *rad)
         rad->eleinel_table_loaded = 0;
         return;
     }
-#if ELEINEL_YE_DIAG
-    g_eleinel_diag_rank = prj_rad_inel_mpi_rank();
-    atexit(prj_eleinel_ye_diag_print);
-#endif
 
     ee_count = (size_t)2 * (size_t)PRJ_NEGROUP * (size_t)PRJ_NEGROUP
         * (size_t)INEL_PHI_NETA * (size_t)INEL_PHI_NT;
@@ -524,6 +492,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     double he[PRJ_NRAD * PRJ_NEGROUP * PRJ_NDIM];
     double source_arr[PRJ_NRAD * PRJ_NEGROUP];
     double sink_arr[PRJ_NRAD * PRJ_NEGROUP];
+    double E_pre[PRJ_NRAD * PRJ_NEGROUP];
     double eta_factor = 1.0 / (4.0 * M_PI);
     double etael;
     double du;
@@ -585,33 +554,56 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     prj_rad_eleinel_lookup(rad, rho, T_cell, Ye, etael, je, he,
         source_arr, sink_arr, 0);
 
-    du = 0.0;
-    dy = 0.0;
+    /* Implicit eleinel update; stash the pre-scatter energy per group. */
     for (nu = 0; nu < PRJ_NRAD; nu++) {
         for (g = 0; g < PRJ_NEGROUP; g++) {
             int idx = nu * PRJ_NEGROUP + g;
             double source_phys = source_arr[idx] * rad->degroup_erg[nu][g]
                 / (PRJ_MEV_TO_ERG * eta_factor);
             double E_old = u[PRJ_CONS_RAD_E(nu, g)];
-            double E_new = (E_old + dt * source_phys)
-                / (1.0 + PRJ_CLIGHT * dt * sink_arr[idx]);
 
-            u[PRJ_CONS_RAD_E(nu, g)] = E_new;
-            du += E_new - E_old;
-            dy += rad->x_e[nu][g] * (E_new - E_old);
-#if ELEINEL_YE_DIAG
-            g_eleinel_dy_activity += fabs(rad->x_e[nu][g] * (E_new - E_old));
-#endif
+            E_pre[idx] = E_old;
+            u[PRJ_CONS_RAD_E(nu, g)] = (E_old + dt * source_phys)
+                / (1.0 + PRJ_CLIGHT * dt * sink_arr[idx]);
         }
     }
 
-#if ELEINEL_YE_DIAG
-    g_eleinel_dy_net += dy;
-    g_eleinel_dy_abs += fabs(dy);
-#endif
+    /* eleinel is pure scattering: it must conserve each species' total neutrino
+       number. The implicit update drifts it by ~1e-4; restore exact conservation
+       by rescaling each species back to its pre-scatter number N = sum_g E/erg_g.
+       Since x_e[nu][g] ~ +-1/erg_g, dN=0 per species => dYe=0 exactly. */
+    for (nu = 0; nu < PRJ_NRAD; nu++) {
+        double n_old = 0.0;
+        double n_new = 0.0;
+        double scale;
 
-    /* du is a change in RAD_SCALE*erg units; multiply back to erg for the gas.
-       dy already carries RAD_SCALE through x_e. */
+        for (g = 0; g < PRJ_NEGROUP; g++) {
+            int idx = nu * PRJ_NEGROUP + g;
+            double inv_erg = 1.0 / rad->egroup_erg[nu][g];
+            n_old += E_pre[idx] * inv_erg;
+            n_new += u[PRJ_CONS_RAD_E(nu, g)] * inv_erg;
+        }
+        scale = (n_new > 0.0) ? n_old / n_new : 1.0;
+        for (g = 0; g < PRJ_NEGROUP; g++) {
+            u[PRJ_CONS_RAD_E(nu, g)] *= scale;
+        }
+    }
+
+    /* Energy/Ye exchange computed from the rescaled (final) radiation field so
+       total energy stays conserved; dy is now ~roundoff. */
+    du = 0.0;
+    dy = 0.0;
+    for (nu = 0; nu < PRJ_NRAD; nu++) {
+        for (g = 0; g < PRJ_NEGROUP; g++) {
+            int idx = nu * PRJ_NEGROUP + g;
+            double dE = u[PRJ_CONS_RAD_E(nu, g)] - E_pre[idx];
+
+            du += dE;
+            dy += rad->x_e[nu][g] * dE;
+        }
+    }
+
+    /* du is a change in RAD_SCALE*erg units; multiply back to erg for the gas. */
     Uint_new = Uint_old - du * RAD_SCALE;
     u[PRJ_CONS_ETOT] = Uint_new + KE + Emag;
     u[PRJ_CONS_YE] += dy;
