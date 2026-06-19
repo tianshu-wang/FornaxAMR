@@ -1178,12 +1178,14 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
+        double dt_lapse = lapse * dt;
         double Eg[PRJ_NEGROUP];
         double Fg[PRJ_NEGROUP][3];
         double Pg[PRJ_NEGROUP][3][3];
         double Mq[PRJ_NEGROUP][3]; /* Q_g : dvdx, the only way Q is ever used */
-        double dE_acc[PRJ_NEGROUP];
-        double dF_acc[PRJ_NEGROUP][3];
+        double energy_face[PRJ_NEGROUP + 1] = {0.0};
+        double momentum_face[PRJ_NEGROUP + 1][PRJ_NDIM] = {{0.0}};
+        double energy_available[PRJ_NEGROUP];
         const double *nu_face = rad->eedge[field];
         int g;
         int ii;
@@ -1200,10 +1202,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             prj_rad_m1_pressure(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
             prj_rad_m1_third_moment_contract(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2],
                 dvdx, Mq[g]);
-            dE_acc[g] = 0.0;
-            dF_acc[g][0] = 0.0;
-            dF_acc[g][1] = 0.0;
-            dF_acc[g][2] = 0.0;
+            energy_available[g] = u[PRJ_CONS_RAD_E(field, g)];
         }
 
         /* SR velocity-gradient energy-space flux (Eqs. 21a/21b).  The whole
@@ -1234,9 +1233,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
              * single upwind donor group gu = gf + d (gf for div v >= 0, else
              * gf-1); its flux ν_face[gf]·{P,Q}[gu] is the upper (g+1/2) face of
              * group gf-1 and the lower (g-1/2) face of group gf, so it is
-             * scattered into both with opposite signs.  This accumulates the
-             * energy (P) and flux (Q) updates together without materialising the
-             * per-face tensors.  (For a Koren-limited version, replace Pg[gu] /
+             * scattered into both with opposite signs.  Accumulate the net
+             * energy and momentum transfer at each face so it can be limited
+             * before the conservative scatter.  (For a Koren-limited version,
+             * replace Pg[gu] /
              * Qg[gu] by q[gu] + 0.5·φ(r)·(q[gu] − q[gu+up]) per component, with
              * upwind-neighbour offset up = (div v >= 0) ? +1 : -1.) */
             for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
@@ -1247,14 +1247,12 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                     for (ii = 0; ii < 3; ++ii) {
                         double pf = nu * Pg[gu][jj][ii] * dvdx[jj][ii];
 
-                        dE_acc[gf - 1] += pf;
-                        dE_acc[gf] -= pf;
+                        energy_face[gf] += pf;
                     }
                     {
                         double qf = nu * Mq[gu][jj];
 
-                        dF_acc[gf - 1][jj] += qf;
-                        dF_acc[gf][jj] -= qf;
+                        momentum_face[gf][jj] += qf;
                     }
                 }
             }
@@ -1298,8 +1296,8 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                         : prj_rad_recon_face(q, gf - 1, +1);
                     face_val[gf] = nu_face[gf] * pick;
                 }
-                for (g = 0; g < PRJ_NEGROUP; ++g) {
-                    dE_acc[g] += coef * (face_val[g + 1] - face_val[g]);
+                for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                    energy_face[gf] += coef * face_val[gf];
                 }
             }
 
@@ -1325,9 +1323,46 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                             : prj_rad_recon_face(q, gf - 1, +1);
                         face_val[gf] = nu_face[gf] * pick;
                     }
-                    for (g = 0; g < PRJ_NEGROUP; ++g) {
-                        dF_acc[g][jj] += coef * (face_val[g + 1] - face_val[g]);
+                    for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                        momentum_face[gf][jj] += coef * face_val[gf];
                     }
+                }
+            }
+        }
+
+        /* Limit the combined SR+GR frequency-space flux with one factor per
+         * donor group.  For dE_g/dt = face[g+1] - face[g], a positive face
+         * drains its upper group and a negative face drains its lower group.
+         * Both outgoing faces of a group share the same factor. */
+        {
+            double outgoing[PRJ_NEGROUP] = {0.0};
+            double theta[PRJ_NEGROUP];
+            int gf;
+
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                if (energy_face[gf] > 0.0) {
+                    outgoing[gf] += energy_face[gf];
+                } else if (energy_face[gf] < 0.0) {
+                    outgoing[gf - 1] -= energy_face[gf];
+                }
+            }
+            for (g = 0; g < PRJ_NEGROUP; ++g) {
+                double drain = dt_lapse * outgoing[g];
+
+                theta[g] = 1.0;
+                if (drain > energy_available[g]) {
+                    theta[g] = energy_available[g] > 0.0 && drain > 0.0
+                        ? nextafter(energy_available[g] / drain, 0.0)
+                        : 0.0;
+                }
+            }
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                int donor = energy_face[gf] > 0.0 ? gf : gf - 1;
+                double factor = theta[donor];
+
+                energy_face[gf] *= factor;
+                for (ii = 0; ii < PRJ_NDIM; ++ii) {
+                    momentum_face[gf][ii] *= factor;
                 }
             }
         }
@@ -1338,10 +1373,14 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
          * well, consistent with the lapse multipliers already on the spatial
          * radiation flux and on the gravity source. */
         for (g = 0; g < PRJ_NEGROUP; ++g) {
-            u[PRJ_CONS_RAD_E(field, g)] += lapse * dt * dE_acc[g];
-            u[PRJ_CONS_RAD_F1(field, g)] += lapse * dt * dF_acc[g][0];
-            u[PRJ_CONS_RAD_F2(field, g)] += lapse * dt * dF_acc[g][1];
-            u[PRJ_CONS_RAD_F3(field, g)] += lapse * dt * dF_acc[g][2];
+            u[PRJ_CONS_RAD_E(field, g)] += dt_lapse *
+                (energy_face[g + 1] - energy_face[g]);
+            u[PRJ_CONS_RAD_F1(field, g)] += dt_lapse *
+                (momentum_face[g + 1][0] - momentum_face[g][0]);
+            u[PRJ_CONS_RAD_F2(field, g)] += dt_lapse *
+                (momentum_face[g + 1][1] - momentum_face[g][1]);
+            u[PRJ_CONS_RAD_F3(field, g)] += dt_lapse *
+                (momentum_face[g + 1][2] - momentum_face[g][2]);
         }
     }
 #else
