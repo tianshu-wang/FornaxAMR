@@ -97,6 +97,122 @@ static double occupation_for_group(int nu, int g)
     return 0.05 + 0.70 * phase;
 }
 
+static void check_step_positivity(prj_rad *rad)
+{
+    const double rho = 1.0e12;
+    const double Ye = 0.3;
+    const double gas_energy = 1.0e30;
+    double u[PRJ_NVAR_CONS] = {0};
+    double number_before[PRJ_NRAD] = {0};
+    double total_before;
+    double total_after;
+    prj_eos eos;
+    int nu;
+    int g;
+
+    memset(&eos, 0, sizeof(eos));
+    eos.kind = PRJ_EOS_KIND_IDEAL;
+
+    u[PRJ_CONS_RHO] = rho;
+    u[PRJ_CONS_ETOT] = gas_energy;
+    u[PRJ_CONS_YE] = rho * Ye;
+#if PRJ_MHD
+    u[PRJ_CONS_B1] = 0.0;
+    u[PRJ_CONS_B2] = 0.0;
+    u[PRJ_CONS_B3] = 0.0;
+#endif
+
+    total_before = gas_energy;
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double energy = 10.0 + (double)g;
+
+            if (g == PRJ_NEGROUP - 2) {
+                energy = -5.0 - (double)nu;
+            }
+            u[PRJ_CONS_RAD_E(nu, g)] = energy;
+            number_before[nu] += energy / rad->egroup_erg[nu][g];
+            total_before += energy * RAD_SCALE;
+        }
+    }
+
+    /* dt=0 isolates the positivity projection and number normalization from
+       the scattering-rate details. */
+    prj_rad_eleinel_step(rad, &eos, u, 0.0, 0.9);
+
+    total_after = u[PRJ_CONS_ETOT];
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        double number_after = 0.0;
+
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double energy = u[PRJ_CONS_RAD_E(nu, g)];
+
+            if (energy < 0.0) {
+                die("electron-inelastic step left a negative energy group");
+            }
+            number_after += energy / rad->egroup_erg[nu][g];
+            total_after += energy * RAD_SCALE;
+        }
+        if (fabs(number_after - number_before[nu]) >
+            5.0e-13 * fmax(fabs(number_before[nu]), 1.0)) {
+            die("electron-inelastic positivity projection changed species number");
+        }
+    }
+
+    if (fabs(total_after - total_before) >
+        5.0e-13 * fmax(fabs(total_before), 1.0)) {
+        die("electron-inelastic positivity projection violated total energy");
+    }
+    if (fabs(u[PRJ_CONS_YE] - rho * Ye) >
+        5.0e-13 * fmax(fabs(rho * Ye), 1.0)) {
+        die("electron-inelastic positivity projection changed Ye");
+    }
+}
+
+static void check_signed_number_normalization(prj_rad *rad)
+{
+    const double rho = 1.0e12;
+    const double Ye = 0.3;
+    double u[PRJ_NVAR_CONS] = {0};
+    double number_before[PRJ_NRAD] = {0};
+    prj_eos eos;
+    int nu;
+    int g;
+
+    memset(&eos, 0, sizeof(eos));
+    eos.kind = PRJ_EOS_KIND_IDEAL;
+    u[PRJ_CONS_RHO] = rho;
+    u[PRJ_CONS_ETOT] = 1.0e30;
+    u[PRJ_CONS_YE] = rho * Ye;
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double energy = (g == 0) ? -1000.0 : 1.0;
+
+            u[PRJ_CONS_RAD_E(nu, g)] = energy;
+            number_before[nu] += energy / rad->egroup_erg[nu][g];
+        }
+        if (!(number_before[nu] < 0.0)) {
+            die("signed-number test did not construct a negative species number");
+        }
+    }
+
+    prj_rad_eleinel_step(rad, &eos, u, 0.0, 0.9);
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        double number_after = 0.0;
+
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            number_after += u[PRJ_CONS_RAD_E(nu, g)] /
+                rad->egroup_erg[nu][g];
+        }
+        if (fabs(number_after - number_before[nu]) >
+            5.0e-13 * fmax(fabs(number_before[nu]), 1.0)) {
+            die("signed electron-inelastic species number was not conserved");
+        }
+    }
+}
+
 static void check_state(const prj_rad *rad, double T, double etael,
     double *max_rel_out)
 {
@@ -213,6 +329,8 @@ int main(int argc, char *argv[])
     build_test_egroups(&rad);
     prj_rad_eleinel_init(&rad);
 
+    check_step_positivity(&rad);
+    check_signed_number_normalization(&rad);
     check_state(&rad, 0.35, 12.0, &max_rel);
     check_state(&rad, 0.90, 22.0, &max_rel);
     check_state(&rad, 1.60, 35.0, &max_rel);

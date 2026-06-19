@@ -568,6 +568,19 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
         }
     }
 
+    /* Project the implicit update onto E_g >= 0 before species-number
+       normalization.  The normalization factor remains signed so the original
+       signed species number is conserved even when n_old < 0. */
+    for (nu = 0; nu < PRJ_NRAD; nu++) {
+        for (g = 0; g < PRJ_NEGROUP; g++) {
+            int eidx = PRJ_CONS_RAD_E(nu, g);
+
+            if (u[eidx] < 0.0) {
+                u[eidx] = 0.0;
+            }
+        }
+    }
+
     /* eleinel is pure scattering: it must conserve each species' total neutrino
        number. The implicit update drifts it by ~1e-4; restore exact conservation
        by rescaling each species back to its pre-scatter number N = sum_g E/erg_g.
@@ -583,7 +596,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
             n_old += E_pre[idx] * inv_erg;
             n_new += u[PRJ_CONS_RAD_E(nu, g)] * inv_erg;
         }
-        scale = (n_new > 0.0) ? n_old / n_new : 1.0;
+        scale = (n_new != 0.0) ? n_old / n_new : 1.0;
         for (g = 0; g < PRJ_NEGROUP; g++) {
             u[PRJ_CONS_RAD_E(nu, g)] *= scale;
         }
