@@ -793,7 +793,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
 {
-    double cdir[3] = {0.0, 0.0, 0.0};
+    double max_denom = 0.0;
     int field;
     int group;
 
@@ -803,6 +803,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
             double F1 = w[PRJ_PRIM_RAD_F1(field, group)];
             double F2 = w[PRJ_PRIM_RAD_F2(field, group)];
             double F3 = w[PRJ_PRIM_RAD_F3(field, group)];
+            double denom = 0.0;
             double lam_min;
             double lam_max;
             double c_abs;
@@ -832,9 +833,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
                 c_abs = fabs(lam_max);
             }
             c_abs *= PRJ_CLIGHT;
-            if (c_abs > cdir[0]) {
-                cdir[0] = c_abs;
-            }
+            denom += c_abs / dx[0];
 
             prj_rad_m1_wavespeeds_with_fluxmag(E, F2, Fmag, inv_Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
@@ -842,9 +841,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
                 c_abs = fabs(lam_max);
             }
             c_abs *= PRJ_CLIGHT;
-            if (c_abs > cdir[1]) {
-                cdir[1] = c_abs;
-            }
+            denom += c_abs / dx[1];
 
             prj_rad_m1_wavespeeds_with_fluxmag(E, F3, Fmag, inv_Fmag, f, &lam_min, &lam_max);
             c_abs = fabs(lam_min);
@@ -852,13 +849,18 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
                 c_abs = fabs(lam_max);
             }
             c_abs *= PRJ_CLIGHT;
-            if (c_abs > cdir[2]) {
-                cdir[2] = c_abs;
+            denom += c_abs / dx[2];
+
+            /* Preserve the correlation between directional wavespeeds belonging
+             * to one M1 state. Different groups are independent systems, so the
+             * cell CFL denominator is the largest complete group denominator. */
+            if (denom > max_denom) {
+                max_denom = denom;
             }
         }
     }
 
-    return cdir[0] / dx[0] + cdir[1] / dx[1] + cdir[2] / dx[2];
+    return max_denom;
 }
 #endif
 
