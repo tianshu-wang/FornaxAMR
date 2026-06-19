@@ -526,6 +526,33 @@ typedef struct prj_rad_resid_deriv {
     double deint_dYe;
 } prj_rad_resid_deriv;
 
+static void prj_rad_energy_failure_diagnostics(const char *reason,
+    const double *u_input, double dt, double lapse, int iter, int maxiter,
+    double res, double tol2, double T, double Ye, double F1, double F2,
+    double rho, double Uint_old, double Ye_old)
+{
+    int v;
+
+    fprintf(stderr, "prj_rad_energy_update: %s\n", reason);
+    fprintf(stderr,
+        "  solver: iter=%d maxiter=%d res=%.17e tol2=%.17e "
+        "T=%.17e Ye=%.17e F1=%.17e F2=%.17e\n",
+        iter, maxiter, res, tol2, T, Ye, F1, F2);
+    fprintf(stderr,
+        "  derived input: rho=%.17e Uint_old=%.17e Ye_old=%.17e\n",
+        rho, Uint_old, Ye_old);
+    fprintf(stderr,
+        "  raw input: dt=%.17e lapse=%.17e PRJ_NVAR_CONS=%d "
+        "PRJ_NRAD=%d PRJ_NEGROUP=%d PRJ_MHD=%d\n",
+        dt, lapse, PRJ_NVAR_CONS, PRJ_NRAD, PRJ_NEGROUP, PRJ_MHD);
+    fprintf(stderr, "  double u[PRJ_NVAR_CONS] = {\n");
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        fprintf(stderr, "      [%d] = %.17e,\n", v, u_input[v]);
+    }
+    fprintf(stderr, "  };\n");
+    fflush(stderr);
+}
+
 static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     double dt, double lapse, double rho, double Uint_old, double Ye_old,
     const double *E_nu_old, double T, double Ye, double *F1, double *F2,
@@ -650,6 +677,7 @@ static void prj_rad_implicit_jacobian_from_deriv(const prj_rad *rad,
 
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out)
 {
+    double u_input[PRJ_NVAR_CONS];
     double E_nu_old[PRJ_NRAD * PRJ_NEGROUP];
     double E_nu_new[PRJ_NRAD * PRJ_NEGROUP];
     double last_kappa[PRJ_NRAD * PRJ_NEGROUP];
@@ -674,8 +702,13 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     int iter;
     int nu;
     int g;
+    int v;
     const double alpha_ls = 1.0e-4;
     const double tol2 = rad->implicit_err_tol * rad->implicit_err_tol;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_input[v] = u[v];
+    }
 
     rho = u[PRJ_CONS_RHO];
     KE = 0.5 * (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
@@ -800,7 +833,11 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         /* 2x2 Cramer solve. */
         det = J00 * J11 - J01 * J10;
         if (fabs(det) < 1.0e-30) {
-            fprintf(stderr, "prj_rad_energy_update: singular Jacobian at iter=%d\n", iter);
+            prj_rad_energy_failure_diagnostics("singular Jacobian", u_input,
+                dt, lapse, iter, rad->maxiter, res_cur, tol2, T, Ye, F1, F2,
+                rho, Uint_old, Ye_old);
+            fprintf(stderr, "  scaled Jacobian determinant: %.17e\n", det);
+            fflush(stderr);
             exit(1);
         }
         s0 = (J11 * r0 - J01 * r1) / det;
@@ -902,7 +939,19 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         }
     }
     if (iter == rad->maxiter) {
-        fprintf(stderr, "prj_rad_energy_update: failed to converge (res=%e)\n", res_cur);
+        double F1_final;
+        double F2_final;
+        double f1_final;
+        double f2_final;
+
+        prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
+            E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa, 0);
+        f1_final = F1_final / err_scale_1;
+        f2_final = F2_final / err_scale_2;
+        res_cur = 0.5 * (f1_final * f1_final + f2_final * f2_final);
+        prj_rad_energy_failure_diagnostics("failed to converge", u_input,
+            dt, lapse, iter, rad->maxiter, res_cur, tol2, T, Ye,
+            F1_final, F2_final, rho, Uint_old, Ye_old);
         exit(1);
     }
 
