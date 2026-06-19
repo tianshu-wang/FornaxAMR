@@ -454,8 +454,8 @@ static void prj_mpi_assign_inactive_ranks(prj_mesh *mesh)
     for (lvl = max_lvl - 1; lvl >= 0; --lvl) {
         for (b = 0; b < mesh->nblocks; ++b) {
             prj_block *block = &mesh->blocks[b];
-            int cand_rank[8];
-            int cand_count[8];
+            int cand_rank[8] = {0};
+            int cand_count[8] = {0};
             int ncand = 0;
             int best_rank = -1;
             int best_count = 0;
