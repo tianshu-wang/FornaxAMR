@@ -379,10 +379,10 @@ void prj_rad3_opac_free(prj_rad *rad)
  * both kappa and eta (no scattering/delta, no per-output NULL checks).  The
  * interpolation is identical to prj_rad3_opac_lookup(); this variant just drops
  * the branches the hot path doesn't need. */
-void prj_rad3_opac_lookup_ke(const prj_rad *rad, double rho, double temp, double ye,
-    double *kappa, double *eta,
-    double *dlnkappa_dlnT, double *dlnkappa_dYe,
-    double *dlneta_dlnT, double *dlneta_dYe)
+void prj_rad3_opac_lookup_ke(const prj_rad *restrict rad, double rho, double temp, double ye,
+    double *restrict kappa, double *restrict eta,
+    double *restrict dlnkappa_dlnT, double *restrict dlnkappa_dYe,
+    double *restrict dlneta_dlnT, double *restrict dlneta_dYe)
 {
     int nromax = rad->nromax;
     int ntmax = rad->ntmax;
@@ -397,15 +397,17 @@ void prj_rad3_opac_lookup_ke(const prj_rad *rad, double rho, double temp, double
     int jr;
     int jt;
     int jye;
-    double r1i;
-    double r2i;
-    double t1i;
-    double t2i;
-    double ye1i;
-    double ye2i;
     double dri;
     double dti;
     double dyei;
+    double o_r;
+    double o_t;
+    double o_y;
+    double value_weight[8];
+    double dtemp_weight[4];
+    double dye_weight[4];
+    double inv_dlnT;
+    double inv_dYe;
     size_t corner[8];
     double factor;
     int nu;
@@ -430,19 +432,34 @@ void prj_rad3_opac_lookup_ke(const prj_rad *rad, double rho, double temp, double
     if (jye < 0) jye = 0;
     if (jye > nyemax - 2) jye = nyemax - 2;
 
-    r1i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)jr / (double)(nromax - 1);
-    r2i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)(jr + 1) / (double)(nromax - 1);
-    dri = (rl - r1i) / (r2i - r1i);
+    dri = deltar - (double)jr;
     if (dri < 0.0) dri = 0.0;
-
-    t1i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)jt / (double)(ntmax - 1);
-    t2i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)(jt + 1) / (double)(ntmax - 1);
-    dti = (tl_c - t1i) / (t2i - t1i);
+    dti = deltat - (double)jt;
     if (dti < 0.0) dti = 0.0;
+    dyei = deltaye - (double)jye;
 
-    ye1i = rad->yemin + (rad->yemax - rad->yemin) * (double)jye / (double)(nyemax - 1);
-    ye2i = rad->yemin + (rad->yemax - rad->yemin) * (double)(jye + 1) / (double)(nyemax - 1);
-    dyei = (ye_c - ye1i) / (ye2i - ye1i);
+    o_r = 1.0 - dri;
+    o_t = 1.0 - dti;
+    o_y = 1.0 - dyei;
+    value_weight[0] = o_r * o_t * o_y;
+    value_weight[1] = dri * o_t * o_y;
+    value_weight[2] = o_r * dti * o_y;
+    value_weight[3] = dri * dti * o_y;
+    value_weight[4] = o_r * o_t * dyei;
+    value_weight[5] = dri * o_t * dyei;
+    value_weight[6] = o_r * dti * dyei;
+    value_weight[7] = dri * dti * dyei;
+
+    dtemp_weight[0] = o_r * o_y;
+    dtemp_weight[1] = dri * o_y;
+    dtemp_weight[2] = o_r * dyei;
+    dtemp_weight[3] = dri * dyei;
+    dye_weight[0] = o_r * o_t;
+    dye_weight[1] = dri * o_t;
+    dye_weight[2] = o_r * dti;
+    dye_weight[3] = dri * dti;
+    inv_dlnT = rad->inv_logtemp_span * (double)(ntmax - 1);
+    inv_dYe = rad->inv_ye_span * (double)(nyemax - 1);
 
     corner[0] = OPAC_CELL_IDX(jr,     jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
     corner[1] = OPAC_CELL_IDX(jr + 1, jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
@@ -457,51 +474,58 @@ void prj_rad3_opac_lookup_ke(const prj_rad *rad, double rho, double temp, double
        internal RAD_SCALE*erg units. */
     factor = 4.0 * M_PI / PRJ_MEV_TO_ERG / RAD_SCALE;
 
-    {
-        /* Inverse grid spacings for the temperature (natural log) and Ye axes;
-         * used to turn normalized-cell-coordinate slopes into coordinate
-         * derivatives.  No log10->ln conversion is needed: this table's T axis
-         * is already natural log. */
-        double inv_dlnT = (t2i != t1i) ? 1.0 / (t2i - t1i) : 0.0;
-        double inv_dYe = (ye2i != ye1i) ? 1.0 / (ye2i - ye1i) : 0.0;
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        const double *restrict absopac = rad->absopac[nu];
+        const double *restrict emis = rad->emis[nu];
+        const double *restrict degroup_erg = rad->degroup_erg[nu];
 
-        for (nu = 0; nu < PRJ_NRAD; ++nu) {
-            const double *absopac = rad->absopac[nu];
-            const double *emis = rad->emis[nu];
+        for (ng = 0; ng < PRJ_NEGROUP; ++ng) {
+            size_t base = (size_t)nu * (size_t)PRJ_NEGROUP + (size_t)ng;
+            double k0 = absopac[corner[0] + (size_t)ng];
+            double k1 = absopac[corner[1] + (size_t)ng];
+            double k2 = absopac[corner[2] + (size_t)ng];
+            double k3 = absopac[corner[3] + (size_t)ng];
+            double k4 = absopac[corner[4] + (size_t)ng];
+            double k5 = absopac[corner[5] + (size_t)ng];
+            double k6 = absopac[corner[6] + (size_t)ng];
+            double k7 = absopac[corner[7] + (size_t)ng];
+            double j0 = emis[corner[0] + (size_t)ng];
+            double j1 = emis[corner[1] + (size_t)ng];
+            double j2 = emis[corner[2] + (size_t)ng];
+            double j3 = emis[corner[3] + (size_t)ng];
+            double j4 = emis[corner[4] + (size_t)ng];
+            double j5 = emis[corner[5] + (size_t)ng];
+            double j6 = emis[corner[6] + (size_t)ng];
+            double j7 = emis[corner[7] + (size_t)ng];
+            double kv =
+                value_weight[0] * k0 + value_weight[1] * k1 +
+                value_weight[2] * k2 + value_weight[3] * k3 +
+                value_weight[4] * k4 + value_weight[5] * k5 +
+                value_weight[6] * k6 + value_weight[7] * k7;
+            double jv =
+                value_weight[0] * j0 + value_weight[1] * j1 +
+                value_weight[2] * j2 + value_weight[3] * j3 +
+                value_weight[4] * j4 + value_weight[5] * j5 +
+                value_weight[6] * j6 + value_weight[7] * j7;
+            double dk_dt =
+                dtemp_weight[0] * (k2 - k0) + dtemp_weight[1] * (k3 - k1) +
+                dtemp_weight[2] * (k6 - k4) + dtemp_weight[3] * (k7 - k5);
+            double dk_dye =
+                dye_weight[0] * (k4 - k0) + dye_weight[1] * (k5 - k1) +
+                dye_weight[2] * (k6 - k2) + dye_weight[3] * (k7 - k3);
+            double dj_dt =
+                dtemp_weight[0] * (j2 - j0) + dtemp_weight[1] * (j3 - j1) +
+                dtemp_weight[2] * (j6 - j4) + dtemp_weight[3] * (j7 - j5);
+            double dj_dye =
+                dye_weight[0] * (j4 - j0) + dye_weight[1] * (j5 - j1) +
+                dye_weight[2] * (j6 - j2) + dye_weight[3] * (j7 - j3);
 
-            for (ng = 0; ng < PRJ_NEGROUP; ++ng) {
-                size_t base = (size_t)nu * (size_t)PRJ_NEGROUP + (size_t)ng;
-                double vk[8];
-                double vj[8];
-                double kv;
-                double jv;
-                double dk_dr;
-                double dk_dt;
-                double dk_dye;
-                double dj_dr;
-                double dj_dt;
-                double dj_dye;
-                int c;
-
-                /* Corner bit order for prj_trilinear_with_deriv: d0=rho, d1=T, d2=Ye. */
-                for (c = 0; c < 8; ++c) {
-                    vk[c] = absopac[corner[c] + (size_t)ng];
-                    vj[c] = emis[corner[c] + (size_t)ng];
-                }
-                kv = prj_trilinear_with_deriv(vk, dri, dti, dyei, &dk_dr, &dk_dt, &dk_dye);
-                jv = prj_trilinear_with_deriv(vj, dri, dti, dyei, &dj_dr, &dj_dt, &dj_dye);
-
-                kappa[base] = exp(kv + rl);
-                eta[base] = exp(jv + rl) * factor * rad->degroup_erg[nu][ng];
-
-                /* ln(kappa) = kv + rl and ln(eta) = jv + rl + const; the rl term
-                 * is rho-only, so T/Ye log-derivatives come straight from the
-                 * interpolated log-table slopes. */
-                dlnkappa_dlnT[base] = dk_dt * inv_dlnT;
-                dlnkappa_dYe[base] = dk_dye * inv_dYe;
-                dlneta_dlnT[base] = dj_dt * inv_dlnT;
-                dlneta_dYe[base] = dj_dye * inv_dYe;
-            }
+            kappa[base] = exp(kv + rl);
+            eta[base] = exp(jv + rl) * factor * degroup_erg[ng];
+            dlnkappa_dlnT[base] = dk_dt * inv_dlnT;
+            dlnkappa_dYe[base] = dk_dye * inv_dYe;
+            dlneta_dlnT[base] = dj_dt * inv_dlnT;
+            dlneta_dYe[base] = dj_dye * inv_dYe;
         }
     }
 }

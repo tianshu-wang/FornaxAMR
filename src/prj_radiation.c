@@ -558,12 +558,17 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     const double *E_nu_old, double T, double Ye, double *F1, double *F2,
     double *E_nu_new_out, double *kappa_out, prj_rad_resid_deriv *deriv)
 {
-    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double kappa_local[PRJ_NRAD * PRJ_NEGROUP];
     double eta[PRJ_NRAD * PRJ_NEGROUP];
-    double dlnkappa_dlnT[PRJ_NRAD * PRJ_NEGROUP];
-    double dlnkappa_dYe[PRJ_NRAD * PRJ_NEGROUP];
-    double dlneta_dlnT[PRJ_NRAD * PRJ_NEGROUP];
-    double dlneta_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double dlnkappa_dlnT_local[PRJ_NRAD * PRJ_NEGROUP];
+    double dlnkappa_dYe_local[PRJ_NRAD * PRJ_NEGROUP];
+    double dlneta_dlnT_local[PRJ_NRAD * PRJ_NEGROUP];
+    double dlneta_dYe_local[PRJ_NRAD * PRJ_NEGROUP];
+    double *kappa = kappa_out != 0 ? kappa_out : kappa_local;
+    double *dlnkappa_dlnT = deriv != 0 ? deriv->dlnkappa_dlnT : dlnkappa_dlnT_local;
+    double *dlnkappa_dYe = deriv != 0 ? deriv->dlnkappa_dYe : dlnkappa_dYe_local;
+    double *dlneta_dlnT = deriv != 0 ? deriv->dlneta_dlnT : dlneta_dlnT_local;
+    double *dlneta_dYe = deriv != 0 ? deriv->dlneta_dYe : dlneta_dYe_local;
     double eint_new;
     double deint_dlnT;
     double deint_dYe;
@@ -601,21 +606,7 @@ static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     *F1 = Uint_new - Uint_old + sum_dE * RAD_SCALE;
     *F2 = rho * Ye - rho * Ye_old + sum_dE_xe;
 
-    if (kappa_out != 0) {
-        int i;
-        for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
-            kappa_out[i] = kappa[i];
-        }
-    }
-
     if (deriv != 0) {
-        int i;
-        for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
-            deriv->dlnkappa_dlnT[i] = dlnkappa_dlnT[i];
-            deriv->dlnkappa_dYe[i] = dlnkappa_dYe[i];
-            deriv->dlneta_dlnT[i] = dlneta_dlnT[i];
-            deriv->dlneta_dYe[i] = dlneta_dYe[i];
-        }
         deriv->deint_dlnT = deint_dlnT;
         deriv->deint_dYe = deint_dYe;
     }
