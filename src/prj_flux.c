@@ -58,6 +58,24 @@ static inline void prj_flux_face_cells(int dir, int i, int j, int k,
     }
 }
 
+#if PRJ_NRAD > 0
+/* The radiation flux at a face is consumed by the flux divergence only when the
+ * face's two transverse indices lie in the active range [0, PRJ_BLOCK_SIZE - 1].
+ * For MHD the face loop carries an extra transverse ghost layer (CT/EMF
+ * reconstruction); radiation never reads those faces, so the M1 flux there is
+ * pure waste. Non-MHD loop bounds already exclude them, making this a no-op. */
+static inline int prj_flux_rad_face_needed(int dir, int i, int j, int k)
+{
+    if (dir == X1DIR) {
+        return j >= 0 && j < PRJ_BLOCK_SIZE && k >= 0 && k < PRJ_BLOCK_SIZE;
+    }
+    if (dir == X2DIR) {
+        return i >= 0 && i < PRJ_BLOCK_SIZE && k >= 0 && k < PRJ_BLOCK_SIZE;
+    }
+    return i >= 0 && i < PRJ_BLOCK_SIZE && j >= 0 && j < PRJ_BLOCK_SIZE;
+}
+#endif
+
 #if !PRJ_FLUX_RECON_MC_FASTPATH
 static inline double prj_flux_radiation_stencil_value(double q)
 {
@@ -918,7 +936,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     prj_flux_store_face_velocity(block, dir, i, j, k, v_face_loc);
 #if PRJ_NRAD > 0
                     PRJ_SUBTIMER_START("sub_flux_rad");
-                    {
+                    if (prj_flux_rad_face_needed(dir, i, j, k)) {
                         double dx_dir;
                         double lapse_face = 1.0;
                         double chi_face[PRJ_NRAD * PRJ_NEGROUP];
@@ -947,6 +965,20 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         }
 
                         prj_rad_flux(rad, WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
+                    } else {
+                        /* Transverse ghost face (MHD CT/EMF layer): radiation flux
+                         * is never read by the divergence. Zero the unused
+                         * components so the store stays well-defined. */
+                        int field;
+                        int group;
+                        for (field = 0; field < PRJ_NRAD; ++field) {
+                            for (group = 0; group < PRJ_NEGROUP; ++group) {
+                                Fl[PRJ_CONS_RAD_E(field, group)] = 0.0;
+                                Fl[PRJ_CONS_RAD_F1(field, group)] = 0.0;
+                                Fl[PRJ_CONS_RAD_F2(field, group)] = 0.0;
+                                Fl[PRJ_CONS_RAD_F3(field, group)] = 0.0;
+                            }
+                        }
                     }
                     PRJ_SUBTIMER_STOP("sub_flux_rad");
 #endif
