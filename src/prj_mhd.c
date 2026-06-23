@@ -24,7 +24,7 @@ static inline int prj_mhd_local_block(const prj_mpi *mpi, const prj_block *block
 static inline int prj_mhd_initialized_storage_block(const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        block->W != 0 && block->W1 != 0 && block->U != 0 &&
+        block->W != 0 && block->W1 != 0 &&
         block->Bf[0] != 0 && block->Bf1[0] != 0 && block->emf[0] != 0;
 }
 
@@ -35,7 +35,7 @@ static inline void prj_mhd_check_block_storage(const prj_block *block)
     if (block == 0) {
         prj_mhd_fail("prj_mhd: block is null");
     }
-    if (block->W == 0 || block->W1 == 0 || block->U == 0) {
+    if (block->W == 0 || block->W1 == 0) {
         prj_mhd_fail("prj_mhd: missing cell-centered block storage");
     }
     for (d = 0; d < 3; ++d) {
@@ -555,11 +555,6 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
                 double b1;
                 double b2;
                 double b3;
-                double rho;
-                double v1;
-                double v2;
-                double v3;
-                double eint;
 
                 if (use_cell_derived_mask != 0 &&
                     block->cell_derived_done != 0 &&
@@ -573,21 +568,9 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
                     prj_mhd_fail("prj_mhd_bf2bc: non-finite cell-centered magnetic field");
                 }
 
-                rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
-                v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
-                v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
-                v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
-                eint = W[VIDX(PRJ_PRIM_EINT, i, j, k)];
-
                 W[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
                 W[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
                 W[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
-                block->U[VIDX(PRJ_CONS_ETOT, i, j, k)] =
-                    rho * eint + 0.5 * rho * (v1 * v1 + v2 * v2 + v3 * v3) +
-                    0.5 * (b1 * b1 + b2 * b2 + b3 * b3);
-                block->U[VIDX(PRJ_CONS_B1, i, j, k)] = b1;
-                block->U[VIDX(PRJ_CONS_B2, i, j, k)] = b2;
-                block->U[VIDX(PRJ_CONS_B3, i, j, k)] = b3;
             }
         }
     }

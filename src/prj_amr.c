@@ -1203,6 +1203,43 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos,
     }
 }
 
+static void prj_sync_conserved_from_primitive(prj_mesh *mesh, prj_eos *eos,
+    const prj_mpi *mpi)
+{
+    int bidx;
+
+    if (mesh == 0 || eos == 0) {
+        return;
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int i;
+        int j;
+        int k;
+
+        if (!prj_is_local_active_block(mpi, block) || block->W == 0 || block->U == 0) {
+            continue;
+        }
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    double Wc[PRJ_NVAR_PRIM];
+                    double Uc[PRJ_NVAR_CONS];
+                    int v;
+
+                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                        Wc[v] = block->W[VIDX(v, i, j, k)];
+                    }
+                    prj_eos_prim2cons(eos, Wc, Uc);
+                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+                        block->U[VIDX(v, i, j, k)] = Uc[v];
+                    }
+                }
+            }
+        }
+    }
+}
+
 void prj_amr_enforce_two_to_one(prj_mesh *mesh, const prj_mpi *mpi)
 {
     int changed;
@@ -2274,6 +2311,10 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
         free(changed_blocks);
         return 0;
     }
+
+    PRJ_SUBTIMER_START("sub_amr_sync_conserved");
+    prj_sync_conserved_from_primitive(mesh, eos, mpi);
+    PRJ_SUBTIMER_STOP("sub_amr_sync_conserved");
 
     PRJ_SUBTIMER_START("sub_amr_eos_fill_ghost_cons");
     prj_eos_fill_ghost_cons(mesh, eos, mpi, 1, PRJ_EOS_CTX_AMR);

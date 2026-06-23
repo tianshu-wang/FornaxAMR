@@ -31,15 +31,6 @@ static void prj_timeint_cell_prim(const double *src, int i, int j, int k, double
 }
 
 #if !(PRJ_MHD && PRJ_NRAD > 0)
-static void prj_timeint_cell_cons_store(double *dst, int i, int j, int k, const double *u)
-{
-    int v;
-
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        dst[VIDX(v, i, j, k)] = u[v];
-    }
-}
-
 static void prj_timeint_cell_prim_store(double *dst, int i, int j, int k, const double *w)
 {
     int v;
@@ -466,8 +457,8 @@ static void prj_timeint_cell_cons_from_prim_mhd_rad(const double *W,
     }
 }
 
-static void prj_timeint_store_mhd_rad_cell(prj_block *block,
-    double *Wdst, int i, int j, int k, double *u)
+static void prj_timeint_store_mhd_rad_cell(double *Wdst,
+    int i, int j, int k, double *u)
 {
     double rho = u[PRJ_CONS_RHO];
     int field;
@@ -504,16 +495,6 @@ static void prj_timeint_store_mhd_rad_cell(prj_block *block,
         Wdst[VIDX(PRJ_PRIM_B3, i, j, k)] = u[PRJ_CONS_B3];
     }
 
-    block->U[VIDX(PRJ_CONS_RHO, i, j, k)] = u[PRJ_CONS_RHO];
-    block->U[VIDX(PRJ_CONS_MOM1, i, j, k)] = u[PRJ_CONS_MOM1];
-    block->U[VIDX(PRJ_CONS_MOM2, i, j, k)] = u[PRJ_CONS_MOM2];
-    block->U[VIDX(PRJ_CONS_MOM3, i, j, k)] = u[PRJ_CONS_MOM3];
-    block->U[VIDX(PRJ_CONS_ETOT, i, j, k)] = u[PRJ_CONS_ETOT];
-    block->U[VIDX(PRJ_CONS_YE, i, j, k)] = u[PRJ_CONS_YE];
-    block->U[VIDX(PRJ_CONS_B1, i, j, k)] = u[PRJ_CONS_B1];
-    block->U[VIDX(PRJ_CONS_B2, i, j, k)] = u[PRJ_CONS_B2];
-    block->U[VIDX(PRJ_CONS_B3, i, j, k)] = u[PRJ_CONS_B3];
-
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int e = PRJ_CONS_RAD_E(field, group);
@@ -521,10 +502,6 @@ static void prj_timeint_store_mhd_rad_cell(prj_block *block,
             int f2 = PRJ_CONS_RAD_F2(field, group);
             int f3 = PRJ_CONS_RAD_F3(field, group);
 
-            block->U[VIDX(e, i, j, k)] = u[e];
-            block->U[VIDX(f1, i, j, k)] = u[f1];
-            block->U[VIDX(f2, i, j, k)] = u[f2];
-            block->U[VIDX(f3, i, j, k)] = u[f3];
             Wdst[VIDX(e, i, j, k)] = u[e];
             Wdst[VIDX(f1, i, j, k)] = u[f1];
             Wdst[VIDX(f2, i, j, k)] = u[f2];
@@ -604,7 +581,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_STOP("sub_cell_radiation");
     }
     PRJ_SUBTIMER_START("sub_cell_store");
-    prj_timeint_store_mhd_rad_cell(block, block->W1, i, j, k, u);
+    prj_timeint_store_mhd_rad_cell(block->W1, i, j, k, u);
     PRJ_SUBTIMER_STOP("sub_cell_store");
 #else
     double w[PRJ_NVAR_PRIM];
@@ -639,7 +616,6 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     (void)rad;
 #endif
     prj_eos_cons2prim(eos, u1, w);
-    prj_timeint_cell_cons_store(block->U, i, j, k, u1);
     prj_timeint_cell_prim_store(block->W1, i, j, k, w);
 #endif
 }
@@ -747,7 +723,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_STOP("sub_cell_radiation");
     }
     PRJ_SUBTIMER_START("sub_cell_store");
-    prj_timeint_store_mhd_rad_cell(block, block->W, i, j, k, u);
+    prj_timeint_store_mhd_rad_cell(block->W, i, j, k, u);
     PRJ_SUBTIMER_STOP("sub_cell_store");
 #else
     double w[PRJ_NVAR_PRIM];
@@ -785,7 +761,6 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
     (void)rad;
 #endif
     prj_eos_cons2prim(eos, u, w);
-    prj_timeint_cell_cons_store(block->U, i, j, k, u);
     prj_timeint_cell_prim_store(block->W, i, j, k, w);
 #endif
 }
