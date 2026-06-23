@@ -560,6 +560,10 @@ static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
     }
 
 #if PRJ_NRAD > 0
+    /* The radiation flux divergence only reads faces with transverse indices in
+     * the active range; on MHD transverse ghost faces these stores are never
+     * consumed, so skip the (PRJ_NRAD * PRJ_NEGROUP * 4)-wide copy there. */
+    if (prj_flux_rad_face_needed(dir, i, j, k)) {
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             dst[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] = Fl[PRJ_CONS_RAD_E(field, group)];
@@ -577,6 +581,7 @@ static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
                 dst[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)] = Fl[PRJ_CONS_RAD_F3(field, group)];
             }
         }
+    }
     }
 #else
     (void)field;
@@ -965,21 +970,11 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         }
 
                         prj_rad_flux(rad, WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
-                    } else {
-                        /* Transverse ghost face (MHD CT/EMF layer): radiation flux
-                         * is never read by the divergence. Zero the unused
-                         * components so the store stays well-defined. */
-                        int field;
-                        int group;
-                        for (field = 0; field < PRJ_NRAD; ++field) {
-                            for (group = 0; group < PRJ_NEGROUP; ++group) {
-                                Fl[PRJ_CONS_RAD_E(field, group)] = 0.0;
-                                Fl[PRJ_CONS_RAD_F1(field, group)] = 0.0;
-                                Fl[PRJ_CONS_RAD_F2(field, group)] = 0.0;
-                                Fl[PRJ_CONS_RAD_F3(field, group)] = 0.0;
-                            }
-                        }
                     }
+                    /* Transverse ghost faces (MHD CT/EMF layer) are skipped: the
+                     * radiation flux divergence never reads them, and the store
+                     * (prj_flux_store_local_flux) gates the radiation copy on the
+                     * same prj_flux_rad_face_needed() predicate. */
                     PRJ_SUBTIMER_STOP("sub_flux_rad");
 #endif
                     PRJ_SUBTIMER_START("sub_flux_store");
