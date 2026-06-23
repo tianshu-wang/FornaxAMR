@@ -2148,9 +2148,7 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             child->grav[1] = 0;
             child->grav[2] = 0;
             child->r_com = 0;
-            for (int n = 0; n < LMAX*LMAX; ++n) {
-                child->Ylm[n] = 0;
-            }
+            child->Ylm = 0;
             child->ridx = 0;
             child->fr = 0;
             prj_block_setup_geometry(child, &mesh->coord);

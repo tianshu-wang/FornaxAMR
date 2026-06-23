@@ -101,7 +101,8 @@ struct prj_block {
     double *lapse;
     double *grav[3];
     double *r_com;
-    double *Ylm[LMAX*LMAX];
+    /* Cell-major: Ylm[cell * (LMAX * LMAX) + yidx]. */
+    double *Ylm;
 #if PRJ_MHD
     int *face_fidelity[3];
     int *edge_fidelity[3];
@@ -191,8 +192,9 @@ struct prj_grav {
     double *ms;
     double *phi;
     double *lapse;
-    double *Clm[LMAX*LMAX];
-    double *Dlm[LMAX*LMAX];
+    /* Radial-bin-major: {C,D}lm[bin * (LMAX * LMAX) + yidx]. */
+    double *Clm;
+    double *Dlm;
     double *vol;
     double *rho_avg;
     double *vr_avg;

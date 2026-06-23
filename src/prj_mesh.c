@@ -230,9 +230,7 @@ static void prj_block_init_empty(prj_block *b)
         b->grav[n] = 0;
     }
     b->r_com = 0;
-    for (n = 0; n < LMAX*LMAX; ++n) {
-        b->Ylm[n] = 0;
-    }
+    b->Ylm = 0;
 #if PRJ_MHD
     for (n = 0; n < 3; ++n) {
         b->face_fidelity[n] = 0;
@@ -368,10 +366,8 @@ int prj_block_alloc_data(prj_block *b)
     }
     b->r_com = base;
     base += (size_t)PRJ_BLOCK_NCELLS;
-    for (int n = 0; n < LMAX*LMAX; ++n) {
-        b->Ylm[n] = base;
-        base += (size_t)PRJ_BLOCK_NCELLS;
-    }
+    b->Ylm = base;
+    base += (size_t)(LMAX * LMAX) * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = face_fidelity[d];
@@ -409,9 +405,7 @@ int prj_block_alloc_data(prj_block *b)
         prj_fill(b->grav[d], (size_t)PRJ_BLOCK_NCELLS, 0.0);
     }
     prj_fill(b->r_com, (size_t)PRJ_BLOCK_NCELLS, 0.0);
-    for (int n = 0; n < LMAX*LMAX; ++n) {
-        prj_fill(b->Ylm[n], (size_t)PRJ_BLOCK_NCELLS, 0.0);
-    }
+    prj_fill(b->Ylm, (size_t)(LMAX * LMAX) * (size_t)PRJ_BLOCK_NCELLS, 0.0);
     return 0;
 }
 
@@ -450,9 +444,7 @@ void prj_block_free_data(prj_block *b)
         b->grav[d] = 0;
     }
     b->r_com = 0;
-    for (int n = 0; n < LMAX*LMAX; ++n) {
-        b->Ylm[n] = 0;
-    }
+    b->Ylm = 0;
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = 0;
