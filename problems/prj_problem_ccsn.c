@@ -467,6 +467,88 @@ static void prj_ccsn_profile_sample(const prj_ccsn_profile *profile, double r,
     }
 }
 
+/* Volume-average the primitive state over a cell using the same 3x3x3
+   Gauss-Legendre quadrature (about the mesh center of mass) that
+   prj_mesh_update_block_r_com uses for r_com. At every quadrature node we
+   compute the radius, sample the progenitor, and convert to primitives
+   (density, radially-projected velocity, internal energy, electron fraction),
+   then accumulate the volume average. This is more accurate than evaluating
+   the primitives once at the cell-averaged radius r_com. */
+static void prj_ccsn_quadrature_primitives(prj_sim *sim, const prj_ccsn_profile *profile,
+    const prj_block *block, int i, int j, int k, double *W)
+{
+    static const double gq_node[3] = {
+        -0.77459666924148337704, 0.0, 0.77459666924148337704
+    };
+    static const double gq_wnorm[3] = {5.0 / 18.0, 8.0 / 18.0, 5.0 / 18.0};
+    double x_com[3] = {0.0, 0.0, 0.0};
+    double xc;
+    double yc;
+    double zc;
+    double hx;
+    double hy;
+    double hz;
+    int a;
+    int b;
+    int c;
+    int v;
+
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        W[v] = 0.0;
+    }
+
+    x_com[0] = sim->mesh.x_com[0];
+    x_com[1] = sim->mesh.x_com[1];
+    x_com[2] = sim->mesh.x_com[2];
+
+    xc = block->xmin[0] + ((double)i + 0.5) * block->dx[0] - x_com[0];
+    yc = block->xmin[1] + ((double)j + 0.5) * block->dx[1] - x_com[1];
+    zc = block->xmin[2] + ((double)k + 0.5) * block->dx[2] - x_com[2];
+    hx = 0.5 * block->dx[0];
+    hy = 0.5 * block->dx[1];
+    hz = 0.5 * block->dx[2];
+
+    for (a = 0; a < 3; ++a) {
+        double dx1 = xc + hx * gq_node[a];
+
+        for (b = 0; b < 3; ++b) {
+            double dx2 = yc + hy * gq_node[b];
+            double wab = gq_wnorm[a] * gq_wnorm[b];
+
+            for (c = 0; c < 3; ++c) {
+                double dx3 = zc + hz * gq_node[c];
+                double w = wab * gq_wnorm[c];
+                double r = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+                double rho;
+                double temp;
+                double ye;
+                double vr;
+                double eos_q[PRJ_EOS_NQUANT];
+
+                prj_ccsn_profile_sample(profile, r, &rho, &temp, &ye, &vr);
+                if (rho == 0.0) {
+                    fprintf(stderr,
+                        "prj_ccsn_quadrature_primitives: rho=0 before prj_eos_rty for current_block id=%d current_rank=%d level=%d "
+                        "cell=(%d,%d,%d) node=(%d,%d,%d) x=(%.17e, %.17e, %.17e) r=%.17e temp=%.17e ye=%.17e\n",
+                        block->id, block->rank, block->level, i, j, k, a, b, c,
+                        dx1 + x_com[0], dx2 + x_com[1], dx3 + x_com[2], r, temp, ye);
+                    exit(EXIT_FAILURE);
+                }
+                prj_eos_rty(&sim->eos, rho, prj_ccsn_kelvin_to_mev(temp), ye, eos_q, PRJ_EOS_CTX_MAIN);
+
+                W[PRJ_PRIM_RHO] += w * rho;
+                if (r > 0.0) {
+                    W[PRJ_PRIM_V1] += w * vr * dx1 / r;
+                    W[PRJ_PRIM_V2] += w * vr * dx2 / r;
+                    W[PRJ_PRIM_V3] += w * vr * dx3 / r;
+                }
+                W[PRJ_PRIM_EINT] += w * eos_q[PRJ_EOS_EINT];
+                W[PRJ_PRIM_YE] += w * ye;
+            }
+        }
+    }
+}
+
 static void prj_ccsn_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_ccsn_profile *profile)
 {
     int bidx;
@@ -483,52 +565,12 @@ static void prj_ccsn_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_ccsn_
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
             for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
                 for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                    double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-                    double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-                    double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-                    double r = sqrt(x1 * x1 + x2 * x2 + x3 * x3);
-                    /* Sample the progenitor profile at the volume-averaged radius
-                       about the center of mass (r_com) rather than the cell-centered
-                       radius; fall back to r if r_com is unavailable. */
-                    double r_interp = (block->r_com != 0) ?
-                        block->r_com[prj_block_cache_index(i, j, k)] : r;
-                    double rho;
-                    double temp;
-                    double ye;
-                    double vr;
-                    double eos_q[PRJ_EOS_NQUANT];
                     double W[PRJ_NVAR_PRIM] = {0.0};
                     double U[PRJ_NVAR_CONS] = {0.0};
-                    int v;
 
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        W[v] = 0.0;
-                    }
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        U[v] = 0.0;
-                    }
-
-                    prj_ccsn_profile_sample(profile, r_interp, &rho, &temp, &ye, &vr);
-                    if (rho == 0.0) {
-                        fprintf(stderr,
-                            "prj_ccsn_fill_mesh: rho=0 before prj_eos_rty for current_block id=%d current_rank=%d level=%d "
-                            "cell=(%d,%d,%d) x=(%.17e, %.17e, %.17e) r=%.17e temp=%.17e ye=%.17e\n",
-                            block->id, block->rank, block->level, i, j, k, x1, x2, x3, r, temp, ye);
-                        exit(EXIT_FAILURE);
-                    }
-                    prj_eos_rty(&sim->eos, rho, prj_ccsn_kelvin_to_mev(temp), ye, eos_q, PRJ_EOS_CTX_MAIN);
-                    W[PRJ_PRIM_RHO] = rho;
-                    if (r > 0.0) {
-                        W[PRJ_PRIM_V1] = vr * x1 / r;
-                        W[PRJ_PRIM_V2] = vr * x2 / r;
-                        W[PRJ_PRIM_V3] = vr * x3 / r;
-                    } else {
-                        W[PRJ_PRIM_V1] = 0.0;
-                        W[PRJ_PRIM_V2] = 0.0;
-                        W[PRJ_PRIM_V3] = 0.0;
-                    }
-                    W[PRJ_PRIM_EINT] = eos_q[PRJ_EOS_EINT];
-                    W[PRJ_PRIM_YE] = ye;
+                    /* Volume-averaged primitives over the cell, using the same
+                       quadrature as the r_com calculation. */
+                    prj_ccsn_quadrature_primitives(sim, profile, block, i, j, k, W);
                     prj_eos_prim2cons(&sim->eos, W, U);
                     prj_problem_store_cell(block, i, j, k, W, U);
                 }
