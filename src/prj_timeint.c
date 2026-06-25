@@ -928,17 +928,68 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mp
     dt_global = prj_mpi_min_dt(mpi, dt_min);
 #if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
     dt_global *= (double)(PRJ_TIMEINT_ESSPRK_N - 1);
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
+    dt_global *= 6.0;
 #endif
     return dt_global;
 }
 
-#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
-static void prj_timeint_eSSPRK_save_initial(prj_mesh *mesh, const prj_mpi *mpi)
+#if PRJ_TIMEINT_USES_ESSPRK_STEP
+static void prj_timeint_eSSPRK_bad_saved_state(const char *name)
+{
+    fprintf(stderr, "%s: invalid saved state\n", name);
+    exit(EXIT_FAILURE);
+}
+
+static double *prj_timeint_eSSPRK_saved_W(prj_block *block, int saved_state)
+{
+    if (block == 0) {
+        prj_timeint_eSSPRK_bad_saved_state("prj_timeint_eSSPRK_saved_W");
+    }
+    if (saved_state == 1) {
+        return block->W1;
+    }
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    if (saved_state == 2) {
+        return block->W2;
+    }
+    if (saved_state == 3) {
+        return block->W3;
+    }
+#endif
+    prj_timeint_eSSPRK_bad_saved_state("prj_timeint_eSSPRK_saved_W");
+    return 0;
+}
+
+#if PRJ_MHD
+static double **prj_timeint_eSSPRK_saved_bf(prj_block *block, int saved_state)
+{
+    if (block == 0) {
+        prj_timeint_eSSPRK_bad_saved_state("prj_timeint_eSSPRK_saved_bf");
+    }
+    if (saved_state == 1) {
+        return block->Bf1;
+    }
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    if (saved_state == 2) {
+        return block->Bf2;
+    }
+    if (saved_state == 3) {
+        return block->Bf3;
+    }
+#endif
+    prj_timeint_eSSPRK_bad_saved_state("prj_timeint_eSSPRK_saved_bf");
+    return 0;
+}
+#endif
+
+static void prj_timeint_eSSPRK_save_state(prj_mesh *mesh, const prj_mpi *mpi, int saved_state)
 {
     int bidx;
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
+        double *W_saved;
         int i;
         int j;
         int k;
@@ -947,23 +998,25 @@ static void prj_timeint_eSSPRK_save_initial(prj_mesh *mesh, const prj_mpi *mpi)
         if (!prj_timeint_local_block(mpi, block)) {
             continue;
         }
+        W_saved = prj_timeint_eSSPRK_saved_W(block, saved_state);
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        block->W1[VIDX(v, i, j, k)] = block->W[VIDX(v, i, j, k)];
+                        W_saved[VIDX(v, i, j, k)] = block->W[VIDX(v, i, j, k)];
                     }
                 }
             }
         }
 #if PRJ_MHD
         {
+            double **bf_saved = prj_timeint_eSSPRK_saved_bf(block, saved_state);
             int d;
             int n;
 
             for (d = 0; d < 3; ++d) {
                 for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
-                    block->Bf1[d][n] = block->Bf[d][n];
+                    bf_saved[d][n] = block->Bf[d][n];
                 }
             }
         }
@@ -972,9 +1025,10 @@ static void prj_timeint_eSSPRK_save_initial(prj_mesh *mesh, const prj_mpi *mpi)
 }
 
 #if PRJ_MHD
-static void prj_timeint_eSSPRK_blend_bf(prj_block *block, double inv_n)
+static void prj_timeint_eSSPRK_blend_bf(prj_block *block, int saved_state, double saved_weight)
 {
-    double current_weight = 1.0 - inv_n;
+    double **bf_saved = prj_timeint_eSSPRK_saved_bf(block, saved_state);
+    double current_weight = 1.0 - saved_weight;
     int dir;
 
     for (dir = 0; dir < 3; ++dir) {
@@ -988,7 +1042,7 @@ static void prj_timeint_eSSPRK_blend_bf(prj_block *block, double inv_n)
                     int idx = FACE_IDX(dir, i, j, k);
 
                     block->Bf[dir][idx] =
-                        inv_n * block->Bf1[dir][idx] + current_weight * block->Bf[dir][idx];
+                        saved_weight * bf_saved[dir][idx] + current_weight * block->Bf[dir][idx];
                 }
             }
         }
@@ -997,20 +1051,21 @@ static void prj_timeint_eSSPRK_blend_bf(prj_block *block, double inv_n)
 #endif
 
 static void prj_timeint_eSSPRK_final_cell(prj_eos *eos, prj_block *block,
-    int i, int j, int k, double inv_n)
+    int i, int j, int k, int saved_state, double saved_weight)
 {
+    double *W_saved = prj_timeint_eSSPRK_saved_W(block, saved_state);
     double w[PRJ_NVAR_PRIM];
     double u[PRJ_NVAR_CONS];
-    double u1[PRJ_NVAR_CONS];
-    double current_weight = 1.0 - inv_n;
+    double u_saved[PRJ_NVAR_CONS];
+    double current_weight = 1.0 - saved_weight;
     int v;
 
     prj_timeint_cell_prim(block->W, i, j, k, w);
     prj_eos_prim2cons(eos, w, u);
-    prj_timeint_cell_prim(block->W1, i, j, k, w);
-    prj_eos_prim2cons(eos, w, u1);
+    prj_timeint_cell_prim(W_saved, i, j, k, w);
+    prj_eos_prim2cons(eos, w, u_saved);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        u[v] = inv_n * u1[v] + current_weight * u[v];
+        u[v] = saved_weight * u_saved[v] + current_weight * u[v];
     }
 #if PRJ_MHD
     prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
@@ -1022,12 +1077,58 @@ static void prj_timeint_eSSPRK_final_cell(prj_eos *eos, prj_block *block,
     prj_timeint_cell_prim_store(block->W, i, j, k, w);
 #endif
 }
+
+static void prj_timeint_eSSPRK_blend_with_saved(prj_mesh *mesh, const prj_bc *bc,
+    prj_eos *eos, prj_rad *rad, prj_grav *grav, prj_mpi *mpi, prj_timer *timer,
+    int saved_state, double saved_weight, const char *cell_timer, const char *active_timer,
+    const char *ghost_timer, const char *mesh_timer)
+{
+    int bidx;
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, cell_timer);
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int i;
+        int j;
+        int k;
+
+        if (!prj_timeint_local_block(mpi, block)) {
+            continue;
+        }
+#if PRJ_MHD
+        prj_timeint_eSSPRK_blend_bf(block, saved_state, saved_weight);
+#endif
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    prj_timeint_eSSPRK_final_cell(eos, block, i, j, k, saved_state, saved_weight);
+                }
+            }
+        }
+    }
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, cell_timer);
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, active_timer);
+    prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, active_timer);
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, ghost_timer);
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad,
+        PRJ_BOUNDARY_TIMER_SCOPE_NONE);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, ghost_timer);
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, mesh_timer);
+    prj_eos_fill_mesh(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, mesh_timer);
+
+    prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 1);
+}
 #endif
 
 void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
     prj_rad *rad, prj_grav *grav, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
 {
-#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+#if PRJ_TIMEINT_USES_ESSPRK_STEP
     int bidx;
 
     (void)coord;
@@ -1127,47 +1228,15 @@ void prj_timeint_eSSPRK_final(prj_mesh *mesh, const prj_coord *coord, const prj_
 {
 #if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
     double inv_n = 1.0 / (double)PRJ_TIMEINT_ESSPRK_N;
-    int bidx;
 
     (void)coord;
 
-    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_cell_update");
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        prj_block *block = &mesh->blocks[bidx];
-        int i;
-        int j;
-        int k;
-
-        if (!prj_timeint_local_block(mpi, block)) {
-            continue;
-        }
-#if PRJ_MHD
-        prj_timeint_eSSPRK_blend_bf(block, inv_n);
-#endif
-        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    prj_timeint_eSSPRK_final_cell(eos, block, i, j, k, inv_n);
-                }
-            }
-        }
-    }
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_cell_update");
-
-    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_eos_fill_active");
-    prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_eos_fill_active");
-
-    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_ghost_grav_opac");
-    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad,
-        PRJ_BOUNDARY_TIMER_SCOPE_NONE);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_ghost_grav_opac");
-
-    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_eos_fill_mesh");
-    prj_eos_fill_mesh(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
-    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_eos_fill_mesh");
-
-    prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 1);
+    prj_timeint_eSSPRK_blend_with_saved(mesh, bc, eos, rad, grav, mpi, timer,
+        1, inv_n,
+        "essprk_final_cell_update",
+        "essprk_final_eos_fill_active",
+        "essprk_final_ghost_grav_opac",
+        "essprk_final_eos_fill_mesh");
 #else
     (void)mesh;
     (void)coord;
@@ -1180,6 +1249,56 @@ void prj_timeint_eSSPRK_final(prj_mesh *mesh, const prj_coord *coord, const prj_
     prj_timeint_unavailable("prj_timeint_eSSPRK_final");
 #endif
 }
+
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
+static void prj_timeint_eSSPRK9_3_advance(prj_mesh *mesh, const prj_coord *coord,
+    const prj_bc *bc, prj_eos *eos, prj_rad *rad, prj_grav *grav, prj_mpi *mpi,
+    double dt, double *dt_src, prj_timer *timer)
+{
+    double dt_sub = dt / 6.0;
+    int n;
+
+    prj_timeint_eSSPRK_save_state(mesh, mpi, 1);
+    prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+
+    prj_timeint_eSSPRK_save_state(mesh, mpi, 2);
+    prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+
+    prj_timeint_eSSPRK_save_state(mesh, mpi, 3);
+    for (n = 0; n < 3; ++n) {
+        prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+    }
+
+    prj_timeint_eSSPRK_blend_with_saved(mesh, bc, eos, rad, grav, mpi, timer,
+        1, 1.0 / 5.0,
+        "essprk9_3_blend1_cell_update",
+        "essprk9_3_blend1_eos_fill_active",
+        "essprk9_3_blend1_ghost_grav_opac",
+        "essprk9_3_blend1_eos_fill_mesh");
+
+    prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+
+    prj_timeint_eSSPRK_blend_with_saved(mesh, bc, eos, rad, grav, mpi, timer,
+        2, 1.0 / 4.0,
+        "essprk9_3_blend2_cell_update",
+        "essprk9_3_blend2_eos_fill_active",
+        "essprk9_3_blend2_ghost_grav_opac",
+        "essprk9_3_blend2_eos_fill_mesh");
+
+    prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+
+    prj_timeint_eSSPRK_blend_with_saved(mesh, bc, eos, rad, grav, mpi, timer,
+        3, 1.0 / 3.0,
+        "essprk9_3_blend3_cell_update",
+        "essprk9_3_blend3_eos_fill_active",
+        "essprk9_3_blend3_ghost_grav_opac",
+        "essprk9_3_blend3_eos_fill_mesh");
+
+    for (n = 0; n < 2; ++n) {
+        prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+    }
+}
+#endif
 
 void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
     prj_rad *rad, prj_grav *grav, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
@@ -1398,11 +1517,13 @@ void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, 
     int n;
     double dt_sub = dt / (double)(PRJ_TIMEINT_ESSPRK_N - 1);
 
-    prj_timeint_eSSPRK_save_initial(mesh, mpi);
+    prj_timeint_eSSPRK_save_state(mesh, mpi, 1);
     for (n = 0; n < PRJ_TIMEINT_ESSPRK_N; ++n) {
         prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
     }
     prj_timeint_eSSPRK_final(mesh, coord, bc, eos, rad, grav, mpi, timer);
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
+    prj_timeint_eSSPRK9_3_advance(mesh, coord, bc, eos, rad, grav, mpi, dt, dt_src, timer);
 #else
 #error "Unsupported TIME_INTEGRATION value"
 #endif

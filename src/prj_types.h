@@ -90,6 +90,10 @@ struct prj_block {
     double dx[3];
     double *W;
     double *W1;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    double *W2;
+    double *W3;
+#endif
     double *eosvar;
     int *cell_derived_done;
     double *U;
@@ -108,6 +112,10 @@ struct prj_block {
     int *edge_fidelity[3];
     double *Bf[3];
     double *Bf1[3];
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    double *Bf2[3];
+    double *Bf3[3];
+#endif
     double *Bv1[3];
     double *Bv2[3];
     double *emf[3];

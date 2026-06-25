@@ -2169,6 +2169,10 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
         } else {
             child->W = 0;
             child->W1 = 0;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+            child->W2 = 0;
+            child->W3 = 0;
+#endif
             child->eosvar = 0;
             child->U = 0;
             child->dUdt = 0;

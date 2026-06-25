@@ -213,6 +213,10 @@ static void prj_block_init_empty(prj_block *b)
     b->can_refine = 1;
     b->W = 0;
     b->W1 = 0;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    b->W2 = 0;
+    b->W3 = 0;
+#endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
@@ -237,6 +241,10 @@ static void prj_block_init_empty(prj_block *b)
         b->edge_fidelity[n] = 0;
         b->Bf[n] = 0;
         b->Bf1[n] = 0;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+        b->Bf2[n] = 0;
+        b->Bf3[n] = 0;
+#endif
         b->Bv1[n] = 0;
         b->Bv2[n] = 0;
         b->emf[n] = 0;
@@ -294,10 +302,16 @@ int prj_block_alloc_data(prj_block *b)
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     total_count = 2U * prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    total_count += 2U * prim_count;
+#endif
     total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
     total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
     total_count += 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    total_count += 6U * (size_t)PRJ_BLOCK_NFACES;
+#endif
 #endif
 #if PRJ_NRAD > 0
     total_count += 2U * (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
@@ -339,6 +353,12 @@ int prj_block_alloc_data(prj_block *b)
     base += prim_count;
     b->W1 = base;
     base += prim_count;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    b->W2 = base;
+    base += prim_count;
+    b->W3 = base;
+    base += prim_count;
+#endif
     b->eosvar = base;
     base += eosvar_count;
     b->cell_derived_done = cell_derived_done;
@@ -379,6 +399,16 @@ int prj_block_alloc_data(prj_block *b)
         b->Bf1[d] = base;
         base += (size_t)PRJ_BLOCK_NFACES;
     }
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    for (int d = 0; d < 3; ++d) {
+        b->Bf2[d] = base;
+        base += (size_t)PRJ_BLOCK_NFACES;
+    }
+    for (int d = 0; d < 3; ++d) {
+        b->Bf3[d] = base;
+        base += (size_t)PRJ_BLOCK_NFACES;
+    }
+#endif
     for (int d = 0; d < 3; ++d) {
         b->Bv1[d] = base;
         base += (size_t)PRJ_BLOCK_NCELLS;
@@ -427,6 +457,10 @@ void prj_block_free_data(prj_block *b)
     free(b->fr);
     b->W = 0;
     b->W1 = 0;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+    b->W2 = 0;
+    b->W3 = 0;
+#endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
@@ -451,6 +485,10 @@ void prj_block_free_data(prj_block *b)
         b->edge_fidelity[d] = 0;
         b->Bf[d] = 0;
         b->Bf1[d] = 0;
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+        b->Bf2[d] = 0;
+        b->Bf3[d] = 0;
+#endif
         b->Bv1[d] = 0;
         b->Bv2[d] = 0;
         b->emf[d] = 0;
