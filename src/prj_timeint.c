@@ -15,6 +15,12 @@ static double prj_timeint_cell_lapse(const prj_block *block, int i, int j, int k
 }
 #endif
 
+static void prj_timeint_unavailable(const char *name)
+{
+    fprintf(stderr, "%s is unavailable for the selected TIME_INTEGRATION\n", name);
+    exit(EXIT_FAILURE);
+}
+
 static int prj_timeint_local_block(const prj_mpi *mpi, const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
@@ -249,7 +255,7 @@ static void prj_timeint_mhd_update_bf(prj_block *block, int stage, double dt)
     double *old[3];
     int dir;
 
-    if (block == 0 || (stage != 1 && stage != 2)) {
+    if (block == 0 || (stage != 0 && stage != 1 && stage != 2)) {
         prj_timeint_mhd_fail("prj_timeint_mhd_update_bf: invalid input");
     }
     for (dir = 0; dir < 3; ++dir) {
@@ -257,7 +263,10 @@ static void prj_timeint_mhd_update_bf(prj_block *block, int stage, double dt)
             prj_timeint_mhd_fail("prj_timeint_mhd_update_bf: missing Bf storage");
         }
         old[dir] = block->Bf[dir];
-        if (stage == 1) {
+        if (stage == 0) {
+            src[dir] = block->Bf[dir];
+            dst[dir] = block->Bf[dir];
+        } else if (stage == 1) {
             src[dir] = block->Bf[dir];
             dst[dir] = block->Bf1[dir];
         } else {
@@ -322,10 +331,12 @@ static double *prj_timeint_stage1_array(prj_block *block)
     return block != 0 ? block->W : 0;
 }
 
+#if TIME_INTEGRATION == RK2
 static double *prj_timeint_stage2_array(prj_block *block)
 {
     return block != 0 ? block->W1 : 0;
 }
+#endif
 #endif
 
 static void prj_timeint_update_dt_src_values(const prj_mesh *mesh, const prj_grav *grav,
@@ -513,12 +524,19 @@ static void prj_timeint_store_mhd_rad_cell(double *Wdst,
 
 static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad *rad, prj_eos *eos,
     prj_block *block, int i, int j, int k,
-    double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src)
+    double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src, double *Wdst,
+    int use_bf1)
 {
 #if PRJ_MHD && PRJ_NRAD > 0
+    double *bf_dst[3];
     double u[PRJ_NVAR_CONS];
+    int d;
     int field;
     int group;
+
+    for (d = 0; d < 3; ++d) {
+        bf_dst[d] = use_bf1 != 0 ? block->Bf1[d] : block->Bf[d];
+    }
 
     PRJ_SUBTIMER_START("sub_cell_cons_from_prim");
     prj_timeint_cell_cons_from_prim_mhd_rad(block->W, i, j, k, u);
@@ -555,7 +573,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #undef PRJ_STAGE1_UPDATE
 
     PRJ_SUBTIMER_START("sub_cell_mhd_set_b");
-    prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf1, i, j, k, u);
+    prj_timeint_mhd_set_cons_b_from_bf(block, bf_dst, i, j, k, u);
     PRJ_SUBTIMER_STOP("sub_cell_mhd_set_b");
     {
         double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
@@ -581,7 +599,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_STOP("sub_cell_radiation");
     }
     PRJ_SUBTIMER_START("sub_cell_store");
-    prj_timeint_store_mhd_rad_cell(block->W1, i, j, k, u);
+    prj_timeint_store_mhd_rad_cell(Wdst, i, j, k, u);
     PRJ_SUBTIMER_STOP("sub_cell_store");
 #else
     double w[PRJ_NVAR_PRIM];
@@ -598,7 +616,17 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         u1[v] = u[v] + dt * (block->dUdt[VIDX(v, i, j, k)] + fluxdiv[v]);
     }
 #if PRJ_MHD
-    prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf1, i, j, k, u1);
+    {
+        double *bf_dst[3];
+        int d;
+
+        for (d = 0; d < 3; ++d) {
+            bf_dst[d] = use_bf1 != 0 ? block->Bf1[d] : block->Bf[d];
+        }
+        prj_timeint_mhd_set_cons_b_from_bf(block, bf_dst, i, j, k, u1);
+    }
+#else
+    (void)use_bf1;
 #endif
 #if PRJ_NRAD > 0
     {
@@ -616,10 +644,11 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     (void)rad;
 #endif
     prj_eos_cons2prim(eos, u1, w);
-    prj_timeint_cell_prim_store(block->W1, i, j, k, w);
+    prj_timeint_cell_prim_store(Wdst, i, j, k, w);
 #endif
 }
 
+#if TIME_INTEGRATION == RK2
 static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad *rad, prj_eos *eos,
     prj_block *block, int i, int j, int k,
     double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src)
@@ -764,6 +793,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
     prj_timeint_cell_prim_store(block->W, i, j, k, w);
 #endif
 }
+#endif
 
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
@@ -842,6 +872,7 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
 double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, double cfl)
 {
     double dt_min = 1.0e99;
+    double dt_global;
     int bidx;
 
     (void)eos;
@@ -894,12 +925,266 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mp
         }
     }
 
-    return prj_mpi_min_dt(mpi, dt_min);
+    dt_global = prj_mpi_min_dt(mpi, dt_min);
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+    dt_global *= (double)(PRJ_TIMEINT_ESSPRK_N - 1);
+#endif
+    return dt_global;
+}
+
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+static void prj_timeint_eSSPRK_save_initial(prj_mesh *mesh, const prj_mpi *mpi)
+{
+    int bidx;
+
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int i;
+        int j;
+        int k;
+        int v;
+
+        if (!prj_timeint_local_block(mpi, block)) {
+            continue;
+        }
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                        block->W1[VIDX(v, i, j, k)] = block->W[VIDX(v, i, j, k)];
+                    }
+                }
+            }
+        }
+#if PRJ_MHD
+        {
+            int d;
+            int n;
+
+            for (d = 0; d < 3; ++d) {
+                for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
+                    block->Bf1[d][n] = block->Bf[d][n];
+                }
+            }
+        }
+#endif
+    }
+}
+
+#if PRJ_MHD
+static void prj_timeint_eSSPRK_blend_bf(prj_block *block, double inv_n)
+{
+    double current_weight = 1.0 - inv_n;
+    int dir;
+
+    for (dir = 0; dir < 3; ++dir) {
+        int i;
+        int j;
+        int k;
+
+        for (i = 0; i <= prj_timeint_mhd_face_axis_max(dir, 0); ++i) {
+            for (j = 0; j <= prj_timeint_mhd_face_axis_max(dir, 1); ++j) {
+                for (k = 0; k <= prj_timeint_mhd_face_axis_max(dir, 2); ++k) {
+                    int idx = FACE_IDX(dir, i, j, k);
+
+                    block->Bf[dir][idx] =
+                        inv_n * block->Bf1[dir][idx] + current_weight * block->Bf[dir][idx];
+                }
+            }
+        }
+    }
+}
+#endif
+
+static void prj_timeint_eSSPRK_final_cell(prj_eos *eos, prj_block *block,
+    int i, int j, int k, double inv_n)
+{
+    double w[PRJ_NVAR_PRIM];
+    double u[PRJ_NVAR_CONS];
+    double u1[PRJ_NVAR_CONS];
+    double current_weight = 1.0 - inv_n;
+    int v;
+
+    prj_timeint_cell_prim(block->W, i, j, k, w);
+    prj_eos_prim2cons(eos, w, u);
+    prj_timeint_cell_prim(block->W1, i, j, k, w);
+    prj_eos_prim2cons(eos, w, u1);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u[v] = inv_n * u1[v] + current_weight * u[v];
+    }
+#if PRJ_MHD
+    prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
+#endif
+#if PRJ_MHD && PRJ_NRAD > 0
+    prj_timeint_store_mhd_rad_cell(block->W, i, j, k, u);
+#else
+    prj_eos_cons2prim(eos, u, w);
+    prj_timeint_cell_prim_store(block->W, i, j, k, w);
+#endif
+}
+#endif
+
+void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
+    prj_rad *rad, prj_grav *grav, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
+{
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+    int bidx;
+
+    (void)coord;
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_flux_send");
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
+        if (prj_timeint_local_block(mpi, block)) {
+            prj_flux_update(eos, rad, block, block->W, block->eosvar, block->flux, 0);
+        }
+    }
+    PRJ_SUBTIMER_START("sub_riemann_flux_send");
+    prj_riemann_flux_send(mesh, mpi);
+    PRJ_SUBTIMER_STOP("sub_riemann_flux_send");
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_flux_send");
+
+#if PRJ_MHD
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_mhd_emf");
+    prj_timeint_mhd_update_mesh_emf(mesh, mpi, prj_timeint_stage1_array);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_mhd_emf");
+#endif
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_flux_emf_exchange");
+    prj_mpi_exchange_fluxes_and_emf(mesh, mpi);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_flux_emf_exchange");
+
+#if PRJ_MHD
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_mhd_update_bf");
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
+        if (prj_timeint_local_block(mpi, block)) {
+            prj_timeint_mhd_update_bf(block, 0, dt);
+        }
+    }
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_mhd_update_bf");
+#endif
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_src_cell_update");
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
+        if (prj_timeint_local_block(mpi, block)) {
+            int i;
+            int j;
+            int k;
+
+            PRJ_SUBTIMER_START("sub_cell_src_update");
+            prj_src_update(eos, rad, grav, block, block->W, block->dUdt);
+            PRJ_SUBTIMER_STOP("sub_cell_src_update");
+            PRJ_SUBTIMER_START("sub_cell_essprk_step_update");
+            for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                    for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                        prj_timeint_update_cell_stage1_mhd_rad(mesh, rad, eos, block,
+                            i, j, k, dt, grav, mpi, dt_src, block->W, 0);
+                    }
+                }
+            }
+            PRJ_SUBTIMER_STOP("sub_cell_essprk_step_update");
+        }
+    }
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_src_cell_update");
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_eos_fill_active");
+    prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_eos_fill_active");
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_ghost_grav_opac");
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad,
+        PRJ_BOUNDARY_TIMER_SCOPE_NONE);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_ghost_grav_opac");
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_eos_fill_mesh");
+    prj_eos_fill_mesh(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_eos_fill_mesh");
+
+    prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 1);
+#else
+    (void)mesh;
+    (void)coord;
+    (void)bc;
+    (void)eos;
+    (void)rad;
+    (void)grav;
+    (void)mpi;
+    (void)dt;
+    (void)dt_src;
+    (void)timer;
+    prj_timeint_unavailable("prj_timeint_eSSPRK_step");
+#endif
+}
+
+void prj_timeint_eSSPRK_final(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc,
+    prj_eos *eos, prj_rad *rad, prj_grav *grav, prj_mpi *mpi, prj_timer *timer)
+{
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+    double inv_n = 1.0 / (double)PRJ_TIMEINT_ESSPRK_N;
+    int bidx;
+
+    (void)coord;
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_cell_update");
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int i;
+        int j;
+        int k;
+
+        if (!prj_timeint_local_block(mpi, block)) {
+            continue;
+        }
+#if PRJ_MHD
+        prj_timeint_eSSPRK_blend_bf(block, inv_n);
+#endif
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    prj_timeint_eSSPRK_final_cell(eos, block, i, j, k, inv_n);
+                }
+            }
+        }
+    }
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_cell_update");
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_eos_fill_active");
+    prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_eos_fill_active");
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_ghost_grav_opac");
+    prj_boundary_fill_ghosts_and_bf(mesh, mpi, bc, 1, 0, eos, grav, rad,
+        PRJ_BOUNDARY_TIMER_SCOPE_NONE);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_ghost_grav_opac");
+
+    PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_final_eos_fill_mesh");
+    prj_eos_fill_mesh(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_final_eos_fill_mesh");
+
+    prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 1);
+#else
+    (void)mesh;
+    (void)coord;
+    (void)bc;
+    (void)eos;
+    (void)rad;
+    (void)grav;
+    (void)mpi;
+    (void)timer;
+    prj_timeint_unavailable("prj_timeint_eSSPRK_final");
+#endif
 }
 
 void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
     prj_rad *rad, prj_grav *grav, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
 {
+#if TIME_INTEGRATION == RK2
     int bidx;
 
     (void)coord;
@@ -957,7 +1242,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                         prj_timeint_update_cell_stage1_mhd_rad(mesh, rad, eos, block,
-                            i, j, k, dt, grav, mpi, dt_src);
+                            i, j, k, dt, grav, mpi, dt_src, block->W1, 1);
                     }
                 }
             }
@@ -985,11 +1270,25 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     /* The 1-ghost halo opacity needs ghost W/eosvar, so fill it now that all
      * ghost filling and eos_fill_mesh are done. */
     prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 2);
+#else
+    (void)mesh;
+    (void)coord;
+    (void)bc;
+    (void)eos;
+    (void)rad;
+    (void)grav;
+    (void)mpi;
+    (void)dt;
+    (void)dt_src;
+    (void)timer;
+    prj_timeint_unavailable("prj_timeint_stage1");
+#endif
 }
 
 void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
     prj_rad *rad, prj_grav *grav, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
 {
+#if TIME_INTEGRATION == RK2
     int bidx;
 
     (void)coord;
@@ -1074,11 +1373,37 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     /* The 1-ghost halo opacity needs ghost W/eosvar, so fill it now that all
      * ghost filling and eos_fill_mesh are done. */
     prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, 1);
+#else
+    (void)mesh;
+    (void)coord;
+    (void)bc;
+    (void)eos;
+    (void)rad;
+    (void)grav;
+    (void)mpi;
+    (void)dt;
+    (void)dt_src;
+    (void)timer;
+    prj_timeint_unavailable("prj_timeint_stage2");
+#endif
 }
 
 void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
     prj_rad *rad, prj_grav *grav, prj_mpi *mpi, double dt, double *dt_src, prj_timer *timer)
 {
+#if TIME_INTEGRATION == RK2
     prj_timeint_stage1(mesh, coord, bc, eos, rad, grav, mpi, dt, dt_src, timer);
     prj_timeint_stage2(mesh, coord, bc, eos, rad, grav, mpi, dt, dt_src, timer);
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+    int n;
+    double dt_sub = dt / (double)(PRJ_TIMEINT_ESSPRK_N - 1);
+
+    prj_timeint_eSSPRK_save_initial(mesh, mpi);
+    for (n = 0; n < PRJ_TIMEINT_ESSPRK_N; ++n) {
+        prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+    }
+    prj_timeint_eSSPRK_final(mesh, coord, bc, eos, rad, grav, mpi, timer);
+#else
+#error "Unsupported TIME_INTEGRATION value"
+#endif
 }

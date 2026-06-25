@@ -41,6 +41,25 @@
 #define PRJ_LHLLD_RIEMANN 1
 #endif
 
+#define PRJ_TIMEINT_RK2 1
+#define PRJ_TIMEINT_ESSPRK 2
+#ifndef RK2
+#define RK2 PRJ_TIMEINT_RK2
+#endif
+#ifndef TIME_INTEGRATION
+#define TIME_INTEGRATION RK2
+#endif
+#ifndef PRJ_TIMEINT_ESSPRK_N
+#define PRJ_TIMEINT_ESSPRK_N 0
+#endif
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+#if PRJ_TIMEINT_ESSPRK_N < 2
+#error "TIME_INTEGRATION=eSSPRK<N>_2 requires N >= 2"
+#endif
+#elif TIME_INTEGRATION != RK2
+#error "Unsupported TIME_INTEGRATION value"
+#endif
+
 #if PRJ_USE_RADIATION
 #ifndef PRJ_NRAD
 #define PRJ_NRAD 3
