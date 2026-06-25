@@ -476,7 +476,23 @@ void prj_riemann_lhlld(const double *WL, const double *WR,
         phi * L.rho * R.rho * (SR - R.vx) * (SL - L.vx) * (R.vx - L.vx)) /
         denom;
     if (pt_star <= 0.0 || !isfinite(pt_star)) {
-        prj_riemann_hlld_fail("invalid star total pressure");
+        /* Unphysical star pressure (strong rarefaction): fall back to the
+         * positivity-robust HLL flux over SL..SR instead of aborting.  Only
+         * reached with SL < 0 < SR, so SR - SL > 0 and the HLL density > 0;
+         * face velocity/EMF come from the HLL average state. */
+        double inv = 1.0 / (SR - SL);
+        double Uhll[PRJ_NHYDRO];
+        double rho;
+
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
+            flux[v] = (SR * L.F[v] - SL * R.F[v] + SL * SR * (R.U[v] - L.U[v])) * inv;
+            Uhll[v] = (SR * R.U[v] - SL * L.U[v] + L.F[v] - R.F[v]) * inv;
+        }
+        rho = Uhll[PRJ_CONS_RHO];
+        prj_hlld_face_outputs(Uhll[PRJ_CONS_MOM1] / rho, Uhll[PRJ_CONS_MOM2] / rho,
+            Uhll[PRJ_CONS_MOM3] / rho, Uhll[PRJ_CONS_B1], Uhll[PRJ_CONS_B2],
+            Uhll[PRJ_CONS_B3], v_face, Bv1, Bv2);
+        return;
     }
     bn_small = (0.5 * bn * bn < PRJ_HLLD_SMALL_NUMBER * pt_star);
 
@@ -580,7 +596,23 @@ void prj_riemann_hlld(const double *WL, const double *WR,
     pt_star_r = R.pt + R.rho * (SR - R.vx) * (SM - R.vx);
     pt_star = 0.5 * (pt_star_l + pt_star_r);
     if (pt_star <= 0.0 || !isfinite(pt_star)) {
-        prj_riemann_hlld_fail("invalid star total pressure");
+        /* Unphysical star pressure (strong rarefaction): fall back to the
+         * positivity-robust HLL flux over SL..SR instead of aborting.  Only
+         * reached with SL < 0 < SR, so SR - SL > 0 and the HLL density > 0;
+         * face velocity/EMF come from the HLL average state. */
+        double inv = 1.0 / (SR - SL);
+        double Uhll[PRJ_NHYDRO];
+        double rho;
+
+        for (v = 0; v < PRJ_NHYDRO; ++v) {
+            flux[v] = (SR * L.F[v] - SL * R.F[v] + SL * SR * (R.U[v] - L.U[v])) * inv;
+            Uhll[v] = (SR * R.U[v] - SL * L.U[v] + L.F[v] - R.F[v]) * inv;
+        }
+        rho = Uhll[PRJ_CONS_RHO];
+        prj_hlld_face_outputs(Uhll[PRJ_CONS_MOM1] / rho, Uhll[PRJ_CONS_MOM2] / rho,
+            Uhll[PRJ_CONS_MOM3] / rho, Uhll[PRJ_CONS_B1], Uhll[PRJ_CONS_B2],
+            Uhll[PRJ_CONS_B3], v_face, Bv1, Bv2);
+        return;
     }
     bn_small = (0.5 * bn * bn < PRJ_HLLD_SMALL_NUMBER * pt_star);
 
