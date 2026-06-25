@@ -1174,6 +1174,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         double Fg[PRJ_NEGROUP][3];
         double Pg[PRJ_NEGROUP][3][3];
         double Mq[PRJ_NEGROUP][3]; /* Q_g : dvdx, the only way Q is ever used */
+        double Acon[PRJ_NEGROUP];  /* P_g : dvdx, the energy-space drift per group */
         double energy_face[PRJ_NEGROUP + 1] = {0.0};
         double momentum_face[PRJ_NEGROUP + 1][PRJ_NDIM] = {{0.0}};
         double energy_available[PRJ_NEGROUP];
@@ -1193,58 +1194,38 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             prj_rad_m1_pressure(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
             prj_rad_m1_third_moment_contract(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2],
                 dvdx, Mq[g]);
+            Acon[g] = 0.0;
+            for (jj = 0; jj < 3; ++jj) {
+                for (ii = 0; ii < 3; ++ii) {
+                    Acon[g] += Pg[g][jj][ii] * dvdx[jj][ii];
+                }
+            }
             energy_available[g] = u[PRJ_CONS_RAD_E(field, g)];
         }
 
-        /* SR velocity-gradient energy-space flux (Eqs. 21a/21b).  The whole
-         * frequency flux is upwinded once by the sign of the velocity divergence
-         * div(v) = tr(∂_j v_i): compression (div < 0) blueshifts and expansion
-         * (div > 0) redshifts the entire spectrum, so a single upwind side is
-         * used for every energy group and every tensor component (replacing the
-         * earlier per-component upwinding, which summed nine independently
-         * upwinded ν-fluxes and drove a grid-scale instability).  The centred
-         * closure tensors P, Q are reconstructed (donor cell) to each frequency
-         * face from the upwind group and scaled by the face frequency ν. */
+        /* SR velocity-gradient energy-space flux (Eqs. 21a/21b).  Each interior
+         * frequency face is upwinded by the sign of the actual energy-space
+         * drift P:dvdx (the contraction that the flux itself transports),
+         * estimated from the two groups adjacent to the face (left+right).  This
+         * reduces exactly to the bulk div(v) rule for isotropic radiation
+         * (P = E/3·I  =>  P:dvdx = E/3·div v) but stays upwind-correct when the
+         * anisotropic/shearing part of ∂_j v_i dominates the trace, where a
+         * single trace-based side could disagree with the true drift.  The
+         * energy flux at face gf is ν_face[gf]·(P_gu:dvdx) = ν_face[gf]·Acon[gu]
+         * and the momentum flux is ν_face[gf]·(Q_gu:dvdx) = ν_face[gf]·Mq[gu];
+         * it is the upper (g+1/2) face of group gf-1 and the lower (g-1/2) face
+         * of group gf, so it is scattered into both with opposite signs. */
         {
-            /* CAVEAT: choosing the single upwind side from the sign of div(v)
-             * only guarantees a stable energy-space flux in bulk flows, where
-             * the (isotropic) compression/expansion divergence is the dominant
-             * part of the velocity gradient.  In turbulent or strongly shearing
-             * flows the off-diagonal/anisotropic parts of ∂_j v_i can exceed the
-             * trace, so the trace-based upwind direction may disagree with the
-             * actual sign of an individual tensor component and absolute
-             * stability is no longer assured.  It is robust for the smooth
-             * infall/contraction regime this code targets. */
-            double divv = dvdx[0][0] + dvdx[1][1] + dvdx[2][2];
-            int d = (divv >= 0.0) ? 0 : -1; /* donor offset: upwind group = gf + d */
             int gf;
 
-            /* Sweep interior frequency faces (the domain-edge faces 0 and
-             * PRJ_NEGROUP carry zero flux and are skipped).  Each face gf has a
-             * single upwind donor group gu = gf + d (gf for div v >= 0, else
-             * gf-1); its flux ν_face[gf]·{P,Q}[gu] is the upper (g+1/2) face of
-             * group gf-1 and the lower (g-1/2) face of group gf, so it is
-             * scattered into both with opposite signs.  Accumulate the net
-             * energy and momentum transfer at each face so it can be limited
-             * before the conservative scatter.  (For a Koren-limited version,
-             * replace Pg[gu] /
-             * Qg[gu] by q[gu] + 0.5·φ(r)·(q[gu] − q[gu+up]) per component, with
-             * upwind-neighbour offset up = (div v >= 0) ? +1 : -1.) */
             for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
-                int gu = gf + d;
+                double face_drift = Acon[gf - 1] + Acon[gf];
+                int gu = (face_drift >= 0.0) ? gf : gf - 1;
                 double nu = nu_face[gf];
 
+                energy_face[gf] += nu * Acon[gu];
                 for (jj = 0; jj < 3; ++jj) {
-                    for (ii = 0; ii < 3; ++ii) {
-                        double pf = nu * Pg[gu][jj][ii] * dvdx[jj][ii];
-
-                        energy_face[gf] += pf;
-                    }
-                    {
-                        double qf = nu * Mq[gu][jj];
-
-                        momentum_face[gf][jj] += qf;
-                    }
+                    momentum_face[gf][jj] += nu * Mq[gu][jj];
                 }
             }
         }

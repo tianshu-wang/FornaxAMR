@@ -30,7 +30,7 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 # User settings. Choose a variable name, or derived variables "B"/"vr".
 # Available: density, v1, v2, v3, eint, ye, pressure, temperature, gamma,
 #            B1/B2/B3 (MHD), radF_gG_{E,F1,F2,F3} (radiation), plus "B" and "vr".
-VARIABLE = "pressure"
+VARIABLE = "v1"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
@@ -39,7 +39,7 @@ X_RANGE = [-3e2, 3e2]
 Y_RANGE = [-3e2, 3e2]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
-COLOR_SCALE = "lognorm"
+COLOR_SCALE = "normalize"
 COLOR_VMIN = None
 COLOR_VMAX = None
 SYMLOG_LINTHRESH = 1.0e-6
