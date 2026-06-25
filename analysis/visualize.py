@@ -30,16 +30,16 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 # User settings. Choose a variable name, or derived variables "B"/"vr".
 # Available: density, v1, v2, v3, eint, ye, pressure, temperature, gamma,
 #            B1/B2/B3 (MHD), radF_gG_{E,F1,F2,F3} (radiation), plus "B" and "vr".
-VARIABLE = "vr"
+VARIABLE = "pressure"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
 # Set these to None to show the full domain. Ranges are in km.
-X_RANGE = [-1e4, 1e4]
-Y_RANGE = [-1e4, 1e4]
+X_RANGE = [-3e2, 3e2]
+Y_RANGE = [-3e2, 3e2]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
-COLOR_SCALE = "normalize"
+COLOR_SCALE = "lognorm"
 COLOR_VMIN = None
 COLOR_VMAX = None
 SYMLOG_LINTHRESH = 1.0e-6
@@ -51,8 +51,8 @@ AXIS_NAMES = ("x", "y", "z")
 # The dump format does not record whether MHD/radiation were compiled in, so the
 # variable->index mapping must be supplied here to match the build that produced
 # the files. Defaults mirror src/prj_defs.h.
-HAS_MHD = False
-NRAD = 0          # PRJ_NRAD
+HAS_MHD = True
+NRAD = 3          # PRJ_NRAD
 NEGROUP = 12      # PRJ_NEGROUP
 RAD_GROUP_STRIDE = 4  # 1 + PRJ_NDIM
 # B is stored unscaled in Data; the legacy dump format scaled it by sqrt(4*pi).

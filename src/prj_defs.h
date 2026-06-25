@@ -44,6 +44,7 @@
 #define PRJ_TIMEINT_RK2 1
 #define PRJ_TIMEINT_ESSPRK 2
 #define PRJ_TIMEINT_ESSPRK9_3 3
+#define PRJ_TIMEINT_IMEX_SSP2332 4
 #ifndef RK2
 #define RK2 PRJ_TIMEINT_RK2
 #endif
@@ -53,8 +54,11 @@
 #ifndef eSSPRK9_3
 #define eSSPRK9_3 PRJ_TIMEINT_ESSPRK9_3
 #endif
+#ifndef IMEX_SSP2332
+#define IMEX_SSP2332 PRJ_TIMEINT_IMEX_SSP2332
+#endif
 #ifndef TIME_INTEGRATION
-#define TIME_INTEGRATION eSSPRK9_2
+#define TIME_INTEGRATION IMEX_SSP2332
 #endif
 #ifndef PRJ_TIMEINT_ESSPRK_N
 #define PRJ_TIMEINT_ESSPRK_N 9
@@ -65,6 +69,8 @@
 #endif
 #elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
 /* Exact named third-order scheme. */
+#elif TIME_INTEGRATION == PRJ_TIMEINT_IMEX_SSP2332
+/* IMEX-SSP2(3,3,2): explicit hyperbolics + implicit radiation source. */
 #elif TIME_INTEGRATION != RK2
 #error "Unsupported TIME_INTEGRATION value"
 #endif
@@ -77,6 +83,11 @@
 #define PRJ_TIMEINT_USES_ESSPRK_STEP 1
 #else
 #define PRJ_TIMEINT_USES_ESSPRK_STEP 0
+#endif
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_SSP2332
+#define PRJ_TIMEINT_IMEX_BUFFERS 1
+#else
+#define PRJ_TIMEINT_IMEX_BUFFERS 0
 #endif
 
 #if PRJ_USE_RADIATION

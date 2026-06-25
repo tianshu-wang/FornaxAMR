@@ -221,6 +221,10 @@ static void prj_block_init_empty(prj_block *b)
     b->cell_derived_done = 0;
     b->U = 0;
     b->dUdt = 0;
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    b->dUdt_ex = 0;
+    b->dUdt_im = 0;
+#endif
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
@@ -241,6 +245,9 @@ static void prj_block_init_empty(prj_block *b)
         b->edge_fidelity[n] = 0;
         b->Bf[n] = 0;
         b->Bf1[n] = 0;
+#if PRJ_TIMEINT_IMEX_BUFFERS
+        b->dBfdt_ex[n] = 0;
+#endif
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
         b->Bf2[n] = 0;
         b->Bf3[n] = 0;
@@ -305,12 +312,18 @@ int prj_block_alloc_data(prj_block *b)
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
     total_count += 2U * prim_count;
 #endif
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    total_count += 2U * cons_count;
+#endif
     total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
     total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
     total_count += 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
     total_count += 6U * (size_t)PRJ_BLOCK_NFACES;
+#endif
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    total_count += 3U * (size_t)PRJ_BLOCK_NFACES;
 #endif
 #endif
 #if PRJ_NRAD > 0
@@ -366,6 +379,12 @@ int prj_block_alloc_data(prj_block *b)
     base += cons_count;
     b->dUdt = base;
     base += cons_count;
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    b->dUdt_ex = base;
+    base += cons_count;
+    b->dUdt_im = base;
+    base += cons_count;
+#endif
     b->flux[0] = base;
     base += cons_count;
     b->flux[1] = base;
@@ -399,6 +418,12 @@ int prj_block_alloc_data(prj_block *b)
         b->Bf1[d] = base;
         base += (size_t)PRJ_BLOCK_NFACES;
     }
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    for (int d = 0; d < 3; ++d) {
+        b->dBfdt_ex[d] = base;
+        base += (size_t)PRJ_BLOCK_NFACES;
+    }
+#endif
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
     for (int d = 0; d < 3; ++d) {
         b->Bf2[d] = base;
@@ -465,6 +490,10 @@ void prj_block_free_data(prj_block *b)
     b->cell_derived_done = 0;
     b->U = 0;
     b->dUdt = 0;
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    b->dUdt_ex = 0;
+    b->dUdt_im = 0;
+#endif
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
@@ -485,6 +514,9 @@ void prj_block_free_data(prj_block *b)
         b->edge_fidelity[d] = 0;
         b->Bf[d] = 0;
         b->Bf1[d] = 0;
+#if PRJ_TIMEINT_IMEX_BUFFERS
+        b->dBfdt_ex[d] = 0;
+#endif
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
         b->Bf2[d] = 0;
         b->Bf3[d] = 0;

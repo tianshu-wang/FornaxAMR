@@ -98,6 +98,10 @@ struct prj_block {
     int *cell_derived_done;
     double *U;
     double *dUdt;
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    double *dUdt_ex;
+    double *dUdt_im;
+#endif
     double *flux[3];
     double *v_riemann[3];
     double *kappa_cell;
@@ -112,6 +116,9 @@ struct prj_block {
     int *edge_fidelity[3];
     double *Bf[3];
     double *Bf1[3];
+#if PRJ_TIMEINT_IMEX_BUFFERS
+    double *dBfdt_ex[3];
+#endif
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
     double *Bf2[3];
     double *Bf3[3];
