@@ -57,6 +57,13 @@
 #ifndef IMEX_SSP2332
 #define IMEX_SSP2332 PRJ_TIMEINT_IMEX_SSP2332
 #endif
+/* === Time integration scheme (single source of truth) ===================
+ * Change the scheme by editing the line below to one of:
+ *   RK2, eSSPRK9_2, eSSPRK9_3, IMEX_SSP2332
+ * No Makefile edit is needed.  For an explicit SSPRK with a different stage
+ * count, keep TIME_INTEGRATION eSSPRK9_2 and set PRJ_TIMEINT_ESSPRK_N below.
+ * (The build may still override either macro from the command line, e.g.
+ *  `make TIME_INTEGRATION=IMEX_SSP2332`, in which case that wins over these.) */
 #ifndef TIME_INTEGRATION
 #define TIME_INTEGRATION eSSPRK9_2
 #endif
