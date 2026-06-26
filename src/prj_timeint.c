@@ -1608,6 +1608,11 @@ static void prj_timeint_imex_im_cell(prj_rad *rad, prj_eos *eos, prj_block *bloc
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u_entry[v] = u[v];
     }
+    /* Radiation frequency advection and inelastic scattering, evaluated as part
+     * of the implicit substep and applied before the energy/momentum coupling. */
+    prj_rad_freq_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt_sub);
+    prj_rad_eleinel_step(rad, eos, u, dt_sub, T_cell);
+    prj_rad_nucinel_step(rad, eos, u, dt_sub, T_cell);
     /* The implicit solver re-derives T from the conserved state internally, so
      * the (possibly stale) eosvar temperature only seeds final_temperature. */
     prj_rad_energy_update(rad, eos, u, dt_sub, lapse_cell, &T_cell, kappa);
@@ -1628,12 +1633,10 @@ static void prj_timeint_imex_ex_cell(const prj_mesh *mesh, prj_rad *rad, prj_eos
     double fluxdiv[PRJ_NVAR_CONS];
     double inv_dt = 1.0 / dt_sub;
     int v;
-#if PRJ_NRAD > 0
-    double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
-    double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
-#else
+
+    /* Radiation explicit operators (freq advection, inelastic) now run in the
+     * implicit substep, so the explicit substep does not touch radiation. */
     (void)rad;
-#endif
 
     prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
     prj_timeint_imex_cons_from_prim(eos, block->W, i, j, k, u);
@@ -1648,12 +1651,6 @@ static void prj_timeint_imex_ex_cell(const prj_mesh *mesh, prj_rad *rad, prj_eos
     /* The CT magnetic update is the explicit B operator; pick up the new
      * cell-centered B from the just-advanced face field. */
     prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
-#endif
-#if PRJ_NRAD > 0
-    /* Explicit radiation operators (advection in frequency, inelastic). */
-    prj_rad_freq_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt_sub);
-    prj_rad_eleinel_step(rad, eos, u, dt_sub, T_cell);
-    prj_rad_nucinel_step(rad, eos, u, dt_sub, T_cell);
 #endif
     prj_timeint_imex_store(eos, block->W, i, j, k, u);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
