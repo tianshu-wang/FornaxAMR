@@ -34,6 +34,9 @@ VARIABLE = "v1"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
+# Set to False to hide the AMR block boundaries overlaid on each plot.
+SHOW_BLOCK_BOUNDARIES = True
+
 # Set these to None to show the full domain. Ranges are in km.
 X_RANGE = [-3e2, 3e2]
 Y_RANGE = [-3e2, 3e2]
@@ -298,7 +301,8 @@ def plot_plane(output_dir, dump_id, dump_time, plane_blocks, variable, plane) ->
     norm = build_norm(vmin, vmax)
     for xmin, xmax, xedges, yedges, plane_values in plane_blocks:
         pcm = ax.pcolormesh(xedges, yedges, plane_values.T, shading="flat", cmap="viridis", norm=norm)
-        draw_block_grid(ax, xmin, xmax, plane)
+        if SHOW_BLOCK_BOUNDARIES:
+            draw_block_grid(ax, xmin, xmax, plane)
     fig.colorbar(pcm, ax=ax, label=variable)
     _, axis_a, axis_b = plane_axes(plane)
     ax.set_title(f"{variable} at time = {dump_time:g} s")
