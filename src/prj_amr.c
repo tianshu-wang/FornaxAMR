@@ -1565,11 +1565,13 @@ static int prj_amr_mhd_face_axis_max(int dir, int axis)
 
 static void prj_amr_mhd_clear_faces(prj_block *block, int use_bf1)
 {
-    double **bf;
+    double *bf[3];
     int d;
 
     prj_amr_mhd_check_block(block, "prj_amr_mhd_clear_faces: missing MHD storage");
-    bf = use_bf1 != 0 ? block->Bf1 : block->Bf;
+    for (d = 0; d < 3; ++d) {
+        bf[d] = prj_block_stage_Bf(block, prj_block_legacy_bf_stage(use_bf1), d);
+    }
     for (d = 0; d < 3; ++d) {
         prj_fill(bf[d], (size_t)PRJ_BLOCK_NFACES, 0.0);
     }
@@ -1604,13 +1606,16 @@ static void prj_amr_mhd_mark_active_faces(prj_block *block, int fidelity)
 
 static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
 {
-    double **bf;
+    double *bf[3];
+    int d;
     int i;
     int j;
     int k;
 
     prj_amr_mhd_check_block(block, "prj_amr_mhd_set_cons_b_from_bf: missing MHD storage");
-    bf = use_bf1 != 0 ? block->Bf1 : block->Bf;
+    for (d = 0; d < 3; ++d) {
+        bf[d] = prj_block_stage_Bf(block, prj_block_legacy_bf_stage(use_bf1), d);
+    }
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -1659,7 +1664,8 @@ static void prj_amr_mhd_pack_prolong_bf_buffer(const prj_block *parent,
         buf[dir] = 0;
     }
     for (dir = 0; dir < 3; ++dir) {
-        const double *src = use_bf1 != 0 ? parent->Bf1[dir] : parent->Bf[dir];
+        const double *src = prj_block_stage_Bf_const(parent,
+            prj_block_legacy_bf_stage(use_bf1), dir);
         int count = 1;
         int d;
         int i;
@@ -1734,7 +1740,8 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_mpi *m
                 if (fabs(child->xmin[tan0] - slot->xmin[tan0]) < 1.0e-12*child->dx[tan0]){
                     if (fabs(child->xmin[tan1] - slot->xmin[tan1]) < 1.0e-12*child->dx[tan1]){
                         const prj_block *neighbor = &mesh->blocks[slot->id];
-                        double *src = use_bf1 != 0 ? neighbor->Bf1[dir] : neighbor->Bf[dir];
+                        const double *src = prj_block_stage_Bf_const(neighbor,
+                            prj_block_legacy_bf_stage(use_bf1), dir);
                         int i, j;
                         if (fabs(child->xmax[dir] - slot->xmin[dir]) < 1.0e-12*child->dx[dir]){
                             double buffer[PRJ_BLOCK_SIZE*PRJ_BLOCK_SIZE];
@@ -1757,7 +1764,7 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_mpi *m
                                     it_recv[dir] = PRJ_BLOCK_SIZE;
                                     it_recv[tan0] = i;
                                     it_recv[tan1] = j;
-                                    prj_boundary_write_bf_face(child, use_bf1, dir,
+                                    prj_boundary_write_bf_face(child, prj_block_legacy_bf_stage(use_bf1), dir,
                                                                it_recv[0],
                                                                it_recv[1],
                                                                it_recv[2],
@@ -1785,7 +1792,7 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_mpi *m
                                     it_recv[dir] = 0;
                                     it_recv[tan0] = i;
                                     it_recv[tan1] = j;
-                                    prj_boundary_write_bf_face(child, use_bf1, dir,
+                                    prj_boundary_write_bf_face(child, prj_block_legacy_bf_stage(use_bf1), dir,
                                                                it_recv[0],
                                                                it_recv[1],
                                                                it_recv[2],
@@ -1820,7 +1827,7 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_mpi *m
                 int fk = 2 * (ck - ck0);
 
                 prj_mhd_prolong_bf_from_buffer(cbuf, buf_lo, buf_n,
-                    parent->dx, child, ci, cj, ck, fi, fj, fk, use_bf1,
+                    parent->dx, child, ci, cj, ck, fi, fj, fk, prj_block_legacy_bf_stage(use_bf1),
                     mesh != 0 && mesh->use_BJ != 0);
             }
         }
@@ -1890,7 +1897,7 @@ static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
             int local[3];
             int bit[3];
             const prj_block *child;
-            double *src;
+            const double *src;
             double value;
 
             global[0] = 2 * coarse_idx[0];
@@ -1905,7 +1912,7 @@ static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
             local[tan0] = global[tan0] - bit[tan0] * PRJ_BLOCK_SIZE;
             local[tan1] = global[tan1] - bit[tan1] * PRJ_BLOCK_SIZE;
             child = prj_amr_mhd_child_for_face(children, bit);
-            src = use_bf1 != 0 ? child->Bf1[dir] : child->Bf[dir];
+            src = prj_block_stage_Bf_const(child, prj_block_legacy_bf_stage(use_bf1), dir);
             if (src == 0) {
                 prj_amr_mhd_fail("prj_amr_mhd_restrict_face_value: missing child Bf storage");
             }
@@ -1922,11 +1929,13 @@ static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
 static void prj_amr_mhd_restrict_bf_one(const prj_block *children[8],
     prj_block *parent, int use_bf1)
 {
-    double **dst;
+    double *dst[3];
     int dir;
 
     prj_amr_mhd_clear_faces(parent, use_bf1);
-    dst = use_bf1 != 0 ? parent->Bf1 : parent->Bf;
+    for (dir = 0; dir < 3; ++dir) {
+        dst[dir] = prj_block_stage_Bf(parent, prj_block_legacy_bf_stage(use_bf1), dir);
+    }
     for (dir = 0; dir < 3; ++dir) {
         int i;
         int j;
@@ -2167,8 +2176,15 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             prj_mesh_update_block_r_com(child, mesh);
             prj_amr_prolongate(mesh, mpi, parent, child, oct);
         } else {
+            int s;
+
             child->W = 0;
             child->W1 = 0;
+            for (s = 0; s < PRJ_TIMEINT_MAX_STAGES; ++s) {
+                child->W_stage[s] = 0;
+                child->rhs_ex[s] = 0;
+                child->rhs_im[s] = 0;
+            }
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
             child->W2 = 0;
             child->W3 = 0;

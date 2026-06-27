@@ -11,6 +11,7 @@
 #endif
 
 #include "prj.h"
+#include "prj_rk_tableau.h"
 
 #ifndef PRJ_BRANCH
 #define PRJ_BRANCH "unknown"
@@ -256,6 +257,8 @@ int main(int argc, char *argv[])
     prj_sim sim;
     prj_mpi mpi;
     prj_timer timer;
+    prj_timeint_imex_tableau imex_tableau;
+    const prj_timeint_imex_tableau *timeint_tableau = 0;
     prj_problem_init_fn init_fn;
     int init_with_mpi = 0;
     char *param_file = 0;
@@ -279,6 +282,7 @@ int main(int argc, char *argv[])
     int i;
 
     memset(&sim, 0, sizeof(sim));
+    memset(&imex_tableau, 0, sizeof(imex_tableau));
     prj_timer_init(&timer);
 #if PRJ_TIMER
     prj_timer_set_current(&timer);
@@ -300,6 +304,11 @@ int main(int argc, char *argv[])
         return 1;
     }
     init_fn = prj_select_problem(sim.problem_name);
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_RK
+    PRJ_TIMEINT_TABLEAU_NAME(&imex_tableau);
+    prj_timeint_validate_imex_tableau(&imex_tableau);
+    timeint_tableau = &imex_tableau;
+#endif
     if (sim.restart_from_latest != 0) {
         if (prj_io_find_latest_restart("output", sim.restart_file_name,
                 sizeof(sim.restart_file_name), &restart_latest_id) != 0) {
@@ -385,7 +394,7 @@ int main(int argc, char *argv[])
             sim.perturbation_gaussian_norm, sim.perturbation_seed);
     }
     prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
-    prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos, 0,
+    prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, &sim.eos, 0,
         &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
@@ -441,7 +450,7 @@ int main(int argc, char *argv[])
             double dt_new;
 
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "calc_dt");
-            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, &mpi, sim.cfl);
+            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, &mpi, sim.cfl, timeint_tableau);
             PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "calc_dt");
 
             if (sim.dt > 0.0) {
@@ -473,6 +482,7 @@ int main(int argc, char *argv[])
 #else
             0
 #endif
+            , timeint_tableau
         );
 
         PRJ_TIMER_BARRIER_START(&timer, &mpi, "min_dt_src");
@@ -514,7 +524,7 @@ int main(int argc, char *argv[])
                 prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
                 PRJ_SUBTIMER_STOP("sub_amr_post_eos_active");
                 PRJ_SUBTIMER_START("sub_amr_post_ghost");
-                prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0,
+                prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1,
                     &sim.eos, 0, &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
                 PRJ_SUBTIMER_STOP("sub_amr_post_ghost");
                 PRJ_SUBTIMER_START("sub_amr_post_eos_mesh");

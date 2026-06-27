@@ -1415,7 +1415,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                         block->Bf1[d][n] = value;
                     }
                 }
-                prj_mhd_bf2bc_all((prj_eos *)eos, block, 0);
+                prj_mhd_bf2bc_all((prj_eos *)eos, block, 1);
             }
             free(bf_buffer);
         }

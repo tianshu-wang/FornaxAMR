@@ -47,7 +47,7 @@ static int prj_mpi_block_is_local(const prj_mpi *mpi, const prj_block *block)
 
 static double *prj_mpi_stage_array(prj_block *block, int stage)
 {
-    return stage == 2 ? block->W1 : block->W;
+    return prj_block_stage_W(block, stage);
 }
 
 static void prj_mpi_buffer_free(prj_mpi_buffer *buffer)
@@ -1219,7 +1219,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
         if (!prj_block_is_active(block) || block->rank != mpi->rank) {
             continue;
         }
-        double *W_send = stage == 2 ? block->W1 : block->W;
+        double *W_send = prj_block_stage_W(block, stage);
         double *eos_send = block->eosvar;
         for (n = 0; n < 56; ++n) {
             const prj_neighbor *slot = &block->slot[n];
@@ -1554,14 +1554,14 @@ enum {
 
 #define PRJ_MPI_BF_FILL_N 6
 
-static double *prj_mpi_bf_array(prj_block *block, int dir, int use_bf1)
+static double *prj_mpi_bf_array(prj_block *block, int dir, int stage)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_stage_Bf(block, stage, dir);
 }
 
-static const double *prj_mpi_bf_array_const(const prj_block *block, int dir, int use_bf1)
+static const double *prj_mpi_bf_array_const(const prj_block *block, int dir, int stage)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_stage_Bf_const(block, stage, dir);
 }
 
 static void prj_mpi_check_bf_storage(const prj_block *block, const char *label)
@@ -2688,7 +2688,7 @@ static int prj_mpi_build_bf_plan_for_neighbor(const prj_mesh *mesh,
 #endif
 }
 
-void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kind)
+void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind)
 {
 #if defined(PRJ_ENABLE_MPI)
     int nb;
@@ -2708,7 +2708,7 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
         int recv_record_count = buffer->bf_recv_record_count[fill_kind];
         int recv_value_count = buffer->bf_recv_value_count[fill_kind];
 
-        if (prj_mpi_pack_bf_records(mesh, mpi, buffer->receiver_rank, use_bf1,
+        if (prj_mpi_pack_bf_records(mesh, mpi, buffer->receiver_rank, stage,
                 fill_kind, buffer->bf_headers_send,
                 buffer->bf_send_record_capacity, &send_record_count,
                 buffer->bf_values_send, buffer->bf_send_value_capacity,
@@ -2731,7 +2731,7 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
             buffer->receiver_rank, 302,
             MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-        if (prj_mpi_apply_bf_records(mesh, mpi, use_bf1, fill_kind,
+        if (prj_mpi_apply_bf_records(mesh, mpi, stage, fill_kind,
                 buffer->bf_headers_recv, recv_record_count,
                 buffer->bf_values_recv,
                 recv_value_count) != 0) {
@@ -2742,7 +2742,7 @@ void prj_mpi_exchange_bf(prj_mesh *mesh, prj_mpi *mpi, int use_bf1, int fill_kin
 #else
     (void)mesh;
     (void)mpi;
-    (void)use_bf1;
+    (void)stage;
     (void)fill_kind;
 #endif
 }
@@ -2863,7 +2863,7 @@ static int prj_mpi_amr_bf_pack_face_values(const prj_block *neighbor,
     int j;
 
     prj_mpi_check_bf_storage(neighbor, "prj_mpi_amr_bf_pack_face_values");
-    src = prj_mpi_bf_array_const(neighbor, dir, use_bf1);
+    src = prj_mpi_bf_array_const(neighbor, dir, prj_block_legacy_bf_stage(use_bf1));
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             int it_send[3] = {0, 0, 0};
@@ -3320,7 +3320,7 @@ int prj_mpi_amr_mhd_prolongate_bf_one(const prj_mpi *mpi,
                     it_recv[dir] = recv_face;
                     it_recv[tan0] = i;
                     it_recv[tan1] = j;
-                    prj_boundary_write_bf_face(child, use_bf1, dir,
+                    prj_boundary_write_bf_face(child, prj_block_legacy_bf_stage(use_bf1), dir,
                         it_recv[0], it_recv[1], it_recv[2],
                         values[pos++], PRJ_MHD_FIDELITY_SAME);
                 }
@@ -4196,7 +4196,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
  * matching prj_mpi_wait_ghosts_and_bf can complete and unpack them. Splitting
  * post from wait lets the caller overlap unrelated work (e.g. the gravity
  * allreduce, which touches active cells only) inside the exchange's shadow. */
-void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
+void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind)
 {
 #if defined(PRJ_ENABLE_MPI)
     int nb;
@@ -4244,7 +4244,7 @@ void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
         bf_send = buffer->bf_send_value_count[fill_kind];
         bf_recv = buffer->bf_recv_value_count[fill_kind];
 #else
-        (void)use_bf1;
+        (void)stage;
 #endif
         if (has_send_values) {
             prj_mpi_pack_ghost_values(mesh, mpi, buffer, stage, fill_kind);
@@ -4254,7 +4254,7 @@ void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
             int send_value_count = 0;
 
             if (prj_mpi_pack_bf_values_only(mesh, mpi, buffer->receiver_rank,
-                    use_bf1, fill_kind,
+                    stage, fill_kind,
                     buffer->cell_buffer_send_by_kind[fill_kind] + send_total,
                     bf_send, &send_value_count) != 0 ||
                 send_value_count != bf_send) {
@@ -4291,7 +4291,6 @@ void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
     (void)mesh;
     (void)stage;
     (void)fill_kind;
-    (void)use_bf1;
     if (mpi != 0) {
         mpi->ghost_request_count = 0;
     }
@@ -4300,7 +4299,7 @@ void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
 
 /* Complete the Isend/Irecv posted by prj_mpi_post_ghosts_and_bf, then unpack
  * the received values into local ghost zones. */
-void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
+void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind)
 {
 #if defined(PRJ_ENABLE_MPI)
     int nb;
@@ -4337,7 +4336,7 @@ void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
 
             if (recv_value_count > 0 &&
                 prj_mpi_apply_bf_values_from_sender(mesh, mpi,
-                    buffer->receiver_rank, use_bf1, fill_kind,
+                    buffer->receiver_rank, stage, fill_kind,
                     buffer->cell_buffer_recv_by_kind[fill_kind] + recv_total,
                     recv_value_count) != 0) {
                 fprintf(stderr, "prj_mpi_wait_ghosts_and_bf: failed to apply Bf values\n");
@@ -4345,7 +4344,7 @@ void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
             }
         }
 #else
-        (void)use_bf1;
+        (void)stage;
 #endif
     }
 #else
@@ -4353,14 +4352,13 @@ void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
     (void)mpi;
     (void)stage;
     (void)fill_kind;
-    (void)use_bf1;
 #endif
 }
 
-void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind, int use_bf1)
+void prj_mpi_exchange_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_kind)
 {
-    prj_mpi_post_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
-    prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
+    prj_mpi_post_ghosts_and_bf(mesh, mpi, stage, fill_kind);
+    prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind);
 }
 
 void prj_mpi_exchange_fluxes(prj_mesh *mesh, prj_mpi *mpi)

@@ -708,7 +708,7 @@ void prj_flux_fill_transport_opacity_active(prj_mesh *mesh, prj_rad *rad,
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = stage == 2 ? block->W1 : block->W;
+        double *W = prj_block_stage_W(block, stage);
         int ii;
         int jj;
         int kk;
@@ -750,7 +750,7 @@ void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = stage == 2 ? block->W1 : block->W;
+        double *W = prj_block_stage_W(block, stage);
         int ii;
         int jj;
         int kk;
@@ -784,7 +784,7 @@ void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
 }
 
 void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
-    double *eosvar, double *flux[3], int use_bf1)
+    double *eosvar, double *flux[3], int stage)
 {
     /* Block-wide face-state scratch for the variable-outermost reconstruction
      * pass.  Reused across calls (this code path is serial); WL/WR use layout
@@ -811,7 +811,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
     (void)rad;
 #endif
 #if !PRJ_MHD
-    (void)use_bf1;
+    (void)stage;
 #endif
 
     /* Transport opacity (kappa_cell/sigma_cell) is now filled ahead of the flux:
@@ -924,7 +924,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     PRJ_SUBTIMER_START("sub_flux_riemann");
 #if PRJ_MHD
                     {
-                        double *bf_dir = use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+                        double *bf_dir = prj_block_stage_Bf(block, stage, dir);
                         double bv1 = 0.0;
                         double bv2 = 0.0;
                         double bn;

@@ -175,9 +175,9 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
     }
 }
 
-static inline double *prj_mhd_bf_array(prj_block *block, int dir, int use_bf1)
+static inline double *prj_mhd_bf_array(prj_block *block, int dir, int stage)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_stage_Bf(block, stage, dir);
 }
 
 static inline int prj_mhd_face_storage_index_ok(int dir, int i, int j, int k)
@@ -198,7 +198,7 @@ static inline int prj_mhd_face_storage_index_ok(int dir, int i, int j, int k)
     return 1;
 }
 
-static inline void prj_mhd_write_bf_face(prj_block *block, int use_bf1,
+static inline void prj_mhd_write_bf_face(prj_block *block, int stage,
     int dir, int i, int j, int k, double value, int fidelity)
 {
     int idx;
@@ -218,7 +218,7 @@ static inline void prj_mhd_write_bf_face(prj_block *block, int use_bf1,
     if (fidelity < block->face_fidelity[dir][idx]) {
         return;
     }
-    dst = prj_mhd_bf_array(block, dir, use_bf1);
+    dst = prj_mhd_bf_array(block, dir, stage);
     dst[idx] = value;
     if (fidelity > block->face_fidelity[dir][idx]) {
         block->face_fidelity[dir][idx] = fidelity;
@@ -377,7 +377,7 @@ static inline void prj_mhd_compute_buffer_inner_fluxes(double u[3][2][2],
 void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
     int buf_lo[3][3], int buf_n[3][3], const double coarse_dx[3],
     prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
-    int use_bf1, int use_BJ)
+    int stage, int use_BJ)
 {
     double u[3][2][2];
     double v[2][3][2];
@@ -394,7 +394,7 @@ void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
     prj_mhd_check_bf_storage(fine);
 
     for (d = 0; d < 3; ++d) {
-        dst[d] = prj_mhd_bf_array(fine, d, use_bf1);
+        dst[d] = prj_mhd_bf_array(fine, d, stage);
     }
 
     area_u = fine->dx[1] * fine->dx[2];
@@ -493,21 +493,21 @@ void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
 
     for (j = 0; j < 2; ++j) {
         for (k = 0; k < 2; ++k) {
-            prj_mhd_write_bf_face(fine, use_bf1, X1DIR,
+            prj_mhd_write_bf_face(fine, stage, X1DIR,
                 fi + 1, fj + j, fk + k,
                 u[1][j][k] / area_u, PRJ_MHD_FIDELITY_COARSER);
         }
     }
     for (i = 0; i < 2; ++i) {
         for (k = 0; k < 2; ++k) {
-            prj_mhd_write_bf_face(fine, use_bf1, X2DIR,
+            prj_mhd_write_bf_face(fine, stage, X2DIR,
                 fi + i, fj + 1, fk + k,
                 v[i][1][k] / area_v, PRJ_MHD_FIDELITY_COARSER);
         }
     }
     for (i = 0; i < 2; ++i) {
         for (j = 0; j < 2; ++j) {
-            prj_mhd_write_bf_face(fine, use_bf1, X3DIR,
+            prj_mhd_write_bf_face(fine, stage, X3DIR,
                 fi + i, fj + j, fk + 1,
                 w[i][j][1] / area_w, PRJ_MHD_FIDELITY_COARSER);
         }
@@ -531,7 +531,7 @@ static inline void prj_mhd_check_edge_storage_index(const char *label, int dir, 
     }
 }
 
-static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
+static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int stage,
     int use_cell_derived_mask)
 {
     double *W;
@@ -544,9 +544,9 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
     (void)eos;
     prj_mhd_check_block_storage(block);
 
-    W = use_bf1 != 0 ? block->W1 : block->W;
+    W = prj_block_stage_W(block, stage);
     for (d = 0; d < 3; ++d) {
-        src[d] = use_bf1 != 0 ? block->Bf1[d] : block->Bf[d];
+        src[d] = prj_block_stage_Bf(block, stage, d);
     }
 
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -576,14 +576,14 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
     }
 }
 
-void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1)
+void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int stage)
 {
-    prj_mhd_bf2bc_impl(eos, block, use_bf1, 1);
+    prj_mhd_bf2bc_impl(eos, block, stage, 1);
 }
 
-void prj_mhd_bf2bc_all(prj_eos *eos, prj_block *block, int use_bf1)
+void prj_mhd_bf2bc_all(prj_eos *eos, prj_block *block, int stage)
 {
-    prj_mhd_bf2bc_impl(eos, block, use_bf1, 0);
+    prj_mhd_bf2bc_impl(eos, block, stage, 0);
 }
 
 double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
@@ -977,7 +977,7 @@ void prj_mhd_debug_check_divb(const prj_mesh *mesh, const prj_mpi *mpi, int use_
         }
         prj_mhd_check_bf_storage(block);
         for (d = 0; d < 3; ++d) {
-            bf[d] = use_bf1 != 0 ? block->Bf1[d] : block->Bf[d];
+            bf[d] = prj_block_stage_Bf_const(block, prj_block_legacy_bf_stage(use_bf1), d);
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -1151,8 +1151,8 @@ void prj_mhd_init(prj_sim *sim, prj_mpi *mpi)
         for (d = 0; d < 3; ++d) {
             prj_fill(block->emf[d], (size_t)PRJ_BLOCK_NEDGES, 0.0);
         }
-        prj_mhd_bf2bc_all(&sim->eos, block, 0);
         prj_mhd_bf2bc_all(&sim->eos, block, 1);
+        prj_mhd_bf2bc_all(&sim->eos, block, 2);
     }
 #if PRJ_MHD_DEBUG
     prj_mhd_debug_check_divb(&sim->mesh, mpi, 0);

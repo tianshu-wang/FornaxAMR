@@ -1055,7 +1055,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
-        double *W;
+        const double *W;
         int i;
         int j;
         int k;
@@ -1063,7 +1063,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         if (!prj_gravity_block_is_local_active(mpi, block)) {
             continue;
         }
-        W = stage == 2 ? block->W1 : block->W;
+        W = prj_block_stage_W_const(block, stage);
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {

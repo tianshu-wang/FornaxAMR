@@ -15,11 +15,11 @@ enum {
     PRJ_BOUNDARY_TIMER_SCOPE_STAGE2
 };
 void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc,
-    int stage, int use_bf1, prj_eos *eos, prj_grav *grav, prj_rad *rad, int timer_scope);
+    int stage, prj_eos *eos, prj_grav *grav, prj_rad *rad, int timer_scope);
 #if PRJ_MHD
-void prj_boundary_send_bf(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int use_bf1, int fill_kind);
-void prj_boundary_fill_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int use_bf1, prj_eos *eos);
-void prj_boundary_write_bf_face(prj_block *block, int use_bf1, int dir,
+void prj_boundary_send_bf(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int stage, int fill_kind);
+void prj_boundary_fill_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int stage, prj_eos *eos);
+void prj_boundary_write_bf_face(prj_block *block, int stage, int dir,
     int i, int j, int k, double value, int fidelity);
 #endif
 

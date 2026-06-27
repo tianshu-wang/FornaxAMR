@@ -27,6 +27,15 @@ typedef struct prj_mpi prj_mpi;
 typedef void (*prj_problem_init_fn)(prj_sim *sim, prj_mpi *mpi);
 typedef int (*prj_amr_init_refine_fn)(const prj_block *block, void *userdata);
 
+typedef struct prj_timeint_imex_tableau {
+    int nstages;
+    double a_ex[PRJ_TIMEINT_MAX_STAGES][PRJ_TIMEINT_MAX_STAGES];
+    double a_im[PRJ_TIMEINT_MAX_STAGES][PRJ_TIMEINT_MAX_STAGES];
+    double b_ex[PRJ_TIMEINT_MAX_STAGES];
+    double b_im[PRJ_TIMEINT_MAX_STAGES];
+    double r;
+} prj_timeint_imex_tableau;
+
 struct prj_coord {
     double x1min;
     double x1max;
@@ -90,6 +99,7 @@ struct prj_block {
     double dx[3];
     double *W;
     double *W1;
+    double *W_stage[PRJ_TIMEINT_MAX_STAGES];
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
     double *W2;
     double *W3;
@@ -97,6 +107,8 @@ struct prj_block {
     double *eosvar;
     int *cell_derived_done;
     double *U;
+    double *rhs_ex[PRJ_TIMEINT_MAX_STAGES];
+    double *rhs_im[PRJ_TIMEINT_MAX_STAGES];
     double *dUdt;
     double *flux[3];
     double *v_riemann[3];
@@ -112,6 +124,9 @@ struct prj_block {
     int *edge_fidelity[3];
     double *Bf[3];
     double *Bf1[3];
+    double *Bf_stage[PRJ_TIMEINT_MAX_STAGES][3];
+    double *Bf0[3];
+    double *dBfdt_ex[PRJ_TIMEINT_MAX_STAGES][3];
 #if PRJ_TIMEINT_EXTRA_SAVED_STATES
     double *Bf2[3];
     double *Bf3[3];
@@ -406,5 +421,85 @@ struct prj_mpi {
     int amr_bf_value_capacity;
 #endif
 };
+
+static inline int prj_block_stage_scratch_index(int stage)
+{
+    return stage - 2;
+}
+
+static inline int prj_block_legacy_bf_stage(int use_bf1)
+{
+    return use_bf1 != 0 ? 2 : 1;
+}
+
+static inline double *prj_block_stage_W(prj_block *block, int stage)
+{
+    int idx;
+
+    if (block == 0) {
+        return 0;
+    }
+    if (stage <= 1) {
+        return block->W;
+    }
+    idx = prj_block_stage_scratch_index(stage);
+    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->W_stage[idx];
+}
+
+static inline const double *prj_block_stage_W_const(const prj_block *block, int stage)
+{
+    int idx;
+
+    if (block == 0) {
+        return 0;
+    }
+    if (stage <= 1) {
+        return block->W;
+    }
+    idx = prj_block_stage_scratch_index(stage);
+    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->W_stage[idx];
+}
+
+#if PRJ_MHD
+static inline double *prj_block_stage_Bf(prj_block *block, int stage, int dir)
+{
+    int idx;
+
+    if (block == 0 || dir < 0 || dir >= 3) {
+        return 0;
+    }
+    if (stage <= 1) {
+        return block->Bf[dir];
+    }
+    idx = prj_block_stage_scratch_index(stage);
+    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->Bf_stage[idx][dir];
+}
+
+static inline const double *prj_block_stage_Bf_const(const prj_block *block, int stage, int dir)
+{
+    int idx;
+
+    if (block == 0 || dir < 0 || dir >= 3) {
+        return 0;
+    }
+    if (stage <= 1) {
+        return block->Bf[dir];
+    }
+    idx = prj_block_stage_scratch_index(stage);
+    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->Bf_stage[idx][dir];
+}
+#endif
 
 #endif
