@@ -48,7 +48,7 @@ OMPFLAGS ?=
 # macro maps names -> PRJ_TIMEINT_* and sets PRJ_TIMEINT_ESSPRK_N).  Nothing is
 # defined here by default, so the header is authoritative.  Either macro may
 # still be overridden from the command line, e.g.
-#   make TIME_INTEGRATION=IMEX_SSP2332
+#   make TIME_INTEGRATION=RK2
 #   make TIME_INTEGRATION=eSSPRK9_2 PRJ_TIMEINT_ESSPRK_N=5
 TIME_INTEGRATION_DEF := \
 	$(if $(strip $(TIME_INTEGRATION)),-DTIME_INTEGRATION=$(strip $(TIME_INTEGRATION))) \
