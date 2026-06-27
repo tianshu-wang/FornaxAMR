@@ -127,7 +127,7 @@ static double prj_timeint_mhd_face_vnorm(const prj_block *block, int face_dir,
     if (block == 0 || face_dir < 0 || face_dir >= 3 || block->v_riemann[face_dir] == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_face_vnorm: invalid input");
     }
-    value = block->v_riemann[face_dir][face_dir * PRJ_BLOCK_NCELLS + IDX(i, j, k)];
+    value = block->v_riemann[face_dir][VRIDX(face_dir, i, j, k)];
     if (!isfinite(value)) {
         prj_timeint_mhd_fail("prj_timeint_mhd_face_vnorm: non-finite face velocity");
     }

@@ -306,7 +306,8 @@ static inline double prj_flux_recon_stencil_val(double q, int is_rad)
  * limiter evaluations vs reconstructing each face/side independently, and is
  * bit-identical because both faces share the same slope. `slab` is the source
  * variable plane (W or eosvar), `wl`/`wr` the left/right output planes. */
-static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
+static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
+    double *wl, double *wr,
     int dir, int istart, int iend, int jstart, int jend, int kstart, int kend,
     int is_rad)
 {
@@ -314,19 +315,20 @@ static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
     int j;
     int k;
 
-    /* k (the contiguous IDX axis) is kept innermost in every direction for cache
-     * locality and vectorization; the sweep axis is outer, and the +S "upper
-     * face" write simply lands in the next sweep plane. The boundary tests on the
-     * sweep axis are loop-invariant w.r.t. the inner k loop for X1/X2. */
+    /* Source component gv is read from the block buffer `src` (nc components per
+     * cell) via BIDX, so this works for both SoA and AoSoA layouts.  The output
+     * planes wl/wr are untiled SoA scratch (one contiguous LIDX plane per local
+     * variable), so the slope is written at LIDX(i,j,k) and the upper-face value
+     * at the +S neighbour, where S is the untiled LIDX stride of the sweep axis. */
     if (dir == X1DIR) {
         const size_t S = (size_t)PRJ_BS * PRJ_BS;
         for (i = istart - 1; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
                 for (k = kstart; k <= kend; ++k) {
-                    size_t idx = (size_t)IDX(i, j, k);
-                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
-                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
-                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
+                    size_t idx = (size_t)LIDX(i, j, k);
+                    double qm = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i - 1, j, k)], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k)], is_rad);
+                    double qp = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i + 1, j, k)], is_rad);
                     double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
                     if (i >= istart) wr[idx] = q0 - h;
                     if (i < iend) wl[idx + S] = q0 + h;
@@ -338,10 +340,10 @@ static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
         for (i = istart; i <= iend; ++i) {
             for (j = jstart - 1; j <= jend; ++j) {
                 for (k = kstart; k <= kend; ++k) {
-                    size_t idx = (size_t)IDX(i, j, k);
-                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
-                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
-                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
+                    size_t idx = (size_t)LIDX(i, j, k);
+                    double qm = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j - 1, k)], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k)], is_rad);
+                    double qp = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j + 1, k)], is_rad);
                     double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
                     if (j >= jstart) wr[idx] = q0 - h;
                     if (j < jend) wl[idx + S] = q0 + h;
@@ -353,10 +355,10 @@ static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
         for (i = istart; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
                 for (k = kstart - 1; k <= kend; ++k) {
-                    size_t idx = (size_t)IDX(i, j, k);
-                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
-                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
-                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
+                    size_t idx = (size_t)LIDX(i, j, k);
+                    double qm = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k - 1)], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k)], is_rad);
+                    double qp = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k + 1)], is_rad);
                     double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
                     if (k >= kstart) wr[idx] = q0 - h;
                     if (k < kend) wl[idx + S] = q0 + h;
@@ -376,8 +378,8 @@ static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
         int lv; \
         for (lv = (LV_BEGIN); lv < (LV_END); ++lv) { \
             int gv = gmap[lv]; \
-            double *wl = &WL_block[(size_t)lv * PRJ_BLOCK_NCELLS]; \
-            double *wr = &WR_block[(size_t)lv * PRJ_BLOCK_NCELLS]; \
+            double *wl = &WL_block[VPLANE((size_t)lv)]; \
+            double *wr = &WR_block[VPLANE((size_t)lv)]; \
             int i; \
             for (i = istart; i <= iend; ++i) { \
                 int j; \
@@ -391,8 +393,8 @@ static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
                         int jr; \
                         int kr; \
                         FACE_CELLS(i, j, k, &il, &jl, &kl, &ir, &jr, &kr); \
-                        wl[IDX(i, j, k)] = PRIM_FACE_VALUE(W, gv, il, jl, kl, 0.5); \
-                        wr[IDX(i, j, k)] = PRIM_FACE_VALUE(W, gv, ir, jr, kr, -0.5); \
+                        wl[LIDX(i, j, k)] = PRIM_FACE_VALUE(W, gv, il, jl, kl, 0.5); \
+                        wr[LIDX(i, j, k)] = PRIM_FACE_VALUE(W, gv, ir, jr, kr, -0.5); \
                     } \
                 } \
             } \
@@ -432,8 +434,8 @@ static void prj_flux_recon_var_mc(const double *slab, double *wl, double *wr,
                             int jr; \
                             int kr; \
                             FACE_CELLS(i, j, k, &il, &jl, &kl, &ir, &jr, &kr); \
-                            el[IDX(i, j, k)] = EOS_FACE_VALUE(eosvar, ev, il, jl, kl, 0.5); \
-                            er[IDX(i, j, k)] = EOS_FACE_VALUE(eosvar, ev, ir, jr, kr, -0.5); \
+                            el[LIDX(i, j, k)] = EOS_FACE_VALUE(eosvar, ev, il, jl, kl, 0.5); \
+                            er[LIDX(i, j, k)] = EOS_FACE_VALUE(eosvar, ev, ir, jr, kr, -0.5); \
                         } \
                     } \
                 } \
@@ -456,22 +458,22 @@ static void prj_flux_reconstruct_block(double *W, const double *eosvar, int dir,
 
         for (lv = 0; lv < PRJ_NHYDRO; ++lv) {
             int gv = gmap[lv];
-            prj_flux_recon_var_mc(&W[(size_t)gv * PRJ_BLOCK_NCELLS],
-                &WL_block[(size_t)lv * PRJ_BLOCK_NCELLS],
-                &WR_block[(size_t)lv * PRJ_BLOCK_NCELLS],
+            prj_flux_recon_var_mc(W, PRJ_NVAR_CONS, gv,
+                &WL_block[VPLANE((size_t)lv)],
+                &WR_block[VPLANE((size_t)lv)],
                 dir, istart, iend, jstart, jend, kstart, kend, 0);
         }
         for (lv = PRJ_NHYDRO; lv < PRJ_NVAR_PRIM; ++lv) {
             int gv = gmap[lv];
-            prj_flux_recon_var_mc(&W[(size_t)gv * PRJ_BLOCK_NCELLS],
-                &WL_block[(size_t)lv * PRJ_BLOCK_NCELLS],
-                &WR_block[(size_t)lv * PRJ_BLOCK_NCELLS],
+            prj_flux_recon_var_mc(W, PRJ_NVAR_CONS, gv,
+                &WL_block[VPLANE((size_t)lv)],
+                &WR_block[VPLANE((size_t)lv)],
                 dir, istart, iend, jstart, jend, kstart, kend, 1);
         }
         if (eosvar != 0) {
-            prj_flux_recon_var_mc(&eosvar[(size_t)PRJ_EOSVAR_PRESSURE * PRJ_BLOCK_NCELLS],
+            prj_flux_recon_var_mc(eosvar, PRJ_NVAR_EOSVAR, PRJ_EOSVAR_PRESSURE,
                 pL_block, pR_block, dir, istart, iend, jstart, jend, kstart, kend, 0);
-            prj_flux_recon_var_mc(&eosvar[(size_t)PRJ_EOSVAR_GAMMA * PRJ_BLOCK_NCELLS],
+            prj_flux_recon_var_mc(eosvar, PRJ_NVAR_EOSVAR, PRJ_EOSVAR_GAMMA,
                 gL_block, gR_block, dir, istart, iend, jstart, jend, kstart, kend, 0);
         }
     }
@@ -506,17 +508,17 @@ static void prj_flux_store_face_velocity(prj_block *block, int dir, int i, int j
     }
     dst = block->v_riemann[dir];
     if (dir == X1DIR) {
-        dst[0 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[0];
-        dst[1 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[1];
-        dst[2 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[2];
+        dst[VRIDX(0, i, j, k)] = v_face_loc[0];
+        dst[VRIDX(1, i, j, k)] = v_face_loc[1];
+        dst[VRIDX(2, i, j, k)] = v_face_loc[2];
     } else if (dir == X2DIR) {
-        dst[1 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[0];
-        dst[2 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[1];
-        dst[0 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[2];
+        dst[VRIDX(1, i, j, k)] = v_face_loc[0];
+        dst[VRIDX(2, i, j, k)] = v_face_loc[1];
+        dst[VRIDX(0, i, j, k)] = v_face_loc[2];
     } else {
-        dst[2 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[0];
-        dst[0 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[1];
-        dst[1 * PRJ_BLOCK_NCELLS + IDX(i, j, k)] = v_face_loc[2];
+        dst[VRIDX(2, i, j, k)] = v_face_loc[0];
+        dst[VRIDX(0, i, j, k)] = v_face_loc[1];
+        dst[VRIDX(1, i, j, k)] = v_face_loc[2];
     }
 }
 
@@ -859,14 +861,14 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                  * face as the old per-face gather did. */
                 PRJ_SUBTIMER_START("sub_flux_gather");
                 {
-                    size_t base = (size_t)IDX(i, j, kstart);
+                    size_t base = (size_t)LIDX(i, j, kstart);
                     int v;
                     int kk;
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                         const double *src_l =
-                            &WL_block[(size_t)v * PRJ_BLOCK_NCELLS + base];
+                            &WL_block[VPLANE((size_t)v) + base];
                         const double *src_r =
-                            &WR_block[(size_t)v * PRJ_BLOCK_NCELLS + base];
+                            &WR_block[VPLANE((size_t)v) + base];
                         for (kk = 0; kk < strip; ++kk) {
                             WLp[(size_t)kk * PRJ_NVAR_PRIM + v] = src_l[kk];
                             WRp[(size_t)kk * PRJ_NVAR_PRIM + v] = src_r[kk];

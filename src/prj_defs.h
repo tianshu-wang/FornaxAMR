@@ -214,7 +214,9 @@
 #define PRJ_BLOCK_NFACES ((PRJ_BS + 1) * PRJ_BS * PRJ_BS)
 #define PRJ_BLOCK_NEDGES ((PRJ_BS + 1) * (PRJ_BS + 1) * PRJ_BS)
 
-#define IDX(i, j, k) \
+/* Untiled linear cell index within a block (k fastest).  Used for face/edge
+ * fields and any per-cell SoA scratch that is swept with constant strides. */
+#define LIDX(i, j, k) \
     (((i) + PRJ_NGHOST) * PRJ_BS * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST))
 #define FACE_IDX(dir, i, j, k) \
     ((dir) == X1DIR ? \
@@ -228,8 +230,45 @@
      (dir) == X2DIR ? \
         (((i) + PRJ_NGHOST) * PRJ_BS * (PRJ_BS + 1) + ((j) + PRJ_NGHOST) * (PRJ_BS + 1) + ((k) + PRJ_NGHOST)) : \
         (((i) + PRJ_NGHOST) * (PRJ_BS + 1) * PRJ_BS + ((j) + PRJ_NGHOST) * PRJ_BS + ((k) + PRJ_NGHOST)))
-#define VIDX(v, i, j, k) ((v) * PRJ_BLOCK_NCELLS + IDX(i, j, k))
-#define EIDX(v, i, j, k) ((v) * PRJ_BLOCK_NCELLS + IDX(i, j, k))
+/* ---- Block memory layout (SoA at PRJ_AOSOA_W==1, AoSoA when >1) ------------
+ * BIDX(nc,v,i,j,k) gives the address of component v (of an nc-component cell
+ * buffer) at cell (i,j,k).  At PRJ_AOSOA_W==1 it is plain component-major SoA
+ * (v*NCELLS + LIDX), reproducing the legacy layout exactly.  At W>1 it is
+ * AoSoA: memory order [i][j][k_tile][var][k_lane] with the fast k axis tiled
+ * into lanes of width W, so a cell's variables sit in one compact tile (better
+ * locality) and the W cells of a tile vectorise per variable.
+ * Per-array wrappers fix nc: VIDX for the NVAR-wide prim/cons buffers, EIDX for
+ * eosvar, VRIDX for the 3-component v_riemann/v_face fields, IDX for scalar
+ * (one component per cell) fields. */
+/* AoSoA lane width (cells per tile along the fast k axis).  Must divide PRJ_BS
+ * (12 for the default 2-ghost build, 16 for WENO7).  4 is the AVX2 double width
+ * and divides both; set to 1 for the legacy plain-SoA layout. */
+#ifndef PRJ_AOSOA_W
+#define PRJ_AOSOA_W 4
+#endif
+#if (PRJ_BS % PRJ_AOSOA_W) != 0
+#error "PRJ_AOSOA_W must divide PRJ_BS"
+#endif
+#define PRJ_AOSOA_KT (PRJ_BS / PRJ_AOSOA_W)
+
+#if PRJ_AOSOA_W <= 1
+#define BIDX(nc, v, i, j, k) ((v) * PRJ_BLOCK_NCELLS + LIDX(i, j, k))
+#else
+#define BIDX(nc, v, i, j, k) \
+    ((((((i) + PRJ_NGHOST) * PRJ_BS + ((j) + PRJ_NGHOST)) * PRJ_AOSOA_KT \
+        + ((k) + PRJ_NGHOST) / PRJ_AOSOA_W) * (nc) + (v)) * PRJ_AOSOA_W \
+     + ((k) + PRJ_NGHOST) % PRJ_AOSOA_W)
+#endif
+
+#define IDX(i, j, k) BIDX(1, 0, i, j, k)
+#define VIDX(v, i, j, k) BIDX(PRJ_NVAR_CONS, v, i, j, k)
+#define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
+#define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
+
+/* Legacy SoA per-variable plane base (valid only at PRJ_AOSOA_W==1).  Still used
+ * by the pencil-reconstruction scratch; removed from block-array access in the
+ * reconstruction rewrite. */
+#define VPLANE(v) ((v) * PRJ_BLOCK_NCELLS)
 
 enum prj_cons_var {
     PRJ_CONS_RHO = 0,

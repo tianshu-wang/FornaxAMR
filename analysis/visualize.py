@@ -30,20 +30,20 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 # User settings. Choose a variable name, or derived variables "B"/"vr".
 # Available: density, v1, v2, v3, eint, ye, pressure, temperature, gamma,
 #            B1/B2/B3 (MHD), radF_gG_{E,F1,F2,F3} (radiation), plus "B" and "vr".
-VARIABLE = "v1"
+VARIABLE = "B"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
 
 # Set to False to hide the AMR block boundaries overlaid on each plot.
-SHOW_BLOCK_BOUNDARIES = True
+SHOW_BLOCK_BOUNDARIES = False
 
 # Set these to None to show the full domain. Ranges are in km.
-X_RANGE = [-3e2, 3e2]
-Y_RANGE = [-3e2, 3e2]
+X_RANGE = [-2e2, 2e2]
+Y_RANGE = [-2e2, 2e2]
 
 # Choose from "normalize", "lognorm", or "symlognorm".
-COLOR_SCALE = "normalize"
-COLOR_VMIN = None
+COLOR_SCALE = "lognorm"
+COLOR_VMIN = 1e7 #None
 COLOR_VMAX = None
 SYMLOG_LINTHRESH = 1.0e-6
 SYMLOG_LINSCALE = 1.0

@@ -1149,8 +1149,8 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             } else {
                 kr = kc + 1;
             }
-            vL = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(il, jl, kl)];
-            vR = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(ir, jr, kr)];
+            vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+            vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
             dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
         }
     }

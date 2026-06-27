@@ -55,17 +55,13 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
                     double v_avg1;
                     double v_avg2;
                     double v_avg3;
-                    int idx000 = IDX(i, j, k);
-                    int idx100 = IDX(i + 1, j, k);
-                    int idx010 = IDX(i, j + 1, k);
-                    int idx001 = IDX(i, j, k + 1);
 
-                    v_avg1 = (block->v_riemann[X1DIR][idx000] +
-                              block->v_riemann[X1DIR][idx100]) * 0.5;
-                    v_avg2 = (block->v_riemann[X2DIR][1*PRJ_BLOCK_NCELLS+idx000] +
-                              block->v_riemann[X2DIR][1*PRJ_BLOCK_NCELLS+idx010]) * 0.5;
-                    v_avg3 = (block->v_riemann[X3DIR][2*PRJ_BLOCK_NCELLS+idx000] +
-                              block->v_riemann[X3DIR][2*PRJ_BLOCK_NCELLS+idx001]) * 0.5;
+                    v_avg1 = (block->v_riemann[X1DIR][VRIDX(0, i, j, k)] +
+                              block->v_riemann[X1DIR][VRIDX(0, i + 1, j, k)]) * 0.5;
+                    v_avg2 = (block->v_riemann[X2DIR][VRIDX(1, i, j, k)] +
+                              block->v_riemann[X2DIR][VRIDX(1, i, j + 1, k)]) * 0.5;
+                    v_avg3 = (block->v_riemann[X3DIR][VRIDX(2, i, j, k)] +
+                              block->v_riemann[X3DIR][VRIDX(2, i, j, k + 1)]) * 0.5;
 
                     dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
                         rho * (v_avg1 * g1 + v_avg2 * g2 + v_avg3 * g3);
@@ -162,8 +158,8 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
                         } else {
                             kr = k + 1;
                         }
-                        vL = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(il, jl, kl)];
-                        vR = block->v_riemann[jdir][icomp * PRJ_BLOCK_NCELLS + IDX(ir, jr, kr)];
+                        vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+                        vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
                         dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
                     }
                 }
