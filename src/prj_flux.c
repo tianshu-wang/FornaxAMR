@@ -311,24 +311,35 @@ static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
     int dir, int istart, int iend, int jstart, int jend, int kstart, int kend,
     int is_rad)
 {
+    /* Component gv is first gathered from the block buffer `src` (nc components
+     * per cell, SoA or AoSoA) into a contiguous untiled SoA plane `slab`.  The
+     * MC sweep then streams `slab` with stride 1/BS/BS^2 and full cache-line
+     * use, instead of the AoSoA per-variable interleave that wastes ~half of
+     * every line and would read each cell three times in the stencil.  Reading
+     * the AoSoA data once (the gather) is cheaper than the 3x scattered stencil
+     * reads, and the slab sweep is the original bit-identical SoA kernel. */
+    static double slab[PRJ_BLOCK_NCELLS];
     int i;
     int j;
     int k;
 
-    /* Source component gv is read from the block buffer `src` (nc components per
-     * cell) via BIDX, so this works for both SoA and AoSoA layouts.  The output
-     * planes wl/wr are untiled SoA scratch (one contiguous LIDX plane per local
-     * variable), so the slope is written at LIDX(i,j,k) and the upper-face value
-     * at the +S neighbour, where S is the untiled LIDX stride of the sweep axis. */
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                slab[LIDX(i, j, k)] = src[BIDX(nc, gv, i, j, k)];
+            }
+        }
+    }
+
     if (dir == X1DIR) {
         const size_t S = (size_t)PRJ_BS * PRJ_BS;
         for (i = istart - 1; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
                 for (k = kstart; k <= kend; ++k) {
                     size_t idx = (size_t)LIDX(i, j, k);
-                    double qm = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i - 1, j, k)], is_rad);
-                    double q0 = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k)], is_rad);
-                    double qp = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i + 1, j, k)], is_rad);
+                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
+                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
                     double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
                     if (i >= istart) wr[idx] = q0 - h;
                     if (i < iend) wl[idx + S] = q0 + h;
@@ -341,9 +352,9 @@ static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
             for (j = jstart - 1; j <= jend; ++j) {
                 for (k = kstart; k <= kend; ++k) {
                     size_t idx = (size_t)LIDX(i, j, k);
-                    double qm = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j - 1, k)], is_rad);
-                    double q0 = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k)], is_rad);
-                    double qp = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j + 1, k)], is_rad);
+                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
+                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
                     double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
                     if (j >= jstart) wr[idx] = q0 - h;
                     if (j < jend) wl[idx + S] = q0 + h;
@@ -356,9 +367,9 @@ static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
             for (j = jstart; j <= jend; ++j) {
                 for (k = kstart - 1; k <= kend; ++k) {
                     size_t idx = (size_t)LIDX(i, j, k);
-                    double qm = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k - 1)], is_rad);
-                    double q0 = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k)], is_rad);
-                    double qp = prj_flux_recon_stencil_val(src[BIDX(nc, gv, i, j, k + 1)], is_rad);
+                    double qm = prj_flux_recon_stencil_val(slab[idx - S], is_rad);
+                    double q0 = prj_flux_recon_stencil_val(slab[idx], is_rad);
+                    double qp = prj_flux_recon_stencil_val(slab[idx + S], is_rad);
                     double h = 0.5 * prj_reconstruct_mc_face_slope(qm, q0, qp);
                     if (k >= kstart) wr[idx] = q0 - h;
                     if (k < kend) wl[idx + S] = q0 + h;
