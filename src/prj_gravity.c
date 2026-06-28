@@ -1,4 +1,5 @@
 #include <math.h>
+#include <limits.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1023,6 +1024,13 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
     int idx;
     int use_multipole;
     double x_com[3];
+    double *block_avg = 0;
+    double *block_lm = 0;
+    size_t block_count = 0U;
+    size_t avg_stride = 0U;
+    size_t avg_count = 0U;
+    size_t lm_stride = 0U;
+    size_t lm_count = 0U;
 
     if (mesh == 0 || grav == 0 || grav->ms == 0 || grav->vol == 0 ||
         grav->rho_avg == 0 || grav->vr_avg == 0 || grav->pgas_avg == 0 ||
@@ -1053,9 +1061,36 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         prj_gravity_zero_multipole_coefficients(grav);
     }
 
+    if (mesh->nblocks > 0) {
+        block_count = (size_t)mesh->nblocks;
+        avg_stride = 9U * (size_t)grav->nbins;
+        if (avg_stride > 0U && block_count <= (size_t)INT_MAX / avg_stride) {
+            avg_count = block_count * avg_stride;
+            block_avg = (double *)calloc(avg_count, sizeof(*block_avg));
+        }
+        if (use_multipole) {
+            lm_stride = 2U * (size_t)PRJ_GRAVITY_NHARM * (size_t)grav->nbins;
+            if (lm_stride > 0U && block_count <= (size_t)INT_MAX / lm_stride) {
+                lm_count = block_count * lm_stride;
+                block_lm = (double *)calloc(lm_count, sizeof(*block_lm));
+            }
+            if (block_lm == 0) {
+                free(block_avg);
+                block_avg = 0;
+                avg_count = 0U;
+            }
+        }
+    }
+
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
         const double *W;
+        double *avg = block_avg != 0 ?
+            block_avg + (size_t)bidx * avg_stride : 0;
+        double *clm = block_lm != 0 ?
+            block_lm + (size_t)bidx * lm_stride : 0;
+        double *dlm = block_lm != 0 ?
+            clm + (size_t)PRJ_GRAVITY_NHARM * (size_t)grav->nbins : 0;
         int i;
         int j;
         int k;
@@ -1126,19 +1161,40 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                             }
                         }
 #endif
-                        grav->vol[idx] += block->vol;
-                        grav->rho_avg[idx] += block->vol * rho;
-                        grav->vr_avg[idx] += block->vol * vr;
-                        grav->pgas_avg[idx] += block->vol * pgas;
-                        grav->uavg_int[idx] += block->vol * rho * eint;
-                        grav->erad_avg[idx] += block->vol * erad;
-                        grav->prad_avg[idx] += block->vol * prad;
-                        grav->vdotF_avg[idx] += block->vol * vdotF;
-                        grav->ms[idx] += rho * block->vol;
+                        if (avg != 0) {
+                            avg[0U * (size_t)grav->nbins + (size_t)idx] +=
+                                rho * block->vol;
+                            avg[1U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol;
+                            avg[2U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol * rho;
+                            avg[3U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol * vr;
+                            avg[4U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol * pgas;
+                            avg[5U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol * rho * eint;
+                            avg[6U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol * erad;
+                            avg[7U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol * prad;
+                            avg[8U * (size_t)grav->nbins + (size_t)idx] +=
+                                block->vol * vdotF;
+                        } else {
+                            grav->vol[idx] += block->vol;
+                            grav->rho_avg[idx] += block->vol * rho;
+                            grav->vr_avg[idx] += block->vol * vr;
+                            grav->pgas_avg[idx] += block->vol * pgas;
+                            grav->uavg_int[idx] += block->vol * rho * eint;
+                            grav->erad_avg[idx] += block->vol * erad;
+                            grav->prad_avg[idx] += block->vol * prad;
+                            grav->vdotF_avg[idx] += block->vol * vdotF;
+                            grav->ms[idx] += rho * block->vol;
+                        }
                         if (use_multipole && block->Ylm != 0 && r > 0.0) {
                             const double *Ylm = block->Ylm +
                                 PRJ_GRAVITY_LM_OFFSET(cache_idx, 0);
-                            size_t lm_base = PRJ_GRAVITY_LM_OFFSET(idx, 0);
+                            size_t lm_base = (size_t)idx * (size_t)PRJ_GRAVITY_NHARM;
                             double r_l = 1.0;
                             int l;
 
@@ -1158,8 +1214,13 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                                         Ylm[yidx];
                                     size_t lm_idx = lm_base + (size_t)yidx;
 
-                                    grav->Clm[lm_idx] += coeff * r_l;
-                                    grav->Dlm[lm_idx] += coeff * inv_r_l1;
+                                    if (clm != 0 && dlm != 0) {
+                                        clm[lm_idx] += coeff * r_l;
+                                        dlm[lm_idx] += coeff * inv_r_l1;
+                                    } else {
+                                        grav->Clm[lm_idx] += coeff * r_l;
+                                        grav->Dlm[lm_idx] += coeff * inv_r_l1;
+                                    }
                                 }
                             }
                         }
@@ -1169,8 +1230,50 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         }
     }
 
+    if (block_avg != 0) {
+        size_t nb = (size_t)grav->nbins;
+
 #if defined(PRJ_ENABLE_MPI)
-    {
+        if (mpi != 0 && mpi->totrank > 1) {
+            MPI_Allreduce(MPI_IN_PLACE, block_avg, (int)avg_count, MPI_DOUBLE,
+                MPI_SUM, MPI_COMM_WORLD);
+            if (use_multipole && block_lm != 0) {
+                MPI_Allreduce(MPI_IN_PLACE, block_lm, (int)lm_count, MPI_DOUBLE,
+                    MPI_SUM, MPI_COMM_WORLD);
+            }
+        }
+#else
+        (void)mpi;
+#endif
+        for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+            const double *avg = block_avg + (size_t)bidx * avg_stride;
+
+            for (idx = 0; idx < grav->nbins; ++idx) {
+                grav->ms[idx]        += avg[0U * nb + (size_t)idx];
+                grav->vol[idx]       += avg[1U * nb + (size_t)idx];
+                grav->rho_avg[idx]   += avg[2U * nb + (size_t)idx];
+                grav->vr_avg[idx]    += avg[3U * nb + (size_t)idx];
+                grav->pgas_avg[idx]  += avg[4U * nb + (size_t)idx];
+                grav->uavg_int[idx]  += avg[5U * nb + (size_t)idx];
+                grav->erad_avg[idx]  += avg[6U * nb + (size_t)idx];
+                grav->prad_avg[idx]  += avg[7U * nb + (size_t)idx];
+                grav->vdotF_avg[idx] += avg[8U * nb + (size_t)idx];
+            }
+            if (use_multipole && block_lm != 0) {
+                const double *clm = block_lm + (size_t)bidx * lm_stride;
+                const double *dlm = clm + (size_t)PRJ_GRAVITY_NHARM * nb;
+                size_t n;
+
+                for (n = 0U; n < (size_t)PRJ_GRAVITY_NHARM * nb; ++n) {
+                    grav->Clm[n] += clm[n];
+                    grav->Dlm[n] += dlm[n];
+                }
+            }
+        }
+        free(block_lm);
+        free(block_avg);
+    } else {
+#if defined(PRJ_ENABLE_MPI)
         if (mpi != 0 && mpi->totrank > 1 && grav->reduce_avg_buf != 0 &&
             (!use_multipole || grav->reduce_lm_buf != 0)) {
             double *restrict buf = grav->reduce_avg_buf;
@@ -1198,18 +1301,21 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
             memcpy(grav->vdotF_avg, buf + 8U * nb, nb * sizeof(double));
             if (use_multipole) {
                 double *restrict lmbuf = grav->reduce_lm_buf;
-                size_t lm_count = nb * (size_t)PRJ_GRAVITY_NHARM;
+                size_t reduced_lm_count = nb * (size_t)PRJ_GRAVITY_NHARM;
 
-                memcpy(lmbuf, grav->Clm, lm_count * sizeof(double));
-                memcpy(lmbuf + lm_count, grav->Dlm, lm_count * sizeof(double));
-                MPI_Allreduce(MPI_IN_PLACE, lmbuf, 2 * PRJ_GRAVITY_NHARM * grav->nbins,
-                    MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
-                memcpy(grav->Clm, lmbuf, lm_count * sizeof(double));
-                memcpy(grav->Dlm, lmbuf + lm_count, lm_count * sizeof(double));
+                memcpy(lmbuf, grav->Clm, reduced_lm_count * sizeof(double));
+                memcpy(lmbuf + reduced_lm_count, grav->Dlm,
+                    reduced_lm_count * sizeof(double));
+                MPI_Allreduce(MPI_IN_PLACE, lmbuf,
+                    2 * PRJ_GRAVITY_NHARM * grav->nbins, MPI_DOUBLE, MPI_SUM,
+                    MPI_COMM_WORLD);
+                memcpy(grav->Clm, lmbuf, reduced_lm_count * sizeof(double));
+                memcpy(grav->Dlm, lmbuf + reduced_lm_count,
+                    reduced_lm_count * sizeof(double));
             }
         }
-    }
 #endif
+    }
 
     /* Fill radial bins that no cell mapped into by spreading the neighboring
        outer bin's reductions across the gap (volume-weighted), before the

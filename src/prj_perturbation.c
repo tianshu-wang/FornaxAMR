@@ -96,7 +96,8 @@ void prj_set_perturbation(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
                     }
                     W[PRJ_PRIM_RHO] *= factor;
                     block->W[VIDX(PRJ_PRIM_RHO, i, j, k)] = W[PRJ_PRIM_RHO];
-                    block->W1[VIDX(PRJ_PRIM_RHO, i, j, k)] = W[PRJ_PRIM_RHO];
+                    prj_block_stage_W(block, 2)[VIDX(PRJ_PRIM_RHO, i, j, k)] =
+                        W[PRJ_PRIM_RHO];
 
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                         U[v] = block->U[VIDX(v, i, j, k)];

@@ -531,7 +531,7 @@ static void prj_boundary_check_bf_storage(const prj_block *block, const char *la
             fprintf(stderr, "%s: missing face fidelity storage\n", label);
             exit(EXIT_FAILURE);
         }
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->Bf[d] == 0 || prj_block_stage_Bf_const(block, 2, d) == 0) {
             fprintf(stderr, "%s: missing face-centered magnetic field storage\n", label);
             exit(EXIT_FAILURE);
         }

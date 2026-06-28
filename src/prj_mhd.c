@@ -24,8 +24,9 @@ static inline int prj_mhd_local_block(const prj_mpi *mpi, const prj_block *block
 static inline int prj_mhd_initialized_storage_block(const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        block->W != 0 && block->W1 != 0 &&
-        block->Bf[0] != 0 && block->Bf1[0] != 0 && block->emf[0] != 0;
+        block->W != 0 && prj_block_stage_W_const(block, 2) != 0 &&
+        block->Bf[0] != 0 && prj_block_stage_Bf_const(block, 2, 0) != 0 &&
+        block->emf[0] != 0;
 }
 
 static inline void prj_mhd_check_block_storage(const prj_block *block)
@@ -35,11 +36,12 @@ static inline void prj_mhd_check_block_storage(const prj_block *block)
     if (block == 0) {
         prj_mhd_fail("prj_mhd: block is null");
     }
-    if (block->W == 0 || block->W1 == 0) {
+    if (block->W == 0 || prj_block_stage_W_const(block, 2) == 0) {
         prj_mhd_fail("prj_mhd: missing cell-centered block storage");
     }
     for (d = 0; d < 3; ++d) {
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0 || block->emf[d] == 0) {
+        if (block->Bf[d] == 0 || prj_block_stage_Bf_const(block, 2, d) == 0 ||
+            block->emf[d] == 0) {
             prj_mhd_fail("prj_mhd: missing staggered MHD block storage");
         }
     }
@@ -146,14 +148,16 @@ static inline void prj_mhd_curl_a_to_bf(prj_block *block)
     }
 }
 
-static inline void prj_mhd_copy_bf_to_bf1(prj_block *block)
+static inline void prj_mhd_copy_bf_to_stage2(prj_block *block)
 {
     int d;
     int n;
 
     for (d = 0; d < 3; ++d) {
+        double *Bf_saved = prj_block_stage_Bf(block, 2, d);
+
         for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
-            block->Bf1[d][n] = block->Bf[d][n];
+            Bf_saved[n] = block->Bf[d][n];
         }
     }
 }
@@ -169,7 +173,7 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
         if (block->face_fidelity[d] == 0) {
             prj_mhd_fail("prj_mhd_check_bf_storage: missing face fidelity storage");
         }
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->Bf[d] == 0 || prj_block_stage_Bf_const(block, 2, d) == 0) {
             prj_mhd_fail("prj_mhd_check_bf_storage: missing face-centered magnetic field storage");
         }
     }
@@ -1147,7 +1151,7 @@ void prj_mhd_init(prj_sim *sim, prj_mpi *mpi)
         }
         prj_mhd_check_block_storage(block);
         prj_mhd_curl_a_to_bf(block);
-        prj_mhd_copy_bf_to_bf1(block);
+        prj_mhd_copy_bf_to_stage2(block);
         for (d = 0; d < 3; ++d) {
             prj_fill(block->emf[d], (size_t)PRJ_BLOCK_NEDGES, 0.0);
         }

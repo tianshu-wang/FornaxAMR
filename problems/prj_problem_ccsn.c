@@ -283,11 +283,12 @@ static unsigned long long prj_problem_mesh_signature(const prj_mesh *mesh)
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)
 {
+    double *W_saved = prj_block_stage_W(block, 2);
     int v;
 
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
         block->W[VIDX(v, i, j, k)] = W[v];
-        block->W1[VIDX(v, i, j, k)] = W[v];
+        W_saved[VIDX(v, i, j, k)] = W[v];
     }
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         block->U[VIDX(v, i, j, k)] = U[v];

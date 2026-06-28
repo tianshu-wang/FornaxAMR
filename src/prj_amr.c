@@ -1548,11 +1548,13 @@ static void prj_amr_mhd_check_block(const prj_block *block, const char *caller)
 {
     int d;
 
-    if (block == 0 || block->U == 0 || block->W == 0 || block->W1 == 0) {
+    if (block == 0 || block->U == 0 || block->W == 0 ||
+        prj_block_stage_W_const(block, 2) == 0) {
         prj_amr_mhd_fail(caller);
     }
     for (d = 0; d < 3; ++d) {
-        if (block->face_fidelity[d] == 0 || block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->face_fidelity[d] == 0 || block->Bf[d] == 0 ||
+            prj_block_stage_Bf_const(block, 2, d) == 0) {
             prj_amr_mhd_fail(caller);
         }
     }
@@ -1619,6 +1621,7 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                double *W_saved = prj_block_stage_W(block, 2);
                 double b1 = 0.5 * (bf[X1DIR][FACE_IDX(X1DIR, i, j, k)] + bf[X1DIR][FACE_IDX(X1DIR, i + 1, j, k)]);
                 double b2 = 0.5 * (bf[X2DIR][FACE_IDX(X2DIR, i, j, k)] + bf[X2DIR][FACE_IDX(X2DIR, i, j + 1, k)]);
                 double b3 = 0.5 * (bf[X3DIR][FACE_IDX(X3DIR, i, j, k)] + bf[X3DIR][FACE_IDX(X3DIR, i, j, k + 1)]);
@@ -1632,9 +1635,9 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
                 block->W[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
                 block->W[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
                 block->W[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
-                block->W1[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
-                block->W1[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
-                block->W1[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                W_saved[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                W_saved[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                W_saved[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
             }
         }
     }
@@ -2176,22 +2179,15 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             prj_mesh_update_block_r_com(child, mesh);
             prj_amr_prolongate(mesh, mpi, parent, child, oct);
         } else {
-            int s;
-
             child->W = 0;
-            child->W1 = 0;
-            for (s = 0; s < PRJ_TIMEINT_MAX_STAGES; ++s) {
-                child->W_stage[s] = 0;
-                child->rhs_ex[s] = 0;
-                child->rhs_im[s] = 0;
-            }
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-            child->W2 = 0;
-            child->W3 = 0;
-#endif
             child->eosvar = 0;
             child->U = 0;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_RK
+            child->rhs_ex = 0;
+            child->rhs_im = 0;
+#else
             child->dUdt = 0;
+#endif
             child->flux[0] = 0;
             child->flux[1] = 0;
             child->flux[2] = 0;

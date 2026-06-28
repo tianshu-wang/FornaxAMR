@@ -98,18 +98,15 @@ struct prj_block {
     double xmax[3];
     double dx[3];
     double *W;
-    double *W1;
-    double *W_stage[PRJ_TIMEINT_MAX_STAGES];
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    double *W2;
-    double *W3;
-#endif
     double *eosvar;
     int *cell_derived_done;
     double *U;
-    double *rhs_ex[PRJ_TIMEINT_MAX_STAGES];
-    double *rhs_im[PRJ_TIMEINT_MAX_STAGES];
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_RK
+    double *rhs_ex;
+    double *rhs_im;
+#else
     double *dUdt;
+#endif
     double *flux[3];
     double *v_riemann[3];
     double *kappa_cell;
@@ -123,13 +120,8 @@ struct prj_block {
     int *face_fidelity[3];
     int *edge_fidelity[3];
     double *Bf[3];
-    double *Bf1[3];
-    double *Bf_stage[PRJ_TIMEINT_MAX_STAGES][3];
-    double *Bf0[3];
-    double *dBfdt_ex[PRJ_TIMEINT_MAX_STAGES][3];
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    double *Bf2[3];
-    double *Bf3[3];
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_RK
+    double *rhs_Bf_ex[3];
 #endif
     double *Bv1[3];
     double *Bv2[3];
@@ -422,9 +414,9 @@ struct prj_mpi {
 #endif
 };
 
-static inline int prj_block_stage_scratch_index(int stage)
+static inline int prj_block_stage_slot(int stage)
 {
-    return stage - 2;
+    return stage <= 1 ? 0 : stage - 1;
 }
 
 static inline int prj_block_legacy_bf_stage(int use_bf1)
@@ -434,72 +426,125 @@ static inline int prj_block_legacy_bf_stage(int use_bf1)
 
 static inline double *prj_block_stage_W(prj_block *block, int stage)
 {
-    int idx;
+    int slot;
 
-    if (block == 0) {
+    if (block == 0 || block->W == 0) {
         return 0;
     }
-    if (stage <= 1) {
-        return block->W;
-    }
-    idx = prj_block_stage_scratch_index(stage);
-    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+    slot = prj_block_stage_slot(stage);
+    if (slot < 0 || slot > PRJ_TIMEINT_MAX_STAGES) {
         return 0;
     }
-    return block->W_stage[idx];
+    return block->W + (size_t)slot * (size_t)PRJ_NVAR_PRIM *
+        (size_t)PRJ_BLOCK_NCELLS;
 }
 
 static inline const double *prj_block_stage_W_const(const prj_block *block, int stage)
 {
-    int idx;
+    int slot;
 
-    if (block == 0) {
+    if (block == 0 || block->W == 0) {
         return 0;
     }
-    if (stage <= 1) {
-        return block->W;
-    }
-    idx = prj_block_stage_scratch_index(stage);
-    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+    slot = prj_block_stage_slot(stage);
+    if (slot < 0 || slot > PRJ_TIMEINT_MAX_STAGES) {
         return 0;
     }
-    return block->W_stage[idx];
+    return block->W + (size_t)slot * (size_t)PRJ_NVAR_PRIM *
+        (size_t)PRJ_BLOCK_NCELLS;
 }
+
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_RK
+static inline double *prj_block_rhs_ex(prj_block *block, int rhs_idx)
+{
+    if (block == 0 || block->rhs_ex == 0 ||
+        rhs_idx < 0 || rhs_idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->rhs_ex + (size_t)rhs_idx * (size_t)PRJ_NVAR_CONS *
+        (size_t)PRJ_BLOCK_NCELLS;
+}
+
+static inline const double *prj_block_rhs_ex_const(const prj_block *block, int rhs_idx)
+{
+    if (block == 0 || block->rhs_ex == 0 ||
+        rhs_idx < 0 || rhs_idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->rhs_ex + (size_t)rhs_idx * (size_t)PRJ_NVAR_CONS *
+        (size_t)PRJ_BLOCK_NCELLS;
+}
+
+static inline double *prj_block_rhs_im(prj_block *block, int rhs_idx)
+{
+    if (block == 0 || block->rhs_im == 0 ||
+        rhs_idx < 0 || rhs_idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->rhs_im + (size_t)rhs_idx * (size_t)PRJ_NVAR_CONS *
+        (size_t)PRJ_BLOCK_NCELLS;
+}
+
+static inline const double *prj_block_rhs_im_const(const prj_block *block, int rhs_idx)
+{
+    if (block == 0 || block->rhs_im == 0 ||
+        rhs_idx < 0 || rhs_idx >= PRJ_TIMEINT_MAX_STAGES) {
+        return 0;
+    }
+    return block->rhs_im + (size_t)rhs_idx * (size_t)PRJ_NVAR_CONS *
+        (size_t)PRJ_BLOCK_NCELLS;
+}
+#endif
 
 #if PRJ_MHD
 static inline double *prj_block_stage_Bf(prj_block *block, int stage, int dir)
 {
-    int idx;
+    int slot;
 
-    if (block == 0 || dir < 0 || dir >= 3) {
+    if (block == 0 || dir < 0 || dir >= 3 || block->Bf[dir] == 0) {
         return 0;
     }
-    if (stage <= 1) {
-        return block->Bf[dir];
-    }
-    idx = prj_block_stage_scratch_index(stage);
-    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+    slot = prj_block_stage_slot(stage);
+    if (slot < 0 || slot > PRJ_TIMEINT_MAX_STAGES) {
         return 0;
     }
-    return block->Bf_stage[idx][dir];
+    return block->Bf[dir] + (size_t)slot * (size_t)PRJ_BLOCK_NFACES;
 }
 
 static inline const double *prj_block_stage_Bf_const(const prj_block *block, int stage, int dir)
 {
-    int idx;
+    int slot;
 
-    if (block == 0 || dir < 0 || dir >= 3) {
+    if (block == 0 || dir < 0 || dir >= 3 || block->Bf[dir] == 0) {
         return 0;
     }
-    if (stage <= 1) {
-        return block->Bf[dir];
-    }
-    idx = prj_block_stage_scratch_index(stage);
-    if (idx < 0 || idx >= PRJ_TIMEINT_MAX_STAGES) {
+    slot = prj_block_stage_slot(stage);
+    if (slot < 0 || slot > PRJ_TIMEINT_MAX_STAGES) {
         return 0;
     }
-    return block->Bf_stage[idx][dir];
+    return block->Bf[dir] + (size_t)slot * (size_t)PRJ_BLOCK_NFACES;
 }
+
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_RK
+static inline double *prj_block_rhs_Bf_ex(prj_block *block, int rhs_idx, int dir)
+{
+    if (block == 0 || rhs_idx < 0 || rhs_idx >= PRJ_TIMEINT_MAX_STAGES ||
+        dir < 0 || dir >= 3 || block->rhs_Bf_ex[dir] == 0) {
+        return 0;
+    }
+    return block->rhs_Bf_ex[dir] + (size_t)rhs_idx * (size_t)PRJ_BLOCK_NFACES;
+}
+
+static inline const double *prj_block_rhs_Bf_ex_const(const prj_block *block,
+    int rhs_idx, int dir)
+{
+    if (block == 0 || rhs_idx < 0 || rhs_idx >= PRJ_TIMEINT_MAX_STAGES ||
+        dir < 0 || dir >= 3 || block->rhs_Bf_ex[dir] == 0) {
+        return 0;
+    }
+    return block->rhs_Bf_ex[dir] + (size_t)rhs_idx * (size_t)PRJ_BLOCK_NFACES;
+}
+#endif
 #endif
 
 #endif

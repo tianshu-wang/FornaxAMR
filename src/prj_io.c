@@ -1398,7 +1398,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                 prj_block *block = &mesh->blocks[run_start + ridx];
 
                 if (block->Bf[0] == 0 || block->Bf[1] == 0 || block->Bf[2] == 0 ||
-                    block->Bf1[0] == 0 || block->Bf1[1] == 0 || block->Bf1[2] == 0) {
+                    prj_block_stage_Bf_const(block, 2, 0) == 0 ||
+                    prj_block_stage_Bf_const(block, 2, 1) == 0 ||
+                    prj_block_stage_Bf_const(block, 2, 2) == 0) {
                     prj_io_fail("prj_io_read_restart: missing MHD block storage");
                 }
             }
@@ -1407,12 +1409,14 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                 prj_block *block = &mesh->blocks[run_start + ridx];
 
                 for (d = 0; d < 3; ++d) {
+                    double *Bf_saved = prj_block_stage_Bf(block, 2, d);
+
                     for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
                         size_t offset = ((size_t)ridx * 3U + (size_t)d) * (size_t)PRJ_BLOCK_NFACES + (size_t)n;
                         double value = bf_buffer[offset];
 
                         block->Bf[d][n] = value;
-                        block->Bf1[d][n] = value;
+                        Bf_saved[n] = value;
                     }
                 }
                 prj_mhd_bf2bc_all((prj_eos *)eos, block, 1);
@@ -1435,7 +1439,18 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                         prj_eos_prim2cons((prj_eos *)eos, Wcell, Ucell);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             block->U[VIDX(v, i, j, k)] = Ucell[v];
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX_RK
+                            {
+                                int s;
+
+                                for (s = 0; s < PRJ_TIMEINT_MAX_STAGES; ++s) {
+                                    prj_block_rhs_ex(block, s)[VIDX(v, i, j, k)] = 0.0;
+                                    prj_block_rhs_im(block, s)[VIDX(v, i, j, k)] = 0.0;
+                                }
+                            }
+#else
                             block->dUdt[VIDX(v, i, j, k)] = 0.0;
+#endif
                             block->flux[0][VIDX(v, i, j, k)] = 0.0;
                             block->flux[1][VIDX(v, i, j, k)] = 0.0;
                             block->flux[2][VIDX(v, i, j, k)] = 0.0;
