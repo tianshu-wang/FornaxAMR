@@ -46,6 +46,7 @@
 #define PRJ_TIMEINT_RK2 1
 #define PRJ_TIMEINT_ESSPRK 2
 #define PRJ_TIMEINT_ESSPRK9_3 3
+#define PRJ_TIMEINT_IMEX 4
 #ifndef RK2
 #define RK2 PRJ_TIMEINT_RK2
 #endif
@@ -55,15 +56,24 @@
 #ifndef eSSPRK9_3
 #define eSSPRK9_3 PRJ_TIMEINT_ESSPRK9_3
 #endif
+#ifndef IMEX
+#define IMEX PRJ_TIMEINT_IMEX
+#endif
+#ifndef PRJ_TIMEINT_TABLEAU_NAME
+#define PRJ_TIMEINT_TABLEAU_NAME prj_2s2pe2pi2plinKInf
+#endif
+#ifndef PRJ_TIMEINT_TABLEAU_NSTAGES
+#define PRJ_TIMEINT_TABLEAU_NSTAGES 2
+#endif
 /* === Time integration scheme (single source of truth) ===================
  * Change the scheme by editing the line below to one of:
- *   RK2, eSSPRK9_2, eSSPRK9_3
+ *   IMEX, RK2, eSSPRK9_2, eSSPRK9_3
  * No Makefile edit is needed.  For an explicit SSPRK with a different stage
  * count, keep TIME_INTEGRATION eSSPRK9_2 and set PRJ_TIMEINT_ESSPRK_N below.
  * (The build may still override either macro from the command line, e.g.
  *  `make TIME_INTEGRATION=RK2`, in which case that wins over these.) */
 #ifndef TIME_INTEGRATION
-#define TIME_INTEGRATION eSSPRK9_2
+#define TIME_INTEGRATION IMEX
 #endif
 #ifndef PRJ_TIMEINT_ESSPRK_N
 #define PRJ_TIMEINT_ESSPRK_N 9
@@ -74,6 +84,10 @@
 #endif
 #elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
 /* Exact named third-order scheme. */
+#elif TIME_INTEGRATION == PRJ_TIMEINT_IMEX
+#if PRJ_TIMEINT_TABLEAU_NSTAGES < 1
+#error "TIME_INTEGRATION=IMEX requires PRJ_TIMEINT_TABLEAU_NSTAGES >= 1"
+#endif
 #elif TIME_INTEGRATION != RK2
 #error "Unsupported TIME_INTEGRATION value"
 #endif
@@ -82,7 +96,9 @@
 #else
 #define PRJ_TIMEINT_EXTRA_SAVED_STATES 0
 #endif
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
+#define PRJ_BLOCK_NSTAGES PRJ_TIMEINT_TABLEAU_NSTAGES
+#elif PRJ_TIMEINT_EXTRA_SAVED_STATES
 #define PRJ_BLOCK_NSTAGES 4
 #else
 #define PRJ_BLOCK_NSTAGES 2

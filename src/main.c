@@ -441,7 +441,8 @@ int main(int argc, char *argv[])
             double dt_new;
 
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "calc_dt");
-            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, &mpi, sim.cfl);
+            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, &mpi, sim.cfl,
+                &PRJ_TIMEINT_TABLEAU_NAME);
             PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "calc_dt");
 
             if (sim.dt > 0.0) {
@@ -467,7 +468,7 @@ int main(int argc, char *argv[])
             dt_step = sim.t_end - sim.time;
         }
         prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, &sim.grav, &mpi,
-            dt_step, &dt_src,
+            &PRJ_TIMEINT_TABLEAU_NAME, dt_step, &dt_src,
 #if PRJ_TIMER
             &timer
 #else

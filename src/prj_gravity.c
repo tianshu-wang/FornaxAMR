@@ -1063,7 +1063,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         if (!prj_gravity_block_is_local_active(mpi, block)) {
             continue;
         }
-        W = prj_block_prim_stage_const(block, stage == 2 ? 1 : 0);
+        W = prj_block_prim_stage_const(block, prj_stage_slot_from_stage_arg(stage));
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {

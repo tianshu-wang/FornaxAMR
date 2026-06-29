@@ -216,6 +216,8 @@ static void prj_block_init_empty(prj_block *b)
     b->cell_derived_done = 0;
     b->U = 0;
     b->dUdt = 0;
+    b->deriv_ex = 0;
+    b->deriv_im = 0;
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
@@ -235,6 +237,7 @@ static void prj_block_init_empty(prj_block *b)
         b->face_fidelity[n] = 0;
         b->edge_fidelity[n] = 0;
         b->Bf[n] = 0;
+        b->deriv_Bf[n] = 0;
         b->Bv1[n] = 0;
         b->Bv2[n] = 0;
         b->emf[n] = 0;
@@ -272,6 +275,7 @@ int prj_block_alloc_data(prj_block *b)
     size_t prim_count;
     size_t eosvar_count;
     size_t cons_count;
+    size_t deriv_count;
     size_t total_count;
     double *base;
     int *cell_derived_done;
@@ -292,12 +296,15 @@ int prj_block_alloc_data(prj_block *b)
         (size_t)PRJ_BLOCK_NCELLS;
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    deriv_count = (size_t)PRJ_BLOCK_NSTAGES * cons_count;
     total_count = prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
+    total_count += 2U * deriv_count;
     total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
     total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
     total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES +
         6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
+    total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES;
 #endif
 #if PRJ_NRAD > 0
     total_count += 2U * (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
@@ -344,6 +351,10 @@ int prj_block_alloc_data(prj_block *b)
     base += cons_count;
     b->dUdt = base;
     base += cons_count;
+    b->deriv_ex = base;
+    base += deriv_count;
+    b->deriv_im = base;
+    base += deriv_count;
     b->flux[0] = base;
     base += cons_count;
     b->flux[1] = base;
@@ -371,6 +382,10 @@ int prj_block_alloc_data(prj_block *b)
         b->face_fidelity[d] = face_fidelity[d];
         b->edge_fidelity[d] = edge_fidelity[d];
         b->Bf[d] = base;
+        base += (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES;
+    }
+    for (int d = 0; d < 3; ++d) {
+        b->deriv_Bf[d] = base;
         base += (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES;
     }
     for (int d = 0; d < 3; ++d) {
@@ -424,6 +439,8 @@ void prj_block_free_data(prj_block *b)
     b->cell_derived_done = 0;
     b->U = 0;
     b->dUdt = 0;
+    b->deriv_ex = 0;
+    b->deriv_im = 0;
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
@@ -443,6 +460,7 @@ void prj_block_free_data(prj_block *b)
         b->face_fidelity[d] = 0;
         b->edge_fidelity[d] = 0;
         b->Bf[d] = 0;
+        b->deriv_Bf[d] = 0;
         b->Bv1[d] = 0;
         b->Bv2[d] = 0;
         b->emf[d] = 0;

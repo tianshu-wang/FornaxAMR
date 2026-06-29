@@ -27,6 +27,29 @@ typedef struct prj_mpi prj_mpi;
 typedef void (*prj_problem_init_fn)(prj_sim *sim, prj_mpi *mpi);
 typedef int (*prj_amr_init_refine_fn)(const prj_block *block, void *userdata);
 
+static inline int prj_stage_slot_from_stage_arg(int stage)
+{
+    int slot = stage > 0 ? stage - 1 : 0;
+
+    if (slot >= PRJ_BLOCK_NSTAGES) {
+        slot = PRJ_BLOCK_NSTAGES - 1;
+    }
+    return slot < 0 ? 0 : slot;
+}
+
+static inline int prj_stage_slot_from_bf_arg(int stage)
+{
+    int slot = stage;
+
+    if (slot < 0) {
+        slot = 0;
+    }
+    if (slot >= PRJ_BLOCK_NSTAGES) {
+        slot = PRJ_BLOCK_NSTAGES - 1;
+    }
+    return slot;
+}
+
 struct prj_coord {
     double x1min;
     double x1max;
@@ -93,6 +116,8 @@ struct prj_block {
     int *cell_derived_done;
     double *U;
     double *dUdt;
+    double *deriv_ex;
+    double *deriv_im;
     double *flux[3];
     double *v_riemann[3];
     double *kappa_cell;
@@ -106,6 +131,7 @@ struct prj_block {
     int *face_fidelity[3];
     int *edge_fidelity[3];
     double *Bf[3];
+    double *deriv_Bf[3];
     double *Bv1[3];
     double *Bv2[3];
     double *emf[3];
@@ -131,6 +157,18 @@ static inline const double *prj_block_prim_stage_const(const prj_block *block, i
         PRJ_BLOCK_STAGE_W(block->W, stage) : 0;
 }
 
+static inline double *prj_block_deriv_stage(double *deriv, int stage)
+{
+    return deriv != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES ?
+        &deriv[(size_t)stage * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS] : 0;
+}
+
+static inline const double *prj_block_deriv_stage_const(const double *deriv, int stage)
+{
+    return deriv != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES ?
+        &deriv[(size_t)stage * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS] : 0;
+}
+
 #if PRJ_MHD
 static inline double *prj_block_bf_stage(prj_block *block, int dir, int stage)
 {
@@ -144,6 +182,20 @@ static inline const double *prj_block_bf_stage_const(const prj_block *block, int
     return block != 0 && dir >= 0 && dir < 3 &&
         stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->Bf[dir] != 0 ?
         PRJ_BLOCK_STAGE_BF(block->Bf[dir], stage) : 0;
+}
+
+static inline double *prj_block_deriv_bf_stage(prj_block *block, int dir, int stage)
+{
+    return block != 0 && dir >= 0 && dir < 3 &&
+        stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->deriv_Bf[dir] != 0 ?
+        &block->deriv_Bf[dir][(size_t)stage * (size_t)PRJ_BLOCK_NFACES] : 0;
+}
+
+static inline const double *prj_block_deriv_bf_stage_const(const prj_block *block, int dir, int stage)
+{
+    return block != 0 && dir >= 0 && dir < 3 &&
+        stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->deriv_Bf[dir] != 0 ?
+        &block->deriv_Bf[dir][(size_t)stage * (size_t)PRJ_BLOCK_NFACES] : 0;
 }
 #endif
 

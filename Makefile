@@ -71,6 +71,8 @@ endif
 TARGET ?= prj
 SRC_DIR := src
 TEST_DIR := tests
+RK_TABLEAU_DIR := rk_tableau
+RK_TABLEAU_SRCS := $(wildcard $(RK_TABLEAU_DIR)/*.c)
 
 SRCS := \
 	$(SRC_DIR)/main.c \
@@ -93,6 +95,7 @@ SRCS := \
 	$(SRC_DIR)/prj_timeint.c \
 	$(SRC_DIR)/prj_timer.c \
 	$(SRC_DIR)/prj_utils.c \
+	$(RK_TABLEAU_SRCS) \
 	problems/prj_problem_general.c \
 	problems/prj_problem_cc.c \
 	problems/prj_problem_ccsn.c \
@@ -114,6 +117,9 @@ $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDLIBS) -o $@
 
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+$(RK_TABLEAU_DIR)/%.o: $(RK_TABLEAU_DIR)/%.c $(SRC_DIR)/prj_timeint.h $(SRC_DIR)/prj_defs.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_DIR)/%: $(TEST_DIR)/%.c $(CORE_OBJS)

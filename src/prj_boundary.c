@@ -21,12 +21,12 @@ static int prj_floor_to_int(double x)
 
 static double *prj_boundary_stage_array(prj_block *block, int stage)
 {
-    return prj_block_prim_stage(block, stage == 2 ? 1 : 0);
+    return prj_block_prim_stage(block, prj_stage_slot_from_stage_arg(stage));
 }
 
 static const double *prj_boundary_stage_array_const(const prj_block *block, int stage)
 {
-    return prj_block_prim_stage_const(block, stage == 2 ? 1 : 0);
+    return prj_block_prim_stage_const(block, prj_stage_slot_from_stage_arg(stage));
 }
 
 static int prj_boundary_active_block(const prj_mpi *mpi, const prj_block *block)
@@ -510,12 +510,12 @@ void prj_boundary_physical(const prj_mesh *mesh, const prj_bc *bc, prj_block *bl
 #if PRJ_MHD
 static double *prj_boundary_bf_array(prj_block *block, int dir, int use_bf1)
 {
-    return prj_block_bf_stage(block, dir, use_bf1 != 0 ? 1 : 0);
+    return prj_block_bf_stage(block, dir, prj_stage_slot_from_bf_arg(use_bf1));
 }
 
 static const double *prj_boundary_bf_array_const(const prj_block *block, int dir, int use_bf1)
 {
-    return prj_block_bf_stage_const(block, dir, use_bf1 != 0 ? 1 : 0);
+    return prj_block_bf_stage_const(block, dir, prj_stage_slot_from_bf_arg(use_bf1));
 }
 
 static void prj_boundary_check_bf_storage(const prj_block *block, const char *label)

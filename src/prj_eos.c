@@ -834,7 +834,7 @@ void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
+        double *W = prj_block_prim_stage(block, prj_stage_slot_from_stage_arg(stage));
         int i;
         int j;
         int k;
@@ -866,7 +866,7 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int sta
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
+        double *W = prj_block_prim_stage(block, prj_stage_slot_from_stage_arg(stage));
 
         if (block->id < 0 || block->active != 1 || W == 0 || block->eosvar == 0) {
             continue;
@@ -894,7 +894,7 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
+        double *W = prj_block_prim_stage(block, prj_stage_slot_from_stage_arg(stage));
         int i;
         int j;
         int k;

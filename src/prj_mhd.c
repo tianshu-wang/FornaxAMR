@@ -178,7 +178,7 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
 
 static inline double *prj_mhd_bf_array(prj_block *block, int dir, int use_bf1)
 {
-    return prj_block_bf_stage(block, dir, use_bf1 != 0 ? 1 : 0);
+    return prj_block_bf_stage(block, dir, prj_stage_slot_from_bf_arg(use_bf1));
 }
 
 static inline int prj_mhd_face_storage_index_ok(int dir, int i, int j, int k)
@@ -545,9 +545,9 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
     (void)eos;
     prj_mhd_check_block_storage(block);
 
-    W = prj_block_prim_stage(block, use_bf1 != 0 ? 1 : 0);
+    W = prj_block_prim_stage(block, prj_stage_slot_from_bf_arg(use_bf1));
     for (d = 0; d < 3; ++d) {
-        src[d] = prj_block_bf_stage(block, d, use_bf1 != 0 ? 1 : 0);
+        src[d] = prj_block_bf_stage(block, d, prj_stage_slot_from_bf_arg(use_bf1));
     }
 
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -978,7 +978,7 @@ void prj_mhd_debug_check_divb(const prj_mesh *mesh, const prj_mpi *mpi, int use_
         }
         prj_mhd_check_bf_storage(block);
         for (d = 0; d < 3; ++d) {
-            bf[d] = prj_block_bf_stage_const(block, d, use_bf1 != 0 ? 1 : 0);
+            bf[d] = prj_block_bf_stage_const(block, d, prj_stage_slot_from_bf_arg(use_bf1));
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {

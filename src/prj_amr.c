@@ -2177,6 +2177,8 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             child->eosvar = 0;
             child->U = 0;
             child->dUdt = 0;
+            child->deriv_ex = 0;
+            child->deriv_im = 0;
             child->flux[0] = 0;
             child->flux[1] = 0;
             child->flux[2] = 0;
@@ -2191,6 +2193,11 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             child->grav[2] = 0;
             child->r_com = 0;
             child->Ylm = 0;
+#if PRJ_MHD
+            child->deriv_Bf[0] = 0;
+            child->deriv_Bf[1] = 0;
+            child->deriv_Bf[2] = 0;
+#endif
             child->ridx = 0;
             child->fr = 0;
             prj_block_setup_geometry(child, &mesh->coord);

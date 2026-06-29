@@ -718,7 +718,7 @@ void prj_flux_fill_transport_opacity_active(prj_mesh *mesh, prj_rad *rad,
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
+        double *W = prj_block_prim_stage(block, prj_stage_slot_from_stage_arg(stage));
         int ii;
         int jj;
         int kk;
@@ -760,7 +760,7 @@ void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
+        double *W = prj_block_prim_stage(block, prj_stage_slot_from_stage_arg(stage));
         int ii;
         int jj;
         int kk;
@@ -934,7 +934,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     PRJ_SUBTIMER_START("sub_flux_riemann");
 #if PRJ_MHD
                     {
-                        double *bf_dir = prj_block_bf_stage(block, dir, use_bf1 != 0 ? 1 : 0);
+                        double *bf_dir = prj_block_bf_stage(block, dir,
+                            prj_stage_slot_from_bf_arg(use_bf1));
                         double bv1 = 0.0;
                         double bv2 = 0.0;
                         double bn;
