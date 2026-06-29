@@ -1024,6 +1024,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
                 F_old[d] = u[fi[d]];
                 double dF = F_old[d] * factor;
                 u[fi[d]] = F_old[d] + dF;
+                dmom[d] += dF * inv_c2;
             }
             
             double E = u[PRJ_CONS_RAD_E(nu, g)];
@@ -1038,10 +1039,6 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
                 u[fi[0]] = F1 * scale;
                 u[fi[1]] = F2 * scale;
                 u[fi[2]] = F3 * scale;
-            }
-
-            for (d = 0; d < 3; ++d) {
-                dmom[d] += (u[fi[d]]-F_old[d]) * inv_c2;
             }
         }
     }
