@@ -1124,7 +1124,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            buffer[offset] = block->W[VIDX(v, i, j, k)] * wscale;
+                            buffer[offset] = block->W[WIDX(v, i, j, k)] * wscale;
                         }
                     }
                 }
@@ -1376,7 +1376,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            block->W[VIDX(v, i, j, k)] = buffer[offset] * wscale;
+                            block->W[WIDX(v, i, j, k)] = buffer[offset] * wscale;
                         }
                     }
                 }
@@ -1397,8 +1397,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
             for (ridx = 0; ridx < run_len; ++ridx) {
                 prj_block *block = &mesh->blocks[run_start + ridx];
 
-                if (block->Bf[0] == 0 || block->Bf[1] == 0 || block->Bf[2] == 0 ||
-                    block->Bf1[0] == 0 || block->Bf1[1] == 0 || block->Bf1[2] == 0) {
+                if (block->Bf[0] == 0 || block->Bf[1] == 0 || block->Bf[2] == 0) {
                     prj_io_fail("prj_io_read_restart: missing MHD block storage");
                 }
             }
@@ -1410,9 +1409,10 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                     for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
                         size_t offset = ((size_t)ridx * 3U + (size_t)d) * (size_t)PRJ_BLOCK_NFACES + (size_t)n;
                         double value = bf_buffer[offset];
+                        double *bf1 = prj_block_bf_stage(block, d, 1);
 
                         block->Bf[d][n] = value;
-                        block->Bf1[d][n] = value;
+                        bf1[n] = value;
                     }
                 }
                 prj_mhd_bf2bc_all((prj_eos *)eos, block, 0);
@@ -1430,7 +1430,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                         double Ucell[PRJ_NVAR_CONS];
 
                         for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                            Wcell[v] = block->W[VIDX(v, i, j, k)];
+                            Wcell[v] = block->W[WIDX(v, i, j, k)];
                         }
                         prj_eos_prim2cons((prj_eos *)eos, Wcell, Ucell);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -1623,7 +1623,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            buffer[offset] = (prj_io_dump_real)(block->W[VIDX(v, i, j, k)] * wscale);
+                            buffer[offset] = (prj_io_dump_real)(block->W[WIDX(v, i, j, k)] * wscale);
                         }
                     }
                 }

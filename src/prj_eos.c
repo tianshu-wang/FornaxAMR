@@ -230,12 +230,12 @@ static void prj_eos_fail_zero_rho_in_block(const char *caller, const prj_block *
         block->dx[0], block->dx[1], block->dx[2]);
     fprintf(stderr,
         "  primitive state: rho=%.17e v=(%.17e, %.17e, %.17e) eint=%.17e ye=%.17e\n",
-        W[VIDX(PRJ_PRIM_RHO, i, j, k)],
-        W[VIDX(PRJ_PRIM_V1, i, j, k)],
-        W[VIDX(PRJ_PRIM_V2, i, j, k)],
-        W[VIDX(PRJ_PRIM_V3, i, j, k)],
-        W[VIDX(PRJ_PRIM_EINT, i, j, k)],
-        W[VIDX(PRJ_PRIM_YE, i, j, k)]);
+        W[WIDX(PRJ_PRIM_RHO, i, j, k)],
+        W[WIDX(PRJ_PRIM_V1, i, j, k)],
+        W[WIDX(PRJ_PRIM_V2, i, j, k)],
+        W[WIDX(PRJ_PRIM_V3, i, j, k)],
+        W[WIDX(PRJ_PRIM_EINT, i, j, k)],
+        W[WIDX(PRJ_PRIM_YE, i, j, k)]);
     prj_eos_print_fill_neighbors(block, x1, x2, x3);
     exit(1);
 }
@@ -248,14 +248,14 @@ static void prj_eos_fill_cell(prj_eos *eos, prj_block *block, double *W, int i, 
     if (block == 0 || W == 0 || block->eosvar == 0) {
         return;
     }
-    if (W[VIDX(PRJ_PRIM_RHO, i, j, k)] == 0.0) {
+    if (W[WIDX(PRJ_PRIM_RHO, i, j, k)] == 0.0) {
         prj_eos_fail_zero_rho_in_block("prj_eos_fill_block", block, i, j, k, W);
     }
 
     prj_eos_rey(eos,
-        W[VIDX(PRJ_PRIM_RHO, i, j, k)],
-        W[VIDX(PRJ_PRIM_EINT, i, j, k)],
-        W[VIDX(PRJ_PRIM_YE, i, j, k)],
+        W[WIDX(PRJ_PRIM_RHO, i, j, k)],
+        W[WIDX(PRJ_PRIM_EINT, i, j, k)],
+        W[WIDX(PRJ_PRIM_YE, i, j, k)],
         eos_quantities,
         ctx);
     block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] = eos_quantities[PRJ_EOS_PRESSURE];
@@ -834,7 +834,7 @@ void prj_eos_fill_active_cells(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = stage == 2 ? block->W1 : block->W;
+        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
         int i;
         int j;
         int k;
@@ -866,7 +866,7 @@ void prj_eos_fill_mesh(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, int sta
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = stage == 2 ? block->W1 : block->W;
+        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
 
         if (block->id < 0 || block->active != 1 || W == 0 || block->eosvar == 0) {
             continue;
@@ -894,7 +894,7 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = stage == 2 ? block->W1 : block->W;
+        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
         int i;
         int j;
         int k;
@@ -924,12 +924,12 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
                         continue;
                     }
                     for (v = 0; v < PRJ_NHYDRO; ++v) {
-                        Wc[v] = W[VIDX(v, i, j, k)];
+                        Wc[v] = W[WIDX(v, i, j, k)];
                     }
 #if PRJ_NRAD > 0
                     if (in_rad_zone) {
                         for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                            Wc[v] = W[VIDX(v, i, j, k)];
+                            Wc[v] = W[WIDX(v, i, j, k)];
                         }
                     } else {
                         for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {

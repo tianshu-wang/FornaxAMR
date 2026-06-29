@@ -1105,7 +1105,8 @@ static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int sid
  * Reconstruction: linear-in-log-ν with Koren limiter (groups are uniform in
  * log ν → equal spacing).  Outermost group faces (g = -1/2 and g = NEGROUP-1/2)
  * are set to zero (outflow).  The cell-centred state used for the closure comes
- * from W_state (W in stage1, W1 in stage2), per the user-specified ordering. */
+ * from W_state (primitive stage 0 in stage1, primitive stage 1 in stage2), per
+ * the user-specified ordering. */
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt)
 {
@@ -1184,10 +1185,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
          * once here and shared: P by the GR redshift terms below, and both P, Q
          * by the SR frequency flux (reconstructed to the frequency faces). */
         for (g = 0; g < PRJ_NEGROUP; ++g) {
-            Eg[g] = W_state[VIDX(PRJ_PRIM_RAD_E(field, g), ic, jc, kc)];
-            Fg[g][0] = W_state[VIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
-            Fg[g][1] = W_state[VIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
-            Fg[g][2] = W_state[VIDX(PRJ_PRIM_RAD_F3(field, g), ic, jc, kc)];
+            Eg[g] = W_state[WIDX(PRJ_PRIM_RAD_E(field, g), ic, jc, kc)];
+            Fg[g][0] = W_state[WIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
+            Fg[g][1] = W_state[WIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
+            Fg[g][2] = W_state[WIDX(PRJ_PRIM_RAD_F3(field, g), ic, jc, kc)];
             prj_rad_m1_pressure(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
             prj_rad_m1_third_moment_contract(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2],
                 dvdx, Mq[g]);

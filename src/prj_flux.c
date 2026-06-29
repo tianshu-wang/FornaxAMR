@@ -95,7 +95,7 @@ static inline double prj_flux_hydro_prim_face_value_x1(const double *W, int v,
 
     for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
-        q[n] = W[VIDX(v, i + offset, j, k)];
+        q[n] = W[WIDX(v, i + offset, j, k)];
     }
 
     return prj_reconstruct_hydro_face_value(q, target);
@@ -110,7 +110,7 @@ static inline double prj_flux_hydro_prim_face_value_x2(const double *W, int v,
 
     for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
-        q[n] = W[VIDX(v, i, j + offset, k)];
+        q[n] = W[WIDX(v, i, j + offset, k)];
     }
 
     return prj_reconstruct_hydro_face_value(q, target);
@@ -125,7 +125,7 @@ static inline double prj_flux_hydro_prim_face_value_x3(const double *W, int v,
 
     for (n = 0; n < PRJ_RECON_HYDRO_NCELLS; ++n) {
         int offset = n - half;
-        q[n] = W[VIDX(v, i, j, k + offset)];
+        q[n] = W[WIDX(v, i, j, k + offset)];
     }
 
     return prj_reconstruct_hydro_face_value(q, target);
@@ -140,7 +140,7 @@ static inline double prj_flux_radiation_prim_face_value_x1(const double *W, int 
 
     for (n = 0; n < PRJ_RECON_RADIATION_NCELLS; ++n) {
         int offset = n - half;
-        q[n] = prj_flux_radiation_stencil_value(W[VIDX(v, i + offset, j, k)]);
+        q[n] = prj_flux_radiation_stencil_value(W[WIDX(v, i + offset, j, k)]);
     }
 
     return prj_reconstruct_radiation_face_value(q, target);
@@ -155,7 +155,7 @@ static inline double prj_flux_radiation_prim_face_value_x2(const double *W, int 
 
     for (n = 0; n < PRJ_RECON_RADIATION_NCELLS; ++n) {
         int offset = n - half;
-        q[n] = prj_flux_radiation_stencil_value(W[VIDX(v, i, j + offset, k)]);
+        q[n] = prj_flux_radiation_stencil_value(W[WIDX(v, i, j + offset, k)]);
     }
 
     return prj_reconstruct_radiation_face_value(q, target);
@@ -170,7 +170,7 @@ static inline double prj_flux_radiation_prim_face_value_x3(const double *W, int 
 
     for (n = 0; n < PRJ_RECON_RADIATION_NCELLS; ++n) {
         int offset = n - half;
-        q[n] = prj_flux_radiation_stencil_value(W[VIDX(v, i, j, k + offset)]);
+        q[n] = prj_flux_radiation_stencil_value(W[WIDX(v, i, j, k + offset)]);
     }
 
     return prj_reconstruct_radiation_face_value(q, target);
@@ -290,6 +290,11 @@ static void prj_flux_build_var_map(int dir, int *gmap)
 }
 
 #if PRJ_FLUX_RECON_MC_FASTPATH
+enum prj_flux_recon_src_kind {
+    PRJ_FLUX_RECON_SRC_BLOCK = 0,
+    PRJ_FLUX_RECON_SRC_PRIM_STAGE = 1
+};
+
 static inline double prj_flux_recon_stencil_val(double q, int is_rad)
 {
 #if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
@@ -309,7 +314,7 @@ static inline double prj_flux_recon_stencil_val(double q, int is_rad)
 static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
     double *wl, double *wr,
     int dir, int istart, int iend, int jstart, int jend, int kstart, int kend,
-    int is_rad)
+    int is_rad, enum prj_flux_recon_src_kind src_kind)
 {
     /* Component gv is first gathered from the block buffer `src` (nc components
      * per cell, SoA or AoSoA) into a contiguous untiled SoA plane `slab`.  The
@@ -326,7 +331,8 @@ static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
         for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
             for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                slab[LIDX(i, j, k)] = src[BIDX(nc, gv, i, j, k)];
+                slab[LIDX(i, j, k)] = src_kind == PRJ_FLUX_RECON_SRC_PRIM_STAGE ?
+                    src[WIDX(gv, i, j, k)] : src[BIDX(nc, gv, i, j, k)];
             }
         }
     }
@@ -472,20 +478,24 @@ static void prj_flux_reconstruct_block(double *W, const double *eosvar, int dir,
             prj_flux_recon_var_mc(W, PRJ_NVAR_CONS, gv,
                 &WL_block[VPLANE((size_t)lv)],
                 &WR_block[VPLANE((size_t)lv)],
-                dir, istart, iend, jstart, jend, kstart, kend, 0);
+                dir, istart, iend, jstart, jend, kstart, kend, 0,
+                PRJ_FLUX_RECON_SRC_PRIM_STAGE);
         }
         for (lv = PRJ_NHYDRO; lv < PRJ_NVAR_PRIM; ++lv) {
             int gv = gmap[lv];
             prj_flux_recon_var_mc(W, PRJ_NVAR_CONS, gv,
                 &WL_block[VPLANE((size_t)lv)],
                 &WR_block[VPLANE((size_t)lv)],
-                dir, istart, iend, jstart, jend, kstart, kend, 1);
+                dir, istart, iend, jstart, jend, kstart, kend, 1,
+                PRJ_FLUX_RECON_SRC_PRIM_STAGE);
         }
         if (eosvar != 0) {
             prj_flux_recon_var_mc(eosvar, PRJ_NVAR_EOSVAR, PRJ_EOSVAR_PRESSURE,
-                pL_block, pR_block, dir, istart, iend, jstart, jend, kstart, kend, 0);
+                pL_block, pR_block, dir, istart, iend, jstart, jend, kstart, kend, 0,
+                PRJ_FLUX_RECON_SRC_BLOCK);
             prj_flux_recon_var_mc(eosvar, PRJ_NVAR_EOSVAR, PRJ_EOSVAR_GAMMA,
-                gL_block, gR_block, dir, istart, iend, jstart, jend, kstart, kend, 0);
+                gL_block, gR_block, dir, istart, iend, jstart, jend, kstart, kend, 0,
+                PRJ_FLUX_RECON_SRC_BLOCK);
         }
     }
 #else
@@ -607,68 +617,68 @@ static void prj_flux_velocity_deltas(double *W, int dir,
     double *deltau, double *deltav, double *deltaw)
 {
     if (dir == X1DIR) {
-        *deltau = W[VIDX(PRJ_PRIM_V1, ir, jr, kr)] -
-            W[VIDX(PRJ_PRIM_V1, il, jl, kl)];
+        *deltau = W[WIDX(PRJ_PRIM_V1, ir, jr, kr)] -
+            W[WIDX(PRJ_PRIM_V1, il, jl, kl)];
         *deltav = PRJ_MIN(
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V2, il, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V2, il, jl - 1, kl)],
-                    W[VIDX(PRJ_PRIM_V2, il, jl + 1, kl)] -
-                    W[VIDX(PRJ_PRIM_V2, il, jl, kl)]),
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V2, ir, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V2, ir, jr - 1, kr)],
-                    W[VIDX(PRJ_PRIM_V2, ir, jr + 1, kr)] -
-                    W[VIDX(PRJ_PRIM_V2, ir, jr, kr)]));
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V2, il, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V2, il, jl - 1, kl)],
+                    W[WIDX(PRJ_PRIM_V2, il, jl + 1, kl)] -
+                    W[WIDX(PRJ_PRIM_V2, il, jl, kl)]),
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V2, ir, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V2, ir, jr - 1, kr)],
+                    W[WIDX(PRJ_PRIM_V2, ir, jr + 1, kr)] -
+                    W[WIDX(PRJ_PRIM_V2, ir, jr, kr)]));
         *deltaw = PRJ_MIN(
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V3, il, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V3, il, jl, kl - 1)],
-                    W[VIDX(PRJ_PRIM_V3, il, jl, kl + 1)] -
-                    W[VIDX(PRJ_PRIM_V3, il, jl, kl)]),
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V3, ir, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V3, ir, jr, kr - 1)],
-                    W[VIDX(PRJ_PRIM_V3, ir, jr, kr + 1)] -
-                    W[VIDX(PRJ_PRIM_V3, ir, jr, kr)]));
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V3, il, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V3, il, jl, kl - 1)],
+                    W[WIDX(PRJ_PRIM_V3, il, jl, kl + 1)] -
+                    W[WIDX(PRJ_PRIM_V3, il, jl, kl)]),
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V3, ir, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V3, ir, jr, kr - 1)],
+                    W[WIDX(PRJ_PRIM_V3, ir, jr, kr + 1)] -
+                    W[WIDX(PRJ_PRIM_V3, ir, jr, kr)]));
     } else if (dir == X2DIR) {
-        *deltau = W[VIDX(PRJ_PRIM_V2, ir, jr, kr)] -
-            W[VIDX(PRJ_PRIM_V2, il, jl, kl)];
+        *deltau = W[WIDX(PRJ_PRIM_V2, ir, jr, kr)] -
+            W[WIDX(PRJ_PRIM_V2, il, jl, kl)];
         *deltav = PRJ_MIN(
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V3, il, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V3, il, jl, kl - 1)],
-                    W[VIDX(PRJ_PRIM_V3, il, jl, kl + 1)] -
-                    W[VIDX(PRJ_PRIM_V3, il, jl, kl)]),
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V3, ir, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V3, ir, jr, kr - 1)],
-                    W[VIDX(PRJ_PRIM_V3, ir, jr, kr + 1)] -
-                    W[VIDX(PRJ_PRIM_V3, ir, jr, kr)]));
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V3, il, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V3, il, jl, kl - 1)],
+                    W[WIDX(PRJ_PRIM_V3, il, jl, kl + 1)] -
+                    W[WIDX(PRJ_PRIM_V3, il, jl, kl)]),
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V3, ir, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V3, ir, jr, kr - 1)],
+                    W[WIDX(PRJ_PRIM_V3, ir, jr, kr + 1)] -
+                    W[WIDX(PRJ_PRIM_V3, ir, jr, kr)]));
         *deltaw = PRJ_MIN(
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V1, il, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V1, il - 1, jl, kl)],
-                    W[VIDX(PRJ_PRIM_V1, il + 1, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V1, il, jl, kl)]),
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V1, ir, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V1, ir - 1, jr, kr)],
-                    W[VIDX(PRJ_PRIM_V1, ir + 1, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V1, ir, jr, kr)]));
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V1, il, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V1, il - 1, jl, kl)],
+                    W[WIDX(PRJ_PRIM_V1, il + 1, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V1, il, jl, kl)]),
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V1, ir, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V1, ir - 1, jr, kr)],
+                    W[WIDX(PRJ_PRIM_V1, ir + 1, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V1, ir, jr, kr)]));
     } else {
-        *deltau = W[VIDX(PRJ_PRIM_V3, ir, jr, kr)] -
-            W[VIDX(PRJ_PRIM_V3, il, jl, kl)];
+        *deltau = W[WIDX(PRJ_PRIM_V3, ir, jr, kr)] -
+            W[WIDX(PRJ_PRIM_V3, il, jl, kl)];
         *deltav = PRJ_MIN(
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V1, il, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V1, il - 1, jl, kl)],
-                    W[VIDX(PRJ_PRIM_V1, il + 1, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V1, il, jl, kl)]),
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V1, ir, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V1, ir - 1, jr, kr)],
-                    W[VIDX(PRJ_PRIM_V1, ir + 1, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V1, ir, jr, kr)]));
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V1, il, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V1, il - 1, jl, kl)],
+                    W[WIDX(PRJ_PRIM_V1, il + 1, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V1, il, jl, kl)]),
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V1, ir, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V1, ir - 1, jr, kr)],
+                    W[WIDX(PRJ_PRIM_V1, ir + 1, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V1, ir, jr, kr)]));
         *deltaw = PRJ_MIN(
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V2, il, jl, kl)] -
-                    W[VIDX(PRJ_PRIM_V2, il, jl - 1, kl)],
-                    W[VIDX(PRJ_PRIM_V2, il, jl + 1, kl)] -
-                    W[VIDX(PRJ_PRIM_V2, il, jl, kl)]),
-            PRJ_MIN(W[VIDX(PRJ_PRIM_V2, ir, jr, kr)] -
-                    W[VIDX(PRJ_PRIM_V2, ir, jr - 1, kr)],
-                    W[VIDX(PRJ_PRIM_V2, ir, jr + 1, kr)] -
-                    W[VIDX(PRJ_PRIM_V2, ir, jr, kr)]));
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V2, il, jl, kl)] -
+                    W[WIDX(PRJ_PRIM_V2, il, jl - 1, kl)],
+                    W[WIDX(PRJ_PRIM_V2, il, jl + 1, kl)] -
+                    W[WIDX(PRJ_PRIM_V2, il, jl, kl)]),
+            PRJ_MIN(W[WIDX(PRJ_PRIM_V2, ir, jr, kr)] -
+                    W[WIDX(PRJ_PRIM_V2, ir, jr - 1, kr)],
+                    W[WIDX(PRJ_PRIM_V2, ir, jr + 1, kr)] -
+                    W[WIDX(PRJ_PRIM_V2, ir, jr, kr)]));
     }
 }
 
@@ -679,8 +689,8 @@ static void prj_flux_opacity_cell(prj_rad *rad, prj_block *block, const double *
     const double *eosvar, int ii, int jj, int kk)
 {
     const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
-    double rho = W[VIDX(PRJ_PRIM_RHO, ii, jj, kk)];
-    double ye = W[VIDX(PRJ_PRIM_YE, ii, jj, kk)];
+    double rho = W[WIDX(PRJ_PRIM_RHO, ii, jj, kk)];
+    double ye = W[WIDX(PRJ_PRIM_YE, ii, jj, kk)];
     double T = eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, ii, jj, kk)];
     size_t off = (size_t)IDX(ii, jj, kk) * stride;
 
@@ -708,7 +718,7 @@ void prj_flux_fill_transport_opacity_active(prj_mesh *mesh, prj_rad *rad,
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = stage == 2 ? block->W1 : block->W;
+        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
         int ii;
         int jj;
         int kk;
@@ -750,7 +760,7 @@ void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W = stage == 2 ? block->W1 : block->W;
+        double *W = prj_block_prim_stage(block, stage == 2 ? 1 : 0);
         int ii;
         int jj;
         int kk;
@@ -924,7 +934,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                     PRJ_SUBTIMER_START("sub_flux_riemann");
 #if PRJ_MHD
                     {
-                        double *bf_dir = use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+                        double *bf_dir = prj_block_bf_stage(block, dir, use_bf1 != 0 ? 1 : 0);
                         double bv1 = 0.0;
                         double bv2 = 0.0;
                         double bn;

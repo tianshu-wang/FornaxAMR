@@ -213,14 +213,16 @@ static void prj_zero_block_arrays(prj_block *b)
         return;
     }
 
-    total = (size_t)2U * (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS +
+    total = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+        (size_t)PRJ_BLOCK_NCELLS +
         (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
         (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS +
         9U * (size_t)PRJ_BLOCK_NCELLS
         + 5U * (size_t)PRJ_BLOCK_NCELLS
         + (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS
 #if PRJ_MHD
-        + 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
+        + 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES
+        + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
 #endif
         ;
     for (n = 0; n < total; ++n) {
@@ -233,14 +235,16 @@ static size_t prj_block_data_count(void)
     size_t prim_count;
     size_t cons_count;
 
-    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
+    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+        (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return 2U * prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
+    return prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
         5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS
         + 5U * (size_t)PRJ_BLOCK_NCELLS
         + (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS
 #if PRJ_MHD
-        + 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
+        + 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES
+        + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
 #endif
         ;
 }
@@ -646,7 +650,7 @@ static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, in
     i = prj_amr_clamp_storage_index(i);
     j = prj_amr_clamp_storage_index(j);
     k = prj_amr_clamp_storage_index(k);
-    return b->W[VIDX(v, i, j, k)];
+    return b->W[WIDX(v, i, j, k)];
 }
 
 /* Total pressure used by the AMR estimators: gas pressure plus magnetic
@@ -660,9 +664,9 @@ static double prj_amr_total_pressure_at(const prj_block *b, int i, int j, int k)
 {
     double pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
 #if PRJ_MHD
-    double b1 = b->W[VIDX(PRJ_PRIM_B1, i, j, k)];
-    double b2 = b->W[VIDX(PRJ_PRIM_B2, i, j, k)];
-    double b3 = b->W[VIDX(PRJ_PRIM_B3, i, j, k)];
+    double b1 = b->W[WIDX(PRJ_PRIM_B1, i, j, k)];
+    double b2 = b->W[WIDX(PRJ_PRIM_B2, i, j, k)];
+    double b3 = b->W[WIDX(PRJ_PRIM_B3, i, j, k)];
 
     pressure += 0.5 * (b1 * b1 + b2 * b2 + b3 * b3);
 #endif
@@ -916,7 +920,7 @@ static double prj_fractional_jump_cell_value(const prj_block *b, int jump_var, i
     if (jump_var == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
         return prj_amr_total_pressure_at(b, i, j, k);
     }
-    return b->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+    return b->W[WIDX(PRJ_PRIM_RHO, i, j, k)];
 }
 
 static double prj_fractional_jump_cell_indicator(const prj_block *b, int jump_var, int i, int j, int k)
@@ -1195,7 +1199,7 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos,
                         b->U[VIDX(v, i, j, k)] = Uc[v];
                     }
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        b->W[VIDX(v, i, j, k)] = Wc[v];
+                        b->W[WIDX(v, i, j, k)] = Wc[v];
                     }
                 }
             }
@@ -1228,7 +1232,7 @@ static void prj_sync_conserved_from_primitive(prj_mesh *mesh, prj_eos *eos,
                     int v;
 
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        Wc[v] = block->W[VIDX(v, i, j, k)];
+                        Wc[v] = block->W[WIDX(v, i, j, k)];
                     }
                     prj_eos_prim2cons(eos, Wc, Uc);
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -1548,11 +1552,11 @@ static void prj_amr_mhd_check_block(const prj_block *block, const char *caller)
 {
     int d;
 
-    if (block == 0 || block->U == 0 || block->W == 0 || block->W1 == 0) {
+    if (block == 0 || block->U == 0 || block->W == 0) {
         prj_amr_mhd_fail(caller);
     }
     for (d = 0; d < 3; ++d) {
-        if (block->face_fidelity[d] == 0 || block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->face_fidelity[d] == 0 || block->Bf[d] == 0) {
             prj_amr_mhd_fail(caller);
         }
     }
@@ -1565,13 +1569,12 @@ static int prj_amr_mhd_face_axis_max(int dir, int axis)
 
 static void prj_amr_mhd_clear_faces(prj_block *block, int use_bf1)
 {
-    double **bf;
     int d;
 
     prj_amr_mhd_check_block(block, "prj_amr_mhd_clear_faces: missing MHD storage");
-    bf = use_bf1 != 0 ? block->Bf1 : block->Bf;
     for (d = 0; d < 3; ++d) {
-        prj_fill(bf[d], (size_t)PRJ_BLOCK_NFACES, 0.0);
+        prj_fill(prj_block_bf_stage(block, d, use_bf1 != 0 ? 1 : 0),
+            (size_t)PRJ_BLOCK_NFACES, 0.0);
     }
     for (d = 0; d < 3; ++d) {
         int n;
@@ -1604,13 +1607,16 @@ static void prj_amr_mhd_mark_active_faces(prj_block *block, int fidelity)
 
 static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
 {
-    double **bf;
+    double *bf[3];
+    int d;
     int i;
     int j;
     int k;
 
     prj_amr_mhd_check_block(block, "prj_amr_mhd_set_cons_b_from_bf: missing MHD storage");
-    bf = use_bf1 != 0 ? block->Bf1 : block->Bf;
+    for (d = 0; d < 3; ++d) {
+        bf[d] = prj_block_bf_stage(block, d, use_bf1 != 0 ? 1 : 0);
+    }
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -1624,12 +1630,12 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
                 block->U[VIDX(PRJ_CONS_B1, i, j, k)] = b1;
                 block->U[VIDX(PRJ_CONS_B2, i, j, k)] = b2;
                 block->U[VIDX(PRJ_CONS_B3, i, j, k)] = b3;
-                block->W[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
-                block->W[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
-                block->W[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
-                block->W1[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
-                block->W1[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
-                block->W1[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                block->W[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                block->W[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                block->W[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                prj_block_prim_stage(block, 1)[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                prj_block_prim_stage(block, 1)[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                prj_block_prim_stage(block, 1)[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
             }
         }
     }
@@ -1659,7 +1665,7 @@ static void prj_amr_mhd_pack_prolong_bf_buffer(const prj_block *parent,
         buf[dir] = 0;
     }
     for (dir = 0; dir < 3; ++dir) {
-        const double *src = use_bf1 != 0 ? parent->Bf1[dir] : parent->Bf[dir];
+        const double *src = prj_block_bf_stage_const(parent, dir, use_bf1 != 0 ? 1 : 0);
         int count = 1;
         int d;
         int i;
@@ -1734,7 +1740,8 @@ static void prj_amr_mhd_prolongate_bf_one(const prj_mesh *mesh, const prj_mpi *m
                 if (fabs(child->xmin[tan0] - slot->xmin[tan0]) < 1.0e-12*child->dx[tan0]){
                     if (fabs(child->xmin[tan1] - slot->xmin[tan1]) < 1.0e-12*child->dx[tan1]){
                         const prj_block *neighbor = &mesh->blocks[slot->id];
-                        double *src = use_bf1 != 0 ? neighbor->Bf1[dir] : neighbor->Bf[dir];
+                        const double *src = prj_block_bf_stage_const(neighbor, dir,
+                            use_bf1 != 0 ? 1 : 0);
                         int i, j;
                         if (fabs(child->xmax[dir] - slot->xmin[dir]) < 1.0e-12*child->dx[dir]){
                             double buffer[PRJ_BLOCK_SIZE*PRJ_BLOCK_SIZE];
@@ -1890,7 +1897,7 @@ static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
             int local[3];
             int bit[3];
             const prj_block *child;
-            double *src;
+            const double *src;
             double value;
 
             global[0] = 2 * coarse_idx[0];
@@ -1905,7 +1912,7 @@ static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
             local[tan0] = global[tan0] - bit[tan0] * PRJ_BLOCK_SIZE;
             local[tan1] = global[tan1] - bit[tan1] * PRJ_BLOCK_SIZE;
             child = prj_amr_mhd_child_for_face(children, bit);
-            src = use_bf1 != 0 ? child->Bf1[dir] : child->Bf[dir];
+            src = prj_block_bf_stage_const(child, dir, use_bf1 != 0 ? 1 : 0);
             if (src == 0) {
                 prj_amr_mhd_fail("prj_amr_mhd_restrict_face_value: missing child Bf storage");
             }
@@ -1922,12 +1929,11 @@ static double prj_amr_mhd_restrict_face_value(const prj_block *children[8],
 static void prj_amr_mhd_restrict_bf_one(const prj_block *children[8],
     prj_block *parent, int use_bf1)
 {
-    double **dst;
     int dir;
 
     prj_amr_mhd_clear_faces(parent, use_bf1);
-    dst = use_bf1 != 0 ? parent->Bf1 : parent->Bf;
     for (dir = 0; dir < 3; ++dir) {
+        double *dst = prj_block_bf_stage(parent, dir, use_bf1 != 0 ? 1 : 0);
         int i;
         int j;
         int k;
@@ -1935,7 +1941,7 @@ static void prj_amr_mhd_restrict_bf_one(const prj_block *children[8],
         for (i = 0; i <= prj_amr_mhd_face_axis_max(dir, 0); ++i) {
             for (j = 0; j <= prj_amr_mhd_face_axis_max(dir, 1); ++j) {
                 for (k = 0; k <= prj_amr_mhd_face_axis_max(dir, 2); ++k) {
-                    dst[dir][FACE_IDX(dir, i, j, k)] = prj_amr_mhd_restrict_face_value(
+                    dst[FACE_IDX(dir, i, j, k)] = prj_amr_mhd_restrict_face_value(
                         children, dir, i, j, k, use_bf1);
                 }
             }
@@ -2168,11 +2174,6 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             prj_amr_prolongate(mesh, mpi, parent, child, oct);
         } else {
             child->W = 0;
-            child->W1 = 0;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-            child->W2 = 0;
-            child->W3 = 0;
-#endif
             child->eosvar = 0;
             child->U = 0;
             child->dUdt = 0;

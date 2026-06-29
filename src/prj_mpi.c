@@ -47,7 +47,7 @@ static int prj_mpi_block_is_local(const prj_mpi *mpi, const prj_block *block)
 
 static double *prj_mpi_stage_array(prj_block *block, int stage)
 {
-    return stage == 2 ? block->W1 : block->W;
+    return prj_block_prim_stage(block, stage == 2 ? 1 : 0);
 }
 
 static void prj_mpi_buffer_free(prj_mpi_buffer *buffer)
@@ -341,15 +341,17 @@ static size_t prj_mpi_block_data_count(void)
     size_t eosvar_count;
     size_t cons_count;
 
-    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
+    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+        (size_t)PRJ_BLOCK_NCELLS;
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return 2U * prim_count + eosvar_count + 5U * cons_count +
+    return prim_count + eosvar_count + 5U * cons_count +
         9U * (size_t)PRJ_BLOCK_NCELLS
         + 5U * (size_t)PRJ_BLOCK_NCELLS
         + (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS
 #if PRJ_MHD
-        + 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
+        + 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES
+        + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
 #endif
         ;
 }
@@ -1126,7 +1128,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 static double prj_mpi_read_cell_value(const double *src, int var,
     int i, int j, int k, int is_eosvar)
 {
-    return is_eosvar != 0 ? src[EIDX(var, i, j, k)] : src[VIDX(var, i, j, k)];
+    return is_eosvar != 0 ? src[EIDX(var, i, j, k)] : src[WIDX(var, i, j, k)];
 }
 
 static double prj_mpi_prolongate_cell_value(const double *src, int var,
@@ -1219,7 +1221,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
         if (!prj_block_is_active(block) || block->rank != mpi->rank) {
             continue;
         }
-        double *W_send = stage == 2 ? block->W1 : block->W;
+        double *W_send = prj_mpi_stage_array(block, stage);
         double *eos_send = block->eosvar;
         for (n = 0; n < 56; ++n) {
             const prj_neighbor *slot = &block->slot[n];
@@ -1246,7 +1248,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                             // Same level
                             for (v = 0; v < PRJ_NHYDRO; ++v) {
                                 send_buffer[pos++] =
-                                    W_send[VIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
+                                    W_send[WIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                             }
                             for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
                                 send_buffer[pos++] =
@@ -1257,28 +1259,28 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                             for (v = 0; v < PRJ_NHYDRO; ++v) {
                                 send_buffer[pos++] =
                                     0.125*
-                                    (W_send[VIDX(v, 2*i+slot->send_loc_start[0],
+                                    (W_send[WIDX(v, 2*i+slot->send_loc_start[0],
                                                     2*j+slot->send_loc_start[1],
                                                     2*k+slot->send_loc_start[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
-                                                    2*j+slot->send_loc_start[1],
-                                                    2*k+slot->send_loc_start[2]+1)]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
-                                                    2*j+slot->send_loc_start[1]+1,
-                                                    2*k+slot->send_loc_start[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
-                                                    2*j+slot->send_loc_start[1]+1,
-                                                    2*k+slot->send_loc_start[2]+1)]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
-                                                    2*j+slot->send_loc_start[1],
-                                                    2*k+slot->send_loc_start[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start[0],
                                                     2*j+slot->send_loc_start[1],
                                                     2*k+slot->send_loc_start[2]+1)]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start[0],
                                                     2*j+slot->send_loc_start[1]+1,
                                                     2*k+slot->send_loc_start[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start[0],
+                                                    2*j+slot->send_loc_start[1]+1,
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                    2*j+slot->send_loc_start[1],
+                                                    2*k+slot->send_loc_start[2])]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                    2*j+slot->send_loc_start[1],
+                                                    2*k+slot->send_loc_start[2]+1)]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                    2*j+slot->send_loc_start[1]+1,
+                                                    2*k+slot->send_loc_start[2])]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
                                                     2*j+slot->send_loc_start[1]+1,
                                                     2*k+slot->send_loc_start[2]+1)]);
                             }
@@ -1360,35 +1362,35 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
                             for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
                                 prj_mpi_store_ghost_rad_value(buffer, send_buffer,
                                     fill_kind, pos_rad++,
-                                    W_send[VIDX(v, i+slot->send_loc_start_rad[0], j+slot->send_loc_start_rad[1], k+slot->send_loc_start_rad[2])]);
+                                    W_send[WIDX(v, i+slot->send_loc_start_rad[0], j+slot->send_loc_start_rad[1], k+slot->send_loc_start_rad[2])]);
                             }
                         } else if (slot->rel_level==-1) {
                             for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
                                 prj_mpi_store_ghost_rad_value(buffer, send_buffer,
                                     fill_kind, pos_rad++,
                                     0.125*
-                                    (W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                    (W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
                                                     2*j+slot->send_loc_start_rad[1],
                                                     2*k+slot->send_loc_start_rad[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
-                                                    2*j+slot->send_loc_start_rad[1],
-                                                    2*k+slot->send_loc_start_rad[2]+1)]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
-                                                    2*j+slot->send_loc_start_rad[1]+1,
-                                                    2*k+slot->send_loc_start_rad[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
-                                                    2*j+slot->send_loc_start_rad[1]+1,
-                                                    2*k+slot->send_loc_start_rad[2]+1)]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
-                                                    2*j+slot->send_loc_start_rad[1],
-                                                    2*k+slot->send_loc_start_rad[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
                                                     2*j+slot->send_loc_start_rad[1],
                                                     2*k+slot->send_loc_start_rad[2]+1)]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
                                                     2*j+slot->send_loc_start_rad[1]+1,
                                                     2*k+slot->send_loc_start_rad[2])]
-                                    +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                                    2*j+slot->send_loc_start_rad[1]+1,
+                                                    2*k+slot->send_loc_start_rad[2]+1)]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                    2*j+slot->send_loc_start_rad[1],
+                                                    2*k+slot->send_loc_start_rad[2])]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                    2*j+slot->send_loc_start_rad[1],
+                                                    2*k+slot->send_loc_start_rad[2]+1)]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                    2*j+slot->send_loc_start_rad[1]+1,
+                                                    2*k+slot->send_loc_start_rad[2])]
+                                    +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
                                                     2*j+slot->send_loc_start_rad[1]+1,
                                                     2*k+slot->send_loc_start_rad[2]+1)]));
                             }
@@ -1489,7 +1491,7 @@ static void prj_mpi_unpack_ghost_values(prj_mesh *mesh, prj_mpi *mpi,
         dst = prj_mpi_stage_array(block, stage);
         prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
         for (v = 0; v < PRJ_NHYDRO; ++v) {
-            dst[VIDX(v, ii, jj, kk)] = recv_buffer[pos++];
+            dst[WIDX(v, ii, jj, kk)] = recv_buffer[pos++];
         }
         for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
             block->eosvar[EIDX(v, ii, jj, kk)] = recv_buffer[pos++];
@@ -1522,7 +1524,7 @@ static void prj_mpi_unpack_ghost_values(prj_mesh *mesh, prj_mpi *mpi,
         dst = prj_mpi_stage_array(block, stage);
         prj_mpi_decode_cell_index(code, &ii, &jj, &kk);
         for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-            dst[VIDX(v, ii, jj, kk)] = prj_mpi_read_ghost_rad_value(
+            dst[WIDX(v, ii, jj, kk)] = prj_mpi_read_ghost_rad_value(
                 buffer, recv_buffer, fill_kind, pos_rad++);
         }
     }
@@ -1556,12 +1558,12 @@ enum {
 
 static double *prj_mpi_bf_array(prj_block *block, int dir, int use_bf1)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_bf_stage(block, dir, use_bf1 != 0 ? 1 : 0);
 }
 
 static const double *prj_mpi_bf_array_const(const prj_block *block, int dir, int use_bf1)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_bf_stage_const(block, dir, use_bf1 != 0 ? 1 : 0);
 }
 
 static void prj_mpi_check_bf_storage(const prj_block *block, const char *label)
@@ -1577,7 +1579,7 @@ static void prj_mpi_check_bf_storage(const prj_block *block, const char *label)
             fprintf(stderr, "%s: missing face fidelity storage\n", label);
             exit(EXIT_FAILURE);
         }
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->Bf[d] == 0) {
             fprintf(stderr, "%s: missing face-centered magnetic field storage\n", label);
             exit(EXIT_FAILURE);
         }

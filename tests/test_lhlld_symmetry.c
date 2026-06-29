@@ -156,7 +156,7 @@ static void test_fill_cell(prj_block *block, int i, int j, int k,
     int v;
 
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-        block->W[VIDX(v, i, j, k)] = W[v];
+        block->W[WIDX(v, i, j, k)] = W[v];
     }
     test_fill_eosvar(block, i, j, k, p, gamma);
 }

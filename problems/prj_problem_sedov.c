@@ -8,7 +8,7 @@
 static int prj_problem_local_block(const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        block->W != 0 && block->W1 != 0 && block->U != 0;
+        block->W != 0 && prj_block_prim_stage_const(block, 1) != 0 && block->U != 0;
 }
 
 static int prj_problem_block_overlaps_ball(const prj_block *block,
@@ -59,8 +59,8 @@ static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const 
     int v;
 
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-        block->W[VIDX(v, i, j, k)] = W[v];
-        block->W1[VIDX(v, i, j, k)] = W[v];
+        block->W[WIDX(v, i, j, k)] = W[v];
+        prj_block_prim_stage(block, 1)[WIDX(v, i, j, k)] = W[v];
     }
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         block->U[VIDX(v, i, j, k)] = U[v];
@@ -317,8 +317,8 @@ static void prj_problem_inject_energy(prj_sim *sim, double cx, double cy, double
                     }
                     prj_eos_cons2prim(&sim->eos, U, W);
                     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        block->W[VIDX(v, i, j, k)] = W[v];
-                        block->W1[VIDX(v, i, j, k)] = W[v];
+                        block->W[WIDX(v, i, j, k)] = W[v];
+                        prj_block_prim_stage(block, 1)[WIDX(v, i, j, k)] = W[v];
                     }
                 }
             }

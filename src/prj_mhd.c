@@ -24,8 +24,7 @@ static inline int prj_mhd_local_block(const prj_mpi *mpi, const prj_block *block
 static inline int prj_mhd_initialized_storage_block(const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        block->W != 0 && block->W1 != 0 &&
-        block->Bf[0] != 0 && block->Bf1[0] != 0 && block->emf[0] != 0;
+        block->W != 0 && block->Bf[0] != 0 && block->emf[0] != 0;
 }
 
 static inline void prj_mhd_check_block_storage(const prj_block *block)
@@ -35,11 +34,11 @@ static inline void prj_mhd_check_block_storage(const prj_block *block)
     if (block == 0) {
         prj_mhd_fail("prj_mhd: block is null");
     }
-    if (block->W == 0 || block->W1 == 0) {
+    if (block->W == 0) {
         prj_mhd_fail("prj_mhd: missing cell-centered block storage");
     }
     for (d = 0; d < 3; ++d) {
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0 || block->emf[d] == 0) {
+        if (block->Bf[d] == 0 || block->emf[d] == 0) {
             prj_mhd_fail("prj_mhd: missing staggered MHD block storage");
         }
     }
@@ -152,8 +151,10 @@ static inline void prj_mhd_copy_bf_to_bf1(prj_block *block)
     int n;
 
     for (d = 0; d < 3; ++d) {
+        double *bf1 = prj_block_bf_stage(block, d, 1);
+
         for (n = 0; n < PRJ_BLOCK_NFACES; ++n) {
-            block->Bf1[d][n] = block->Bf[d][n];
+            bf1[n] = block->Bf[d][n];
         }
     }
 }
@@ -169,7 +170,7 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
         if (block->face_fidelity[d] == 0) {
             prj_mhd_fail("prj_mhd_check_bf_storage: missing face fidelity storage");
         }
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->Bf[d] == 0) {
             prj_mhd_fail("prj_mhd_check_bf_storage: missing face-centered magnetic field storage");
         }
     }
@@ -177,7 +178,7 @@ static inline void prj_mhd_check_bf_storage(const prj_block *block)
 
 static inline double *prj_mhd_bf_array(prj_block *block, int dir, int use_bf1)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_bf_stage(block, dir, use_bf1 != 0 ? 1 : 0);
 }
 
 static inline int prj_mhd_face_storage_index_ok(int dir, int i, int j, int k)
@@ -544,9 +545,9 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
     (void)eos;
     prj_mhd_check_block_storage(block);
 
-    W = use_bf1 != 0 ? block->W1 : block->W;
+    W = prj_block_prim_stage(block, use_bf1 != 0 ? 1 : 0);
     for (d = 0; d < 3; ++d) {
-        src[d] = use_bf1 != 0 ? block->Bf1[d] : block->Bf[d];
+        src[d] = prj_block_bf_stage(block, d, use_bf1 != 0 ? 1 : 0);
     }
 
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
@@ -568,9 +569,9 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
                     prj_mhd_fail("prj_mhd_bf2bc: non-finite cell-centered magnetic field");
                 }
 
-                W[VIDX(PRJ_PRIM_B1, i, j, k)] = b1;
-                W[VIDX(PRJ_PRIM_B2, i, j, k)] = b2;
-                W[VIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                W[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                W[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                W[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
             }
         }
     }
@@ -977,7 +978,7 @@ void prj_mhd_debug_check_divb(const prj_mesh *mesh, const prj_mpi *mpi, int use_
         }
         prj_mhd_check_bf_storage(block);
         for (d = 0; d < 3; ++d) {
-            bf[d] = use_bf1 != 0 ? block->Bf1[d] : block->Bf[d];
+            bf[d] = prj_block_bf_stage_const(block, d, use_bf1 != 0 ? 1 : 0);
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {

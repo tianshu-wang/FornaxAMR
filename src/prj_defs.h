@@ -1,6 +1,8 @@
 #ifndef PRJ_DEFS_H
 #define PRJ_DEFS_H
 
+#include <stddef.h>
+
 #define PRJ_NDIM 3
 #ifndef PRJ_USE_GRAVITY
 #define PRJ_USE_GRAVITY 1
@@ -79,6 +81,11 @@
 #define PRJ_TIMEINT_EXTRA_SAVED_STATES 1
 #else
 #define PRJ_TIMEINT_EXTRA_SAVED_STATES 0
+#endif
+#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+#define PRJ_BLOCK_NSTAGES 4
+#else
+#define PRJ_BLOCK_NSTAGES 2
 #endif
 #if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK || TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
 #define PRJ_TIMEINT_USES_ESSPRK_STEP 1
@@ -253,6 +260,13 @@
 #define VIDX(v, i, j, k) BIDX(PRJ_NVAR_CONS, v, i, j, k)
 #define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
 #define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
+#define WIDX(v, i, j, k) \
+    (((size_t)(v) * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NCELLS) + \
+     (size_t)IDX(i, j, k))
+#define PRJ_BLOCK_STAGE_W(W, stage) \
+    (&(W)[(size_t)(stage) * (size_t)PRJ_BLOCK_NCELLS])
+#define PRJ_BLOCK_STAGE_BF(BF, stage) \
+    (&(BF)[(size_t)(stage) * (size_t)PRJ_BLOCK_NFACES])
 
 /* Legacy SoA per-variable plane base (valid only at PRJ_AOSOA_W==1).  Still used
  * by the pencil-reconstruction scratch; removed from block-array access in the

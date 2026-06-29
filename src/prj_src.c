@@ -47,7 +47,7 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
                 g1 = block->grav[0][cell_idx];
                 g2 = block->grav[1][cell_idx];
                 g3 = block->grav[2][cell_idx];
-                rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+                rho = W[WIDX(PRJ_PRIM_RHO, i, j, k)];
                 dUdt[VIDX(PRJ_CONS_MOM1, i, j, k)] += rho * g1;
                 dUdt[VIDX(PRJ_CONS_MOM2, i, j, k)] += rho * g2;
                 dUdt[VIDX(PRJ_CONS_MOM3, i, j, k)] += rho * g3;
@@ -75,10 +75,10 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
                     double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
                     for (field = 0; field < PRJ_NRAD; ++field) {
                         for (group = 0; group < PRJ_NEGROUP; ++group) {
-                            double E = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
-                            double F1 = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
-                            double F2 = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
-                            double F3 = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
+                            double E = W[WIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
+                            double F1 = W[WIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
+                            double F2 = W[WIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
+                            double F3 = W[WIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
 
                             dUdt[VIDX(PRJ_CONS_RAD_F1(field, group), i, j, k)] += lapse * E * g1;
                             dUdt[VIDX(PRJ_CONS_RAD_F2(field, group), i, j, k)] += lapse * E * g2;
@@ -166,16 +166,16 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
 
                 for (field = 0; field < PRJ_NRAD; ++field) {
                     for (group = 0; group < PRJ_NEGROUP; ++group) {
-                        double E = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
+                        double E = W[WIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)];
                         double F[3];
                         double P[3][3];
                         double dE_src;
                         int jj;
                         int ii;
 
-                        F[0] = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
-                        F[1] = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
-                        F[2] = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
+                        F[0] = W[WIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)];
+                        F[1] = W[WIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)];
+                        F[2] = W[WIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)];
 
                         /* Closure: P^{ij} from the cell-centred (E, F). */
                         prj_rad_m1_pressure(rad, E, F[0], F[1], F[2], P);

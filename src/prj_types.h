@@ -89,11 +89,6 @@ struct prj_block {
     double xmax[3];
     double dx[3];
     double *W;
-    double *W1;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    double *W2;
-    double *W3;
-#endif
     double *eosvar;
     int *cell_derived_done;
     double *U;
@@ -111,11 +106,6 @@ struct prj_block {
     int *face_fidelity[3];
     int *edge_fidelity[3];
     double *Bf[3];
-    double *Bf1[3];
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    double *Bf2[3];
-    double *Bf3[3];
-#endif
     double *Bv1[3];
     double *Bv2[3];
     double *emf[3];
@@ -128,6 +118,34 @@ struct prj_block {
     int children[8];
     prj_neighbor slot[56];
 };
+
+static inline double *prj_block_prim_stage(prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W != 0 ?
+        PRJ_BLOCK_STAGE_W(block->W, stage) : 0;
+}
+
+static inline const double *prj_block_prim_stage_const(const prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W != 0 ?
+        PRJ_BLOCK_STAGE_W(block->W, stage) : 0;
+}
+
+#if PRJ_MHD
+static inline double *prj_block_bf_stage(prj_block *block, int dir, int stage)
+{
+    return block != 0 && dir >= 0 && dir < 3 &&
+        stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->Bf[dir] != 0 ?
+        PRJ_BLOCK_STAGE_BF(block->Bf[dir], stage) : 0;
+}
+
+static inline const double *prj_block_bf_stage_const(const prj_block *block, int dir, int stage)
+{
+    return block != 0 && dir >= 0 && dir < 3 &&
+        stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->Bf[dir] != 0 ?
+        PRJ_BLOCK_STAGE_BF(block->Bf[dir], stage) : 0;
+}
+#endif
 
 struct prj_mesh {
     int nblocks;

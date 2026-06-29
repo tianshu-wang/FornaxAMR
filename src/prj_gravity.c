@@ -1055,7 +1055,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
-        double *W;
+        const double *W;
         int i;
         int j;
         int k;
@@ -1063,7 +1063,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
         if (!prj_gravity_block_is_local_active(mpi, block)) {
             continue;
         }
-        W = stage == 2 ? block->W1 : block->W;
+        W = prj_block_prim_stage_const(block, stage == 2 ? 1 : 0);
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -1090,11 +1090,11 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 
                     idx = block->ridx != 0 ? block->ridx[cache_idx] : PRJ_GRAVITY_CACHE_INVALID;
                     if (idx >= 0 && fr < PRJ_GRAVITY_CACHE_SKIP_REDUCE) {
-                        rho = W[VIDX(PRJ_PRIM_RHO, i, j, k)];
-                        v1 = W[VIDX(PRJ_PRIM_V1, i, j, k)];
-                        v2 = W[VIDX(PRJ_PRIM_V2, i, j, k)];
-                        v3 = W[VIDX(PRJ_PRIM_V3, i, j, k)];
-                        eint = W[VIDX(PRJ_PRIM_EINT, i, j, k)];
+                        rho = W[WIDX(PRJ_PRIM_RHO, i, j, k)];
+                        v1 = W[WIDX(PRJ_PRIM_V1, i, j, k)];
+                        v2 = W[WIDX(PRJ_PRIM_V2, i, j, k)];
+                        v3 = W[WIDX(PRJ_PRIM_V3, i, j, k)];
+                        eint = W[WIDX(PRJ_PRIM_EINT, i, j, k)];
                         vr = r > 0.0 ? (v1 * dx1 + v2 * dx2 + v3 * dx3) / r : 0.0;
                         pgas = block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
                         erad = 0.0;
@@ -1110,10 +1110,10 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                                     /* Radiation E/F are stored in RAD_SCALE*erg
                                        units; convert back to physical erg for the
                                        gravitational source. */
-                                    double e_rad = W[VIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)] * RAD_SCALE;
-                                    double f1 = W[VIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)] * RAD_SCALE;
-                                    double f2 = W[VIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)] * RAD_SCALE;
-                                    double f3 = W[VIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)] * RAD_SCALE;
+                                    double e_rad = W[WIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)] * RAD_SCALE;
+                                    double f1 = W[WIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)] * RAD_SCALE;
+                                    double f2 = W[WIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)] * RAD_SCALE;
+                                    double f3 = W[WIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)] * RAD_SCALE;
                                     double fr = r > 0.0 ? (f1 * dx1 + f2 * dx2 + f3 * dx3) / r : 0.0;
 
                                     erad += e_rad / (PRJ_CLIGHT * PRJ_CLIGHT);

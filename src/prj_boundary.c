@@ -21,12 +21,12 @@ static int prj_floor_to_int(double x)
 
 static double *prj_boundary_stage_array(prj_block *block, int stage)
 {
-    return stage == 2 ? block->W1 : block->W;
+    return prj_block_prim_stage(block, stage == 2 ? 1 : 0);
 }
 
 static const double *prj_boundary_stage_array_const(const prj_block *block, int stage)
 {
-    return stage == 2 ? block->W1 : block->W;
+    return prj_block_prim_stage_const(block, stage == 2 ? 1 : 0);
 }
 
 static int prj_boundary_active_block(const prj_mpi *mpi, const prj_block *block)
@@ -68,7 +68,7 @@ static double prj_boundary_read_value(const double *src, int var, int i, int j, 
             var, i, j, k, -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST - 1);
         exit(EXIT_FAILURE);
     }
-    return src[is_eosvar != 0 ? EIDX(var, i, j, k) : VIDX(var, i, j, k)];
+    return src[is_eosvar != 0 ? EIDX(var, i, j, k) : WIDX(var, i, j, k)];
 }
 
 static int prj_boundary_use_BJ(const prj_mesh *mesh)
@@ -192,7 +192,7 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
     int n;
     int use_BJ = prj_boundary_use_BJ(mesh);
     
-    double *W_send = stage == 2 ? block->W1 : block->W;
+    double *W_send = prj_boundary_stage_array(block, stage);
     double *eos_send = block->eosvar;
 
     for (n = 0; n < 56; ++n) {
@@ -200,7 +200,7 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
 
         if (id >= 0 && mesh != 0 && id < mesh->nblocks) {
             prj_block *neighbor = &mesh->blocks[id];
-            double *W_recv = stage == 2 ? neighbor->W1 : neighbor->W;
+            double *W_recv = prj_boundary_stage_array(neighbor, stage);
             double *eos_recv = neighbor->eosvar;
             int i;
             int j;
@@ -228,8 +228,8 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
                             if (slot->rel_level==0){
                                 // Same level
                                 for (v = 0; v < PRJ_NHYDRO; ++v) {
-                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
-                                        W_send[VIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
+                                    W_recv[WIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
+                                        W_send[WIDX(v, i+slot->send_loc_start[0], j+slot->send_loc_start[1], k+slot->send_loc_start[2])];
                                 }
                                 for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
                                     eos_recv[EIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
@@ -238,30 +238,30 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
                             } else if (slot->rel_level==-1) {
                                 // Neighbor is coarser, restriction
                                 for (v = 0; v < PRJ_NHYDRO; ++v) {
-                                    W_recv[VIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
+                                    W_recv[WIDX(v, i+slot->recv_loc_start[0], j+slot->recv_loc_start[1], k+slot->recv_loc_start[2])] =
                                         0.125*
-                                        (W_send[VIDX(v, 2*i+slot->send_loc_start[0],
+                                        (W_send[WIDX(v, 2*i+slot->send_loc_start[0],
                                                         2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
-                                                        2*j+slot->send_loc_start[1],
-                                                        2*k+slot->send_loc_start[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
-                                                        2*j+slot->send_loc_start[1]+1,
-                                                        2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0],
-                                                        2*j+slot->send_loc_start[1]+1,
-                                                        2*k+slot->send_loc_start[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
-                                                        2*j+slot->send_loc_start[1],
-                                                        2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start[0],
                                                         2*j+slot->send_loc_start[1],
                                                         2*k+slot->send_loc_start[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start[0],
                                                         2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start[0],
+                                                        2*j+slot->send_loc_start[1]+1,
+                                                        2*k+slot->send_loc_start[2]+1)]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1],
+                                                        2*k+slot->send_loc_start[2])]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1],
+                                                        2*k+slot->send_loc_start[2]+1)]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
+                                                        2*j+slot->send_loc_start[1]+1,
+                                                        2*k+slot->send_loc_start[2])]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start[0]+1,
                                                         2*j+slot->send_loc_start[1]+1,
                                                         2*k+slot->send_loc_start[2]+1)]);
                                 }
@@ -304,7 +304,7 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
                                 target[1] = (aj % 2 == 0) ? -0.25 : 0.25;
                                 target[2] = (ak % 2 == 0) ? -0.25 : 0.25;
                                 for (v = 0; v < PRJ_NHYDRO; ++v) {
-                                    W_recv[VIDX(v, ai, aj, ak)] =
+                                    W_recv[WIDX(v, ai, aj, ak)] =
                                         prj_boundary_prolongate_value(W_send, v,
                                             i/2+slot->send_loc_start[0],
                                             j/2+slot->send_loc_start[1],
@@ -336,35 +336,35 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
 
                             if (slot->rel_level==0){
                                 for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                                    W_recv[VIDX(v, i+slot->recv_loc_start_rad[0], j+slot->recv_loc_start_rad[1], k+slot->recv_loc_start_rad[2])] =
-                                        W_send[VIDX(v, i+slot->send_loc_start_rad[0], j+slot->send_loc_start_rad[1], k+slot->send_loc_start_rad[2])];
+                                    W_recv[WIDX(v, i+slot->recv_loc_start_rad[0], j+slot->recv_loc_start_rad[1], k+slot->recv_loc_start_rad[2])] =
+                                        W_send[WIDX(v, i+slot->send_loc_start_rad[0], j+slot->send_loc_start_rad[1], k+slot->send_loc_start_rad[2])];
                                 }
                             } else if (slot->rel_level==-1) {
                                 for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                                    W_recv[VIDX(v, i+slot->recv_loc_start_rad[0], j+slot->recv_loc_start_rad[1], k+slot->recv_loc_start_rad[2])] =
+                                    W_recv[WIDX(v, i+slot->recv_loc_start_rad[0], j+slot->recv_loc_start_rad[1], k+slot->recv_loc_start_rad[2])] =
                                         0.125*
-                                        (W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                        (W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
                                                         2*j+slot->send_loc_start_rad[1],
                                                         2*k+slot->send_loc_start_rad[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
-                                                        2*j+slot->send_loc_start_rad[1],
-                                                        2*k+slot->send_loc_start_rad[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
-                                                        2*j+slot->send_loc_start_rad[1]+1,
-                                                        2*k+slot->send_loc_start_rad[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0],
-                                                        2*j+slot->send_loc_start_rad[1]+1,
-                                                        2*k+slot->send_loc_start_rad[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
-                                                        2*j+slot->send_loc_start_rad[1],
-                                                        2*k+slot->send_loc_start_rad[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
                                                         2*j+slot->send_loc_start_rad[1],
                                                         2*k+slot->send_loc_start_rad[2]+1)]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
                                                         2*j+slot->send_loc_start_rad[1]+1,
                                                         2*k+slot->send_loc_start_rad[2])]
-                                        +W_send[VIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0],
+                                                        2*j+slot->send_loc_start_rad[1]+1,
+                                                        2*k+slot->send_loc_start_rad[2]+1)]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                        2*j+slot->send_loc_start_rad[1],
+                                                        2*k+slot->send_loc_start_rad[2])]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                        2*j+slot->send_loc_start_rad[1],
+                                                        2*k+slot->send_loc_start_rad[2]+1)]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
+                                                        2*j+slot->send_loc_start_rad[1]+1,
+                                                        2*k+slot->send_loc_start_rad[2])]
+                                        +W_send[WIDX(v, 2*i+slot->send_loc_start_rad[0]+1,
                                                         2*j+slot->send_loc_start_rad[1]+1,
                                                         2*k+slot->send_loc_start_rad[2]+1)]);
                                 }
@@ -381,7 +381,7 @@ void prj_boundary_send(prj_mesh *mesh, const prj_mpi *mpi, prj_block *block, int
                                 target[1] = (aj % 2 == 0) ? -0.25 : 0.25;
                                 target[2] = (ak % 2 == 0) ? -0.25 : 0.25;
                                 for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
-                                    W_recv[VIDX(v, ai, aj, ak)] =
+                                    W_recv[WIDX(v, ai, aj, ak)] =
                                         prj_boundary_prolongate_value(W_send, v,
                                             i/2+slot->send_loc_start_rad[0],
                                             j/2+slot->send_loc_start_rad[1],
@@ -446,16 +446,16 @@ static void prj_boundary_apply_axis_band(double *dst, int axis, int side, int bc
                 src_idx[axis1] = t1;
                 src_idx[axis2] = t2;
                 for (v = v_begin; v < v_end; ++v) {
-                    dst[VIDX(v, idx[0], idx[1], idx[2])] =
-                        dst[VIDX(v, src_idx[0], src_idx[1], src_idx[2])];
+                    dst[WIDX(v, idx[0], idx[1], idx[2])] =
+                        dst[WIDX(v, src_idx[0], src_idx[1], src_idx[2])];
                 }
                 if (do_special) {
                     if (bc_type == PRJ_BC_REFLECT) {
-                        dst[VIDX(normal_v, idx[0], idx[1], idx[2])] =
-                            -dst[VIDX(normal_v, src_idx[0], src_idx[1], src_idx[2])];
+                        dst[WIDX(normal_v, idx[0], idx[1], idx[2])] =
+                            -dst[WIDX(normal_v, src_idx[0], src_idx[1], src_idx[2])];
                     } else if (bc_type == PRJ_BC_USER) {
                         if (axis == 0 && side == 0) {
-                            dst[VIDX(PRJ_PRIM_V1, idx[0], idx[1], idx[2])] = 5.0;
+                            dst[WIDX(PRJ_PRIM_V1, idx[0], idx[1], idx[2])] = 5.0;
                         }
                     }
                 }
@@ -510,12 +510,12 @@ void prj_boundary_physical(const prj_mesh *mesh, const prj_bc *bc, prj_block *bl
 #if PRJ_MHD
 static double *prj_boundary_bf_array(prj_block *block, int dir, int use_bf1)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_bf_stage(block, dir, use_bf1 != 0 ? 1 : 0);
 }
 
 static const double *prj_boundary_bf_array_const(const prj_block *block, int dir, int use_bf1)
 {
-    return use_bf1 != 0 ? block->Bf1[dir] : block->Bf[dir];
+    return prj_block_bf_stage_const(block, dir, use_bf1 != 0 ? 1 : 0);
 }
 
 static void prj_boundary_check_bf_storage(const prj_block *block, const char *label)
@@ -531,7 +531,7 @@ static void prj_boundary_check_bf_storage(const prj_block *block, const char *la
             fprintf(stderr, "%s: missing face fidelity storage\n", label);
             exit(EXIT_FAILURE);
         }
-        if (block->Bf[d] == 0 || block->Bf1[d] == 0) {
+        if (block->Bf[d] == 0) {
             fprintf(stderr, "%s: missing face-centered magnetic field storage\n", label);
             exit(EXIT_FAILURE);
         }

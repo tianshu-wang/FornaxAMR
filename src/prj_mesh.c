@@ -212,11 +212,6 @@ static void prj_block_init_empty(prj_block *b)
     b->refine_flag = 0;
     b->can_refine = 1;
     b->W = 0;
-    b->W1 = 0;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    b->W2 = 0;
-    b->W3 = 0;
-#endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
@@ -240,11 +235,6 @@ static void prj_block_init_empty(prj_block *b)
         b->face_fidelity[n] = 0;
         b->edge_fidelity[n] = 0;
         b->Bf[n] = 0;
-        b->Bf1[n] = 0;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-        b->Bf2[n] = 0;
-        b->Bf3[n] = 0;
-#endif
         b->Bv1[n] = 0;
         b->Bv2[n] = 0;
         b->emf[n] = 0;
@@ -298,20 +288,16 @@ int prj_block_alloc_data(prj_block *b)
 
     prj_block_free_data(b);
 
-    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NCELLS;
+    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+        (size_t)PRJ_BLOCK_NCELLS;
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    total_count = 2U * prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    total_count += 2U * prim_count;
-#endif
+    total_count = prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
     total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
     total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
-    total_count += 6U * (size_t)PRJ_BLOCK_NFACES + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    total_count += 6U * (size_t)PRJ_BLOCK_NFACES;
-#endif
+    total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES +
+        6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
 #endif
 #if PRJ_NRAD > 0
     total_count += 2U * (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
@@ -351,14 +337,6 @@ int prj_block_alloc_data(prj_block *b)
 
     b->W = base;
     base += prim_count;
-    b->W1 = base;
-    base += prim_count;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    b->W2 = base;
-    base += prim_count;
-    b->W3 = base;
-    base += prim_count;
-#endif
     b->eosvar = base;
     base += eosvar_count;
     b->cell_derived_done = cell_derived_done;
@@ -393,22 +371,8 @@ int prj_block_alloc_data(prj_block *b)
         b->face_fidelity[d] = face_fidelity[d];
         b->edge_fidelity[d] = edge_fidelity[d];
         b->Bf[d] = base;
-        base += (size_t)PRJ_BLOCK_NFACES;
+        base += (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES;
     }
-    for (int d = 0; d < 3; ++d) {
-        b->Bf1[d] = base;
-        base += (size_t)PRJ_BLOCK_NFACES;
-    }
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    for (int d = 0; d < 3; ++d) {
-        b->Bf2[d] = base;
-        base += (size_t)PRJ_BLOCK_NFACES;
-    }
-    for (int d = 0; d < 3; ++d) {
-        b->Bf3[d] = base;
-        base += (size_t)PRJ_BLOCK_NFACES;
-    }
-#endif
     for (int d = 0; d < 3; ++d) {
         b->Bv1[d] = base;
         base += (size_t)PRJ_BLOCK_NCELLS;
@@ -456,11 +420,6 @@ void prj_block_free_data(prj_block *b)
     free(b->ridx);
     free(b->fr);
     b->W = 0;
-    b->W1 = 0;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-    b->W2 = 0;
-    b->W3 = 0;
-#endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
@@ -484,11 +443,6 @@ void prj_block_free_data(prj_block *b)
         b->face_fidelity[d] = 0;
         b->edge_fidelity[d] = 0;
         b->Bf[d] = 0;
-        b->Bf1[d] = 0;
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
-        b->Bf2[d] = 0;
-        b->Bf3[d] = 0;
-#endif
         b->Bv1[d] = 0;
         b->Bv2[d] = 0;
         b->emf[d] = 0;
@@ -790,7 +744,7 @@ int prj_mesh_update_center_of_mass(prj_mesh *mesh, const prj_mpi *mpi, double x_
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    double rho = block->W[VIDX(PRJ_PRIM_RHO, i, j, k)];
+                    double rho = block->W[WIDX(PRJ_PRIM_RHO, i, j, k)];
                     double dm = rho * block->vol;
                     double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                     double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
