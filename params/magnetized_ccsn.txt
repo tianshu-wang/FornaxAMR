@@ -23,7 +23,7 @@ output_interval = -1
 restart_interval = -1
 output_dt = -1
 restart_dt = -1
-dt_gw = 1e-6
+dt_gw = 1e-4
 
 amr_interval = 1
 amr_estimator = lohner
