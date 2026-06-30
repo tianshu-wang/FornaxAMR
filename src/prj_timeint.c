@@ -801,6 +801,12 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
 
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
+#if defined(PRJ_DEBUG)
+static int prj_timeint_imex_debug_tracking_active = 0;
+static int prj_timeint_imex_debug_nstages = 0;
+static int prj_timeint_imex_debug_stage_solved[PRJ_BLOCK_NSTAGES];
+#endif
+
 static void prj_timeint_imex_fail(const char *message)
 {
     fprintf(stderr, "%s\n", message);
@@ -809,6 +815,9 @@ static void prj_timeint_imex_fail(const char *message)
 
 static void prj_timeint_imex_validate(const prj_timeint_imex_tableau *tableau)
 {
+    int i;
+    int j;
+
     if (tableau == 0) {
         prj_timeint_imex_fail("prj_timeint_imex: missing tableau");
     }
@@ -821,6 +830,28 @@ static void prj_timeint_imex_validate(const prj_timeint_imex_tableau *tableau)
     }
     if (!(tableau->r > 0.0) || !isfinite(tableau->r)) {
         prj_timeint_imex_fail("prj_timeint_imex: invalid SSP coefficient");
+    }
+    for (i = 0; i < tableau->nstages; ++i) {
+        if (!isfinite(tableau->b_ex[i]) || !isfinite(tableau->b_im[i])) {
+            prj_timeint_imex_fail("prj_timeint_imex: non-finite final coefficient");
+        }
+        if (tableau->a_im[(size_t)i * (size_t)tableau->nstages + (size_t)i] == 0.0) {
+            prj_timeint_imex_fail("prj_timeint_imex: zero implicit diagonal unsupported");
+        }
+        for (j = 0; j < tableau->nstages; ++j) {
+            double a_ex = tableau->a_ex[(size_t)i * (size_t)tableau->nstages + (size_t)j];
+            double a_im = tableau->a_im[(size_t)i * (size_t)tableau->nstages + (size_t)j];
+
+            if (!isfinite(a_ex) || !isfinite(a_im)) {
+                prj_timeint_imex_fail("prj_timeint_imex: non-finite stage coefficient");
+            }
+            if (j >= i && a_ex != 0.0) {
+                prj_timeint_imex_fail("prj_timeint_imex: explicit tableau is not strictly lower triangular");
+            }
+            if (j > i && a_im != 0.0) {
+                prj_timeint_imex_fail("prj_timeint_imex: implicit tableau is not lower triangular");
+            }
+        }
     }
 }
 
@@ -1071,6 +1102,49 @@ static void prj_timeint_imex_assemble_stage(prj_mesh *mesh, prj_eos *eos,
         }
     }
 }
+
+#if PRJ_NRAD > 0
+static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
+    prj_block *block, int stage, int i, int j, int k, double dt, double *deriv)
+{
+    double u0[PRJ_NVAR_CONS];
+    double u1[PRJ_NVAR_CONS];
+    double *W_stage;
+    double T_cell;
+    double lapse_cell;
+    int v;
+
+    if (dt == 0.0 || deriv == 0) {
+        return;
+    }
+    W_stage = prj_block_prim_stage(block, stage);
+    if (W_stage == 0) {
+        prj_timeint_imex_fail("prj_timeint_step_ex: missing stage storage");
+    }
+    prj_timeint_imex_cons_from_stage(eos, block, stage, i, j, k, u0);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u1[v] = u0[v];
+    }
+    T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
+    lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
+
+    PRJ_SUBTIMER_START("sub_rad_freq_flux");
+    prj_rad_freq_flux_apply(rad, block, W_stage, u1, i, j, k, lapse_cell, dt);
+    PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
+    PRJ_SUBTIMER_START("sub_rad_eleinel");
+    prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
+    PRJ_SUBTIMER_STOP("sub_rad_eleinel");
+    PRJ_SUBTIMER_START("sub_rad_nucinel");
+    prj_rad_nucinel_step(rad, eos, u1, dt, T_cell);
+    PRJ_SUBTIMER_STOP("sub_rad_nucinel");
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        size_t idx = (size_t)VIDX(v, i, j, k);
+
+        deriv[idx] += (u1[v] - u0[v]) / dt;
+    }
+}
+#endif
 
 static void prj_timeint_imex_fill_updated_stage(prj_mesh *mesh, const prj_bc *bc,
     prj_eos *eos, prj_rad *rad, prj_grav *grav, prj_mpi *mpi, prj_timer *timer,
@@ -1828,12 +1902,21 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
 
     (void)coord;
     (void)bc;
+#if PRJ_NRAD == 0
     (void)dt;
+#endif
 
     prj_timeint_imex_validate(tableau);
     if (stage < 0 || stage >= tableau->nstages) {
         prj_timeint_imex_fail("prj_timeint_step_ex: invalid stage");
     }
+#if defined(PRJ_DEBUG)
+    if (prj_timeint_imex_debug_tracking_active &&
+        (stage >= prj_timeint_imex_debug_nstages ||
+         !prj_timeint_imex_debug_stage_solved[stage])) {
+        prj_timeint_imex_fail("prj_timeint_step_ex: stage was not solved implicitly");
+    }
+#endif
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "imex_step_ex_flux_send");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -1908,6 +1991,12 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                         deriv[VIDX(v, i, j, k)] =
                             block->dUdt[VIDX(v, i, j, k)] + fluxdiv[v];
                     }
+#if PRJ_NRAD > 0
+                    prj_timeint_imex_add_explicit_rad_deriv(eos, rad, block,
+                        stage, i, j, k, dt, deriv);
+#else
+                    (void)rad;
+#endif
                 }
             }
         }
@@ -1952,7 +2041,6 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
     PRJ_TIMER_BARRIER_START(timer, mpi, "imex_step_im_deriv");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
-        double *W_stage;
         double *deriv;
         int i;
         int j;
@@ -1961,9 +2049,8 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
         if (!prj_timeint_local_block(mpi, block)) {
             continue;
         }
-        W_stage = prj_block_prim_stage(block, stage);
         deriv = prj_block_deriv_stage(block->deriv_im, stage);
-        if (W_stage == 0 || deriv == 0) {
+        if (prj_block_prim_stage(block, stage) == 0 || deriv == 0) {
             prj_timeint_imex_fail("prj_timeint_step_im: missing derivative storage");
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -1980,20 +2067,10 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                     }
 #if PRJ_NRAD > 0
                     if (dt_implicit != 0.0) {
-                        double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
+                        double T_cell = 0.0;
                         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
                         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 
-                        PRJ_SUBTIMER_START("sub_rad_freq_flux");
-                        prj_rad_freq_flux_apply(rad, block, W_stage, u1, i, j, k,
-                            lapse_cell, dt_implicit);
-                        PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
-                        PRJ_SUBTIMER_START("sub_rad_eleinel");
-                        prj_rad_eleinel_step(rad, eos, u1, dt_implicit, T_cell);
-                        PRJ_SUBTIMER_STOP("sub_rad_eleinel");
-                        PRJ_SUBTIMER_START("sub_rad_nucinel");
-                        prj_rad_nucinel_step(rad, eos, u1, dt_implicit, T_cell);
-                        PRJ_SUBTIMER_STOP("sub_rad_nucinel");
                         PRJ_SUBTIMER_START("sub_rad_energy");
                         prj_rad_energy_update(rad, eos, u1, dt_implicit, lapse_cell,
                             &T_cell, kappa);
@@ -2008,14 +2085,20 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                     }
 #else
                     (void)rad;
-                    (void)W_stage;
                     (void)dt_implicit;
 #endif
+                    prj_timeint_imex_store_cons_to_stage(eos, block, stage, i, j, k, u1);
                 }
             }
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_step_im_deriv");
+#if defined(PRJ_DEBUG)
+    if (prj_timeint_imex_debug_tracking_active &&
+        stage >= 0 && stage < PRJ_BLOCK_NSTAGES) {
+        prj_timeint_imex_debug_stage_solved[stage] = 1;
+    }
+#endif
 #else
     (void)mesh;
     (void)coord;
@@ -2061,22 +2144,30 @@ void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, 
 
     prj_timeint_imex_validate(tableau);
     prj_timeint_imex_save_base_cons(mesh, eos, mpi);
+#if defined(PRJ_DEBUG)
+    prj_timeint_imex_debug_tracking_active = 1;
+    prj_timeint_imex_debug_nstages = tableau->nstages;
+    for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
+        prj_timeint_imex_debug_stage_solved[stage] = 0;
+    }
+#endif
     for (stage = 0; stage < tableau->nstages; ++stage) {
         double diag = prj_timeint_imex_a_im(tableau, stage, stage);
-        double dt_implicit = diag != 0.0 ? dt * diag : dt;
+        double dt_implicit = dt * diag;
 
-        prj_timeint_step_ex(mesh, coord, bc, eos, rad, grav, mpi, tableau,
-            stage, dt, dt_src, timer);
+        prj_timeint_imex_assemble_stage(mesh, eos, mpi, tableau,
+            stage, stage, 0, stage, dt);
+        prj_gravity_monopole_update_lapse_active(mesh, eos, grav, mpi, stage);
         prj_timeint_step_im(mesh, coord, bc, eos, rad, grav, mpi, tableau,
             stage, dt, dt_implicit, dt_src, timer);
-
-        if (stage + 1 < tableau->nstages) {
-            prj_timeint_imex_assemble_stage(mesh, eos, mpi, tableau,
-                stage + 1, stage + 1, 0, stage + 1, dt);
-            prj_timeint_imex_fill_updated_stage(mesh, bc, eos, rad, grav, mpi, timer,
-                stage + 1, "imex_stage");
-        }
+        prj_timeint_imex_fill_updated_stage(mesh, bc, eos, rad, grav, mpi, timer,
+            stage, "imex_stage");
+        prj_timeint_step_ex(mesh, coord, bc, eos, rad, grav, mpi, tableau,
+            stage, dt, dt_src, timer);
     }
+#if defined(PRJ_DEBUG)
+    prj_timeint_imex_debug_tracking_active = 0;
+#endif
     prj_timeint_imex_assemble_stage(mesh, eos, mpi, tableau,
         0, 0, 1, tableau->nstages, dt);
     prj_timeint_imex_fill_updated_stage(mesh, bc, eos, rad, grav, mpi, timer,
