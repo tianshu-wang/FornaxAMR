@@ -5,6 +5,7 @@
 #include "prj_types.h"
 #include "prj_amr.h"
 #include "prj_boundary.h"
+#include "prj_diagnostics.h"
 #include "prj_eos.h"
 #include "prj_flux.h"
 #include "prj_gravity.h"

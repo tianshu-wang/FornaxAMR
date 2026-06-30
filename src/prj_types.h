@@ -366,6 +366,7 @@ struct prj_sim {
     double t_end;
     double output_dt;
     double restart_dt;
+    double dt_gw;
     int max_steps;
     int output_interval;
     int restart_interval;

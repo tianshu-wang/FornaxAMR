@@ -78,6 +78,7 @@ SRCS := \
 	$(SRC_DIR)/main.c \
 	$(SRC_DIR)/prj_amr.c \
 	$(SRC_DIR)/prj_boundary.c \
+	$(SRC_DIR)/prj_diagnostics.c \
 	$(SRC_DIR)/prj_eos.c \
 	$(SRC_DIR)/prj_flux.c \
 	$(SRC_DIR)/prj_gravity.c \

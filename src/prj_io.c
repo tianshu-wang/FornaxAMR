@@ -217,6 +217,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->t_end = 0.1;
     sim->output_dt = -1.0;
     sim->restart_dt = -1.0;
+    sim->dt_gw = -1.0;
     sim->max_steps = 100;
     sim->output_interval = -1;
     sim->restart_interval = -1;
@@ -380,6 +381,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->output_dt = strtod(value, &endptr);
         } else if (strcmp(key, "restart_dt") == 0) {
             sim->restart_dt = strtod(value, &endptr);
+        } else if (strcmp(key, "dt_gw") == 0) {
+            sim->dt_gw = strtod(value, &endptr);
         } else if (strcmp(key, "max_steps") == 0) {
             sim->max_steps = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "output_interval") == 0) {
@@ -989,7 +992,7 @@ int prj_io_find_latest_restart(const char *dir, char *out_filename, size_t out_s
 }
 
 void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time, int step, int dump_count,
-    double last_output_time, double last_restart_time, double dt)
+    double last_output_time, double last_restart_time, double last_gw_time, double dt)
 {
     char filename[64];
     hid_t file;
@@ -1028,6 +1031,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     prj_io_write_attr_int(file, "dump_count", dump_count);
     prj_io_write_attr_double(file, "last_output_time", last_output_time);
     prj_io_write_attr_double(file, "last_restart_time", last_restart_time);
+    prj_io_write_attr_double(file, "last_gw_time", last_gw_time);
     prj_io_write_attr_double(file, "dt", dt);
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
@@ -1194,7 +1198,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
 
 void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const char *filename,
     double *time, int *step, int *dump_count, double *last_output_time, double *last_restart_time,
-    double *dt)
+    double *last_gw_time, double *dt)
 {
     hid_t file;
     hid_t dset_data;
@@ -1228,6 +1232,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     }
     if (last_restart_time != 0) {
         *last_restart_time = prj_io_read_attr_double_optional(file, "last_restart_time", -1.0);
+    }
+    if (last_gw_time != 0) {
+        *last_gw_time = prj_io_read_attr_double_optional(file, "last_gw_time", -1.0);
     }
     if (dt != 0) {
         *dt = prj_io_read_attr_double_optional(file, "dt", 0.0);

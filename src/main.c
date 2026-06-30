@@ -247,6 +247,7 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "max_blocks: %d\n", sim->mesh.max_blocks);
     fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
     fprintf(stderr, "x_com_err_tol: %.6e\n", sim->x_com_err_tol);
+    fprintf(stderr, "dt_gw: %.6e\n", sim->dt_gw);
     fprintf(stderr, "amr_init_scale_factor: %.6e\n", sim->mesh.amr_init_scale_factor);
     fprintf(stderr, "timer_interval: %d\n", sim->timer_interval);
 }
@@ -274,8 +275,10 @@ int main(int argc, char *argv[])
     int restart_latest_id = -1;
     double next_output_time = -1.0;
     double next_restart_time = -1.0;
+    double next_gw_time = -1.0;
     double last_output_time = -1.0;
     double last_restart_time = -1.0;
+    double last_gw_time = -1.0;
     int i;
 
     memset(&sim, 0, sizeof(sim));
@@ -340,6 +343,9 @@ int main(int argc, char *argv[])
     if (mpi.rank == 0) {
         mkdir("output", 0777);
     }
+    if (sim.restart_from_file == 0 && sim.dt_gw > 0.0) {
+        prj_diagnostics_truncate_dqdt(&mpi);
+    }
     sim.dump_count = 0;
     if (sim.restart_from_file != 0) {
         for (i = 0; i < PRJ_AMR_N; ++i) {
@@ -355,7 +361,7 @@ int main(int argc, char *argv[])
         saved_use_BJ = sim.mesh.use_BJ;
         saved_min_dx = sim.mesh.min_dx;
         prj_io_read_restart(&sim.mesh, &sim.eos, &mpi, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
-            &last_output_time, &last_restart_time, &sim.dt);
+            &last_output_time, &last_restart_time, &last_gw_time, &sim.dt);
         for (i = 0; i < PRJ_AMR_N; ++i) {
             sim.mesh.amr_refine_thresh[i] = saved_amr_refine_thresh[i];
             sim.mesh.amr_derefine_thresh[i] = saved_amr_derefine_thresh[i];
@@ -371,6 +377,9 @@ int main(int argc, char *argv[])
         prj_mesh_update_min_allowable_cell_size(&sim.mesh);
         next_output_time = prj_next_event_time(last_output_time, sim.output_dt, sim.time);
         next_restart_time = prj_next_event_time(last_restart_time, sim.restart_dt, sim.time);
+        if (sim.dt_gw > 0.0) {
+            next_gw_time = prj_next_event_time(last_gw_time, sim.dt_gw, sim.time);
+        }
         prj_print_config(&sim, mpi.rank);
     }
     prj_rad_init(&sim.rad);
@@ -403,12 +412,18 @@ int main(int argc, char *argv[])
         if (sim.restart_dt >= 0.0) {
             next_restart_time = sim.time + sim.restart_dt;
         }
+        if (sim.dt_gw > 0.0) {
+            next_gw_time = sim.time + sim.dt_gw;
+        }
     } else {
         if (sim.output_dt >= 0.0 && next_output_time < 0.0) {
             next_output_time = sim.time + sim.output_dt;
         }
         if (sim.restart_dt >= 0.0 && next_restart_time < 0.0) {
             next_restart_time = sim.time + sim.restart_dt;
+        }
+        if (sim.dt_gw > 0.0 && next_gw_time < 0.0) {
+            next_gw_time = sim.time + sim.dt_gw;
         }
     }
 
@@ -418,6 +433,7 @@ int main(int argc, char *argv[])
     while (sim.time < sim.t_end && sim.step < sim.max_steps) {
         int write_output = 0;
         int write_restart = 0;
+        int write_gw = 0;
         double next_event_time = -1.0;
         double dt_step;
         double dt_src = 1.0e100;
@@ -459,6 +475,10 @@ int main(int argc, char *argv[])
         if (sim.restart_dt >= 0.0 && next_restart_time >= 0.0 &&
             (next_event_time < 0.0 || next_restart_time < next_event_time)) {
             next_event_time = next_restart_time;
+        }
+        if (sim.dt_gw > 0.0 && next_gw_time >= 0.0 &&
+            (next_event_time < 0.0 || next_gw_time < next_event_time)) {
+            next_event_time = next_gw_time;
         }
         dt_step = sim.dt;
         if (next_event_time >= 0.0 && sim.time + dt_step > next_event_time) {
@@ -564,6 +584,17 @@ int main(int argc, char *argv[])
                 next_restart_time = -1.0;
             }
         }
+        if (sim.dt_gw > 0.0 && next_gw_time >= 0.0 && sim.time >= next_gw_time) {
+            write_gw = 1;
+            do {
+                next_gw_time += sim.dt_gw;
+            } while (sim.time >= next_gw_time);
+        }
+        if (write_gw) {
+            PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_dqdt");
+            prj_diagnostics_write_dqdt(&sim.mesh, &mpi, sim.time);
+            PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "write_dqdt");
+        }
         if (write_output) {
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_output");
             prj_io_write_dump(&sim.mesh, &sim.grav, &mpi, sim.dump_count, sim.step, sim.time);
@@ -574,7 +605,8 @@ int main(int argc, char *argv[])
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_restart");
             prj_io_write_restart(&sim.mesh, &mpi, sim.time, sim.step, sim.dump_count,
                 prj_last_event_time(next_output_time, sim.output_dt),
-                prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt);
+                prj_last_event_time(next_restart_time, sim.restart_dt),
+                prj_last_event_time(next_gw_time, sim.dt_gw), sim.dt);
             PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "write_restart");
         }
         if (mpi.rank == 0) {
@@ -616,7 +648,8 @@ int main(int argc, char *argv[])
 
     prj_io_write_restart(&sim.mesh, &mpi, sim.time, sim.step, sim.dump_count,
         prj_last_event_time(next_output_time, sim.output_dt),
-        prj_last_event_time(next_restart_time, sim.restart_dt), sim.dt);
+        prj_last_event_time(next_restart_time, sim.restart_dt),
+        prj_last_event_time(next_gw_time, sim.dt_gw), sim.dt);
     if (mpi.rank == 0) {
         char final_restart[64];
 
