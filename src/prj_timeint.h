@@ -12,6 +12,7 @@ typedef struct prj_timeint_imex_tableau {
 
 extern const prj_timeint_imex_tableau PRJ_TIMEINT_TABLEAU_NAME;
 
+void prj_timeint_init(const prj_timeint_imex_tableau *tableau);
 double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
     double cfl, const prj_timeint_imex_tableau *tableau);
 void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,

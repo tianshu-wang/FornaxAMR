@@ -1148,10 +1148,8 @@ static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
 
 static void prj_timeint_imex_fill_updated_stage(prj_mesh *mesh, const prj_bc *bc,
     prj_eos *eos, prj_rad *rad, prj_grav *grav, prj_mpi *mpi, prj_timer *timer,
-    int stage, const char *prefix)
+    int stage, int fill_opacity_halo)
 {
-    (void)prefix;
-
     PRJ_TIMER_BARRIER_START(timer, mpi, "imex_eos_fill_active");
     prj_eos_fill_active_cells(mesh, eos, mpi, stage + 1, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_eos_fill_active");
@@ -1165,9 +1163,20 @@ static void prj_timeint_imex_fill_updated_stage(prj_mesh *mesh, const prj_bc *bc
     prj_eos_fill_mesh(mesh, eos, mpi, stage + 1, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_eos_fill_mesh");
 
-    prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, stage + 1);
+    if (fill_opacity_halo) {
+        prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, stage + 1);
+    }
 }
 #endif
+
+void prj_timeint_init(const prj_timeint_imex_tableau *tableau)
+{
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
+    prj_timeint_imex_validate(tableau);
+#else
+    (void)tableau;
+#endif
+}
 
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
@@ -1253,9 +1262,6 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mp
     (void)eos;
 #if TIME_INTEGRATION != PRJ_TIMEINT_IMEX
     (void)tableau;
-#endif
-#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
-    prj_timeint_imex_validate(tableau);
 #endif
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
@@ -1906,8 +1912,7 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
     (void)dt;
 #endif
 
-    prj_timeint_imex_validate(tableau);
-    if (stage < 0 || stage >= tableau->nstages) {
+    if (tableau == 0 || stage < 0 || stage >= tableau->nstages) {
         prj_timeint_imex_fail("prj_timeint_step_ex: invalid stage");
     }
 #if defined(PRJ_DEBUG)
@@ -2033,8 +2038,7 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
     (void)dt;
     (void)dt_src;
 
-    prj_timeint_imex_validate(tableau);
-    if (stage < 0 || stage >= tableau->nstages) {
+    if (tableau == 0 || stage < 0 || stage >= tableau->nstages) {
         prj_timeint_imex_fail("prj_timeint_step_im: invalid stage");
     }
 
@@ -2142,7 +2146,9 @@ void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, 
 #elif TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     int stage;
 
-    prj_timeint_imex_validate(tableau);
+    if (tableau == 0) {
+        prj_timeint_imex_fail("prj_timeint_step: missing tableau");
+    }
     prj_timeint_imex_save_base_cons(mesh, eos, mpi);
 #if defined(PRJ_DEBUG)
     prj_timeint_imex_debug_tracking_active = 1;
@@ -2163,7 +2169,7 @@ void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, 
         prj_timeint_step_im(mesh, coord, bc, eos, rad, grav, mpi, tableau,
             stage, dt, dt_implicit, dt_src, timer);
         prj_timeint_imex_fill_updated_stage(mesh, bc, eos, rad, grav, mpi, timer,
-            stage, "imex_stage");
+            stage, 1);
         prj_timeint_step_ex(mesh, coord, bc, eos, rad, grav, mpi, tableau,
             stage, dt, dt_src, timer);
     }
@@ -2173,7 +2179,7 @@ void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, 
     prj_timeint_imex_assemble_stage(mesh, eos, mpi, tableau,
         0, 0, 1, tableau->nstages, dt);
     prj_timeint_imex_fill_updated_stage(mesh, bc, eos, rad, grav, mpi, timer,
-        0, "imex_final");
+        0, 0);
 #else
 #error "Unsupported TIME_INTEGRATION value"
 #endif

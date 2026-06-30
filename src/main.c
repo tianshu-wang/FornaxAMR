@@ -326,6 +326,7 @@ int main(int argc, char *argv[])
 
     init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn || init_fn == prj_problem_sedov);
     prj_mpi_init(&argc, &argv, &mpi);
+    prj_timeint_init(&PRJ_TIMEINT_TABLEAU_NAME);
     if (sim.restart_from_latest != 0 && mpi.rank == 0) {
         fprintf(stderr, "restart_from_latest selected %s (id %d)\n", sim.restart_file_name, restart_latest_id);
     }
