@@ -281,11 +281,12 @@ size_t prj_block_data_count(void)
         (size_t)PRJ_BLOCK_NCELLS;
     size_t eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     size_t cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    size_t deriv_count = (size_t)PRJ_BLOCK_NSTAGES * cons_count;
     size_t total_count;
 
     total_count = prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
-    total_count += 2U * deriv_count;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
+    total_count += 2U * (size_t)PRJ_BLOCK_NSTAGES * cons_count;  /* deriv_ex + deriv_im */
+#endif
     total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
     total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_MHD
@@ -304,7 +305,9 @@ int prj_block_alloc_data(prj_block *b)
     size_t prim_count;
     size_t eosvar_count;
     size_t cons_count;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     size_t deriv_count;
+#endif
     size_t total_count;
     double *base;
     int *cell_derived_done;
@@ -325,7 +328,9 @@ int prj_block_alloc_data(prj_block *b)
         (size_t)PRJ_BLOCK_NCELLS;
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     deriv_count = (size_t)PRJ_BLOCK_NSTAGES * cons_count;
+#endif
     total_count = prj_block_data_count();
 
     base = (double *)prj_malloc(total_count * sizeof(*base));
@@ -369,10 +374,15 @@ int prj_block_alloc_data(prj_block *b)
     base += cons_count;
     b->dUdt = base;
     base += cons_count;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     b->deriv_ex = base;
     base += deriv_count;
     b->deriv_im = base;
     base += deriv_count;
+#else
+    b->deriv_ex = 0;
+    b->deriv_im = 0;
+#endif
     b->flux[0] = base;
     base += cons_count;
     b->flux[1] = base;
