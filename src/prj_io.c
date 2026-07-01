@@ -1250,7 +1250,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         prj_io_fail("prj_io_read_restart: incompatible restart metadata");
     }
 
-    if (prj_mesh_init(mesh, root_nx[0], root_nx[1], root_nx[2], max_level, &coord) != 0) {
+    if (prj_mesh_init(mesh, root_nx[0], root_nx[1], root_nx[2], max_level, &coord, 1) != 0) {
         prj_io_fail("prj_io_read_restart: mesh init failed");
     }
     {

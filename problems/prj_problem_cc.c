@@ -715,7 +715,7 @@ void prj_problem_cc(prj_sim *sim, prj_mpi *mpi)
         return;
     }
     if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
-        sim->mesh.max_level, &sim->coord) != 0) {
+        sim->mesh.max_level, &sim->coord, 1) != 0) {
         return;
     }
     prj_mpi_decompose(&sim->mesh, mpi);

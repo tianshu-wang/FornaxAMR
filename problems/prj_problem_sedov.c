@@ -332,7 +332,7 @@ void prj_problem_sedov(prj_sim *sim, prj_mpi *mpi)
     const double pressure = 1.0e-3;
 
     if (prj_mesh_init(&sim->mesh, sim->mesh.root_nx[0], sim->mesh.root_nx[1], sim->mesh.root_nx[2],
-        sim->mesh.max_level, &sim->coord) != 0) {
+        sim->mesh.max_level, &sim->coord, 0) != 0) {
         return;
     }
     prj_problem_fill_ambient(sim, rho, pressure);

@@ -3,7 +3,13 @@
 
 #include "prj_types.h"
 
-int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int max_level, const prj_coord *coord);
+/* defer_block_alloc: when non-zero, prj_mesh_init builds root-block metadata
+ * (geometry, neighbors, Morton lookup) but does NOT allocate per-block cell
+ * data.  Callers that decompose before touching cell data (cc, ccsn) pass 1 so
+ * that only owned blocks get storage in prj_mpi_assign_block_storage, avoiding
+ * a transient peak where every rank allocates the entire root grid.  Callers
+ * that set initial conditions before decomposition must pass 0. */
+int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int max_level, const prj_coord *coord, int defer_block_alloc);
 size_t prj_block_data_count(void);
 int prj_block_alloc_data(prj_block *b);
 void prj_block_free_data(prj_block *b);

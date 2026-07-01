@@ -68,7 +68,7 @@ int main(int argc, char **argv)
     coord.x3min = 0.0;
     coord.x3max = 8.0;
 
-    if (prj_mesh_init(&mesh, 1, 1, 1, 0, &coord) != 0) {
+    if (prj_mesh_init(&mesh, 1, 1, 1, 0, &coord, 0) != 0) {
         die("mesh init failed");
     }
     if (mesh.nblocks != 1) {

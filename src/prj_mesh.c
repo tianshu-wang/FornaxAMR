@@ -1261,7 +1261,7 @@ int prj_mesh_morton_lookup_block(const prj_mesh *mesh, int level, int ix, int iy
     return -1;
 }
 
-int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int max_level, const prj_coord *coord)
+int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int max_level, const prj_coord *coord, int defer_block_alloc)
 {
     int i;
     int j;
@@ -1384,7 +1384,9 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
                 b->dx[2] = block_dx[2] / (double)PRJ_BLOCK_SIZE;
                 prj_block_setup_geometry(b, coord);
                 prj_block_update_can_refine(b, mesh);
-                if (prj_block_alloc_data(b) != 0) {
+                /* Cell data is deferred to prj_mpi_assign_block_storage (owned
+                 * blocks only) when requested; otherwise allocate it here. */
+                if (!defer_block_alloc && prj_block_alloc_data(b) != 0) {
                     prj_mesh_destroy(mesh);
                     return 3;
                 }
