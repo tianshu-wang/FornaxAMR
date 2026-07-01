@@ -1199,8 +1199,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 
 #if defined(PRJ_ENABLE_MPI)
     {
-        if (mpi != 0 && mpi->totrank > 1 && grav->reduce_avg_buf != 0 &&
-            (!use_multipole || grav->reduce_lm_buf != 0)) {
+        if (mpi != 0 && mpi->totrank > 1) {
             double *restrict buf = grav->reduce_avg_buf;
             size_t nb = (size_t)grav->nbins;
 
@@ -1400,7 +1399,7 @@ static int prj_gravity_monopole_reduce_stage_slot_active(prj_mesh *mesh, prj_eos
 
 #if defined(PRJ_ENABLE_MPI)
     {
-        if (mpi != 0 && mpi->totrank > 1 && grav->reduce_avg_buf != 0) {
+        if (mpi != 0 && mpi->totrank > 1) {
             double *restrict buf = grav->reduce_avg_buf;
             size_t nb = (size_t)grav->nbins;
 
