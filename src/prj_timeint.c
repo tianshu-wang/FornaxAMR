@@ -835,9 +835,8 @@ static void prj_timeint_imex_validate(const prj_timeint_imex_tableau *tableau)
         if (!isfinite(tableau->b_ex[i]) || !isfinite(tableau->b_im[i])) {
             prj_timeint_imex_fail("prj_timeint_imex: non-finite final coefficient");
         }
-        if (tableau->a_im[(size_t)i * (size_t)tableau->nstages + (size_t)i] == 0.0) {
-            prj_timeint_imex_fail("prj_timeint_imex: zero implicit diagonal unsupported");
-        }
+        /* A zero implicit diagonal is allowed: step_im treats dt_implicit == 0
+         * as an explicit (no-op) stage, leaving u unchanged and deriv = 0. */
         for (j = 0; j < tableau->nstages; ++j) {
             double a_ex = tableau->a_ex[(size_t)i * (size_t)tableau->nstages + (size_t)j];
             double a_im = tableau->a_im[(size_t)i * (size_t)tableau->nstages + (size_t)j];
@@ -2120,7 +2119,6 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
     prj_timeint_unavailable("prj_timeint_step_im");
 #endif
 }
-
 
 void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, prj_eos *eos,
     prj_rad *rad, prj_grav *grav, prj_mpi *mpi, const prj_timeint_imex_tableau *tableau,
