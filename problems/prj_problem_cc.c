@@ -39,7 +39,7 @@ static int prj_cc_init_amr_ctx_build(prj_cc_init_amr_ctx *ctx, const prj_cc_prof
     ctx->npts = profile->npts;
     ctx->radius = profile->radius;
     ctx->scale_factor = scale_factor;
-    ctx->LP = (double *)malloc((size_t)profile->npts * sizeof(*ctx->LP));
+    ctx->LP = (double *)prj_malloc((size_t)profile->npts * sizeof(*ctx->LP));
     if (ctx->LP == 0) {
         return 1;
     }
@@ -64,7 +64,7 @@ static int prj_cc_init_amr_ctx_build(prj_cc_init_amr_ctx *ctx, const prj_cc_prof
         return 0;
     }
 
-    pressure = (double *)malloc((size_t)profile->npts * sizeof(*pressure));
+    pressure = (double *)prj_malloc((size_t)profile->npts * sizeof(*pressure));
     if (pressure == 0) {
         free(ctx->LP);
         ctx->LP = 0;
@@ -364,11 +364,11 @@ static int prj_cc_profile_load(prj_cc_profile *profile, const char *filename)
     }
 
     capacity = 1024;
-    profile->radius = (double *)malloc((size_t)capacity * sizeof(*profile->radius));
-    profile->rho = (double *)malloc((size_t)capacity * sizeof(*profile->rho));
-    profile->temp = (double *)malloc((size_t)capacity * sizeof(*profile->temp));
-    profile->ye = (double *)malloc((size_t)capacity * sizeof(*profile->ye));
-    profile->vr = (double *)malloc((size_t)capacity * sizeof(*profile->vr));
+    profile->radius = (double *)prj_malloc((size_t)capacity * sizeof(*profile->radius));
+    profile->rho = (double *)prj_malloc((size_t)capacity * sizeof(*profile->rho));
+    profile->temp = (double *)prj_malloc((size_t)capacity * sizeof(*profile->temp));
+    profile->ye = (double *)prj_malloc((size_t)capacity * sizeof(*profile->ye));
+    profile->vr = (double *)prj_malloc((size_t)capacity * sizeof(*profile->vr));
     if (profile->radius == 0 || profile->rho == 0 || profile->temp == 0 ||
         profile->ye == 0 || profile->vr == 0) {
         fclose(fp);
@@ -405,11 +405,11 @@ static int prj_cc_profile_load(prj_cc_profile *profile, const char *filename)
             double *next_ye;
             double *next_vr;
 
-            next_radius = (double *)malloc((size_t)next_capacity * sizeof(*next_radius));
-            next_rho = (double *)malloc((size_t)next_capacity * sizeof(*next_rho));
-            next_temp = (double *)malloc((size_t)next_capacity * sizeof(*next_temp));
-            next_ye = (double *)malloc((size_t)next_capacity * sizeof(*next_ye));
-            next_vr = (double *)malloc((size_t)next_capacity * sizeof(*next_vr));
+            next_radius = (double *)prj_malloc((size_t)next_capacity * sizeof(*next_radius));
+            next_rho = (double *)prj_malloc((size_t)next_capacity * sizeof(*next_rho));
+            next_temp = (double *)prj_malloc((size_t)next_capacity * sizeof(*next_temp));
+            next_ye = (double *)prj_malloc((size_t)next_capacity * sizeof(*next_ye));
+            next_vr = (double *)prj_malloc((size_t)next_capacity * sizeof(*next_vr));
             if (next_radius == 0 || next_rho == 0 || next_temp == 0 || next_ye == 0 || next_vr == 0) {
                 fclose(fp);
                 free(next_radius);

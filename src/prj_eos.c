@@ -153,7 +153,7 @@ static void prj_eos_compact_table(prj_eos *eos)
     }
     slab_size = (size_t)eos->nt * (size_t)eos->nr * (size_t)eos->ny;
     compact_bytes = (size_t)PRJ_EOS_COMPACT_NUMEL * slab_size * sizeof(double);
-    compact = (double *)malloc(compact_bytes);
+    compact = (double *)prj_malloc(compact_bytes);
     if (compact == 0) {
         return;
     }
@@ -318,7 +318,7 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
 #if defined(PRJ_ENABLE_MPI)
     if (mpi != 0 && mpi->totrank > 1) {
         if (mpi->rank == 0) {
-            eos->table = (double *)malloc(expected_bytes);
+            eos->table = (double *)prj_malloc(expected_bytes);
             if (eos->table == 0) {
                 status = 1;
             } else {
@@ -350,7 +350,7 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
         }
 
         if (mpi->rank != 0) {
-            eos->table = (double *)malloc(expected_bytes);
+            eos->table = (double *)prj_malloc(expected_bytes);
             if (eos->table == 0) {
                 status = 1;
             }
@@ -370,7 +370,7 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
     }
 #endif
 
-    eos->table = (double *)malloc(expected_bytes);
+    eos->table = (double *)prj_malloc(expected_bytes);
     if (eos->table == 0) {
         return 1;
     }

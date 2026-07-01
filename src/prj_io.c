@@ -1063,7 +1063,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     if (prj_io_is_root_rank(mpi) && mesh->nblocks > 0) {
         hsize_t start_meta[2] = {0, 0};
         hsize_t count_meta[2] = {(hsize_t)mesh->nblocks, (hsize_t)PRJ_IO_METADATA_SIZE};
-        double *metadata = (double *)calloc((size_t)mesh->nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
+        double *metadata = (double *)prj_calloc((size_t)mesh->nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
 
         if (metadata == 0) {
             prj_io_fail("prj_io_write_restart: metadata allocation failed");
@@ -1105,7 +1105,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
         count_data[0] = (hsize_t)run_len;
         count_data[1] = (hsize_t)PRJ_NVAR_PRIM;
         count_data[2] = (hsize_t)ncells;
-        buffer = (double *)calloc((size_t)run_len * (size_t)PRJ_NVAR_PRIM * ncells, sizeof(*buffer));
+        buffer = (double *)prj_calloc((size_t)run_len * (size_t)PRJ_NVAR_PRIM * ncells, sizeof(*buffer));
         if (buffer == 0) {
             prj_io_fail("prj_io_write_restart: allocation failed");
         }
@@ -1166,7 +1166,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
         count_bf[0] = (hsize_t)run_len;
         count_bf[1] = 3;
         count_bf[2] = (hsize_t)PRJ_BLOCK_NFACES;
-        buffer = (double *)calloc((size_t)run_len * 3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*buffer));
+        buffer = (double *)prj_calloc((size_t)run_len * 3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*buffer));
         if (buffer == 0) {
             prj_io_fail("prj_io_write_restart: Bf allocation failed");
         }
@@ -1269,7 +1269,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     }
     mesh->nblocks = nblocks;
 
-    metadata = (double *)calloc((size_t)nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
+    metadata = (double *)prj_calloc((size_t)nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
     if (metadata == 0) {
         prj_io_fail("prj_io_read_restart: allocation failed");
     }
@@ -1360,7 +1360,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         count_data[0] = (hsize_t)run_len;
         count_data[1] = (hsize_t)PRJ_NVAR_PRIM;
         count_data[2] = (hsize_t)ncells;
-        buffer = (double *)calloc((size_t)run_len * (size_t)PRJ_NVAR_PRIM * ncells, sizeof(*buffer));
+        buffer = (double *)prj_calloc((size_t)run_len * (size_t)PRJ_NVAR_PRIM * ncells, sizeof(*buffer));
         if (buffer == 0) {
             prj_io_fail("prj_io_read_restart: allocation failed");
         }
@@ -1394,7 +1394,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         {
             hsize_t start_bf[3] = {(hsize_t)run_start, 0, 0};
             hsize_t count_bf[3] = {(hsize_t)run_len, 3, (hsize_t)PRJ_BLOCK_NFACES};
-            double *bf_buffer = (double *)calloc((size_t)run_len * 3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*bf_buffer));
+            double *bf_buffer = (double *)prj_calloc((size_t)run_len * 3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*bf_buffer));
             int d;
             int n;
 
@@ -1568,7 +1568,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     if (prj_io_is_root_rank(mpi) && mesh->nblocks > 0) {
         hsize_t start_meta[2] = {0, 0};
         hsize_t count_meta[2] = {(hsize_t)mesh->nblocks, (hsize_t)PRJ_IO_METADATA_SIZE};
-        double *metadata = (double *)calloc((size_t)mesh->nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
+        double *metadata = (double *)prj_calloc((size_t)mesh->nblocks * PRJ_IO_METADATA_SIZE, sizeof(*metadata));
 
         if (metadata == 0) {
             prj_io_fail("prj_io_write_dump: metadata allocation failed");
@@ -1610,7 +1610,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
         count_data[0] = (hsize_t)run_len;
         count_data[1] = (hsize_t)PRJ_NVAR_PRIM;
         count_data[2] = (hsize_t)ncells;
-        buffer = (prj_io_dump_real *)calloc((size_t)run_len * (size_t)PRJ_NVAR_PRIM * ncells, sizeof(*buffer));
+        buffer = (prj_io_dump_real *)prj_calloc((size_t)run_len * (size_t)PRJ_NVAR_PRIM * ncells, sizeof(*buffer));
         if (buffer == 0) {
             prj_io_fail("prj_io_write_dump: data allocation failed");
         }
@@ -1670,7 +1670,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
         count_eos[0] = (hsize_t)run_len;
         count_eos[1] = (hsize_t)PRJ_NVAR_EOSVAR;
         count_eos[2] = (hsize_t)ncells;
-        buffer = (prj_io_dump_real *)calloc((size_t)run_len * (size_t)PRJ_NVAR_EOSVAR * ncells, sizeof(*buffer));
+        buffer = (prj_io_dump_real *)prj_calloc((size_t)run_len * (size_t)PRJ_NVAR_EOSVAR * ncells, sizeof(*buffer));
         if (buffer == 0) {
             prj_io_fail("prj_io_write_dump: eos allocation failed");
         }
@@ -1723,7 +1723,7 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
         count_bf[0] = (hsize_t)run_len;
         count_bf[1] = 3;
         count_bf[2] = (hsize_t)PRJ_BLOCK_NFACES;
-        buffer = (prj_io_dump_real *)calloc((size_t)run_len * 3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*buffer));
+        buffer = (prj_io_dump_real *)prj_calloc((size_t)run_len * 3U * (size_t)PRJ_BLOCK_NFACES, sizeof(*buffer));
         if (buffer == 0) {
             prj_io_fail("prj_io_write_dump: Bf allocation failed");
         }

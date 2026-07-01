@@ -310,19 +310,19 @@ int prj_block_alloc_data(prj_block *b)
     total_count += 2U * (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
 #endif
 
-    base = (double *)malloc(total_count * sizeof(*base));
+    base = (double *)prj_malloc(total_count * sizeof(*base));
     if (base == 0) {
         return 2;
     }
-    cell_derived_done = (int *)calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*cell_derived_done));
+    cell_derived_done = (int *)prj_calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*cell_derived_done));
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
-        face_fidelity[d] = (int *)calloc((size_t)PRJ_BLOCK_NFACES, sizeof(*face_fidelity[d]));
-        edge_fidelity[d] = (int *)calloc((size_t)PRJ_BLOCK_NEDGES, sizeof(*edge_fidelity[d]));
+        face_fidelity[d] = (int *)prj_calloc((size_t)PRJ_BLOCK_NFACES, sizeof(*face_fidelity[d]));
+        edge_fidelity[d] = (int *)prj_calloc((size_t)PRJ_BLOCK_NEDGES, sizeof(*edge_fidelity[d]));
     }
 #endif
-    ridx = (int *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
-    fr = (double *)malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
+    ridx = (int *)prj_malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
+    fr = (double *)prj_malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
     if (cell_derived_done == 0 ||
 #if PRJ_MHD
         face_fidelity[0] == 0 || face_fidelity[1] == 0 || face_fidelity[2] == 0 ||
@@ -1176,7 +1176,7 @@ int prj_mesh_rebuild_morton_lookup(prj_mesh *mesh)
     }
     if (mesh->morton_lookup_capacity != capacity) {
         prj_morton_lookup_entry *lookup =
-            (prj_morton_lookup_entry *)calloc((size_t)capacity, sizeof(*lookup));
+            (prj_morton_lookup_entry *)prj_calloc((size_t)capacity, sizeof(*lookup));
 
         if (lookup == 0) {
             mesh->morton_lookup_count = 0;
@@ -1319,7 +1319,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     }
     mesh->max_blocks = capacity;
 
-    mesh->blocks = (prj_block *)malloc((size_t)capacity * sizeof(*mesh->blocks));
+    mesh->blocks = (prj_block *)prj_malloc((size_t)capacity * sizeof(*mesh->blocks));
     if (mesh->blocks == 0) {
         return 2;
     }

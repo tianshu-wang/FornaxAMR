@@ -60,13 +60,13 @@ static void prj_rad3_build_egroups(prj_rad *rad)
             fprintf(stderr, "prj_rad3_opac: invalid emin/emax for field %d\n", nu);
             exit(1);
         }
-        rad->egroup[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
-        rad->eedge[nu] = (double *)malloc((size_t)(PRJ_NEGROUP + 1) * sizeof(double));
-        rad->egroup_erg[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
-        rad->degroup_erg[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
-        rad->x_e[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
-        rad->log_egroup[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
-        rad->spec_factor[nu] = (double *)malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->egroup[nu] = (double *)prj_malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->eedge[nu] = (double *)prj_malloc((size_t)(PRJ_NEGROUP + 1) * sizeof(double));
+        rad->egroup_erg[nu] = (double *)prj_malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->degroup_erg[nu] = (double *)prj_malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->x_e[nu] = (double *)prj_malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->log_egroup[nu] = (double *)prj_malloc((size_t)PRJ_NEGROUP * sizeof(double));
+        rad->spec_factor[nu] = (double *)prj_malloc((size_t)PRJ_NEGROUP * sizeof(double));
         if (rad->egroup[nu] == 0 || rad->eedge[nu] == 0 || rad->egroup_erg[nu] == 0 ||
             rad->degroup_erg[nu] == 0 || rad->x_e[nu] == 0 || rad->log_egroup[nu] == 0 ||
             rad->spec_factor[nu] == 0) {
@@ -148,8 +148,8 @@ static void prj_rad3_read_param(prj_rad *rad)
             fprintf(stderr, "prj_rad3_opac: ngmax inconsistency in param file\n");
             exit(1);
         }
-        rad->enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
-        rad->log_enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
+        rad->enuk = (double *)prj_malloc((size_t)rad->ngmax * sizeof(double));
+        rad->log_enuk = (double *)prj_malloc((size_t)rad->ngmax * sizeof(double));
         if (rad->enuk == 0 || rad->log_enuk == 0) {
             fprintf(stderr, "prj_rad3_opac: enuk allocation failed\n");
             exit(1);
@@ -176,8 +176,8 @@ static void prj_rad3_read_param(prj_rad *rad)
     MPI_Bcast(&rad->yemin, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     MPI_Bcast(&rad->yemax, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     if (rank != 0) {
-        rad->enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
-        rad->log_enuk = (double *)malloc((size_t)rad->ngmax * sizeof(double));
+        rad->enuk = (double *)prj_malloc((size_t)rad->ngmax * sizeof(double));
+        rad->log_enuk = (double *)prj_malloc((size_t)rad->ngmax * sizeof(double));
         if (rad->enuk == 0 || rad->log_enuk == 0) {
             fprintf(stderr, "prj_rad3_opac: enuk allocation failed\n");
             exit(1);
@@ -223,7 +223,7 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
     dfr = (frmax - frmin) / (double)(ngmax - 1);
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
-        dest[nu] = (double *)malloc(opac_bytes * sizeof(double));
+        dest[nu] = (double *)prj_malloc(opac_bytes * sizeof(double));
         if (dest[nu] == 0) {
             fprintf(stderr, "prj_rad3_opac: opacity allocation failed for field %d\n", nu);
             exit(1);
@@ -320,7 +320,7 @@ void prj_rad3_opac_init(prj_rad *rad)
             fprintf(stderr, "prj_rad3_opac: cannot open %s\n", rad->table_file);
             exit(1);
         }
-        tmp = (float *)malloc(tmp_count * sizeof(float));
+        tmp = (float *)prj_malloc(tmp_count * sizeof(float));
         if (tmp == 0) {
             fprintf(stderr, "prj_rad3_opac: temp allocation failed\n");
             exit(1);

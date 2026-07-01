@@ -620,7 +620,7 @@ static void prj_boundary_copy_bf_same_level(const prj_block *src_block,
         if (count > max_count) max_count = count;
     }
 
-    buffer = (double *)malloc(max_count * sizeof(double));
+    buffer = (double *)prj_malloc(max_count * sizeof(double));
     if (buffer == 0) {
         fprintf(stderr, "prj_boundary_copy_bf_same_level: malloc failed\n");
         exit(EXIT_FAILURE);
@@ -682,7 +682,7 @@ static void prj_boundary_restrict_bf_to_coarse(const prj_block *fine,
         if (count > max_count) max_count = count;
     }
 
-    buffer = (double *)malloc(max_count * sizeof(double));
+    buffer = (double *)prj_malloc(max_count * sizeof(double));
     if (buffer == 0) {
         fprintf(stderr, "prj_boundary_restrict_bf_to_coarse: malloc failed\n");
         exit(EXIT_FAILURE);
@@ -787,9 +787,9 @@ static void prj_boundary_prolong_bf_to_fine(const prj_block *coarse,
         if (count > max_count) max_count = count;
     }
 
-    buf[0] = (double *)malloc(max_count * sizeof(double));
-    buf[1] = (double *)malloc(max_count * sizeof(double));
-    buf[2] = (double *)malloc(max_count * sizeof(double));
+    buf[0] = (double *)prj_malloc(max_count * sizeof(double));
+    buf[1] = (double *)prj_malloc(max_count * sizeof(double));
+    buf[2] = (double *)prj_malloc(max_count * sizeof(double));
     if (buf[0] == 0 || buf[1] == 0 || buf[2] == 0) {
         fprintf(stderr, "prj_boundary_prolong_bf_to_fine: malloc failed\n");
         exit(EXIT_FAILURE);

@@ -111,7 +111,7 @@ void prj_diagnostics_write_dqdt(const prj_mesh *mesh, const prj_mpi *mpi, double
         double *gathered = 0;
 
         if (mpi->rank == 0) {
-            gathered = (double *)calloc((size_t)mpi->totrank * PRJ_DQDT_NCOMP, sizeof(*gathered));
+            gathered = (double *)prj_calloc((size_t)mpi->totrank * PRJ_DQDT_NCOMP, sizeof(*gathered));
             if (gathered == 0) {
                 fprintf(stderr, "failed to allocate dqdt gather buffer\n");
                 MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);

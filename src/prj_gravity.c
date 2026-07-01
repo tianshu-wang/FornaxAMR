@@ -556,28 +556,28 @@ void prj_gravity_init(prj_sim *sim, const prj_mpi *mpi)
 
     grav->nbins = PRJ_GRAVITY_DEFAULT_NBINS;
 
-    grav->rf = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*grav->rf));
-    grav->ms = (double *)calloc((size_t)grav->nbins, sizeof(*grav->ms));
-    grav->phi = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*grav->phi));
-    grav->lapse = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*grav->lapse));
+    grav->rf = (double *)prj_calloc((size_t)grav->nbins + 1U, sizeof(*grav->rf));
+    grav->ms = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->ms));
+    grav->phi = (double *)prj_calloc((size_t)grav->nbins + 1U, sizeof(*grav->phi));
+    grav->lapse = (double *)prj_calloc((size_t)grav->nbins + 1U, sizeof(*grav->lapse));
     if (use_multipole) {
         size_t lm_count = (size_t)grav->nbins * (size_t)(LMAX * LMAX);
 
-        grav->Clm = (double *)calloc(lm_count, sizeof(*grav->Clm));
-        grav->Dlm = (double *)calloc(lm_count, sizeof(*grav->Dlm));
+        grav->Clm = (double *)prj_calloc(lm_count, sizeof(*grav->Clm));
+        grav->Dlm = (double *)prj_calloc(lm_count, sizeof(*grav->Dlm));
     }
-    grav->vol = (double *)calloc((size_t)grav->nbins, sizeof(*grav->vol));
-    grav->rho_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->rho_avg));
-    grav->vr_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->vr_avg));
-    grav->pgas_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->pgas_avg));
-    grav->uavg_int = (double *)calloc((size_t)grav->nbins, sizeof(*grav->uavg_int));
-    grav->erad_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->erad_avg));
-    grav->prad_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->prad_avg));
-    grav->vdotF_avg = (double *)calloc((size_t)grav->nbins, sizeof(*grav->vdotF_avg));
-    grav->reduce_avg_buf = (double *)calloc(9U * (size_t)grav->nbins,
+    grav->vol = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->vol));
+    grav->rho_avg = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->rho_avg));
+    grav->vr_avg = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->vr_avg));
+    grav->pgas_avg = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->pgas_avg));
+    grav->uavg_int = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->uavg_int));
+    grav->erad_avg = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->erad_avg));
+    grav->prad_avg = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->prad_avg));
+    grav->vdotF_avg = (double *)prj_calloc((size_t)grav->nbins, sizeof(*grav->vdotF_avg));
+    grav->reduce_avg_buf = (double *)prj_calloc(9U * (size_t)grav->nbins,
         sizeof(*grav->reduce_avg_buf));
     if (use_multipole) {
-        grav->reduce_lm_buf = (double *)calloc(2U * (size_t)(LMAX * LMAX) *
+        grav->reduce_lm_buf = (double *)prj_calloc(2U * (size_t)(LMAX * LMAX) *
             (size_t)grav->nbins, sizeof(*grav->reduce_lm_buf));
     }
     if (grav->rf == 0 || grav->ms == 0 || grav->phi == 0 ||
@@ -1460,11 +1460,11 @@ static int prj_gravity_monopole_integrate_profiles(prj_grav *grav)
         return 0;
     }
 
-    enclosed_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*enclosed_face));
-    baryon_mass_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*baryon_mass_face));
-    gamma_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*gamma_face));
+    enclosed_face = (double *)prj_calloc((size_t)grav->nbins + 1U, sizeof(*enclosed_face));
+    baryon_mass_face = (double *)prj_calloc((size_t)grav->nbins + 1U, sizeof(*baryon_mass_face));
+    gamma_face = (double *)prj_calloc((size_t)grav->nbins + 1U, sizeof(*gamma_face));
 #if PRJ_GRAVITY_USE_GR
-    accel_face = (double *)calloc((size_t)grav->nbins + 1U, sizeof(*accel_face));
+    accel_face = (double *)prj_calloc((size_t)grav->nbins + 1U, sizeof(*accel_face));
 #endif
     if (enclosed_face == 0 || baryon_mass_face == 0 || gamma_face == 0
 #if PRJ_GRAVITY_USE_GR

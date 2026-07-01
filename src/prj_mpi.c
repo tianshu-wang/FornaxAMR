@@ -249,7 +249,7 @@ static int prj_mpi_order_sort(prj_mpi_order_item *items, int count)
     if (count <= 1) {
         return 0;
     }
-    scratch = (prj_mpi_order_item *)malloc((size_t)count * sizeof(*scratch));
+    scratch = (prj_mpi_order_item *)prj_malloc((size_t)count * sizeof(*scratch));
     if (scratch == 0) {
         return 1;
     }
@@ -394,7 +394,7 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh, const prj_mpi *mpi)
             count += 1;
         }
     }
-    items = (prj_mpi_order_item *)malloc((size_t)count * sizeof(*items));
+    items = (prj_mpi_order_item *)prj_malloc((size_t)count * sizeof(*items));
     if (items == 0) {
         return;
     }
@@ -584,7 +584,7 @@ static void prj_mpi_print_balance(const prj_mesh *mesh, const prj_mpi *mpi)
         return;
     }
 
-    counts = (int *)calloc((size_t)mpi->totrank, sizeof(*counts));
+    counts = (int *)prj_calloc((size_t)mpi->totrank, sizeof(*counts));
     if (counts == 0) {
         return;
     }
@@ -749,7 +749,7 @@ static int prj_mpi_alloc_ghost_value_buffer(double **buffer,
         *buffer = 0;
         return 0;
     }
-    *buffer = (double *)calloc(value_count, sizeof(**buffer));
+    *buffer = (double *)prj_calloc(value_count, sizeof(**buffer));
     return *buffer == 0 ? 1 : 0;
 }
 
@@ -767,7 +767,7 @@ static int prj_mpi_alloc_ghost_rad_value_buffer(float **buffer,
         *buffer = 0;
         return 0;
     }
-    *buffer = (float *)calloc(value_count, sizeof(**buffer));
+    *buffer = (float *)prj_calloc(value_count, sizeof(**buffer));
     return *buffer == 0 ? 1 : 0;
 }
 #endif
@@ -824,9 +824,9 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     int req_n = 0;
 
     send_sizes = buffer->number > 0 ?
-        (int *)calloc((size_t)buffer->number, sizeof(*send_sizes)) : 0;
+        (int *)prj_calloc((size_t)buffer->number, sizeof(*send_sizes)) : 0;
     send_sizes_rad = buffer->number > 0 ?
-        (int *)calloc((size_t)buffer->number, sizeof(*send_sizes_rad)) : 0;
+        (int *)prj_calloc((size_t)buffer->number, sizeof(*send_sizes_rad)) : 0;
     if (buffer->number > 0 && (send_sizes == 0 || send_sizes_rad == 0)) {
         free(send_sizes);
         free(send_sizes_rad);
@@ -901,7 +901,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 
     if (record_count > 0) {
         for (axis = 0; axis < 3; ++axis) {
-            idx_send[axis] = (int *)calloc((size_t)record_count,
+            idx_send[axis] = (int *)prj_calloc((size_t)record_count,
                 sizeof(*idx_send[axis]));
         }
         if (idx_send[0] == 0 || idx_send[1] == 0 || idx_send[2] == 0) {
@@ -915,7 +915,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     }
     if (record_count_rad > 0) {
         for (axis = 0; axis < 3; ++axis) {
-            idx_send_rad[axis] = (int *)calloc((size_t)record_count_rad,
+            idx_send_rad[axis] = (int *)prj_calloc((size_t)record_count_rad,
                 sizeof(*idx_send_rad[axis]));
         }
         if (idx_send_rad[0] == 0 || idx_send_rad[1] == 0 || idx_send_rad[2] == 0) {
@@ -1053,9 +1053,9 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 
     MPI_Sendrecv(&buffer->number, 1, MPI_INT, buffer->receiver_rank, 100,
         &send_entries, 1, MPI_INT, buffer->receiver_rank, 100, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    buffer->cell_data_size_recv = (int *)calloc((size_t)send_entries + 1U,
+    buffer->cell_data_size_recv = (int *)prj_calloc((size_t)send_entries + 1U,
         sizeof(*buffer->cell_data_size_recv));
-    buffer->cell_data_size_recv_rad = (int *)calloc((size_t)send_entries + 1U,
+    buffer->cell_data_size_recv_rad = (int *)prj_calloc((size_t)send_entries + 1U,
         sizeof(*buffer->cell_data_size_recv_rad));
     if (buffer->cell_data_size_recv == 0 || buffer->cell_data_size_recv_rad == 0) {
         return 1;
@@ -1070,7 +1070,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     cell_size_total_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_recv_rad, send_entries);
     if (cell_size_total > 0) {
         for (axis = 0; axis < 3; ++axis) {
-            buffer->cell_data_idx_recv[axis] = (int *)calloc(
+            buffer->cell_data_idx_recv[axis] = (int *)prj_calloc(
                 (size_t)cell_size_total,
                 sizeof(*buffer->cell_data_idx_recv[axis]));
             if (buffer->cell_data_idx_recv[axis] == 0) {
@@ -1080,7 +1080,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     }
     if (cell_size_total_rad > 0) {
         for (axis = 0; axis < 3; ++axis) {
-            buffer->cell_data_idx_recv_rad[axis] = (int *)calloc(
+            buffer->cell_data_idx_recv_rad[axis] = (int *)prj_calloc(
                 (size_t)cell_size_total_rad,
                 sizeof(*buffer->cell_data_idx_recv_rad[axis]));
             if (buffer->cell_data_idx_recv_rad[axis] == 0) {
@@ -2628,21 +2628,21 @@ static int prj_mpi_build_bf_plan_for_neighbor(const prj_mesh *mesh,
     buffer->bf_recv_record_capacity = max_recv_records;
     buffer->bf_recv_value_capacity = max_recv_values;
     if (max_send_records > 0) {
-        buffer->bf_headers_send = (int *)calloc(
+        buffer->bf_headers_send = (int *)prj_calloc(
             (size_t)max_send_records * (size_t)PRJ_MPI_BF_HEADER_NINT,
             sizeof(*buffer->bf_headers_send));
     }
     if (max_send_values > 0) {
-        buffer->bf_values_send = (double *)calloc((size_t)max_send_values,
+        buffer->bf_values_send = (double *)prj_calloc((size_t)max_send_values,
             sizeof(*buffer->bf_values_send));
     }
     if (max_recv_records > 0) {
-        buffer->bf_headers_recv = (int *)calloc(
+        buffer->bf_headers_recv = (int *)prj_calloc(
             (size_t)max_recv_records * (size_t)PRJ_MPI_BF_HEADER_NINT,
             sizeof(*buffer->bf_headers_recv));
     }
     if (max_recv_values > 0) {
-        buffer->bf_values_recv = (double *)calloc((size_t)max_recv_values,
+        buffer->bf_values_recv = (double *)prj_calloc((size_t)max_recv_values,
             sizeof(*buffer->bf_values_recv));
     }
     if ((max_send_records > 0 && buffer->bf_headers_send == 0) ||
@@ -2663,7 +2663,7 @@ static int prj_mpi_build_bf_plan_for_neighbor(const prj_mesh *mesh,
             buffer->cell_recv_count_rad_by_kind[fill_kind]);
 
         if (buffer->bf_send_value_count[fill_kind] > 0) {
-            double *grown = (double *)realloc(buffer->cell_buffer_send_by_kind[fill_kind],
+            double *grown = (double *)prj_realloc(buffer->cell_buffer_send_by_kind[fill_kind],
                 (cell_send + (size_t)buffer->bf_send_value_count[fill_kind]) * sizeof(double));
 
             if (grown == 0) {
@@ -2672,7 +2672,7 @@ static int prj_mpi_build_bf_plan_for_neighbor(const prj_mesh *mesh,
             buffer->cell_buffer_send_by_kind[fill_kind] = grown;
         }
         if (buffer->bf_recv_value_count[fill_kind] > 0) {
-            double *grown = (double *)realloc(buffer->cell_buffer_recv_by_kind[fill_kind],
+            double *grown = (double *)prj_realloc(buffer->cell_buffer_recv_by_kind[fill_kind],
                 (cell_recv + (size_t)buffer->bf_recv_value_count[fill_kind]) * sizeof(double));
 
             if (grown == 0) {
@@ -3091,16 +3091,16 @@ static int prj_mpi_build_amr_bf_plan_for_neighbor(const prj_mesh *mesh, const pr
     buffer->amr_bf_recv_record_capacity = recv_counts[0];
     buffer->amr_bf_recv_value_capacity = recv_counts[1];
     if (send_counts[1] > 0) {
-        buffer->amr_bf_values_send = (double *)calloc(
+        buffer->amr_bf_values_send = (double *)prj_calloc(
             (size_t)send_counts[1], sizeof(*buffer->amr_bf_values_send));
     }
     if (recv_counts[0] > 0) {
-        buffer->amr_bf_headers_recv = (int *)calloc(
+        buffer->amr_bf_headers_recv = (int *)prj_calloc(
             (size_t)recv_counts[0] * (size_t)PRJ_MPI_AMR_BF_HEADER_NINT,
             sizeof(*buffer->amr_bf_headers_recv));
     }
     if (recv_counts[1] > 0) {
-        buffer->amr_bf_values_recv = (double *)calloc(
+        buffer->amr_bf_values_recv = (double *)prj_calloc(
             (size_t)recv_counts[1], sizeof(*buffer->amr_bf_values_recv));
     }
     if ((send_counts[1] > 0 && buffer->amr_bf_values_send == 0) ||
@@ -3134,12 +3134,12 @@ static int prj_mpi_build_amr_bf_cache(prj_mpi *mpi)
     mpi->amr_bf_record_count = 0;
     mpi->amr_bf_value_count = 0;
     if (record_capacity > 0) {
-        mpi->amr_bf_headers = (int *)calloc(
+        mpi->amr_bf_headers = (int *)prj_calloc(
             (size_t)record_capacity * (size_t)PRJ_MPI_AMR_BF_HEADER_NINT,
             sizeof(*mpi->amr_bf_headers));
     }
     if (value_capacity > 0) {
-        mpi->amr_bf_values = (double *)calloc((size_t)value_capacity,
+        mpi->amr_bf_values = (double *)prj_calloc((size_t)value_capacity,
             sizeof(*mpi->amr_bf_values));
     }
     if ((record_capacity > 0 && mpi->amr_bf_headers == 0) ||
@@ -3554,29 +3554,29 @@ static int prj_mpi_build_emf_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi,
     }
     for (axis = 0; axis < 3; ++axis) {
         if (buffer->emf_send_count > 0) {
-            buffer->emf_idx_send[axis] = (int *)calloc(
+            buffer->emf_idx_send[axis] = (int *)prj_calloc(
                 (size_t)buffer->emf_send_count,
                 sizeof(*buffer->emf_idx_send[axis]));
-            buffer->emf_src_idx[axis] = (int *)calloc(
+            buffer->emf_src_idx[axis] = (int *)prj_calloc(
                 (size_t)buffer->emf_send_count,
                 sizeof(*buffer->emf_src_idx[axis]));
         }
         if (buffer->emf_recv_count > 0) {
-            buffer->emf_idx_recv[axis] = (int *)calloc(
+            buffer->emf_idx_recv[axis] = (int *)prj_calloc(
                 (size_t)buffer->emf_recv_count,
                 sizeof(*buffer->emf_idx_recv[axis]));
         }
     }
     if (buffer->emf_send_count > 0) {
-        buffer->emf_value_send = (double *)calloc(
+        buffer->emf_value_send = (double *)prj_calloc(
             (size_t)buffer->emf_send_count, sizeof(*buffer->emf_value_send));
-        buffer->emf_src_block = (int *)calloc(
+        buffer->emf_src_block = (int *)prj_calloc(
             (size_t)buffer->emf_send_count, sizeof(*buffer->emf_src_block));
-        buffer->emf_src_dir = (int *)calloc(
+        buffer->emf_src_dir = (int *)prj_calloc(
             (size_t)buffer->emf_send_count, sizeof(*buffer->emf_src_dir));
     }
     if (buffer->emf_recv_count > 0) {
-        buffer->emf_value_recv = (double *)calloc(
+        buffer->emf_value_recv = (double *)prj_calloc(
             (size_t)buffer->emf_recv_count, sizeof(*buffer->emf_value_recv));
     }
     for (axis = 0; axis < 3; ++axis) {
@@ -3785,18 +3785,18 @@ static int prj_mpi_build_flux_plan_for_neighbor(prj_mesh *mesh,
         return 1;
     }
     if (buffer->flux_send_count > 0) {
-        buffer->flux_idx_send = (int *)calloc(
+        buffer->flux_idx_send = (int *)prj_calloc(
             (size_t)5 * (size_t)buffer->flux_send_count,
             sizeof(*buffer->flux_idx_send));
-        buffer->flux_value_send = (double *)calloc(
+        buffer->flux_value_send = (double *)prj_calloc(
             (size_t)buffer->flux_send_count * (size_t)PRJ_NVAR_CONS,
             sizeof(*buffer->flux_value_send));
     }
     if (buffer->flux_recv_count > 0) {
-        buffer->flux_idx_recv = (int *)calloc(
+        buffer->flux_idx_recv = (int *)prj_calloc(
             (size_t)5 * (size_t)buffer->flux_recv_count,
             sizeof(*buffer->flux_idx_recv));
-        buffer->flux_value_recv = (double *)calloc(
+        buffer->flux_value_recv = (double *)prj_calloc(
             (size_t)buffer->flux_recv_count * (size_t)PRJ_NVAR_CONS,
             sizeof(*buffer->flux_value_recv));
     }
@@ -3922,7 +3922,7 @@ static int prj_mpi_prepare_request_buffer(prj_mpi *mpi)
         return 1;
     }
     capacity = 12 * mpi->neighbor_number;
-    mpi->request_buffer = calloc((size_t)capacity, sizeof(MPI_Request));
+    mpi->request_buffer = prj_calloc((size_t)capacity, sizeof(MPI_Request));
     if (mpi->request_buffer == 0) {
         return 1;
     }
@@ -4015,7 +4015,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
         return;
     }
     prj_mpi_clear_neighbors(mpi);
-    rank_seen = (int *)calloc((size_t)mpi->totrank, sizeof(*rank_seen));
+    rank_seen = (int *)prj_calloc((size_t)mpi->totrank, sizeof(*rank_seen));
     if (rank_seen == 0) {
         return;
     }
@@ -4043,7 +4043,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
     }
     mpi->neighbor_number = count;
     mpi->neighbor_buffer = count > 0 ?
-        (prj_mpi_buffer *)calloc((size_t)count, sizeof(*mpi->neighbor_buffer)) : 0;
+        (prj_mpi_buffer *)prj_calloc((size_t)count, sizeof(*mpi->neighbor_buffer)) : 0;
     if (count > 0 && mpi->neighbor_buffer == 0) {
         mpi->neighbor_number = 0;
         free(rank_seen);
@@ -4076,7 +4076,7 @@ void prj_mpi_prepare(prj_mesh *mesh, prj_mpi *mpi)
             }
         }
         buffer->number = occ;
-        buffer->receiver_blocks = (int *)calloc((size_t)occ, sizeof(*buffer->receiver_blocks));
+        buffer->receiver_blocks = (int *)prj_calloc((size_t)occ, sizeof(*buffer->receiver_blocks));
         if (buffer->receiver_blocks != 0) {
             int idx = 0;
 
@@ -4645,9 +4645,9 @@ void prj_mpi_rebalance(prj_mesh *mesh, prj_mpi *mpi)
     if (mesh == 0 || mpi == 0) {
         return;
     }
-    old_ranks = (int *)calloc((size_t)mesh->nblocks, sizeof(*old_ranks));
-    counts_before = (int *)calloc((size_t)mpi->totrank, sizeof(*counts_before));
-    counts_after = (int *)calloc((size_t)mpi->totrank, sizeof(*counts_after));
+    old_ranks = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*old_ranks));
+    counts_before = (int *)prj_calloc((size_t)mpi->totrank, sizeof(*counts_before));
+    counts_after = (int *)prj_calloc((size_t)mpi->totrank, sizeof(*counts_after));
     if (old_ranks == 0 || counts_before == 0 || counts_after == 0) {
         free(counts_after);
         free(counts_before);

@@ -156,10 +156,10 @@ static void prj_amr_sync_refine_flags(prj_mesh *mesh, const prj_mpi *mpi)
     if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
         return;
     }
-    local_pos = (int *)calloc((size_t)mesh->nblocks, sizeof(*local_pos));
-    global_pos = (int *)calloc((size_t)mesh->nblocks, sizeof(*global_pos));
-    local_neg = (int *)calloc((size_t)mesh->nblocks, sizeof(*local_neg));
-    global_neg = (int *)calloc((size_t)mesh->nblocks, sizeof(*global_neg));
+    local_pos = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*local_pos));
+    global_pos = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*global_pos));
+    local_neg = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*local_neg));
+    global_neg = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*global_neg));
     if (local_pos == 0 || global_pos == 0 || local_neg == 0 || global_neg == 0) {
         free(local_pos);
         free(global_pos);
@@ -1361,11 +1361,11 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi)
         return;
     }
 
-    local_pos = (int *)calloc((size_t)mesh->nblocks, sizeof(*local_pos));
-    local_neg = (int *)calloc((size_t)mesh->nblocks, sizeof(*local_neg));
-    global_pos = (int *)calloc((size_t)mesh->nblocks, sizeof(*global_pos));
-    global_neg = (int *)calloc((size_t)mesh->nblocks, sizeof(*global_neg));
-    boundary_mask = (unsigned int *)calloc((size_t)mesh->nblocks, sizeof(*boundary_mask));
+    local_pos = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*local_pos));
+    local_neg = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*local_neg));
+    global_pos = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*global_pos));
+    global_neg = (int *)prj_calloc((size_t)mesh->nblocks, sizeof(*global_neg));
+    boundary_mask = (unsigned int *)prj_calloc((size_t)mesh->nblocks, sizeof(*boundary_mask));
     if (local_pos == 0 || local_neg == 0 || global_pos == 0 || global_neg == 0 ||
         boundary_mask == 0) {
         free(local_pos);
@@ -1684,7 +1684,7 @@ static void prj_amr_mhd_pack_prolong_bf_buffer(const prj_block *parent,
             count *= buf_n[dir][d];
         }
 
-        buf[dir] = (double *)malloc((size_t)count * sizeof(double));
+        buf[dir] = (double *)prj_malloc((size_t)count * sizeof(double));
         if (buf[dir] == 0) {
             prj_amr_mhd_free_prolong_bf_buffer(buf);
             prj_amr_mhd_fail("prj_amr_mhd_pack_prolong_bf_buffer: malloc failed");
@@ -2293,9 +2293,9 @@ int prj_amr_adapt(prj_mesh *mesh, prj_eos *eos, prj_mpi *mpi)
     }
     PRJ_SUBTIMER_START("sub_amr_alloc");
     if (mesh->nblocks_max > 0) {
-        neighbor_dirty = (int *)calloc((size_t)mesh->nblocks_max,
+        neighbor_dirty = (int *)prj_calloc((size_t)mesh->nblocks_max,
             sizeof(*neighbor_dirty));
-        changed_blocks = (int *)calloc((size_t)mesh->nblocks_max,
+        changed_blocks = (int *)prj_calloc((size_t)mesh->nblocks_max,
             sizeof(*changed_blocks));
     }
     PRJ_SUBTIMER_STOP("sub_amr_alloc");

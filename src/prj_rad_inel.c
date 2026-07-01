@@ -138,7 +138,7 @@ static void prj_rad_eleinel_read_table(const prj_rad *rad, int nu,
 
 static double *prj_rad_eleinel_relayout_table(double *old_table, size_t count, int nu)
 {
-    double *new_table = (double *)malloc(count * sizeof(*new_table));
+    double *new_table = (double *)prj_malloc(count * sizeof(*new_table));
     int ng = PRJ_NEGROUP;
     int m;
     int ke;
@@ -188,7 +188,7 @@ void prj_rad_eleinel_init(prj_rad *rad)
         * (size_t)INEL_PHI_NETA * (size_t)INEL_PHI_NT;
 
     for (nu = 0; nu < PRJ_NRAD; nu++) {
-        double *old_table = (double *)malloc(ee_count * sizeof(*old_table));
+        double *old_table = (double *)prj_malloc(ee_count * sizeof(*old_table));
 
         if (old_table == 0) {
             fprintf(stderr, "prj_rad_inel: allocation failed for species %d\n", nu);
