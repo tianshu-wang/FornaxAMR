@@ -4,6 +4,7 @@
 #include "prj_types.h"
 
 int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int max_level, const prj_coord *coord);
+size_t prj_block_data_count(void);
 int prj_block_alloc_data(prj_block *b);
 void prj_block_free_data(prj_block *b);
 void prj_block_setup_geometry(prj_block *b, const prj_coord *coord);

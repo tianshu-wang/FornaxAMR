@@ -270,6 +270,35 @@ static void prj_block_init_empty(prj_block *b)
     }
 }
 
+/* Number of doubles in a block's flat cell-data array (the single contiguous
+ * allocation rooted at block->W).  This is the SINGLE SOURCE OF TRUTH for the
+ * flat layout size: prj_block_alloc_data allocates exactly this many doubles,
+ * and MPI block migration transfers exactly this many, so the two can never
+ * drift apart.  It must stay in lockstep with the field carving below. */
+size_t prj_block_data_count(void)
+{
+    size_t prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+        (size_t)PRJ_BLOCK_NCELLS;
+    size_t eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
+    size_t cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    size_t deriv_count = (size_t)PRJ_BLOCK_NSTAGES * cons_count;
+    size_t total_count;
+
+    total_count = prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
+    total_count += 2U * deriv_count;
+    total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
+    total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_MHD
+    total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES +
+        6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
+    total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES;
+#endif
+#if PRJ_NRAD > 0
+    total_count += 2U * (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
+#endif
+    return total_count;
+}
+
 int prj_block_alloc_data(prj_block *b)
 {
     size_t prim_count;
@@ -297,18 +326,7 @@ int prj_block_alloc_data(prj_block *b)
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     deriv_count = (size_t)PRJ_BLOCK_NSTAGES * cons_count;
-    total_count = prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
-    total_count += 2U * deriv_count;
-    total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
-    total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
-#if PRJ_MHD
-    total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES +
-        6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
-    total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES;
-#endif
-#if PRJ_NRAD > 0
-    total_count += 2U * (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS;
-#endif
+    total_count = prj_block_data_count();
 
     base = (double *)prj_malloc(total_count * sizeof(*base));
     if (base == 0) {

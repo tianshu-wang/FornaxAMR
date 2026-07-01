@@ -213,40 +213,10 @@ static void prj_zero_block_arrays(prj_block *b)
         return;
     }
 
-    total = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
-        (size_t)PRJ_BLOCK_NCELLS +
-        (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
-        (size_t)5U * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS +
-        9U * (size_t)PRJ_BLOCK_NCELLS
-        + 5U * (size_t)PRJ_BLOCK_NCELLS
-        + (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS
-#if PRJ_MHD
-        + 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES
-        + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
-#endif
-        ;
+    total = prj_block_data_count();
     for (n = 0; n < total; ++n) {
         b->W[n] = 0.0;
     }
-}
-
-static size_t prj_block_data_count(void)
-{
-    size_t prim_count;
-    size_t cons_count;
-
-    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
-        (size_t)PRJ_BLOCK_NCELLS;
-    cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return prim_count + (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS +
-        5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS
-        + 5U * (size_t)PRJ_BLOCK_NCELLS
-        + (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS
-#if PRJ_MHD
-        + 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES
-        + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
-#endif
-        ;
 }
 
 static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, const prj_mpi *mpi, prj_block *parent)

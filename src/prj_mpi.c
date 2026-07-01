@@ -337,23 +337,9 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh, const prj_mpi *mpi)
 
 static size_t prj_mpi_block_data_count(void)
 {
-    size_t prim_count;
-    size_t eosvar_count;
-    size_t cons_count;
-
-    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
-        (size_t)PRJ_BLOCK_NCELLS;
-    eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
-    cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
-    return prim_count + eosvar_count + 5U * cons_count +
-        9U * (size_t)PRJ_BLOCK_NCELLS
-        + 5U * (size_t)PRJ_BLOCK_NCELLS
-        + (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS
-#if PRJ_MHD
-        + 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES
-        + 6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES
-#endif
-        ;
+    /* Delegate to the single source of truth in prj_mesh.c so the migration
+     * transfer length can never drift from the actual block allocation. */
+    return prj_block_data_count();
 }
 
 static void prj_mpi_sync_slot_ranks(prj_mesh *mesh)
