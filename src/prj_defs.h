@@ -59,24 +59,34 @@
 #ifndef IMEX
 #define IMEX PRJ_TIMEINT_IMEX
 #endif
-#ifndef PRJ_TIMEINT_TABLEAU_NAME
-#define PRJ_TIMEINT_TABLEAU_NAME prj_2s2pe2pi2plinKInf
-#endif
-#ifndef PRJ_TIMEINT_TABLEAU_NSTAGES
-#define PRJ_TIMEINT_TABLEAU_NSTAGES 2
-#endif
 /* === Time integration scheme (single source of truth) ===================
- * Change the scheme by editing the line below to one of:
- *   IMEX, RK2, eSSPRK9_2, eSSPRK9_3
- * No Makefile edit is needed.  For an explicit SSPRK with a different stage
- * count, keep TIME_INTEGRATION eSSPRK9_2 and set PRJ_TIMEINT_ESSPRK_N below.
- * (The build may still override either macro from the command line, e.g.
- *  `make TIME_INTEGRATION=RK2`, in which case that wins over these.) */
+ * These defaults are authoritative; the build only overrides them when the
+ * corresponding -D is passed on the command line (see the Makefile's
+ * TIME_INTEGRATION_DEF), so editing here is enough -- no Makefile edit needed.
+ *
+ * Select the scheme with TIME_INTEGRATION: IMEX, RK2, eSSPRK9_2, eSSPRK9_3.
+ *   - eSSPRK9_2 with a different stage count: set PRJ_TIMEINT_ESSPRK_N.
+ *   - IMEX with a different Butcher tableau: set PRJ_TIMEINT_TABLEAU_NAME and
+ *     PRJ_TIMEINT_TABLEAU_NSTAGES.  These two MUST agree: NSTAGES must equal the
+ *     stage count of the named tableau struct in rk_tableau/, otherwise the
+ *     integrator indexes a wrong-sized coefficient array (silent, no error).
+ *
+ * Command-line overrides win, e.g.:
+ *   make TIME_INTEGRATION=RK2
+ *   make TIME_INTEGRATION=IMEX PRJ_TIMEINT_TABLEAU_NAME=prj_godunov_rk2 \
+ *        PRJ_TIMEINT_TABLEAU_NSTAGES=3
+ */
 #ifndef TIME_INTEGRATION
 #define TIME_INTEGRATION IMEX
 #endif
 #ifndef PRJ_TIMEINT_ESSPRK_N
 #define PRJ_TIMEINT_ESSPRK_N 9
+#endif
+#ifndef PRJ_TIMEINT_TABLEAU_NAME
+#define PRJ_TIMEINT_TABLEAU_NAME prj_2s2pe2pi2plinKInf
+#endif
+#ifndef PRJ_TIMEINT_TABLEAU_NSTAGES
+#define PRJ_TIMEINT_TABLEAU_NSTAGES 2
 #endif
 #if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
 #if PRJ_TIMEINT_ESSPRK_N < 2
