@@ -19,6 +19,9 @@
 #ifndef PRJ_USE_RADIATION_M1
 #define PRJ_USE_RADIATION_M1 0
 #endif
+#ifndef PRJ_USE_RADIATION_FSA
+#define PRJ_USE_RADIATION_FSA 0
+#endif
 
 #ifndef PRJ_DUMP_SINGLE_PRECISION
 #define PRJ_DUMP_SINGLE_PRECISION 1
@@ -129,7 +132,7 @@ typedef double prj_table_real;
 #define PRJ_TIMEINT_USES_ESSPRK_STEP 0
 #endif
 
-#if PRJ_USE_RADIATION_M1
+#if PRJ_USE_RADIATION_M1 || PRJ_USE_RADIATION_FSA
 #ifndef PRJ_NRAD
 #define PRJ_NRAD 3
 #endif
@@ -152,6 +155,12 @@ typedef double prj_table_real;
 #endif
 #ifndef PRJ_NEGROUP
 #define PRJ_NEGROUP 12
+#endif
+#ifndef PRJ_NANGLE
+#define PRJ_NANGLE 12
+#endif
+#if PRJ_USE_RADIATION_FSA && PRJ_NANGLE < 1
+#error "PRJ_NANGLE must be at least 1 for RADIATION_FSA"
 #endif
 #ifndef INEL_PHI_NT
 #define INEL_PHI_NT 30

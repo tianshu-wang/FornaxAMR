@@ -290,6 +290,10 @@ struct prj_rad {
     char filename[100];
     int maxiter;
     double implicit_err_tol;
+#if PRJ_USE_RADIATION_FSA
+    double n0[PRJ_NANGLE][3];
+    double solid_angle[PRJ_NANGLE];
+#endif
 #if PRJ_NRAD > 0
     double chi[NCLOSURE + 1];
     double q[NCLOSURE + 1];

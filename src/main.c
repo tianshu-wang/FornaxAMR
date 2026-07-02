@@ -226,6 +226,13 @@ static void prj_print_config(const prj_sim *sim, int rank)
         "off"
 #endif
     );
+    fprintf(stderr, "radiation_fsa: %s\n",
+#if PRJ_USE_RADIATION_FSA
+        "on"
+#else
+        "off"
+#endif
+    );
     fprintf(stderr, "gravity: %s\n",
 #if PRJ_USE_GRAVITY
         "on"

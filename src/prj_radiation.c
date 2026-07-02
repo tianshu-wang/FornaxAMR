@@ -5,6 +5,10 @@
 
 #include "prj.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 static double prj_rad_m1_chi_exact(double f)
 {
     if (f <= 0.0) {
@@ -106,8 +110,35 @@ static double prj_rad_levermore_q_factor(const prj_rad *rad, double f)
 }
 #endif
 
+#if PRJ_USE_RADIATION_FSA
+static void prj_rad_fsa_init_angles(prj_rad *rad)
+{
+    const double golden_angle = 2.39996322972865332223;
+    const double dOmega = 4.0 * M_PI / (double)PRJ_NANGLE;
+    int n;
+
+    if (rad == 0) {
+        return;
+    }
+
+    for (n = 0; n < PRJ_NANGLE; ++n) {
+        double z = 1.0 - 2.0 * ((double)n + 0.5) / (double)PRJ_NANGLE;
+        double r = sqrt(fmax(0.0, 1.0 - z * z));
+        double phi = golden_angle * (double)n;
+
+        rad->n0[n][0] = r * cos(phi);
+        rad->n0[n][1] = r * sin(phi);
+        rad->n0[n][2] = z;
+        rad->solid_angle[n] = dOmega;
+    }
+}
+#endif
+
 void prj_rad_init(prj_rad *rad)
 {
+#if PRJ_USE_RADIATION_FSA
+    prj_rad_fsa_init_angles(rad);
+#endif
 #if PRJ_NRAD > 0
     prj_rad_init_closure(rad);
     prj_rad3_opac_init(rad);
