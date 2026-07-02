@@ -17,7 +17,7 @@ make clean
 
 Feature flags (override defaults from `setup.mk`):
 ```bash
-make GRAVITY=1 RADIATION=1 MHD=1
+make GRAVITY=1 RADIATION_M1=1 MHD=1
 ```
 
 Machine-specific configs live in `machines/*.mk` (use `macos.mk` for local dev). Symlink or copy to `machine.mk` before building. Setup configs (`setups/*.mk`) set default feature flags per problem type.

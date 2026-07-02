@@ -219,8 +219,8 @@ static void prj_print_config(const prj_sim *sim, int rank)
         "off"
 #endif
     );
-    fprintf(stderr, "radiation: %s\n",
-#if PRJ_USE_RADIATION
+    fprintf(stderr, "radiation_m1: %s\n",
+#if PRJ_USE_RADIATION_M1
         "on"
 #else
         "off"

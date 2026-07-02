@@ -16,8 +16,8 @@
 #define PRJ_TIMER 0
 #endif
 
-#ifndef PRJ_USE_RADIATION
-#define PRJ_USE_RADIATION 0
+#ifndef PRJ_USE_RADIATION_M1
+#define PRJ_USE_RADIATION_M1 0
 #endif
 
 #ifndef PRJ_DUMP_SINGLE_PRECISION
@@ -129,7 +129,7 @@ typedef double prj_table_real;
 #define PRJ_TIMEINT_USES_ESSPRK_STEP 0
 #endif
 
-#if PRJ_USE_RADIATION
+#if PRJ_USE_RADIATION_M1
 #ifndef PRJ_NRAD
 #define PRJ_NRAD 3
 #endif
