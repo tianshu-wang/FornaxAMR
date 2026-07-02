@@ -111,33 +111,367 @@ static double prj_rad_levermore_q_factor(const prj_rad *rad, double f)
 #endif
 
 #if PRJ_USE_RADIATION_FSA
-static void prj_rad_fsa_init_angles(prj_rad *rad)
+#define PRJ_RAD_FSA_ICOS_NVERT 12
+#define PRJ_RAD_FSA_ICOS_NFACE 20
+#define PRJ_RAD_FSA_MAX_CELL_VERTS 6
+#define PRJ_RAD_FSA_NTRI (20 * (PRJ_N_ANGLE_LEV) * (PRJ_N_ANGLE_LEV))
+
+typedef struct prj_rad_fsa_triangle {
+    int v[3];
+    double center[3];
+} prj_rad_fsa_triangle;
+
+typedef struct prj_rad_fsa_cell {
+    int tri[PRJ_RAD_FSA_MAX_CELL_VERTS];
+    int ntri;
+} prj_rad_fsa_cell;
+
+static void prj_rad_fsa_fail(const char *msg)
 {
-    const double golden_angle = 2.39996322972865332223;
-    const double dOmega = 4.0 * M_PI / (double)PRJ_NANGLE;
+    fprintf(stderr, "prj_rad_fsa_calculate_directions: %s\n", msg);
+    exit(EXIT_FAILURE);
+}
+
+static double prj_rad_fsa_dot(const double a[3], const double b[3])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+static void prj_rad_fsa_cross(const double a[3], const double b[3], double c[3])
+{
+    c[0] = a[1] * b[2] - a[2] * b[1];
+    c[1] = a[2] * b[0] - a[0] * b[2];
+    c[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static void prj_rad_fsa_normalize(double a[3])
+{
+    double n = sqrt(prj_rad_fsa_dot(a, a));
+
+    if (n <= 0.0) {
+        prj_rad_fsa_fail("zero-length vector");
+    }
+    a[0] /= n;
+    a[1] /= n;
+    a[2] /= n;
+}
+
+static void prj_rad_fsa_init_icosahedron(double x[PRJ_RAD_FSA_ICOS_NVERT][3])
+{
+    const double phi = 0.5 * (1.0 + sqrt(5.0));
+    double raw[PRJ_RAD_FSA_ICOS_NVERT][3] = {
+        {-1.0,  phi,  0.0}, { 1.0,  phi,  0.0},
+        {-1.0, -phi,  0.0}, { 1.0, -phi,  0.0},
+        { 0.0, -1.0,  phi}, { 0.0,  1.0,  phi},
+        { 0.0, -1.0, -phi}, { 0.0,  1.0, -phi},
+        { phi,  0.0, -1.0}, { phi,  0.0,  1.0},
+        {-phi,  0.0, -1.0}, {-phi,  0.0,  1.0}
+    };
+    int i;
+    int d;
+
+    for (i = 0; i < PRJ_RAD_FSA_ICOS_NVERT; ++i) {
+        for (d = 0; d < 3; ++d) {
+            x[i][d] = raw[i][d];
+        }
+        prj_rad_fsa_normalize(x[i]);
+    }
+}
+
+static void prj_rad_fsa_flat_face_point(
+    const double ico[PRJ_RAD_FSA_ICOS_NVERT][3], const int face[3],
+    int i, int j, double p[3])
+{
+    const int nlev = PRJ_N_ANGLE_LEV;
+    double w0 = (double)(nlev - i - j);
+    double w1 = (double)i;
+    double w2 = (double)j;
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        p[d] = (w0 * ico[face[0]][d] + w1 * ico[face[1]][d] +
+            w2 * ico[face[2]][d]) / (double)nlev;
+    }
+}
+
+static int prj_rad_fsa_find_or_add_vertex(double vertices[PRJ_NANGLE][3],
+    int *nvertices, const double p_in[3])
+{
+    const double tol2 = 1.0e-24;
+    double p[3];
+    int i;
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        p[d] = p_in[d];
+    }
+    prj_rad_fsa_normalize(p);
+
+    for (i = 0; i < *nvertices; ++i) {
+        double dx = p[0] - vertices[i][0];
+        double dy = p[1] - vertices[i][1];
+        double dz = p[2] - vertices[i][2];
+
+        if (dx * dx + dy * dy + dz * dz < tol2) {
+            return i;
+        }
+    }
+
+    if (*nvertices >= PRJ_NANGLE) {
+        prj_rad_fsa_fail("too many angular cell centers");
+    }
+    i = *nvertices;
+    for (d = 0; d < 3; ++d) {
+        vertices[i][d] = p[d];
+    }
+    *nvertices = i + 1;
+    return i;
+}
+
+static void prj_rad_fsa_add_cell_triangle(prj_rad_fsa_cell *cells,
+    int vertex_id, int triangle_id)
+{
+    prj_rad_fsa_cell *cell = &cells[vertex_id];
+
+    if (cell->ntri >= PRJ_RAD_FSA_MAX_CELL_VERTS) {
+        prj_rad_fsa_fail("angular cell has more than six vertices");
+    }
+    cell->tri[cell->ntri] = triangle_id;
+    cell->ntri += 1;
+}
+
+static void prj_rad_fsa_add_triangle(prj_rad_fsa_triangle *triangles,
+    prj_rad_fsa_cell *cells, int *ntriangles,
+    int v0, int v1, int v2, const double center_in[3])
+{
+    prj_rad_fsa_triangle *tri;
+    int tri_id;
+    int d;
+
+    if (*ntriangles >= PRJ_RAD_FSA_NTRI) {
+        prj_rad_fsa_fail("too many subdivided triangles");
+    }
+
+    tri_id = *ntriangles;
+    tri = &triangles[tri_id];
+    tri->v[0] = v0;
+    tri->v[1] = v1;
+    tri->v[2] = v2;
+    for (d = 0; d < 3; ++d) {
+        tri->center[d] = center_in[d];
+    }
+    prj_rad_fsa_normalize(tri->center);
+
+    prj_rad_fsa_add_cell_triangle(cells, v0, tri_id);
+    prj_rad_fsa_add_cell_triangle(cells, v1, tri_id);
+    prj_rad_fsa_add_cell_triangle(cells, v2, tri_id);
+    *ntriangles = tri_id + 1;
+}
+
+static void prj_rad_fsa_triangle_center(
+    const double ico[PRJ_RAD_FSA_ICOS_NVERT][3], const int face[3],
+    int i0, int j0, int i1, int j1, int i2, int j2, double center[3])
+{
+    double p0[3];
+    double p1[3];
+    double p2[3];
+    int d;
+
+    prj_rad_fsa_flat_face_point(ico, face, i0, j0, p0);
+    prj_rad_fsa_flat_face_point(ico, face, i1, j1, p1);
+    prj_rad_fsa_flat_face_point(ico, face, i2, j2, p2);
+    for (d = 0; d < 3; ++d) {
+        center[d] = p0[d] + p1[d] + p2[d];
+    }
+    prj_rad_fsa_normalize(center);
+}
+
+static void prj_rad_fsa_build_grid(double vertices[PRJ_NANGLE][3],
+    prj_rad_fsa_triangle *triangles, prj_rad_fsa_cell *cells,
+    int *nvertices, int *ntriangles)
+{
+    static const int faces[PRJ_RAD_FSA_ICOS_NFACE][3] = {
+        {0, 11, 5}, {0, 5, 1}, {0, 1, 7}, {0, 7, 10}, {0, 10, 11},
+        {1, 5, 9}, {5, 11, 4}, {11, 10, 2}, {10, 7, 6}, {7, 1, 8},
+        {3, 9, 4}, {3, 4, 2}, {3, 2, 6}, {3, 6, 8}, {3, 8, 9},
+        {4, 9, 5}, {2, 4, 11}, {6, 2, 10}, {8, 6, 7}, {9, 8, 1}
+    };
+    const int nlev = PRJ_N_ANGLE_LEV;
+    const int stride = nlev + 1;
+    double ico[PRJ_RAD_FSA_ICOS_NVERT][3];
+    int *local;
+    int f;
+
+    prj_rad_fsa_init_icosahedron(ico);
+    local = (int *)prj_malloc((size_t)stride * (size_t)stride * sizeof(*local));
+    *nvertices = 0;
+    *ntriangles = 0;
+
+    for (f = 0; f < PRJ_RAD_FSA_ICOS_NFACE; ++f) {
+        int i;
+        int j;
+
+        for (i = 0; i <= nlev; ++i) {
+            for (j = 0; j <= nlev - i; ++j) {
+                double p[3];
+
+                prj_rad_fsa_flat_face_point(ico, faces[f], i, j, p);
+                local[i * stride + j] =
+                    prj_rad_fsa_find_or_add_vertex(vertices, nvertices, p);
+            }
+        }
+
+        for (i = 0; i < nlev; ++i) {
+            for (j = 0; j < nlev - i; ++j) {
+                double center[3];
+                int v0 = local[i * stride + j];
+                int v1 = local[(i + 1) * stride + j];
+                int v2 = local[i * stride + j + 1];
+
+                prj_rad_fsa_triangle_center(ico, faces[f],
+                    i, j, i + 1, j, i, j + 1, center);
+                prj_rad_fsa_add_triangle(triangles, cells, ntriangles,
+                    v0, v1, v2, center);
+
+                if (i + j < nlev - 1) {
+                    int v3 = local[(i + 1) * stride + j + 1];
+
+                    prj_rad_fsa_triangle_center(ico, faces[f],
+                        i + 1, j, i + 1, j + 1, i, j + 1, center);
+                    prj_rad_fsa_add_triangle(triangles, cells, ntriangles,
+                        v1, v3, v2, center);
+                }
+            }
+        }
+    }
+
+    free(local);
+}
+
+static double prj_rad_fsa_spherical_triangle_area(const double a[3],
+    const double b[3], const double c[3])
+{
+    double bx_c[3];
+    double det;
+    double denom;
+
+    prj_rad_fsa_cross(b, c, bx_c);
+    det = prj_rad_fsa_dot(a, bx_c);
+    denom = 1.0 + prj_rad_fsa_dot(a, b) + prj_rad_fsa_dot(b, c) +
+        prj_rad_fsa_dot(c, a);
+    return 2.0 * atan2(fabs(det), denom);
+}
+
+static double prj_rad_fsa_cell_solid_angle(const double center[3],
+    const prj_rad_fsa_cell *cell, const prj_rad_fsa_triangle *triangles)
+{
+    double ref[3] = {0.0, 0.0, 1.0};
+    double e1[3];
+    double e2[3];
+    double angles[PRJ_RAD_FSA_MAX_CELL_VERTS];
+    int order[PRJ_RAD_FSA_MAX_CELL_VERTS];
+    double area = 0.0;
+    int m = cell->ntri;
+    int i;
+
+    if (m < 3 || m > PRJ_RAD_FSA_MAX_CELL_VERTS) {
+        prj_rad_fsa_fail("invalid angular cell valence");
+    }
+    if (fabs(center[2]) > 0.9) {
+        ref[0] = 1.0;
+        ref[1] = 0.0;
+        ref[2] = 0.0;
+    }
+    prj_rad_fsa_cross(ref, center, e1);
+    prj_rad_fsa_normalize(e1);
+    prj_rad_fsa_cross(center, e1, e2);
+
+    for (i = 0; i < m; ++i) {
+        const double *p = triangles[cell->tri[i]].center;
+
+        order[i] = cell->tri[i];
+        angles[i] = atan2(prj_rad_fsa_dot(p, e2), prj_rad_fsa_dot(p, e1));
+    }
+    for (i = 1; i < m; ++i) {
+        double angle = angles[i];
+        int tri = order[i];
+        int j = i - 1;
+
+        while (j >= 0 && angles[j] > angle) {
+            angles[j + 1] = angles[j];
+            order[j + 1] = order[j];
+            --j;
+        }
+        angles[j + 1] = angle;
+        order[j + 1] = tri;
+    }
+
+    for (i = 0; i < m; ++i) {
+        const double *p0 = triangles[order[i]].center;
+        const double *p1 = triangles[order[(i + 1) % m]].center;
+
+        area += prj_rad_fsa_spherical_triangle_area(center, p0, p1);
+    }
+    return area;
+}
+
+void prj_rad_fsa_calculate_directions(prj_rad *rad)
+{
+    double (*vertices)[3];
+    prj_rad_fsa_triangle *triangles;
+    prj_rad_fsa_cell *cells;
+    int nvertices;
+    int ntriangles;
+    int npent = 0;
+    int nhex = 0;
     int n;
+    int d;
 
     if (rad == 0) {
         return;
     }
 
-    for (n = 0; n < PRJ_NANGLE; ++n) {
-        double z = 1.0 - 2.0 * ((double)n + 0.5) / (double)PRJ_NANGLE;
-        double r = sqrt(fmax(0.0, 1.0 - z * z));
-        double phi = golden_angle * (double)n;
+    vertices = (double (*)[3])prj_malloc((size_t)PRJ_NANGLE * sizeof(*vertices));
+    triangles = (prj_rad_fsa_triangle *)prj_malloc(
+        (size_t)PRJ_RAD_FSA_NTRI * sizeof(*triangles));
+    cells = (prj_rad_fsa_cell *)prj_calloc((size_t)PRJ_NANGLE, sizeof(*cells));
+    prj_rad_fsa_build_grid(vertices, triangles, cells, &nvertices, &ntriangles);
 
-        rad->n0[n][0] = r * cos(phi);
-        rad->n0[n][1] = r * sin(phi);
-        rad->n0[n][2] = z;
-        rad->solid_angle[n] = dOmega;
+    if (nvertices != PRJ_NANGLE) {
+        prj_rad_fsa_fail("unexpected number of angular cells");
     }
+    if (ntriangles != PRJ_RAD_FSA_NTRI) {
+        prj_rad_fsa_fail("unexpected number of triangulated faces");
+    }
+
+    for (n = 0; n < PRJ_NANGLE; ++n) {
+        if (cells[n].ntri == 5) {
+            npent += 1;
+        } else if (cells[n].ntri == 6) {
+            nhex += 1;
+        } else {
+            prj_rad_fsa_fail("angular cell is not a pentagon or hexagon");
+        }
+        for (d = 0; d < 3; ++d) {
+            rad->n0[n][d] = vertices[n][d];
+        }
+        rad->solid_angle[n] =
+            prj_rad_fsa_cell_solid_angle(vertices[n], &cells[n], triangles);
+    }
+    if (npent != 12 || nhex != PRJ_NANGLE - 12) {
+        prj_rad_fsa_fail("unexpected pentagon/hexagon count");
+    }
+
+    free(cells);
+    free(triangles);
+    free(vertices);
 }
 #endif
 
 void prj_rad_init(prj_rad *rad)
 {
 #if PRJ_USE_RADIATION_FSA
-    prj_rad_fsa_init_angles(rad);
+    prj_rad_fsa_calculate_directions(rad);
 #endif
 #if PRJ_NRAD > 0
     prj_rad_init_closure(rad);

@@ -24,6 +24,9 @@ static inline double prj_rad_mixed_round(double x)
 #endif
 
 void prj_rad_init(prj_rad *rad);
+#if PRJ_USE_RADIATION_FSA
+void prj_rad_fsa_calculate_directions(prj_rad *rad);
+#endif
 void prj_rad_prim2cons(const double *W, double *U);
 void prj_rad_cons2prim(const double *U, double *W);
 void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,

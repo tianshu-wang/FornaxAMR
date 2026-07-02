@@ -156,12 +156,13 @@ typedef double prj_table_real;
 #ifndef PRJ_NEGROUP
 #define PRJ_NEGROUP 12
 #endif
-#ifndef PRJ_NANGLE
-#define PRJ_NANGLE 12
+#ifndef PRJ_N_ANGLE_LEV
+#define PRJ_N_ANGLE_LEV 1
 #endif
-#if PRJ_USE_RADIATION_FSA && PRJ_NANGLE < 1
-#error "PRJ_NANGLE must be at least 1 for RADIATION_FSA"
+#if PRJ_USE_RADIATION_FSA && PRJ_N_ANGLE_LEV < 1
+#error "PRJ_N_ANGLE_LEV must be at least 1 for RADIATION_FSA"
 #endif
+#define PRJ_NANGLE (10 * (PRJ_N_ANGLE_LEV) * (PRJ_N_ANGLE_LEV) + 2)
 #ifndef INEL_PHI_NT
 #define INEL_PHI_NT 30
 #endif
