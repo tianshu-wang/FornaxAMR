@@ -1280,6 +1280,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     int saved_use_amr_angular_resolution_limit;
     int saved_use_BJ;
     double saved_amr_init_scale_factor;
+    double saved_amr_reach_highest_level_at_density;
     double saved_E_floor;
     double saved_min_dx;
     int saved_max_blocks;
@@ -1301,6 +1302,8 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     saved_use_amr_angular_resolution_limit = mesh->use_amr_angular_resolution_limit;
     saved_use_BJ = mesh->use_BJ;
     saved_amr_init_scale_factor = mesh->amr_init_scale_factor;
+    saved_amr_reach_highest_level_at_density =
+        mesh->amr_reach_highest_level_at_density;
     saved_E_floor = mesh->E_floor;
     saved_min_dx = mesh->min_dx;
     saved_max_blocks = mesh->max_blocks;
@@ -1330,6 +1333,8 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->use_amr_angular_resolution_limit = saved_use_amr_angular_resolution_limit;
     mesh->use_BJ = saved_use_BJ;
     mesh->amr_init_scale_factor = saved_amr_init_scale_factor;
+    mesh->amr_reach_highest_level_at_density =
+        saved_amr_reach_highest_level_at_density;
     mesh->E_floor = saved_E_floor;
     mesh->max_blocks = saved_max_blocks;
     mesh->amr_init_refine_fn = 0;

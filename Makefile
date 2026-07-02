@@ -112,6 +112,8 @@ CORE_SRCS := $(filter-out $(SRC_DIR)/main.c,$(SRCS))
 CORE_OBJS := $(CORE_SRCS:.c=.o)
 TEST_SRCS := $(wildcard $(TEST_DIR)/*.c)
 TEST_BINS := $(TEST_SRCS:.c=)
+RK_TABLEAU_ARTIFACTS := $(RK_TABLEAU_DIR)/*.o $(RK_TABLEAU_DIR)/*.d \
+	$(RK_TABLEAU_DIR)/*.gcda $(RK_TABLEAU_DIR)/*.gcno $(RK_TABLEAU_DIR)/*.gcov
 
 .PHONY: all clean test
 
@@ -133,4 +135,4 @@ test: $(TEST_BINS)
 	@set -e; for test_bin in $(TEST_BINS); do ./$$test_bin; done
 
 clean:
-	rm -f $(TARGET) $(OBJS) $(CORE_OBJS) $(TEST_BINS)
+	rm -f $(TARGET) $(OBJS) $(CORE_OBJS) $(TEST_BINS) $(RK_TABLEAU_ARTIFACTS)

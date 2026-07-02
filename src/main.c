@@ -249,6 +249,8 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "x_com_err_tol: %.6e\n", sim->x_com_err_tol);
     fprintf(stderr, "dt_gw: %.6e\n", sim->dt_gw);
     fprintf(stderr, "amr_init_scale_factor: %.6e\n", sim->mesh.amr_init_scale_factor);
+    fprintf(stderr, "amr_reach_highest_level_at_density: %.6e\n",
+        sim->mesh.amr_reach_highest_level_at_density);
     fprintf(stderr, "timer_interval: %d\n", sim->timer_interval);
 }
 
@@ -270,6 +272,7 @@ int main(int argc, char *argv[])
     int saved_use_amr_angular_resolution_limit;
     int saved_use_BJ;
     double saved_min_dx;
+    double saved_amr_reach_highest_level_at_density;
     int resolution = -1;
     int max_level_override = -1;
     int restart_latest_id = -1;
@@ -361,6 +364,8 @@ int main(int argc, char *argv[])
         saved_use_amr_angular_resolution_limit = sim.mesh.use_amr_angular_resolution_limit;
         saved_use_BJ = sim.mesh.use_BJ;
         saved_min_dx = sim.mesh.min_dx;
+        saved_amr_reach_highest_level_at_density =
+            sim.mesh.amr_reach_highest_level_at_density;
         prj_io_read_restart(&sim.mesh, &sim.eos, &mpi, sim.restart_file_name, &sim.time, &sim.step, &sim.dump_count,
             &last_output_time, &last_restart_time, &last_gw_time, &sim.dt);
         for (i = 0; i < PRJ_AMR_N; ++i) {
@@ -375,6 +380,8 @@ int main(int argc, char *argv[])
         sim.mesh.use_amr_angular_resolution_limit = saved_use_amr_angular_resolution_limit;
         sim.mesh.use_BJ = saved_use_BJ;
         sim.mesh.min_dx = saved_min_dx;
+        sim.mesh.amr_reach_highest_level_at_density =
+            saved_amr_reach_highest_level_at_density;
         prj_mesh_update_min_allowable_cell_size(&sim.mesh);
         next_output_time = prj_next_event_time(last_output_time, sim.output_dt, sim.time);
         next_restart_time = prj_next_event_time(last_restart_time, sim.restart_dt, sim.time);

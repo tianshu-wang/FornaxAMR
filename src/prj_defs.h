@@ -69,7 +69,7 @@ typedef double prj_table_real;
 #ifndef IMEX
 #define IMEX PRJ_TIMEINT_IMEX
 #endif
-/* === Time integration scheme (single source of truth) ===================
+/* === Tme integration scheme (single source of truth) ===================
  * These defaults are authoritative; the build only overrides them when the
  * corresponding -D is passed on the command line (see the Makefile's
  * TIME_INTEGRATION_DEF), so editing here is enough -- no Makefile edit needed.
@@ -93,7 +93,7 @@ typedef double prj_table_real;
 #define PRJ_TIMEINT_ESSPRK_N 9
 #endif
 #ifndef PRJ_TIMEINT_TABLEAU_NAME
-#define PRJ_TIMEINT_TABLEAU_NAME prj_2s2pe2pi2plinKInf
+#define PRJ_TIMEINT_TABLEAU_NAME prj_imex_ssp2332
 #endif
 #ifndef PRJ_TIMEINT_TABLEAU_NSTAGES
 #define PRJ_TIMEINT_TABLEAU_NSTAGES 2

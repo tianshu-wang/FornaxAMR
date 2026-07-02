@@ -259,6 +259,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.use_amr_angular_resolution_limit = 0;
     sim->mesh.use_BJ = 0;
     sim->mesh.amr_init_scale_factor = 0.5;
+    sim->mesh.amr_reach_highest_level_at_density = -1.0;
     sim->mesh.E_floor = -1.0;
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
@@ -452,6 +453,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.use_BJ = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_init_scale_factor") == 0) {
             sim->mesh.amr_init_scale_factor = strtod(value, &endptr);
+        } else if (strcmp(key, "amr_reach_highest_level_at_density") == 0) {
+            sim->mesh.amr_reach_highest_level_at_density = strtod(value, &endptr);
         } else if (strcmp(key, "E_floor") == 0) {
             sim->mesh.E_floor = strtod(value, &endptr);
 #if PRJ_MHD
@@ -1038,6 +1041,8 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
     prj_io_write_attr_int(file, "max_level", mesh->max_level);
     prj_io_write_attr_double(file, "min_dx", mesh->min_dx);
+    prj_io_write_attr_double(file, "amr_reach_highest_level_at_density",
+        mesh->amr_reach_highest_level_at_density);
     prj_io_write_attr_int3(file, "root_nx", mesh->root_nx);
     prj_io_write_attr_double6(file, "coord", &mesh->coord);
     {
@@ -1212,6 +1217,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     int root_nx[3];
     int max_level;
     double min_dx;
+    double amr_reach_highest_level_at_density;
     prj_coord coord;
     double *metadata;
     int bidx;
@@ -1244,6 +1250,8 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     prj_io_read_attr_int(file, "block_size", &block_size);
     prj_io_read_attr_int(file, "max_level", &max_level);
     min_dx = prj_io_read_attr_double_optional(file, "min_dx", 0.0);
+    amr_reach_highest_level_at_density = prj_io_read_attr_double_optional(file,
+        "amr_reach_highest_level_at_density", -1.0);
     prj_io_read_attr_int3(file, "root_nx", root_nx);
     prj_io_read_attr_double6(file, "coord", &coord);
     if (nvar_prim != PRJ_NVAR_PRIM || block_size != PRJ_BLOCK_SIZE) {
@@ -1259,6 +1267,8 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         prj_io_read_attr_double3_optional(file, "x_com", mesh->x_com, defaults);
     }
     mesh->min_dx = min_dx;
+    mesh->amr_reach_highest_level_at_density =
+        amr_reach_highest_level_at_density;
     prj_mesh_update_min_allowable_cell_size(mesh);
     if (nblocks > mesh->nblocks_max) {
         fprintf(stderr,
@@ -1541,6 +1551,8 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
     prj_io_write_attr_int(file, "max_level", mesh->max_level);
     prj_io_write_attr_double(file, "min_dx", mesh->min_dx);
+    prj_io_write_attr_double(file, "amr_reach_highest_level_at_density",
+        mesh->amr_reach_highest_level_at_density);
     prj_io_write_attr_int3(file, "root_nx", mesh->root_nx);
     prj_io_write_attr_double6(file, "coord", &mesh->coord);
     {

@@ -224,6 +224,7 @@ struct prj_mesh {
     int use_amr_angular_resolution_limit;
     int use_BJ;
     double amr_init_scale_factor;
+    double amr_reach_highest_level_at_density;
     double E_floor;
     prj_amr_init_refine_fn amr_init_refine_fn;
     void *amr_init_refine_userdata;

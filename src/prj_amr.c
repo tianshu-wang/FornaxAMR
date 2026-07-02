@@ -1378,6 +1378,15 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi)
                     if (refine != 0 && cell_boundary_mask == 0U) {
                         continue;
                     }
+                    if (mesh->amr_reach_highest_level_at_density > 0.0 &&
+                        b->W != 0 &&
+                        b->W[WIDX(PRJ_PRIM_RHO, ii, j, k)] >
+                        mesh->amr_reach_highest_level_at_density) {
+                        has_refine_criterion = 1;
+                        refine = 1;
+                        derefine = 0;
+                        boundary_mask[i] |= cell_boundary_mask;
+                    }
                     for (amr_idx = 0; amr_idx < PRJ_AMR_N; ++amr_idx) {
                         if (mesh->amr_criterion_set[amr_idx] == 0) {
                             continue;
