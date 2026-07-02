@@ -19,7 +19,19 @@ dump file does not record whether MHD/radiation were compiled in, set the
 build-configuration constants below to match the run that produced the files.
 """
 
+import multiprocessing
+import os
 from pathlib import Path
+
+# Keep each worker single-threaded; the Pool controls parallelism.
+for thread_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
+    os.environ.setdefault(thread_var, "1")
 
 import h5py
 import matplotlib.pyplot as plt
@@ -33,6 +45,8 @@ from matplotlib.colors import LogNorm, Normalize, SymLogNorm
 VARIABLE = "B"
 OUTPUT_DIR = Path("output")
 PLANES = ("xy", "yz", "xz")
+# Maximum number of dump files to visualize in parallel.
+NPROCESSES = 4
 
 # Set to False to hide the AMR block boundaries overlaid on each plot.
 SHOW_BLOCK_BOUNDARIES = False
@@ -340,37 +354,50 @@ class KeptData:
         return self._dataset[int(self._keep[bid]), var_idx, cell_slice]
 
 
-def main() -> None:
+def visualize_dump(dump_path: Path):
     variable = VARIABLE
     output_dir = OUTPUT_DIR
     index_map = build_index_map()
-    dump_files = load_dump_files(output_dir)
-    checked_missing_plots = False
+    dump_id = dump_path.stem.split("_")[-1]
+    planes = [p for p in PLANES if not plot_path_for(output_dir, variable, p, dump_id).exists()]
+    if not planes:
+        return dump_id, False, False
 
-    for dump_path in dump_files:
-        dump_id = dump_path.stem.split("_")[-1]
-        planes = [p for p in PLANES if not plot_path_for(output_dir, variable, p, dump_id).exists()]
-        if not planes:
-            continue
-        checked_missing_plots = True
-        with h5py.File(dump_path, "r") as h5:
-            if "coord" not in h5.attrs or "root_nx" not in h5.attrs:
-                continue
-            dump_time = float(h5.attrs["time"])
-            coord = np.asarray(h5.attrs["coord"], dtype=float) / CM_PER_KM
-            root_nx = h5.attrs["root_nx"]
-            block_size = int(h5.attrs["block_size"])
-            keep, coords, levels = read_active_metadata(h5)
-            sources = {"Data": KeptData(h5["Data"], keep)}
-            if "Eos" in h5:
-                sources["Eos"] = KeptData(h5["Eos"], keep)
-            for plane in planes:
-                plane_blocks = collect_plane_blocks(
-                    sources, index_map, variable, coords, levels,
-                    plane, coord, root_nx, block_size
-                )
-                plot_plane(output_dir, dump_id, dump_time, plane_blocks, variable, plane)
-        print(dump_id)
+    with h5py.File(dump_path, "r") as h5:
+        if "coord" not in h5.attrs or "root_nx" not in h5.attrs:
+            return dump_id, True, False
+        dump_time = float(h5.attrs["time"])
+        coord = np.asarray(h5.attrs["coord"], dtype=float) / CM_PER_KM
+        root_nx = h5.attrs["root_nx"]
+        block_size = int(h5.attrs["block_size"])
+        keep, coords, levels = read_active_metadata(h5)
+        sources = {"Data": KeptData(h5["Data"], keep)}
+        if "Eos" in h5:
+            sources["Eos"] = KeptData(h5["Eos"], keep)
+        for plane in planes:
+            plane_blocks = collect_plane_blocks(
+                sources, index_map, variable, coords, levels,
+                plane, coord, root_nx, block_size
+            )
+            plot_plane(output_dir, dump_id, dump_time, plane_blocks, variable, plane)
+    return dump_id, True, True
+
+
+def main() -> None:
+    if NPROCESSES < 1:
+        raise ValueError("NPROCESSES must be at least 1")
+
+    dump_files = load_dump_files(OUTPUT_DIR)
+    checked_missing_plots = False
+    nprocs = min(NPROCESSES, len(dump_files))
+
+    with multiprocessing.Pool(processes=nprocs) as pool:
+        for dump_id, missing_plots, plotted in pool.imap_unordered(
+            visualize_dump, dump_files, chunksize=1
+        ):
+            checked_missing_plots = checked_missing_plots or missing_plots
+            if plotted:
+                print(dump_id)
     if not checked_missing_plots:
         print("nothing to do (all plots already exist)")
 
