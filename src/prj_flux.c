@@ -79,7 +79,7 @@ static inline int prj_flux_rad_face_needed(int dir, int i, int j, int k)
 #if !PRJ_FLUX_RECON_MC_FASTPATH
 static inline double prj_flux_radiation_stencil_value(double q)
 {
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     return prj_rad_mixed_round(q);
 #else
     return q;
@@ -297,7 +297,7 @@ enum prj_flux_recon_src_kind {
 
 static inline double prj_flux_recon_stencil_val(double q, int is_rad)
 {
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     return is_rad ? prj_rad_mixed_round(q) : q;
 #else
     (void)is_rad;

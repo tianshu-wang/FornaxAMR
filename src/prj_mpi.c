@@ -64,7 +64,7 @@ static void prj_mpi_buffer_free(prj_mpi_buffer *buffer)
     for (fill_kind = 0; fill_kind < PRJ_MPI_GHOST_FILL_KIND_N; ++fill_kind) {
         free(buffer->cell_buffer_send_by_kind[fill_kind]);
         free(buffer->cell_buffer_recv_by_kind[fill_kind]);
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
         free(buffer->cell_buffer_send_rad_by_kind[fill_kind]);
         free(buffer->cell_buffer_recv_rad_by_kind[fill_kind]);
 #endif
@@ -714,7 +714,7 @@ static size_t prj_mpi_ghost_double_value_count(int cell_count,
 {
     size_t value_count = (size_t)cell_count * (size_t)PRJ_MPI_GHOST_NVAR_HE;
 
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     (void)cell_count_rad;
 #else
     value_count += (size_t)cell_count_rad * (size_t)PRJ_MPI_GHOST_NVAR_RAD;
@@ -739,7 +739,7 @@ static int prj_mpi_alloc_ghost_value_buffer(double **buffer,
     return *buffer == 0 ? 1 : 0;
 }
 
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
 static int prj_mpi_alloc_ghost_rad_value_buffer(float **buffer,
     int cell_count_rad)
 {
@@ -929,7 +929,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             }
             return 1;
         }
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
         if (prj_mpi_alloc_ghost_rad_value_buffer(
                 &buffer->cell_buffer_send_rad_by_kind[fill_kind],
                 record_count_rad_by_kind[fill_kind]) != 0) {
@@ -1094,7 +1094,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                 buffer->cell_recv_count_rad_by_kind[fill_kind]) != 0) {
             return 1;
         }
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
         if (prj_mpi_alloc_ghost_rad_value_buffer(
                 &buffer->cell_buffer_recv_rad_by_kind[fill_kind],
                 buffer->cell_recv_count_rad_by_kind[fill_kind]) != 0) {
@@ -1140,7 +1140,7 @@ static double prj_mpi_prolongate_cell_value(const double *src, int var,
 static inline void prj_mpi_store_ghost_rad_value(prj_mpi_buffer *buffer,
     double *send_buffer, int fill_kind, int pos, double value)
 {
-#if PRJ_MIXED_PRECISION
+#if PRJ_MIXED_PRECISION_FLUX
     (void)send_buffer;
     buffer->cell_buffer_send_rad_by_kind[fill_kind][pos] =
         prj_rad_mixed_pack(value);
@@ -1154,7 +1154,7 @@ static inline void prj_mpi_store_ghost_rad_value(prj_mpi_buffer *buffer,
 static inline double prj_mpi_read_ghost_rad_value(const prj_mpi_buffer *buffer,
     const double *recv_buffer, int fill_kind, int pos)
 {
-#if PRJ_MIXED_PRECISION
+#if PRJ_MIXED_PRECISION_FLUX
     (void)recv_buffer;
     return prj_rad_mixed_unpack(
         buffer->cell_buffer_recv_rad_by_kind[fill_kind][pos]);
@@ -1182,7 +1182,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
     if (send_buffer == 0 && buffer->cell_send_count_by_kind[fill_kind] > 0) {
         return;
     }
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     if (buffer->cell_buffer_send_rad_by_kind[fill_kind] == 0 &&
         buffer->cell_send_count_rad_by_kind[fill_kind] > 0) {
         return;
@@ -1194,7 +1194,7 @@ static void prj_mpi_pack_ghost_values(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buff
 #endif
 
     pos = 0;
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     pos_rad = 0;
 #else
     pos_rad = buffer->cell_send_count_by_kind[fill_kind] *
@@ -1428,7 +1428,7 @@ static void prj_mpi_unpack_ghost_values(prj_mesh *mesh, prj_mpi *mpi,
     if (recv_buffer == 0 && buffer->cell_recv_count_by_kind[fill_kind] > 0) {
         return;
     }
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     if (buffer->cell_buffer_recv_rad_by_kind[fill_kind] == 0 &&
         buffer->cell_recv_count_rad_by_kind[fill_kind] > 0) {
         return;
@@ -1444,7 +1444,7 @@ static void prj_mpi_unpack_ghost_values(prj_mesh *mesh, prj_mpi *mpi,
     total_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_recv_rad,
         total_rad);
     pos = 0;
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     pos_rad = 0;
 #else
     pos_rad = buffer->cell_recv_count_by_kind[fill_kind] *
@@ -4124,7 +4124,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
         mpi->neighbor_number == 0) {
         return;
     }
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     requests_per_neighbor = 4;
 #endif
     requests = (MPI_Request *)mpi->request_buffer;
@@ -4153,7 +4153,7 @@ void prj_mpi_exchange_ghosts(prj_mesh *mesh, prj_mpi *mpi, int stage, int fill_k
             MPI_COMM_WORLD, &requests[request_count++]);
         MPI_Isend(buffer->cell_buffer_send_by_kind[fill_kind], send_total, MPI_DOUBLE, buffer->receiver_rank, PRJ_MPI_GHOST_TAG_DOUBLE,
             MPI_COMM_WORLD, &requests[request_count++]);
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
         MPI_Irecv(buffer->cell_buffer_recv_rad_by_kind[fill_kind],
             cell_size_total_rad * PRJ_MPI_GHOST_NVAR_RAD, MPI_FLOAT,
             buffer->receiver_rank, PRJ_MPI_GHOST_TAG_RAD, MPI_COMM_WORLD,
@@ -4220,7 +4220,7 @@ void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
         int bf_send = 0;
         int bf_recv = 0;
 
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
         int send_total_rad = record_count_rad * PRJ_MPI_GHOST_NVAR_RAD;
         int recv_total_rad = cell_size_total_rad * PRJ_MPI_GHOST_NVAR_RAD;
 
@@ -4259,7 +4259,7 @@ void prj_mpi_post_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
             MPI_Irecv(buffer->cell_buffer_recv_by_kind[fill_kind], recv_total + bf_recv, MPI_DOUBLE,
                 buffer->receiver_rank, PRJ_MPI_GHOST_TAG_DOUBLE, MPI_COMM_WORLD, &requests[request_count++]);
         }
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
         if (send_total_rad > 0) {
             MPI_Isend(buffer->cell_buffer_send_rad_by_kind[fill_kind],
                 send_total_rad, MPI_FLOAT, buffer->receiver_rank,
@@ -4311,7 +4311,7 @@ void prj_mpi_wait_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, int stage, int fil
             cell_size_total_rad);
         int has_recv_values = recv_total > 0;
 
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
         if (cell_size_total_rad > 0) {
             has_recv_values = 1;
         }

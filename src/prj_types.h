@@ -397,7 +397,7 @@ struct prj_mpi_buffer {
     int cell_send_count_by_kind[6];
     int cell_send_count_rad_by_kind[6];
     double *cell_buffer_send_by_kind[6];
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     float *cell_buffer_send_rad_by_kind[6];
 #endif
     int *face_data_size_send;
@@ -409,7 +409,7 @@ struct prj_mpi_buffer {
     int cell_recv_count_by_kind[6];
     int cell_recv_count_rad_by_kind[6];
     double *cell_buffer_recv_by_kind[6];
-#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION
+#if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     float *cell_buffer_recv_rad_by_kind[6];
 #endif
     int *face_data_size_recv;
