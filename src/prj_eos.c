@@ -12,6 +12,11 @@
 
 #if defined(PRJ_ENABLE_MPI)
 #include <mpi.h>
+#if PRJ_MIXED_PRECISION_TABLE
+#define PRJ_TABLE_MPI_TYPE MPI_FLOAT
+#else
+#define PRJ_TABLE_MPI_TYPE MPI_DOUBLE
+#endif
 #endif
 
 #define PRJ_EOS_NUMEL 16
@@ -114,22 +119,6 @@ static void prj_eos_missing_table_filename_fail(void)
     exit(1);
 }
 
-static void prj_eos_convert_pressure_slab_to_log(prj_eos *eos, size_t slab_size)
-{
-    size_t offset;
-    size_t idx;
-
-    if (eos == 0 || eos->table == 0 || slab_size == 0) {
-        return;
-    }
-    offset = (size_t)(PRJ_EOS_REC_PRESSURE - 1) * slab_size;
-    for (idx = 0; idx < slab_size; ++idx) {
-        double p = eos->table[offset + idx];
-
-        eos->table[offset + idx] = log(p > 0.0 ? p : 1.0e-300);
-    }
-}
-
 static int prj_eos_compact_src_rec(int idx)
 {
     switch (idx) {
@@ -141,30 +130,42 @@ static int prj_eos_compact_src_rec(int idx)
     }
 }
 
-static void prj_eos_compact_table(prj_eos *eos)
+static int prj_eos_read_compact_table(FILE *f, prj_eos *eos, size_t slab_size)
 {
-    size_t slab_size;
-    size_t compact_bytes;
-    double *compact;
+    double *slab;
     int i;
 
-    if (eos == 0 || eos->table == 0) {
-        return;
+    if (f == 0 || eos == 0 || eos->table == 0 || slab_size == 0) {
+        return 1;
     }
-    slab_size = (size_t)eos->nt * (size_t)eos->nr * (size_t)eos->ny;
-    compact_bytes = (size_t)PRJ_EOS_COMPACT_NUMEL * slab_size * sizeof(double);
-    compact = (double *)prj_malloc(compact_bytes);
-    if (compact == 0) {
-        return;
+    slab = (double *)prj_malloc(slab_size * sizeof(*slab));
+    if (slab == 0) {
+        return 1;
     }
+
     for (i = 0; i < PRJ_EOS_COMPACT_NUMEL; ++i) {
-        size_t src_off = (size_t)(prj_eos_compact_src_rec(i) - 1) * slab_size;
+        int rec = prj_eos_compact_src_rec(i);
         size_t dst_off = (size_t)i * slab_size;
-        memcpy(&compact[dst_off], &eos->table[src_off], slab_size * sizeof(double));
+        long file_off = (long)((size_t)(rec - 1) * slab_size * sizeof(double));
+        size_t idx;
+
+        if (fseek(f, file_off, SEEK_SET) != 0 ||
+            fread(slab, sizeof(*slab), slab_size, f) != slab_size) {
+            free(slab);
+            return 1;
+        }
+        for (idx = 0; idx < slab_size; ++idx) {
+            double value = slab[idx];
+
+            if (rec == PRJ_EOS_REC_PRESSURE) {
+                value = log(value > 0.0 ? value : 1.0e-300);
+            }
+            eos->table[dst_off + idx] = (prj_table_real)value;
+        }
     }
-    free(eos->table);
-    eos->table = compact;
-    eos->table_bytes = compact_bytes;
+
+    free(slab);
+    return 0;
 }
 
 static void prj_eos_print_fill_neighbors(const prj_block *block, double x1, double x2, double x3)
@@ -281,8 +282,8 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
 {
     FILE *f;
     size_t slab_size;
-    size_t expected_bytes;
-    int rec;
+    size_t table_count;
+    size_t table_bytes;
     int status = 0;
 
     if (eos == 0 || eos->kind != PRJ_EOS_KIND_TABLE || eos->filename[0] == '\0') {
@@ -314,11 +315,12 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
     eos->ln10_t1 = M_LN10 * eos->t1;
     eos->ln10_dlogT = M_LN10 * eos->dlogT;
     slab_size = (size_t)eos->nt * (size_t)eos->nr * (size_t)eos->ny;
-    expected_bytes = (size_t)PRJ_EOS_NUMEL * slab_size * sizeof(*eos->table);
+    table_count = (size_t)PRJ_EOS_COMPACT_NUMEL * slab_size;
+    table_bytes = table_count * sizeof(*eos->table);
 #if defined(PRJ_ENABLE_MPI)
     if (mpi != 0 && mpi->totrank > 1) {
         if (mpi->rank == 0) {
-            eos->table = (double *)prj_malloc(expected_bytes);
+            eos->table = (prj_table_real *)prj_malloc(table_bytes);
             if (eos->table == 0) {
                 status = 1;
             } else {
@@ -326,15 +328,7 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
                 if (f == 0) {
                     status = 1;
                 } else {
-                    for (rec = 0; rec < PRJ_EOS_NUMEL; ++rec) {
-                        if (fread(&eos->table[(size_t)rec * slab_size], sizeof(double), slab_size, f) != slab_size) {
-                            status = 1;
-                            break;
-                        }
-                    }
-                    if (status == 0) {
-                        prj_eos_convert_pressure_slab_to_log(eos, slab_size);
-                    }
+                    status = prj_eos_read_compact_table(f, eos, slab_size);
                     fclose(f);
                 }
             }
@@ -350,7 +344,7 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
         }
 
         if (mpi->rank != 0) {
-            eos->table = (double *)prj_malloc(expected_bytes);
+            eos->table = (prj_table_real *)prj_malloc(table_bytes);
             if (eos->table == 0) {
                 status = 1;
             }
@@ -362,15 +356,15 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
             return 1;
         }
 
-        MPI_Bcast(eos->table, (int)(expected_bytes / sizeof(*eos->table)), MPI_DOUBLE, 0, MPI_COMM_WORLD);
-        prj_eos_compact_table(eos);
+        MPI_Bcast(eos->table, (int)table_count, PRJ_TABLE_MPI_TYPE, 0, MPI_COMM_WORLD);
+        eos->table_bytes = table_bytes;
         eos->table_loaded = 1;
         eos->table_is_mmap = 0;
         return 0;
     }
 #endif
 
-    eos->table = (double *)prj_malloc(expected_bytes);
+    eos->table = (prj_table_real *)prj_malloc(table_bytes);
     if (eos->table == 0) {
         return 1;
     }
@@ -380,18 +374,15 @@ static int prj_eos_prepare_table(prj_eos *eos, const prj_mpi *mpi)
         eos->table = 0;
         return 1;
     }
-    for (rec = 0; rec < PRJ_EOS_NUMEL; ++rec) {
-        if (fread(&eos->table[(size_t)rec * slab_size], sizeof(double), slab_size, f) != slab_size) {
-            fclose(f);
-            free(eos->table);
-            eos->table = 0;
-            return 1;
-        }
-    }
+    status = prj_eos_read_compact_table(f, eos, slab_size);
     fclose(f);
-    prj_eos_convert_pressure_slab_to_log(eos, slab_size);
-    prj_eos_compact_table(eos);
+    if (status != 0) {
+        free(eos->table);
+        eos->table = 0;
+        return 1;
+    }
 
+    eos->table_bytes = table_bytes;
     eos->table_loaded = 1;
     eos->table_is_mmap = 0;
     return 0;
@@ -500,7 +491,7 @@ static double prj_eos_rey_slice_eint(const prj_eos *eos,
     int jt, double coeff0, double coeff1, double coeff2, double coeff3)
 {
     int jt_off = jt - 1;
-    const double *t = eos->table;
+    const prj_table_real *t = eos->table;
     return coeff0 * t[base_eint + off_y_r   + jt_off] +
            coeff1 * t[base_eint + off_yp_r  + jt_off] +
            coeff2 * t[base_eint + off_y_rp  + jt_off] +

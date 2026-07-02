@@ -14,6 +14,11 @@
 
 #if defined(PRJ_ENABLE_MPI)
 #include <mpi.h>
+#if PRJ_MIXED_PRECISION_TABLE
+#define PRJ_TABLE_MPI_TYPE MPI_FLOAT
+#else
+#define PRJ_TABLE_MPI_TYPE MPI_DOUBLE
+#endif
 #endif
 
 /* Runtime opacity tables are corner-major with energy groups contiguous:
@@ -203,7 +208,7 @@ static void prj_rad3_read_param(prj_rad *rad)
 }
 
 static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
-    double **dest, float *tmp)
+    prj_table_real **dest, float *tmp)
 {
     int rank = prj_rad3_mpi_rank();
     int nromax = rad->nromax;
@@ -223,7 +228,7 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
     dfr = (frmax - frmin) / (double)(ngmax - 1);
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
-        dest[nu] = (double *)prj_malloc(opac_bytes * sizeof(double));
+        dest[nu] = (prj_table_real *)prj_malloc(opac_bytes * sizeof(**dest));
         if (dest[nu] == 0) {
             fprintf(stderr, "prj_rad3_opac: opacity allocation failed for field %d\n", nu);
             exit(1);
@@ -254,7 +259,7 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
         }
         for (nu_r = 0; nu_r < PRJ_NRAD; ++nu_r) {
             int src_nu = nu_r < 3 ? nu_r : 2;
-            double *restrict out = dest[nu_r];
+            prj_table_real *restrict out = dest[nu_r];
 
             for (k = 0; k < nyemax; ++k) {
                 for (j = 0; j < ntmax; ++j) {
@@ -282,7 +287,7 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
                             v1 = tmp[TEMP_IDX(i, j, k, jf + 1, nromax, ntmax, nyemax) +
                                 (size_t)src_nu * field_bytes];
                             out[OPAC_IDX(ng, i, j, k, PRJ_NEGROUP, nromax, ntmax, nyemax)] =
-                                (1.0 - dfi) * (double)v0 + dfi * (double)v1;
+                                (prj_table_real)((1.0 - dfi) * (double)v0 + dfi * (double)v1);
                         }
                     }
                 }
@@ -292,7 +297,7 @@ static void prj_rad3_load_block(prj_rad *rad, FILE *fp, int record_base,
 
 #if defined(PRJ_ENABLE_MPI)
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
-        MPI_Bcast(dest[nu], (int)opac_bytes, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+        MPI_Bcast(dest[nu], (int)opac_bytes, PRJ_TABLE_MPI_TYPE, 0, MPI_COMM_WORLD);
     }
 #endif
 }
@@ -475,8 +480,8 @@ void prj_rad3_opac_lookup_ke(const prj_rad *restrict rad, double rho, double tem
     factor = 4.0 * M_PI / PRJ_MEV_TO_ERG / RAD_SCALE;
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
-        const double *restrict absopac = rad->absopac[nu];
-        const double *restrict emis = rad->emis[nu];
+        const prj_table_real *restrict absopac = rad->absopac[nu];
+        const prj_table_real *restrict emis = rad->emis[nu];
         const double *restrict degroup_erg = rad->degroup_erg[nu];
 
         for (ng = 0; ng < PRJ_NEGROUP; ++ng) {
@@ -619,10 +624,10 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     }
 
     for (nu = 0; nu < PRJ_NRAD; ++nu) {
-        const double *absopac = rad->absopac[nu];
-        const double *scaopac = rad->scaopac[nu];
-        const double *emis = rad->emis[nu];
-        const double *sdelta = rad->sdelta[nu];
+        const prj_table_real *absopac = rad->absopac[nu];
+        const prj_table_real *scaopac = rad->scaopac[nu];
+        const prj_table_real *emis = rad->emis[nu];
+        const prj_table_real *sdelta = rad->sdelta[nu];
 
         for (ng = 0; ng < PRJ_NEGROUP; ++ng) {
             size_t base = (size_t)nu * (size_t)PRJ_NEGROUP + (size_t)ng;

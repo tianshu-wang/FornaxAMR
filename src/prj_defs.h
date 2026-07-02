@@ -28,6 +28,16 @@
 #define PRJ_MIXED_PRECISION_FLUX 0
 #endif
 
+#ifndef PRJ_MIXED_PRECISION_TABLE
+#define PRJ_MIXED_PRECISION_TABLE 1
+#endif
+
+#if PRJ_MIXED_PRECISION_TABLE
+typedef float prj_table_real;
+#else
+typedef double prj_table_real;
+#endif
+
 #ifndef PRJ_MHD
 #define PRJ_MHD 0
 #endif

@@ -256,7 +256,7 @@ struct prj_eos {
     double ln10_t1;
     double ln10_dlogT;
     size_t table_bytes;
-    double *table;
+    prj_table_real *table;
     double E_injected;
 };
 
@@ -322,13 +322,13 @@ struct prj_rad {
     double inv_logrho_span;
     double inv_logtemp_span;
     double inv_ye_span;
-    double *absopac[PRJ_NRAD];
-    double *scaopac[PRJ_NRAD];
-    double *emis[PRJ_NRAD];
-    double *sdelta[PRJ_NRAD];
+    prj_table_real *absopac[PRJ_NRAD];
+    prj_table_real *scaopac[PRJ_NRAD];
+    prj_table_real *emis[PRJ_NRAD];
+    prj_table_real *sdelta[PRJ_NRAD];
     char eleinel_table_dir[PRJ_PATH_MAX];
     int eleinel_table_loaded;
-    double *eleinel_phi_ee[PRJ_NRAD];
+    prj_table_real *eleinel_phi_ee[PRJ_NRAD];
 
     double *spec_factor[PRJ_NRAD];
     double kom_epsilon;

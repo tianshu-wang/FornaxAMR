@@ -136,9 +136,9 @@ static void prj_rad_eleinel_read_table(const prj_rad *rad, int nu,
 #endif
 }
 
-static double *prj_rad_eleinel_relayout_table(double *old_table, size_t count, int nu)
+static prj_table_real *prj_rad_eleinel_relayout_table(double *old_table, size_t count, int nu)
 {
-    double *new_table = (double *)prj_malloc(count * sizeof(*new_table));
+    prj_table_real *new_table = (prj_table_real *)prj_malloc(count * sizeof(*new_table));
     int ng = PRJ_NEGROUP;
     int m;
     int ke;
@@ -158,7 +158,7 @@ static double *prj_rad_eleinel_relayout_table(double *old_table, size_t count, i
                 for (jeta = 0; jeta < INEL_PHI_NETA; jeta++) {
                     for (jq = 0; jq < INEL_PHI_NT; jq++) {
                         INEL_ELEM_ELE(new_table, m, ke, le, jeta, jq, ng) =
-                            INEL_ELEM_ELE_FILE(old_table, m, ke, le, jeta, jq, ng);
+                            (prj_table_real)INEL_ELEM_ELE_FILE(old_table, m, ke, le, jeta, jq, ng);
                     }
                 }
             }
@@ -356,7 +356,7 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
 
     for (nu = 0; nu < PRJ_NRAD; nu++) {
         const double *freqe = rad->egroup[nu];
-        const double *table = rad->eleinel_phi_ee[nu];
+        const prj_table_real *table = rad->eleinel_phi_ee[nu];
         const double *freqe2_dnue = &rad->eleinel_freqe2_dnue[nu * PRJ_NEGROUP];
         const double *factf_over_freqe3 = &rad->eleinel_factf_over_freqe3[nu * PRJ_NEGROUP];
         const double *je_nu = &je[nu * PRJ_NEGROUP];
@@ -384,12 +384,12 @@ void prj_rad_eleinel_lookup(const prj_rad *rad,
         {
             const int plane = INEL_ELE_PLANE(nfreq);
             const int half = nfreq * nfreq;
-            const double *pc = table
+            const prj_table_real *pc = table
                 + (size_t)(jeta * INEL_PHI_NT + jq) * plane;
-            const double *c00 = pc;                              /* jeta,   jq   */
-            const double *c10 = pc + INEL_PHI_NT * plane;        /* jeta+1, jq   */
-            const double *c01 = pc + plane;                      /* jeta,   jq+1 */
-            const double *c11 = pc + (INEL_PHI_NT + 1) * plane;  /* jeta+1, jq+1 */
+            const prj_table_real *c00 = pc;                              /* jeta,   jq   */
+            const prj_table_real *c10 = pc + INEL_PHI_NT * plane;        /* jeta+1, jq   */
+            const prj_table_real *c01 = pc + plane;                      /* jeta,   jq+1 */
+            const prj_table_real *c11 = pc + (INEL_PHI_NT + 1) * plane;  /* jeta+1, jq+1 */
             double *o0 = &phi0_interp[0][0];
             int i;
 
