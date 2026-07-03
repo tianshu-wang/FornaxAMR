@@ -16,8 +16,8 @@ void prj_src_user(prj_eos *eos, double *W, double *dUdt)
     (void)dUdt;
 }
 
-void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
-    double *restrict W, double *restrict dUdt)
+void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
+    const prj_grav *grav, double *restrict W, double *restrict dUdt)
 {
     int i;
     int j;
@@ -34,6 +34,9 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
     if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
         return;
     }
+#if !PRJ_USE_RADIATION_FSA
+    (void)rad;
+#endif
 
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -66,7 +69,7 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
                     dUdt[VIDX(PRJ_CONS_ETOT, i, j, k)] +=
                         rho * (v_avg1 * g1 + v_avg2 * g2 + v_avg3 * g3);
                 }
-#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_M1
                 {
                     double lapse = block->lapse[cell_idx];
                     int field;
@@ -88,19 +91,41 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
                         }
                     }
                 }
+#elif PRJ_USE_RADIATION_FSA
+                if (rad != 0) {
+                    double lapse = block->lapse[cell_idx];
+                    double inv_c = 1.0 / PRJ_CLIGHT;
+                    int field;
+                    int group;
+                    int angle;
+
+                    for (field = 0; field < PRJ_NRAD; ++field) {
+                        for (group = 0; group < PRJ_NEGROUP; ++group) {
+                            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                                const double *n = rad->n0[angle];
+                                double a_dot_n = g1 * n[0] + g2 * n[1] + g3 * n[2];
+                                double I = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)];
+
+                                dUdt[VIDX(PRJ_CONS_RAD_I(field, group, angle), i, j, k)] -=
+                                    lapse * a_dot_n * inv_c * I;
+                            }
+                        }
+                    }
+                }
 #endif
             }
         }
     }
 }
 
-/* O(v/c) "source-like" piece of the SR redshift (Eq. 12a/12b of the
- * comoving-frame mixed-frame moment equations).  These are the bits left over
- * once the energy-space-flux divergence has been split off, and they appear as
- * pure cell-local sources:
+/* Velocity-gradient radiation source.  The M1 branch applies the O(v/c)
+ * "source-like" piece of the SR redshift (Eq. 12a/12b of the comoving-frame
+ * mixed-frame moment equations), while the FSA branch applies the first
+ * intensity-equation RHS term -α (n·∇v·n) I:
  *
  *     ∂_t E_g   -= (∂_j v_i) P^{ji}_g                          (Eq. 12a piece)
  *     ∂_t F_{gj} -= (∂_j v_i) F_{gi}                            (Eq. 12b piece)
+ *     ∂_t I_{g,n} -= α (n_j ∂_j v_i n_i) I_{g,n}                 (FSA piece)
  *
  * Indices: i,j ∈ {1,2,3}; sums over i (and i,j for the energy term).  ∂_j v_i is
  * built by central differencing the face-centred Riemann velocities stored in
@@ -109,7 +134,7 @@ void prj_src_monopole_gravity(const prj_block *block, const prj_grav *grav,
 void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
     double *restrict W, double *restrict dUdt)
 {
-#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_M1
     int i;
     int j;
     int k;
@@ -213,6 +238,83 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
             }
         }
     }
+#elif PRJ_USE_RADIATION_FSA
+    int i;
+    int j;
+    int k;
+
+    if (rad == 0 || block == 0 || block->id < 0 || block->active != 1 ||
+        W == 0 || dUdt == 0) {
+        return;
+    }
+    if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
+        return;
+    }
+
+    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                double dvdx[3][3]; /* dvdx[jdir][icomp] = ∂_jdir v_icomp */
+                double inv_dx[3];
+                double lapse = block->lapse != 0 ? block->lapse[IDX(i, j, k)] : 1.0;
+                int jdir;
+                int icomp;
+                int field;
+                int group;
+                int angle;
+
+                inv_dx[0] = 1.0 / block->dx[0];
+                inv_dx[1] = 1.0 / block->dx[1];
+                inv_dx[2] = 1.0 / block->dx[2];
+
+                for (jdir = 0; jdir < 3; ++jdir) {
+                    for (icomp = 0; icomp < 3; ++icomp) {
+                        int il = i;
+                        int jl = j;
+                        int kl = k;
+                        int ir = i;
+                        int jr = j;
+                        int kr = k;
+                        double vL;
+                        double vR;
+
+                        if (jdir == X1DIR) {
+                            ir = i + 1;
+                        } else if (jdir == X2DIR) {
+                            jr = j + 1;
+                        } else {
+                            kr = k + 1;
+                        }
+                        vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+                        vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
+                        dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+                    }
+                }
+
+                for (field = 0; field < PRJ_NRAD; ++field) {
+                    for (group = 0; group < PRJ_NEGROUP; ++group) {
+                        for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                            const double *n = rad->n0[angle];
+                            double ndvdxn = 0.0;
+                            double I;
+                            int jj;
+                            int ii;
+
+                            for (jj = 0; jj < 3; ++jj) {
+                                for (ii = 0; ii < 3; ++ii) {
+                                    ndvdxn += n[jj] * dvdx[jj][ii] * n[ii];
+                                }
+                            }
+
+                            I = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)];
+                            dUdt[VIDX(PRJ_CONS_RAD_I(field, group, angle), i, j, k)] -=
+                                lapse * ndvdxn * I;
+                        }
+                    }
+                }
+            }
+        }
+    }
 #else
     (void)rad;
     (void)block;
@@ -248,7 +350,7 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     prj_src_user(eos, W, dUdt);
     PRJ_SUBTIMER_STOP("sub_src_user");
     PRJ_SUBTIMER_START("sub_src_gravity");
-    prj_src_monopole_gravity(block, grav, W, dUdt);
+    prj_src_monopole_gravity(rad, block, grav, W, dUdt);
     PRJ_SUBTIMER_STOP("sub_src_gravity");
     PRJ_SUBTIMER_START("sub_src_rad_vel_grad");
     prj_src_radiation_vel_grad(rad, block, W, dUdt);
