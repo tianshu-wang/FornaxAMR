@@ -586,6 +586,9 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_START("sub_rad_freq_flux");
         prj_rad_freq_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt);
         PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
+        PRJ_SUBTIMER_START("sub_rad_ang_flux");
+        prj_rad_ang_flux_apply(rad, block, block->W, u, i, j, k, lapse_cell, dt);
+        PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
         PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
         PRJ_SUBTIMER_STOP("sub_rad_eleinel");
@@ -637,6 +640,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 
         prj_rad_freq_flux_apply(rad, block, block->W, u1, i, j, k, lapse_cell, dt);
+        prj_rad_ang_flux_apply(rad, block, block->W, u1, i, j, k, lapse_cell, dt);
         prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
         prj_rad_nucinel_step(rad, eos, u1, dt, T_cell);
         prj_rad_energy_update(rad, eos, u1, dt, lapse_cell, &T_cell, kappa);
@@ -741,6 +745,9 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_START("sub_rad_freq_flux");
         prj_rad_freq_flux_apply(rad, block, W_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
         PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
+        PRJ_SUBTIMER_START("sub_rad_ang_flux");
+        prj_rad_ang_flux_apply(rad, block, W_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
+        PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
         PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
         PRJ_SUBTIMER_STOP("sub_rad_eleinel");
@@ -786,6 +793,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 
         prj_rad_freq_flux_apply(rad, block, W_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
+        prj_rad_ang_flux_apply(rad, block, W_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
         prj_rad_nucinel_step(rad, eos, u, 0.5 * dt, T_cell);
         prj_rad_energy_update(rad, eos, u, 0.5 * dt, lapse_cell, &T_cell, kappa);
@@ -1130,6 +1138,9 @@ static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
     PRJ_SUBTIMER_START("sub_rad_freq_flux");
     prj_rad_freq_flux_apply(rad, block, W_stage, u1, i, j, k, lapse_cell, dt);
     PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
+    PRJ_SUBTIMER_START("sub_rad_ang_flux");
+    prj_rad_ang_flux_apply(rad, block, W_stage, u1, i, j, k, lapse_cell, dt);
+    PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
     PRJ_SUBTIMER_START("sub_rad_eleinel");
     prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
     PRJ_SUBTIMER_STOP("sub_rad_eleinel");

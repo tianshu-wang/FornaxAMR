@@ -293,6 +293,10 @@ struct prj_rad {
 #if PRJ_USE_RADIATION_FSA
     double n0[PRJ_NANGLE][3];
     double solid_angle[PRJ_NANGLE];
+    double *arc_angle;
+    double *arc_vec;
+    int *arc_neighbor;
+    int *cell_neighbor;
 #endif
 #if PRJ_NRAD > 0
     double chi[NCLOSURE + 1];

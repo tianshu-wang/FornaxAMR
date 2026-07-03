@@ -126,6 +126,12 @@ typedef struct prj_rad_fsa_cell {
     int ntri;
 } prj_rad_fsa_cell;
 
+typedef struct prj_rad_fsa_arc {
+    int cell[2];
+    int tri[2];
+    int ntri;
+} prj_rad_fsa_arc;
+
 static void prj_rad_fsa_fail(const char *msg)
 {
     fprintf(stderr, "prj_rad_fsa_calculate_directions: %s\n", msg);
@@ -142,6 +148,17 @@ static void prj_rad_fsa_cross(const double a[3], const double b[3], double c[3])
     c[0] = a[1] * b[2] - a[2] * b[1];
     c[1] = a[2] * b[0] - a[0] * b[2];
     c[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+static double prj_rad_fsa_clamp_dot(double x)
+{
+    if (x < -1.0) {
+        return -1.0;
+    }
+    if (x > 1.0) {
+        return 1.0;
+    }
+    return x;
 }
 
 static void prj_rad_fsa_normalize(double a[3])
@@ -280,10 +297,203 @@ static void prj_rad_fsa_triangle_center(
     prj_rad_fsa_flat_face_point(ico, face, i0, j0, p0);
     prj_rad_fsa_flat_face_point(ico, face, i1, j1, p1);
     prj_rad_fsa_flat_face_point(ico, face, i2, j2, p2);
-    for (d = 0; d < 3; ++d) {
-        center[d] = p0[d] + p1[d] + p2[d];
+    prj_rad_fsa_normalize(p0);
+    prj_rad_fsa_normalize(p1);
+    prj_rad_fsa_normalize(p2);
+    {
+        double e01[3];
+        double e02[3];
+        double sum[3];
+
+        for (d = 0; d < 3; ++d) {
+            e01[d] = p0[d] - p1[d];
+            e02[d] = p0[d] - p2[d];
+            sum[d] = p0[d] + p1[d] + p2[d];
+        }
+        prj_rad_fsa_cross(e01, e02, center);
+        if (prj_rad_fsa_dot(center, sum) < 0.0) {
+            center[0] = -center[0];
+            center[1] = -center[1];
+            center[2] = -center[2];
+        }
+        prj_rad_fsa_normalize(center);
     }
-    prj_rad_fsa_normalize(center);
+}
+
+static void prj_rad_fsa_find_or_add_arc(prj_rad_fsa_arc *arcs,
+    int *narcs, int cell0, int cell1, int tri_id)
+{
+    int a;
+
+    if (cell0 == cell1) {
+        prj_rad_fsa_fail("degenerate angular arc");
+    }
+    if (cell1 < cell0) {
+        int tmp = cell0;
+
+        cell0 = cell1;
+        cell1 = tmp;
+    }
+
+    for (a = 0; a < *narcs; ++a) {
+        if (arcs[a].cell[0] == cell0 && arcs[a].cell[1] == cell1) {
+            if (arcs[a].ntri >= 2) {
+                prj_rad_fsa_fail("angular arc has more than two triangle neighbors");
+            }
+            arcs[a].tri[arcs[a].ntri] = tri_id;
+            arcs[a].ntri += 1;
+            return;
+        }
+    }
+
+    if (*narcs >= PRJ_NARC) {
+        prj_rad_fsa_fail("too many angular arcs");
+    }
+    a = *narcs;
+    arcs[a].cell[0] = cell0;
+    arcs[a].cell[1] = cell1;
+    arcs[a].tri[0] = tri_id;
+    arcs[a].tri[1] = -1;
+    arcs[a].ntri = 1;
+    *narcs = a + 1;
+}
+
+static void prj_rad_fsa_cell_add_arc(int *cell_neighbor, int cell, int arc)
+{
+    int s;
+
+    for (s = 0; s < PRJ_RAD_FSA_MAX_CELL_VERTS; ++s) {
+        int *slot = &cell_neighbor[cell * PRJ_RAD_FSA_MAX_CELL_VERTS + s];
+
+        if (*slot == arc) {
+            prj_rad_fsa_fail("duplicate angular cell arc");
+        }
+        if (*slot == -1) {
+            *slot = arc;
+            return;
+        }
+    }
+    prj_rad_fsa_fail("angular cell has too many arc neighbors");
+}
+
+static void prj_rad_fsa_build_arcs(const double vertices[PRJ_NANGLE][3],
+    const prj_rad_fsa_triangle *triangles, const prj_rad_fsa_cell *cells,
+    int ntriangles, prj_rad *rad)
+{
+    static const int edge_pair[3][2] = {{0, 1}, {1, 2}, {2, 0}};
+    prj_rad_fsa_arc *arcs;
+    int narcs = 0;
+    int idx;
+    int tri_id;
+    int a;
+    int cell;
+
+    arcs = (prj_rad_fsa_arc *)prj_calloc((size_t)PRJ_NARC, sizeof(*arcs));
+    for (idx = 0; idx < PRJ_NARC; ++idx) {
+        rad->arc_angle[idx] = 0.0;
+        rad->arc_vec[3 * idx] = 0.0;
+        rad->arc_vec[3 * idx + 1] = 0.0;
+        rad->arc_vec[3 * idx + 2] = 0.0;
+        rad->arc_neighbor[2 * idx] = -1;
+        rad->arc_neighbor[2 * idx + 1] = -1;
+    }
+    for (idx = 0; idx < PRJ_RAD_FSA_MAX_CELL_VERTS * PRJ_NANGLE; ++idx) {
+        rad->cell_neighbor[idx] = -1;
+    }
+
+    for (tri_id = 0; tri_id < ntriangles; ++tri_id) {
+        int e;
+
+        for (e = 0; e < 3; ++e) {
+            int c0 = triangles[tri_id].v[edge_pair[e][0]];
+            int c1 = triangles[tri_id].v[edge_pair[e][1]];
+
+            prj_rad_fsa_find_or_add_arc(arcs, &narcs, c0, c1, tri_id);
+        }
+    }
+    if (narcs != PRJ_NARC) {
+        prj_rad_fsa_fail("unexpected number of angular arcs");
+    }
+
+    for (a = 0; a < narcs; ++a) {
+        const double *p0;
+        const double *p1;
+        int c0 = arcs[a].cell[0];
+        int c1 = arcs[a].cell[1];
+        double mid[3];
+        double dn[3];
+        double v[3];
+        double v_dot_mid;
+        double p_dot;
+        int d;
+
+        if (arcs[a].ntri != 2) {
+            prj_rad_fsa_fail("angular arc does not have two triangle neighbors");
+        }
+
+        p0 = triangles[arcs[a].tri[0]].center;
+        p1 = triangles[arcs[a].tri[1]].center;
+        p_dot = prj_rad_fsa_clamp_dot(prj_rad_fsa_dot(p0, p1));
+        rad->arc_angle[a] = acos(p_dot);
+        if (rad->arc_angle[a] <= 0.0) {
+            prj_rad_fsa_fail("non-positive angular arc length");
+        }
+
+        for (d = 0; d < 3; ++d) {
+            mid[d] = p0[d] + p1[d];
+            dn[d] = vertices[c1][d] - vertices[c0][d];
+        }
+        prj_rad_fsa_normalize(mid);
+        v_dot_mid = prj_rad_fsa_dot(dn, mid);
+        for (d = 0; d < 3; ++d) {
+            v[d] = dn[d] - v_dot_mid * mid[d];
+        }
+        prj_rad_fsa_normalize(v);
+        if (prj_rad_fsa_dot(v, dn) < 0.0) {
+            v[0] = -v[0];
+            v[1] = -v[1];
+            v[2] = -v[2];
+        }
+
+        rad->arc_neighbor[2 * a] = c0;
+        rad->arc_neighbor[2 * a + 1] = c1;
+        for (d = 0; d < 3; ++d) {
+            rad->arc_vec[3 * a + d] = v[d];
+        }
+        prj_rad_fsa_cell_add_arc(rad->cell_neighbor, c0, a);
+        prj_rad_fsa_cell_add_arc(rad->cell_neighbor, c1, a);
+    }
+
+    for (cell = 0; cell < PRJ_NANGLE; ++cell) {
+        int count = 0;
+        int s;
+
+        for (s = 0; s < PRJ_RAD_FSA_MAX_CELL_VERTS; ++s) {
+            if (rad->cell_neighbor[cell * PRJ_RAD_FSA_MAX_CELL_VERTS + s] >= 0) {
+                count += 1;
+            }
+        }
+        if (count != cells[cell].ntri) {
+            prj_rad_fsa_fail("angular cell arc count does not match valence");
+        }
+    }
+
+    free(arcs);
+}
+
+void prj_rad_fsa_free_geometry(prj_rad *rad)
+{
+    if (rad == 0) {
+        return;
+    }
+    free(rad->arc_angle);
+    free(rad->arc_vec);
+    free(rad->arc_neighbor);
+    free(rad->cell_neighbor);
+    rad->arc_angle = 0;
+    rad->arc_vec = 0;
+    rad->arc_neighbor = 0;
+    rad->cell_neighbor = 0;
 }
 
 static void prj_rad_fsa_build_grid(double vertices[PRJ_NANGLE][3],
@@ -431,6 +641,15 @@ void prj_rad_fsa_calculate_directions(prj_rad *rad)
         return;
     }
 
+    prj_rad_fsa_free_geometry(rad);
+    rad->arc_angle = (double *)prj_malloc((size_t)PRJ_NARC * sizeof(*rad->arc_angle));
+    rad->arc_vec = (double *)prj_malloc((size_t)3 * (size_t)PRJ_NARC *
+        sizeof(*rad->arc_vec));
+    rad->arc_neighbor = (int *)prj_malloc((size_t)2 * (size_t)PRJ_NARC *
+        sizeof(*rad->arc_neighbor));
+    rad->cell_neighbor = (int *)prj_malloc((size_t)PRJ_RAD_FSA_MAX_CELL_VERTS *
+        (size_t)PRJ_NANGLE * sizeof(*rad->cell_neighbor));
+
     vertices = (double (*)[3])prj_malloc((size_t)PRJ_NANGLE * sizeof(*vertices));
     triangles = (prj_rad_fsa_triangle *)prj_malloc(
         (size_t)PRJ_RAD_FSA_NTRI * sizeof(*triangles));
@@ -461,6 +680,7 @@ void prj_rad_fsa_calculate_directions(prj_rad *rad)
     if (npent != 12 || nhex != PRJ_NANGLE - 12) {
         prj_rad_fsa_fail("unexpected pentagon/hexagon count");
     }
+    prj_rad_fsa_build_arcs(vertices, triangles, cells, ntriangles, rad);
 
     free(cells);
     free(triangles);
@@ -1447,7 +1667,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
                 u[fi[d]] = F_old[d] + dF;
                 dmom[d] += dF * inv_c2;
             }
-            
+
             double E = u[PRJ_CONS_RAD_E(nu, g)];
             double F1 = u[fi[0]];
             double F2 = u[fi[1]];
@@ -1970,6 +2190,196 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
 #endif
 }
 
+void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
+    const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt)
+{
+#if PRJ_USE_RADIATION_FSA
+    double dvdx[3][3] = {{0.0}};
+    double a[3] = {0.0, 0.0, 0.0};
+    double dt_lapse;
+    double inv_c = 1.0 / PRJ_CLIGHT;
+    int have_v_riemann;
+    int cell_idx;
+    int field;
+    int group;
+
+    if (rad == 0 || block == 0 || W_state == 0 || u == 0) {
+        return;
+    }
+    if (rad->arc_angle == 0 || rad->arc_vec == 0 ||
+        rad->arc_neighbor == 0 || rad->cell_neighbor == 0) {
+        return;
+    }
+
+    have_v_riemann = block->v_riemann[0] != 0 &&
+        block->v_riemann[1] != 0 && block->v_riemann[2] != 0;
+    if (have_v_riemann) {
+        double inv_dx[3];
+        int jdir;
+        int icomp;
+
+        inv_dx[0] = 1.0 / block->dx[0];
+        inv_dx[1] = 1.0 / block->dx[1];
+        inv_dx[2] = 1.0 / block->dx[2];
+
+        for (jdir = 0; jdir < 3; ++jdir) {
+            for (icomp = 0; icomp < 3; ++icomp) {
+                int il = ic;
+                int jl = jc;
+                int kl = kc;
+                int ir = ic;
+                int jr = jc;
+                int kr = kc;
+                double vL;
+                double vR;
+
+                if (jdir == X1DIR) {
+                    ir = ic + 1;
+                } else if (jdir == X2DIR) {
+                    jr = jc + 1;
+                } else {
+                    kr = kc + 1;
+                }
+                vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+                vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
+                dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+            }
+        }
+    }
+
+    cell_idx = IDX(ic, jc, kc);
+    if (block->grav[0] != 0 && block->grav[1] != 0 && block->grav[2] != 0) {
+        a[0] = block->grav[0][cell_idx];
+        a[1] = block->grav[1][cell_idx];
+        a[2] = block->grav[2][cell_idx];
+    }
+
+    dt_lapse = lapse * dt;
+    if (dt_lapse == 0.0) {
+        return;
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            double arc_flux[PRJ_NARC];
+            double outgoing[PRJ_NANGLE];
+            double theta[PRJ_NANGLE];
+            int arc;
+            int angle;
+
+            for (arc = 0; arc < PRJ_NARC; ++arc) {
+                int c0 = rad->arc_neighbor[2 * arc];
+                int c1 = rad->arc_neighbor[2 * arc + 1];
+                double nface[3];
+                double b[3];
+                double speed;
+                double I_face;
+                double nmag;
+                int donor;
+                int d;
+                int jj;
+
+                arc_flux[arc] = 0.0;
+                if (c0 < 0 || c0 >= PRJ_NANGLE || c1 < 0 || c1 >= PRJ_NANGLE) {
+                    continue;
+                }
+                for (d = 0; d < 3; ++d) {
+                    nface[d] = rad->n0[c0][d] + rad->n0[c1][d];
+                }
+                nmag = sqrt(nface[0] * nface[0] + nface[1] * nface[1] +
+                    nface[2] * nface[2]);
+                if (nmag <= 0.0) {
+                    continue;
+                }
+                for (d = 0; d < 3; ++d) {
+                    nface[d] /= nmag;
+                    b[d] = a[d] * inv_c;
+                }
+                for (d = 0; d < 3; ++d) {
+                    for (jj = 0; jj < 3; ++jj) {
+                        b[d] += nface[jj] * dvdx[jj][d];
+                    }
+                }
+
+                speed = b[0] * rad->arc_vec[3 * arc] +
+                    b[1] * rad->arc_vec[3 * arc + 1] +
+                    b[2] * rad->arc_vec[3 * arc + 2];
+                if (speed == 0.0) {
+                    continue;
+                }
+
+                /* The LHS contains -alpha div_n(I b), so after moving it to
+                 * the update side a positive b·arc_vec drains the second
+                 * angular cell and fills the first. */
+                donor = speed > 0.0 ? c1 : c0;
+                I_face = W_state[WIDX(PRJ_PRIM_RAD_I(field, group, donor), ic, jc, kc)];
+                arc_flux[arc] = speed * I_face * rad->arc_angle[arc];
+            }
+
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                outgoing[angle] = 0.0;
+            }
+            for (arc = 0; arc < PRJ_NARC; ++arc) {
+                int c0 = rad->arc_neighbor[2 * arc];
+                int c1 = rad->arc_neighbor[2 * arc + 1];
+                double flux = arc_flux[arc];
+
+                if (flux > 0.0) {
+                    outgoing[c1] += flux / rad->solid_angle[c1];
+                } else if (flux < 0.0) {
+                    outgoing[c0] -= flux / rad->solid_angle[c0];
+                }
+            }
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int v = PRJ_CONS_RAD_I(field, group, angle);
+                double drain = dt_lapse * outgoing[angle];
+
+                theta[angle] = 1.0;
+                if (drain > u[v]) {
+                    theta[angle] = u[v] > 0.0 && drain > 0.0
+                        ? nextafter(u[v] / drain, 0.0)
+                        : 0.0;
+                }
+            }
+            for (arc = 0; arc < PRJ_NARC; ++arc) {
+                double flux = arc_flux[arc];
+
+                if (flux > 0.0) {
+                    int donor = rad->arc_neighbor[2 * arc + 1];
+
+                    arc_flux[arc] *= theta[donor];
+                } else if (flux < 0.0) {
+                    int donor = rad->arc_neighbor[2 * arc];
+
+                    arc_flux[arc] *= theta[donor];
+                }
+            }
+
+            for (arc = 0; arc < PRJ_NARC; ++arc) {
+                int c0 = rad->arc_neighbor[2 * arc];
+                int c1 = rad->arc_neighbor[2 * arc + 1];
+                double flux = arc_flux[arc];
+
+                u[PRJ_CONS_RAD_I(field, group, c0)] +=
+                    dt_lapse * flux / rad->solid_angle[c0];
+                u[PRJ_CONS_RAD_I(field, group, c1)] -=
+                    dt_lapse * flux / rad->solid_angle[c1];
+            }
+        }
+    }
+#else
+    (void)rad;
+    (void)block;
+    (void)W_state;
+    (void)u;
+    (void)ic;
+    (void)jc;
+    (void)kc;
+    (void)lapse;
+    (void)dt;
+#endif
+}
+
 #else
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out)
 {
@@ -1994,6 +2404,20 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
 }
 
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
+    const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt)
+{
+    (void)rad;
+    (void)block;
+    (void)W_state;
+    (void)u;
+    (void)ic;
+    (void)jc;
+    (void)kc;
+    (void)lapse;
+    (void)dt;
+}
+
+void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt)
 {
     (void)rad;

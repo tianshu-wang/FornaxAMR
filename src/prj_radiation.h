@@ -26,6 +26,7 @@ static inline double prj_rad_mixed_round(double x)
 void prj_rad_init(prj_rad *rad);
 #if PRJ_USE_RADIATION_FSA
 void prj_rad_fsa_calculate_directions(prj_rad *rad);
+void prj_rad_fsa_free_geometry(prj_rad *rad);
 #endif
 void prj_rad_prim2cons(const double *W, double *U);
 void prj_rad_cons2prim(const double *U, double *W);
@@ -46,6 +47,8 @@ void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double
     double f, double *lam_min, double *lam_max);
 #endif
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
+    const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);
+void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);
 
 #endif

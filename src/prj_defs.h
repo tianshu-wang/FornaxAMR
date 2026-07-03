@@ -166,6 +166,7 @@ typedef double prj_table_real;
 #error "PRJ_N_ANGLE_LEV must be at least 1 for RADIATION_FSA"
 #endif
 #define PRJ_NANGLE (10 * (PRJ_N_ANGLE_LEV) * (PRJ_N_ANGLE_LEV) + 2)
+#define PRJ_NARC (30 * (PRJ_N_ANGLE_LEV) * (PRJ_N_ANGLE_LEV))
 #ifndef INEL_PHI_NT
 #define INEL_PHI_NT 30
 #endif

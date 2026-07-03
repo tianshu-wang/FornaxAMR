@@ -25,11 +25,27 @@ def cross(a, b):
     )
 
 
+def add(a, b):
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def sub(a, b):
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+
+def scale(a, s):
+    return (s * a[0], s * a[1], s * a[2])
+
+
 def normalize(a):
     mag = math.sqrt(dot(a, a))
     if mag <= 0.0:
         raise ValueError("zero-length vector")
     return (a[0] / mag, a[1] / mag, a[2] / mag)
+
+
+def clamp_unit(x):
+    return max(-1.0, min(1.0, x))
 
 
 def icosahedron_vertices():
@@ -68,12 +84,13 @@ def find_or_add_vertex(vertices, cells, p):
 
 
 def triangle_center(ico, face, level, coords):
-    pts = [flat_face_point(ico, face, level, i, j) for i, j in coords]
-    return normalize((
-        pts[0][0] + pts[1][0] + pts[2][0],
-        pts[0][1] + pts[1][1] + pts[2][1],
-        pts[0][2] + pts[1][2] + pts[2][2],
-    ))
+    pts = [normalize(flat_face_point(ico, face, level, i, j)) for i, j in coords]
+    e01 = sub(pts[0], pts[1])
+    e02 = sub(pts[0], pts[2])
+    center = cross(e01, e02)
+    if dot(center, add(add(pts[0], pts[1]), pts[2])) < 0.0:
+        center = scale(center, -1.0)
+    return normalize(center)
 
 
 def build_grid(level):
@@ -115,6 +132,40 @@ def build_grid(level):
             f"unexpected grid size: {len(vertices)} cells, {len(triangles)} triangles"
         )
     return vertices, triangles, cells
+
+
+def build_arcs(vertices, triangles):
+    edge_map = {}
+    arcs = []
+
+    for tri_id, (ids, _center) in enumerate(triangles):
+        for c0, c1 in ((ids[0], ids[1]), (ids[1], ids[2]), (ids[2], ids[0])):
+            key = tuple(sorted((c0, c1)))
+            edge_map.setdefault(key, []).append(tri_id)
+
+    for (c0, c1), tri_ids in sorted(edge_map.items()):
+        if len(tri_ids) != 2:
+            raise RuntimeError(f"edge {(c0, c1)} has {len(tri_ids)} triangle neighbors")
+        p0 = triangles[tri_ids[0]][1]
+        p1 = triangles[tri_ids[1]][1]
+        midpoint = normalize(add(p0, p1))
+        delta = sub(vertices[c1], vertices[c0])
+        vec = sub(delta, scale(midpoint, dot(delta, midpoint)))
+        vec = normalize(vec)
+        if dot(vec, delta) < 0.0:
+            vec = scale(vec, -1.0)
+        arcs.append({
+            "cells": (c0, c1),
+            "triangles": tuple(tri_ids),
+            "angle": math.acos(clamp_unit(dot(p0, p1))),
+            "midpoint": midpoint,
+            "vec": vec,
+        })
+
+    expected_arcs = 30 * len(triangles) // 20
+    if len(arcs) != expected_arcs:
+        raise RuntimeError(f"unexpected arc count: {len(arcs)} != {expected_arcs}")
+    return arcs
 
 
 def tangent_basis(center):
@@ -188,22 +239,17 @@ def edge_segments(a, b, want_front, view, right, up, center, radius):
 
 def write_svg(path, level):
     vertices, triangles, cells = build_grid(level)
+    arcs = build_arcs(vertices, triangles)
     view, right, up = camera_basis()
     size = 900
     radius = 360
     center = (size / 2, size / 2)
-    edges = set()
     dual_points = [center_dir for _, center_dir in triangles]
-
-    for vertex_id, cell_triangles in enumerate(cells):
-        order = ordered_cell_triangles(vertices[vertex_id], cell_triangles, triangles)
-        for idx, tri_id in enumerate(order):
-            edge = tuple(sorted((tri_id, order[(idx + 1) % len(order)])))
-            edges.add(edge)
 
     with open(path, "w", encoding="utf-8") as fh:
         fh.write('<?xml version="1.0" encoding="UTF-8"?>\n')
         fh.write(f'<svg xmlns="http://www.w3.org/2000/svg" width="{size}" height="{size}" viewBox="0 0 {size} {size}">\n')
+        fh.write('<defs><marker id="arc-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M 0 0 L 6 3 L 0 6 z" fill="#117a65"/></marker></defs>\n')
         fh.write('<rect width="100%" height="100%" fill="#ffffff"/>\n')
         fh.write(f'<circle cx="{center[0]}" cy="{center[1]}" r="{radius}" fill="#eee7f5" stroke="#dfd0ee" stroke-width="6"/>\n')
 
@@ -211,7 +257,8 @@ def write_svg(path, level):
             (False, "#d7c5ea", 5, 0.45),
             (True, "#8e5cc2", 6, 0.92),
         ):
-            for i, j in sorted(edges):
+            for arc in arcs:
+                i, j = arc["triangles"]
                 a = dual_points[i]
                 b = dual_points[j]
                 for segment in edge_segments(a, b, want_front, view, right, up, center, radius):
@@ -220,6 +267,27 @@ def write_svg(path, level):
                         f'stroke-width="{width}" stroke-linecap="round" stroke-linejoin="round" '
                         f'opacity="{opacity}"/>\n'
                     )
+
+        arrow_half_angle = 0.035
+        for arc in arcs:
+            midpoint = arc["midpoint"]
+            vec = arc["vec"]
+            _xm, _ym, zm = project(midpoint, view, right, up, center, radius)
+            if zm < 0.0:
+                continue
+            p_start = normalize(add(scale(midpoint, math.cos(arrow_half_angle)),
+                                    scale(vec, -math.sin(arrow_half_angle))))
+            p_end = normalize(add(scale(midpoint, math.cos(arrow_half_angle)),
+                                  scale(vec, math.sin(arrow_half_angle))))
+            x0, y0, z0 = project(p_start, view, right, up, center, radius)
+            x1, y1, z1 = project(p_end, view, right, up, center, radius)
+            if z0 < -0.02 or z1 < -0.02:
+                continue
+            fh.write(
+                f'<line x1="{x0:.2f}" y1="{y0:.2f}" x2="{x1:.2f}" y2="{y1:.2f}" '
+                f'stroke="#117a65" stroke-width="2.6" stroke-linecap="round" '
+                f'opacity="0.82" marker-end="url(#arc-arrow)"/>\n'
+            )
 
         for p in dual_points:
             x, y, z = project(p, view, right, up, center, radius)
@@ -233,8 +301,25 @@ def write_svg(path, level):
         fh.write('</svg>\n')
 
     total_area = 4.0 * math.pi
+    degree = [len(cell) for cell in cells]
+    pent_hex = sum(
+        1 for arc in arcs
+        if sorted((degree[arc["cells"][0]], degree[arc["cells"][1]])) == [5, 6]
+    )
+    hex_hex = sum(
+        1 for arc in arcs
+        if degree[arc["cells"][0]] == 6 and degree[arc["cells"][1]] == 6
+    )
+    pent_pent = sum(
+        1 for arc in arcs
+        if degree[arc["cells"][0]] == 5 and degree[arc["cells"][1]] == 5
+    )
     print(f"wrote {path}")
-    print(f"N_ANGLE_LEV={level} Nang={len(vertices)} expected_total_solid_angle={total_area:.16e}")
+    print(
+        f"N_ANGLE_LEV={level} Nang={len(vertices)} Narc={len(arcs)} "
+        f"pent-pent={pent_pent} pent-hex={pent_hex} hex-hex={hex_hex} "
+        f"expected_total_solid_angle={total_area:.16e}"
+    )
 
 
 def main():
