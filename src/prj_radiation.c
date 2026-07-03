@@ -1504,20 +1504,57 @@ static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int sid
     return q[gcell];
 }
 
-/* Apply the per-cell energy-space-flux part of the SR redshift terms
- * (Eqs. 21a/21b of the comoving-frame mixed-frame moment equations):
+#if PRJ_USE_RADIATION_FSA
+static void prj_rad_fsa_omega_faces(const prj_rad *rad, int field,
+    double omega_face[PRJ_NEGROUP + 1])
+{
+    int gf;
+
+    if (rad->eedge[field] != 0) {
+        for (gf = 0; gf <= PRJ_NEGROUP; ++gf) {
+            omega_face[gf] = rad->eedge[field][gf];
+        }
+        return;
+    }
+    if (rad->emin[field] <= 0.0 || rad->emax[field] <= rad->emin[field]) {
+        fprintf(stderr, "prj_rad_freq_flux_apply: invalid FSA emin/emax for field %d\n",
+            field);
+        exit(1);
+    }
+    {
+        double log_min = log(rad->emin[field]);
+        double log_max = log(rad->emax[field]);
+        double dlog = (log_max - log_min) / (double)PRJ_NEGROUP;
+
+        for (gf = 0; gf <= PRJ_NEGROUP; ++gf) {
+            omega_face[gf] = exp(log_min + (double)gf * dlog);
+        }
+        omega_face[0] = rad->emin[field];
+        omega_face[PRJ_NEGROUP] = rad->emax[field];
+    }
+}
+#endif
+
+/* Apply the per-cell energy-space flux terms.  The M1 branch applies the
+ * energy-space-flux part of the SR redshift terms (Eqs. 21a/21b of the
+ * comoving-frame mixed-frame moment equations):
  *
  *   ∂_t E_g    -= - v^i_{;j} [ (ν P^j_{νi})_{g+1/2} - (ν P^j_{νi})_{g-1/2} ]
  *   ∂_t F_{gj} -= - v^i_{;k} [ (ν Q^k_{νji})_{g+1/2} - (ν Q^k_{νji})_{g-1/2} ]
  *
  * (Equivalently dE_g/dt += v^i_{;j} ΔνP^{ji} and dF_{gj}/dt += v^i_{;k} ΔνQ^{kji}.)
  *
- * The face values are picked by upwinding in frequency space according to
- * Eq. 22:
- *      pick L (right face of the lower group)  if v_{...} <  0,
- *      pick R (left  face of the upper group)  if v_{...} >= 0.
+ * The FSA branch applies the third LHS term of the intensity equation after
+ * moving it to the update side:
  *
- * Closure choices:
+ *   ∂_t I_g += α A_n ∂_ω(ω I_g),  A_n = n · ∇'v · n + a · n / c.
+ *
+ * The face values are picked by upwinding in frequency space.  With the update
+ * written as dU_g/dt = face[g+1] - face[g], a positive drift drains the upper
+ * group and uses that group as the donor; a negative drift drains the lower
+ * group.
+ *
+ * M1 closure choices:
  *   - P^{ij}_g from the standard M1 Eddington tensor on cell-centred (E_g, F_g).
  *   - Q^{kij}_g from the Levermore/Vaytet third-moment closure
  *       Q^{ijk} = c E H^{ijk},
@@ -1531,7 +1568,7 @@ static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int sid
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt)
 {
-#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_M1
     double dvdx[3][3];
     double inv_dx[3];
     int jdir;
@@ -1774,6 +1811,152 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 (momentum_face[g + 1][2] - momentum_face[g][2]);
         }
     }
+#elif PRJ_USE_RADIATION_FSA
+    double dvdx[3][3] = {{0.0}};
+    double a[3] = {0.0, 0.0, 0.0};
+    double dt_lapse;
+    double inv_c = 1.0 / PRJ_CLIGHT;
+    int have_v_riemann;
+    int cell_idx;
+    int field;
+
+    if (rad == 0 || block == 0 || W_state == 0 || u == 0) {
+        return;
+    }
+
+    have_v_riemann = block->v_riemann[0] != 0 &&
+        block->v_riemann[1] != 0 && block->v_riemann[2] != 0;
+    if (have_v_riemann) {
+        double inv_dx[3];
+        int jdir;
+        int icomp;
+
+        inv_dx[0] = 1.0 / block->dx[0];
+        inv_dx[1] = 1.0 / block->dx[1];
+        inv_dx[2] = 1.0 / block->dx[2];
+
+        for (jdir = 0; jdir < 3; ++jdir) {
+            for (icomp = 0; icomp < 3; ++icomp) {
+                int il = ic;
+                int jl = jc;
+                int kl = kc;
+                int ir = ic;
+                int jr = jc;
+                int kr = kc;
+                double vL;
+                double vR;
+
+                if (jdir == X1DIR) {
+                    ir = ic + 1;
+                } else if (jdir == X2DIR) {
+                    jr = jc + 1;
+                } else {
+                    kr = kc + 1;
+                }
+                vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+                vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
+                dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+            }
+        }
+    }
+
+    cell_idx = IDX(ic, jc, kc);
+    if (block->grav[0] != 0 && block->grav[1] != 0 && block->grav[2] != 0) {
+        a[0] = block->grav[0][cell_idx];
+        a[1] = block->grav[1][cell_idx];
+        a[2] = block->grav[2][cell_idx];
+    }
+
+    dt_lapse = lapse * dt;
+    if (dt_lapse == 0.0) {
+        return;
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        double omega_face[PRJ_NEGROUP + 1];
+        int angle;
+
+        prj_rad_fsa_omega_faces(rad, field, omega_face);
+
+        for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+            const double *n = rad->n0[angle];
+            double ndvdxn = 0.0;
+            double a_dot_n = a[0] * n[0] + a[1] * n[1] + a[2] * n[2];
+            double drift;
+            double I_group[PRJ_NEGROUP];
+            double freq_face[PRJ_NEGROUP + 1] = {0.0};
+            double intensity_available[PRJ_NEGROUP];
+            double outgoing[PRJ_NEGROUP] = {0.0};
+            double theta[PRJ_NEGROUP];
+            int ii;
+            int jj;
+            int g;
+            int gf;
+
+            for (jj = 0; jj < 3; ++jj) {
+                for (ii = 0; ii < 3; ++ii) {
+                    ndvdxn += n[jj] * dvdx[jj][ii] * n[ii];
+                }
+            }
+            drift = ndvdxn + a_dot_n * inv_c;
+            if (drift == 0.0) {
+                continue;
+            }
+
+            for (g = 0; g < PRJ_NEGROUP; ++g) {
+                int v = PRJ_CONS_RAD_I(field, g, angle);
+
+                I_group[g] = W_state[WIDX(PRJ_PRIM_RAD_I(field, g, angle), ic, jc, kc)];
+                intensity_available[g] = u[v];
+            }
+
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                int gu;
+                double I_face;
+
+                if (drift >= 0.0) {
+                    gu = gf;
+                    I_face = prj_rad_recon_face(I_group, gu, -1);
+                } else {
+                    gu = gf - 1;
+                    I_face = prj_rad_recon_face(I_group, gu, +1);
+                }
+                freq_face[gf] = omega_face[gf] * drift * I_face;
+            }
+
+            /* Same donor-group positivity limiter as the M1 frequency flux:
+             * dI_g/dt = face[g+1] - face[g], so a positive face drains its
+             * upper group and a negative face drains its lower group. */
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                if (freq_face[gf] > 0.0) {
+                    outgoing[gf] += freq_face[gf];
+                } else if (freq_face[gf] < 0.0) {
+                    outgoing[gf - 1] -= freq_face[gf];
+                }
+            }
+            for (g = 0; g < PRJ_NEGROUP; ++g) {
+                double drain = dt_lapse * outgoing[g];
+
+                theta[g] = 1.0;
+                if (drain > intensity_available[g]) {
+                    theta[g] = intensity_available[g] > 0.0 && drain > 0.0
+                        ? nextafter(intensity_available[g] / drain, 0.0)
+                        : 0.0;
+                }
+            }
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                int donor = freq_face[gf] > 0.0 ? gf : gf - 1;
+                double factor = theta[donor];
+
+                freq_face[gf] *= factor;
+            }
+
+            for (g = 0; g < PRJ_NEGROUP; ++g) {
+                u[PRJ_CONS_RAD_I(field, g, angle)] += dt_lapse *
+                    (freq_face[g + 1] - freq_face[g]);
+            }
+        }
+    }
 #else
     (void)rad;
     (void)block;
@@ -1782,6 +1965,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     (void)ic;
     (void)jc;
     (void)kc;
+    (void)lapse;
     (void)dt;
 #endif
 }
