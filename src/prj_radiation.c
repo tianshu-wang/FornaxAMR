@@ -695,7 +695,11 @@ void prj_rad_init(prj_rad *rad)
 #endif
 #if PRJ_USE_RADIATION_M1
     prj_rad_init_closure(rad);
+#endif
+#if PRJ_USE_RADIATION_M1 || PRJ_USE_RADIATION_FSA
     prj_rad3_opac_init(rad);
+#endif
+#if PRJ_USE_RADIATION_M1
     prj_rad_eleinel_init(rad);
 #elif PRJ_NRAD == 0
     (void)rad;
@@ -1693,6 +1697,130 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
                                             u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
                                             u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
 }
+
+#if PRJ_USE_RADIATION_FSA
+void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
+    double *u, double dt, double lapse)
+{
+    double u_tmp[PRJ_NVAR_CONS];
+    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double sigma[PRJ_NRAD * PRJ_NEGROUP];
+    double delta[PRJ_NRAD * PRJ_NEGROUP];
+    double emis[PRJ_NRAD * PRJ_NEGROUP];
+    double final_temperature = 0.0;
+    double rho;
+    double Ye;
+    double dt_lapse;
+    double e_unchanged;
+    double dmom[3] = {0.0, 0.0, 0.0};
+    double dE_matter = 0.0;
+    double dYe_matter = 0.0;
+    int field;
+    int group;
+    int angle;
+    int d;
+    int v;
+    const double four_pi = 4.0 * M_PI;
+
+    if (rad == 0 || eos == 0 || u == 0) {
+        return;
+    }
+    dt_lapse = dt * lapse;
+    if (dt_lapse == 0.0) {
+        return;
+    }
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_tmp[v] = u[v];
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            double E = 0.0;
+            double first_moment[3] = {0.0, 0.0, 0.0};
+
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int iv = PRJ_CONS_RAD_I(field, group, angle);
+                double domega = rad->solid_angle[angle];
+                double I = u[iv];
+
+                E += domega * I;
+                for (d = 0; d < 3; ++d) {
+                    first_moment[d] += domega * I * rad->n0[angle][d];
+                }
+            }
+
+            u_tmp[PRJ_CONS_RAD_E(field, group)] = E;
+            u_tmp[PRJ_CONS_RAD_F1(field, group)] = PRJ_CLIGHT * first_moment[0];
+            u_tmp[PRJ_CONS_RAD_F2(field, group)] = PRJ_CLIGHT * first_moment[1];
+            u_tmp[PRJ_CONS_RAD_F3(field, group)] = PRJ_CLIGHT * first_moment[2];
+        }
+    }
+
+    prj_rad_energy_update(rad, eos, u_tmp, dt, lapse, &final_temperature, 0);
+
+    rho = u_tmp[PRJ_CONS_RHO];
+    Ye = rho != 0.0 ? u_tmp[PRJ_CONS_YE] / rho : 0.0;
+    prj_rad3_opac_lookup(rad, rho, final_temperature, Ye,
+        kappa, sigma, delta, emis);
+
+    rho = u[PRJ_CONS_RHO];
+    e_unchanged = u[PRJ_CONS_ETOT] - 0.5 *
+        (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
+         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
+         u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            double I_old[PRJ_NANGLE];
+            double I_abs[PRJ_NANGLE];
+            double E_abs = 0.0;
+            double E_matter_group = 0.0;
+            double scatter_rate = sigma[idx] * (1.0 - delta[idx] / 3.0);
+            double scatter_den = 1.0 + dt_lapse * PRJ_CLIGHT * scatter_rate;
+            double scatter_fac = 1.0 / scatter_den;
+            double iso;
+
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int iv = PRJ_CONS_RAD_I(field, group, angle);
+                double den = 1.0 + dt_lapse * PRJ_CLIGHT * kappa[idx];
+
+                I_old[angle] = u[iv];
+                I_abs[angle] = (I_old[angle] + dt_lapse * emis[idx] / four_pi) / den;
+                E_abs += rad->solid_angle[angle] * I_abs[angle];
+            }
+
+            iso = E_abs / four_pi;
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int iv = PRJ_CONS_RAD_I(field, group, angle);
+                double I_new = iso + (I_abs[angle] - iso) * scatter_fac;
+                double dI_matter = I_old[angle] - I_new;
+                double dE = rad->solid_angle[angle] * dI_matter;
+
+                u[iv] = I_new;
+                E_matter_group += dE;
+                for (d = 0; d < 3; ++d) {
+                    dmom[d] += dE * rad->n0[angle][d] / PRJ_CLIGHT;
+                }
+            }
+
+            dE_matter += E_matter_group;
+            dYe_matter += rad->x_e[field][group] * E_matter_group;
+        }
+    }
+
+    e_unchanged += dE_matter * RAD_SCALE;
+    u[PRJ_CONS_YE] += dYe_matter;
+    u[PRJ_CONS_MOM1] += dmom[0] * RAD_SCALE;
+    u[PRJ_CONS_MOM2] += dmom[1] * RAD_SCALE;
+    u[PRJ_CONS_MOM3] += dmom[2] * RAD_SCALE;
+    u[PRJ_CONS_ETOT] = e_unchanged + 0.5 *
+        (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
+         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
+         u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
+}
+#endif
 
 /* Koren slope-limiter function φ(r) = max(0, min(2r, (2+r)/3, 2)). */
 static double prj_rad_koren_phi(double r)
