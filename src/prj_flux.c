@@ -230,6 +230,9 @@ static void prj_flux_build_var_map(int dir, int *gmap)
 {
     int field = 0;
     int group = 0;
+#if PRJ_USE_RADIATION_FSA
+    int angle = 0;
+#endif
 
     gmap[PRJ_PRIM_RHO] = PRJ_PRIM_RHO;
     gmap[PRJ_PRIM_EINT] = PRJ_PRIM_EINT;
@@ -265,6 +268,16 @@ static void prj_flux_build_var_map(int dir, int *gmap)
     }
 
 #if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_FSA
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                gmap[PRJ_PRIM_RAD_I(field, group, angle)] =
+                    PRJ_PRIM_RAD_I(field, group, angle);
+            }
+        }
+    }
+#else
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             gmap[PRJ_PRIM_RAD_E(field, group)] = PRJ_PRIM_RAD_E(field, group);
@@ -283,6 +296,7 @@ static void prj_flux_build_var_map(int dir, int *gmap)
             }
         }
     }
+#endif
 #else
     (void)field;
     (void)group;
@@ -548,6 +562,9 @@ static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
 {
     int field=0;
     int group=0;
+#if PRJ_USE_RADIATION_FSA
+    int angle=0;
+#endif
 
     dst[VIDX(PRJ_CONS_RHO, i, j, k)] = Fl[PRJ_CONS_RHO];
     dst[VIDX(PRJ_CONS_ETOT, i, j, k)] = Fl[PRJ_CONS_ETOT];
@@ -585,8 +602,18 @@ static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
 #if PRJ_NRAD > 0
     /* The radiation flux divergence only reads faces with transverse indices in
      * the active range; on MHD transverse ghost faces these stores are never
-     * consumed, so skip the (PRJ_NRAD * PRJ_NEGROUP * 4)-wide copy there. */
+     * consumed, so skip the radiation-variable copy there. */
     if (prj_flux_rad_face_needed(dir, i, j, k)) {
+#if PRJ_USE_RADIATION_FSA
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                dst[VIDX(PRJ_CONS_RAD_I(field, group, angle), i, j, k)] =
+                    Fl[PRJ_CONS_RAD_I(field, group, angle)];
+            }
+        }
+    }
+#else
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             dst[VIDX(PRJ_CONS_RAD_E(field, group), i, j, k)] = Fl[PRJ_CONS_RAD_E(field, group)];
@@ -605,6 +632,7 @@ static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
             }
         }
     }
+#endif
     }
 #else
     (void)field;
@@ -966,6 +994,12 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 #if PRJ_NRAD > 0
                     PRJ_SUBTIMER_START("sub_flux_rad");
                     if (prj_flux_rad_face_needed(dir, i, j, k)) {
+#if PRJ_USE_RADIATION_FSA
+                        double lapse_face = 0.5 *
+                            (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
+
+                        prj_rad_flux_fsa(rad, WL, WR, lapse_face, dir, v_face_loc[0], Fl);
+#else
                         double dx_dir;
                         double lapse_face = 1.0;
                         double chi_face[PRJ_NRAD * PRJ_NEGROUP];
@@ -994,6 +1028,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         }
 
                         prj_rad_flux(rad, WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
+#endif
                     }
                     /* Transverse ghost faces (MHD CT/EMF layer) are skipped: the
                      * radiation flux divergence never reads them, and the store

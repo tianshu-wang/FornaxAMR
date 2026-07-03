@@ -22,6 +22,9 @@
 #ifndef PRJ_USE_RADIATION_FSA
 #define PRJ_USE_RADIATION_FSA 0
 #endif
+#if PRJ_USE_RADIATION_M1 && PRJ_USE_RADIATION_FSA
+#error "RADIATION_M1 and RADIATION_FSA are separate solvers; enable only one"
+#endif
 
 #ifndef PRJ_DUMP_SINGLE_PRECISION
 #define PRJ_DUMP_SINGLE_PRECISION 1
@@ -174,7 +177,11 @@ typedef double prj_table_real;
 #else
 #define PRJ_NHYDRO 6
 #endif
+#if PRJ_USE_RADIATION_FSA
+#define PRJ_NRAD_VAR (PRJ_NRAD * PRJ_NEGROUP * PRJ_NANGLE)
+#else
 #define PRJ_NRAD_VAR (PRJ_NRAD * PRJ_NEGROUP * (1 + PRJ_NDIM))
+#endif
 #define PRJ_NVAR_CONS (PRJ_NHYDRO + PRJ_NRAD_VAR)
 #define PRJ_NVAR_PRIM (PRJ_NHYDRO + PRJ_NRAD_VAR)
 #define PRJ_NVAR_EOSVAR 3
@@ -349,7 +356,11 @@ enum prj_prim_var {
 #endif
 };
 
+#if PRJ_USE_RADIATION_FSA
+#define PRJ_RAD_GROUP_STRIDE PRJ_NANGLE
+#else
 #define PRJ_RAD_GROUP_STRIDE (1 + PRJ_NDIM)
+#endif
 #define PRJ_CONS_RAD_E(field, group) (PRJ_NHYDRO + (((field) * PRJ_NEGROUP + (group)) * PRJ_RAD_GROUP_STRIDE))
 #define PRJ_CONS_RAD_F1(field, group) (PRJ_CONS_RAD_E(field, group) + 1)
 #define PRJ_CONS_RAD_F2(field, group) (PRJ_CONS_RAD_E(field, group) + 2)
@@ -358,6 +369,8 @@ enum prj_prim_var {
 #define PRJ_PRIM_RAD_F1(field, group) PRJ_CONS_RAD_F1(field, group)
 #define PRJ_PRIM_RAD_F2(field, group) PRJ_CONS_RAD_F2(field, group)
 #define PRJ_PRIM_RAD_F3(field, group) PRJ_CONS_RAD_F3(field, group)
+#define PRJ_CONS_RAD_I(field, group, angle) (PRJ_NHYDRO + (((field) * PRJ_NEGROUP + (group)) * PRJ_NANGLE + (angle)))
+#define PRJ_PRIM_RAD_I(field, group, angle) PRJ_CONS_RAD_I(field, group, angle)
 
 enum prj_dir {
     X1DIR = 0,

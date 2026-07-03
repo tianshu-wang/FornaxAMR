@@ -473,17 +473,31 @@ void prj_rad_init(prj_rad *rad)
 #if PRJ_USE_RADIATION_FSA
     prj_rad_fsa_calculate_directions(rad);
 #endif
-#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_M1
     prj_rad_init_closure(rad);
     prj_rad3_opac_init(rad);
     prj_rad_eleinel_init(rad);
-#else
+#elif PRJ_NRAD == 0
     (void)rad;
 #endif
 }
 
 void prj_rad_prim2cons(const double *W, double *U)
 {
+#if PRJ_USE_RADIATION_FSA
+    int field;
+    int group;
+    int angle;
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                U[PRJ_CONS_RAD_I(field, group, angle)] =
+                    W[PRJ_PRIM_RAD_I(field, group, angle)];
+            }
+        }
+    }
+#elif PRJ_USE_RADIATION_M1
     int field;
     int group;
 
@@ -495,10 +509,28 @@ void prj_rad_prim2cons(const double *W, double *U)
             U[PRJ_CONS_RAD_F3(field, group)] = W[PRJ_PRIM_RAD_F3(field, group)];
         }
     }
+#else
+    (void)W;
+    (void)U;
+#endif
 }
 
 void prj_rad_cons2prim(const double *U, double *W)
 {
+#if PRJ_USE_RADIATION_FSA
+    int field;
+    int group;
+    int angle;
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                W[PRJ_PRIM_RAD_I(field, group, angle)] =
+                    U[PRJ_CONS_RAD_I(field, group, angle)];
+            }
+        }
+    }
+#elif PRJ_USE_RADIATION_M1
     int field;
     int group;
 
@@ -510,6 +542,10 @@ void prj_rad_cons2prim(const double *U, double *W)
             W[PRJ_PRIM_RAD_F3(field, group)] = U[PRJ_CONS_RAD_F3(field, group)];
         }
     }
+#else
+    (void)U;
+    (void)W;
+#endif
 }
 
 /* Public M1 closure for the pressure tensor.  P^{ij} = E * D^{ij} with the
@@ -759,7 +795,7 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
     int field;
     int group;
 
-#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_M1
     {
         for (field = 0; field < PRJ_NRAD; ++field) {
             for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -864,20 +900,40 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
     }
 #else
     (void)rad;
+    (void)WL;
+    (void)WR;
     (void)chi_face;
     (void)dx_dir;
     (void)v_face;
     (void)lapse;
-    for (field = 0; field < PRJ_NRAD; ++field) {
-        for (group = 0; group < PRJ_NEGROUP; ++group) {
-            flux[PRJ_CONS_RAD_E(field, group)] = 0.0;
-            flux[PRJ_CONS_RAD_F1(field, group)] = 0.0;
-            flux[PRJ_CONS_RAD_F2(field, group)] = 0.0;
-            flux[PRJ_CONS_RAD_F3(field, group)] = 0.0;
-        }
-    }
+    (void)flux;
+    (void)field;
+    (void)group;
 #endif
 }
+
+#if PRJ_USE_RADIATION_FSA
+void prj_rad_flux_fsa(const prj_rad *rad, const double *WL, const double *WR,
+    double lapse, int dir, double v_face, double *flux)
+{
+    int field;
+    int group;
+    int angle;
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int v = PRJ_CONS_RAD_I(field, group, angle);
+                double speed = v_face + lapse * PRJ_CLIGHT * rad->n0[angle][dir];
+                double I_face = speed >= 0.0 ? WL[PRJ_PRIM_RAD_I(field, group, angle)] :
+                    WR[PRJ_PRIM_RAD_I(field, group, angle)];
+
+                flux[v] = speed * I_face;
+            }
+        }
+    }
+}
+#endif
 
 #if PRJ_NRAD > 0
 /* Building-block derivatives of the implicit residual w.r.t. (lnT, Ye), filled
