@@ -414,7 +414,7 @@ int main(int argc, char *argv[])
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
 #if PRJ_USE_GRAVITY
-    prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
+    prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
     prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
 #endif
 
@@ -460,7 +460,7 @@ int main(int argc, char *argv[])
 #if PRJ_USE_GRAVITY
             if (prj_mesh_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol)) {
                 prj_gravity_cache_mesh(&sim.mesh, &sim.grav);
-                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
+                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
                 prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
             }
 #else
@@ -561,7 +561,7 @@ int main(int argc, char *argv[])
                 PRJ_SUBTIMER_STOP("sub_amr_post_opac_halo");
             #if PRJ_USE_GRAVITY
                 PRJ_SUBTIMER_START("sub_amr_post_grav");
-                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &mpi, 1);
+                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
                 prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
                 PRJ_SUBTIMER_STOP("sub_amr_post_grav");
             #endif

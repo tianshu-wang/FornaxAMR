@@ -1196,7 +1196,7 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * allreduces inside the reduce progress the posted Isend/Irecv. */
         if (grav != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
             PRJ_SUBTIMER_START("sub_ghost_grav");
-            prj_gravity_monopole_reduce(mesh, grav, mpi, stage);
+            prj_gravity_monopole_reduce(mesh, grav, rad, mpi, stage);
             prj_gravity_monopole_integrate(mesh, grav, mpi);
             PRJ_SUBTIMER_STOP("sub_ghost_grav");
         }

@@ -1045,7 +1045,130 @@ static void prj_gravity_fill_empty_bins(prj_grav *grav, int use_multipole)
     }
 }
 
-void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi, int stage)
+static void prj_gravity_radiation_reduce_cell(const prj_rad *rad, const double *W,
+    int i, int j, int k, double dx1, double dx2, double dx3, double r,
+    double v1, double v2, double v3, double *erad, double *prad, double *vdotF)
+{
+    *erad = 0.0;
+    *prad = 0.0;
+    *vdotF = 0.0;
+#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_FSA
+    /* In FSA builds PRJ_PRIM_RAD_E/F* alias angular-cell slots, not moments.
+     * The stored angular variable is J = dOmega I, so build E, F, and P_rr
+     * explicitly from PRJ_PRIM_RAD_I with no extra solid-angle factor. */
+    if (rad != 0) {
+        double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
+        double inv_c3 = inv_c2 / PRJ_CLIGHT;
+        double inv_c4 = inv_c2 * inv_c2;
+        double rhat[3] = {0.0, 0.0, 0.0};
+        int field;
+        int group;
+
+        if (r > 0.0) {
+            rhat[0] = dx1 / r;
+            rhat[1] = dx2 / r;
+            rhat[2] = dx3 / r;
+        }
+        for (field = 0; field < PRJ_NRAD; ++field) {
+            for (group = 0; group < PRJ_NEGROUP; ++group) {
+                double e_rad = 0.0;
+                double f1 = 0.0;
+                double f2 = 0.0;
+                double f3 = 0.0;
+                double p_rr = 0.0;
+                int angle;
+
+                for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                    const double *n = rad->n0[angle];
+                    double J = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)] *
+                        RAD_SCALE;
+
+                    e_rad += J;
+                    f1 += PRJ_CLIGHT * J * n[0];
+                    f2 += PRJ_CLIGHT * J * n[1];
+                    f3 += PRJ_CLIGHT * J * n[2];
+                    if (r > 0.0) {
+                        double mu = n[0] * rhat[0] + n[1] * rhat[1] +
+                            n[2] * rhat[2];
+
+                        p_rr += J * mu * mu;
+                    }
+                }
+                if (r <= 0.0) {
+                    p_rr = e_rad / 3.0;
+                }
+                *erad += e_rad * inv_c2;
+                *prad += p_rr * inv_c3;
+                *vdotF += (v1 * f1 + v2 * f2 + v3 * f3) * inv_c4;
+            }
+        }
+    }
+#elif PRJ_USE_RADIATION_M1
+    {
+        double inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
+        double inv_c3 = inv_c2 / PRJ_CLIGHT;
+        double inv_c4 = inv_c2 * inv_c2;
+        int field;
+        int group;
+
+        (void)rad;
+        (void)dx1;
+        (void)dx2;
+        (void)dx3;
+        (void)r;
+        for (field = 0; field < PRJ_NRAD; ++field) {
+            for (group = 0; group < PRJ_NEGROUP; ++group) {
+                /* Radiation E/F are stored in RAD_SCALE*erg units; convert back
+                 * to physical erg for the gravitational source. */
+                double e_rad = W[WIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)] *
+                    RAD_SCALE;
+                double f1 = W[WIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)] *
+                    RAD_SCALE;
+                double f2 = W[WIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)] *
+                    RAD_SCALE;
+                double f3 = W[WIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)] *
+                    RAD_SCALE;
+
+                *erad += e_rad * inv_c2;
+                *prad += (e_rad / 3.0) * inv_c3;
+                /* v.F/c^4 has mass-density units for the TOV integrand. */
+                *vdotF += (v1 * f1 + v2 * f2 + v3 * f3) * inv_c4;
+            }
+        }
+    }
+#else
+    (void)rad;
+    (void)W;
+    (void)i;
+    (void)j;
+    (void)k;
+    (void)dx1;
+    (void)dx2;
+    (void)dx3;
+    (void)r;
+    (void)v1;
+    (void)v2;
+    (void)v3;
+#endif
+#else
+    (void)rad;
+    (void)W;
+    (void)i;
+    (void)j;
+    (void)k;
+    (void)dx1;
+    (void)dx2;
+    (void)dx3;
+    (void)r;
+    (void)v1;
+    (void)v2;
+    (void)v3;
+#endif
+}
+
+void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav,
+    const prj_rad *rad, const prj_mpi *mpi, int stage)
 {
     int bidx;
     int idx;
@@ -1128,32 +1251,8 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
                         erad = 0.0;
                         prad = 0.0;
                         vdotF = 0.0;
-#if PRJ_NRAD > 0
-                        {
-                            int field;
-                            int group;
-
-                            for (field = 0; field < PRJ_NRAD; ++field) {
-                                for (group = 0; group < PRJ_NEGROUP; ++group) {
-                                    /* Radiation E/F are stored in RAD_SCALE*erg
-                                       units; convert back to physical erg for the
-                                       gravitational source. */
-                                    double e_rad = W[WIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)] * RAD_SCALE;
-                                    double f1 = W[WIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)] * RAD_SCALE;
-                                    double f2 = W[WIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)] * RAD_SCALE;
-                                    double f3 = W[WIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)] * RAD_SCALE;
-                                    double fr = r > 0.0 ? (f1 * dx1 + f2 * dx2 + f3 * dx3) / r : 0.0;
-
-                                    erad += e_rad / (PRJ_CLIGHT * PRJ_CLIGHT);
-                                    prad += (e_rad / 3.0) / (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);
-                                    /* v.F/c^4 has mass-density units for the TOV integrand. */
-                                    vdotF += (v1 * f1 + v2 * f2 + v3 * f3) /
-                                        (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);
-                                    (void)fr;
-                                }
-                            }
-                        }
-#endif
+                        prj_gravity_radiation_reduce_cell(rad, W, i, j, k,
+                            dx1, dx2, dx3, r, v1, v2, v3, &erad, &prad, &vdotF);
                         grav->vol[idx] += block->vol;
                         grav->rho_avg[idx] += block->vol * rho;
                         grav->vr_avg[idx] += block->vol * vr;
@@ -1288,7 +1387,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *
 }
 
 static int prj_gravity_monopole_reduce_stage_slot_active(prj_mesh *mesh, prj_eos *eos,
-    prj_grav *grav, const prj_mpi *mpi, int stage_slot)
+    const prj_rad *rad, prj_grav *grav, const prj_mpi *mpi, int stage_slot)
 {
     int bidx;
     int idx;
@@ -1362,26 +1461,8 @@ static int prj_gravity_monopole_reduce_stage_slot_active(prj_mesh *mesh, prj_eos
                         prj_eos_rey(eos, rho, eint, ye, eos_q, PRJ_EOS_CTX_MAIN);
                         pgas = eos_q[PRJ_EOS_PRESSURE];
                         vr = r > 0.0 ? (v1 * dx1 + v2 * dx2 + v3 * dx3) / r : 0.0;
-#if PRJ_NRAD > 0
-                        {
-                            int field;
-                            int group;
-
-                            for (field = 0; field < PRJ_NRAD; ++field) {
-                                for (group = 0; group < PRJ_NEGROUP; ++group) {
-                                    double e_rad = W[WIDX(PRJ_PRIM_RAD_E(field, group), i, j, k)] * RAD_SCALE;
-                                    double f1 = W[WIDX(PRJ_PRIM_RAD_F1(field, group), i, j, k)] * RAD_SCALE;
-                                    double f2 = W[WIDX(PRJ_PRIM_RAD_F2(field, group), i, j, k)] * RAD_SCALE;
-                                    double f3 = W[WIDX(PRJ_PRIM_RAD_F3(field, group), i, j, k)] * RAD_SCALE;
-
-                                    erad += e_rad / (PRJ_CLIGHT * PRJ_CLIGHT);
-                                    prad += (e_rad / 3.0) / (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);
-                                    vdotF += (v1 * f1 + v2 * f2 + v3 * f3) /
-                                        (PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT * PRJ_CLIGHT);
-                                }
-                            }
-                        }
-#endif
+                        prj_gravity_radiation_reduce_cell(rad, W, i, j, k,
+                            dx1, dx2, dx3, r, v1, v2, v3, &erad, &prad, &vdotF);
                         grav->vol[idx] += block->vol;
                         grav->rho_avg[idx] += block->vol * rho;
                         grav->vr_avg[idx] += block->vol * vr;
@@ -1637,9 +1718,9 @@ void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mp
 }
 
 void prj_gravity_monopole_update_lapse_active(prj_mesh *mesh, prj_eos *eos,
-    prj_grav *grav, const prj_mpi *mpi, int stage_slot)
+    const prj_rad *rad, prj_grav *grav, const prj_mpi *mpi, int stage_slot)
 {
-    if (prj_gravity_monopole_reduce_stage_slot_active(mesh, eos, grav, mpi, stage_slot) &&
+    if (prj_gravity_monopole_reduce_stage_slot_active(mesh, eos, rad, grav, mpi, stage_slot) &&
         prj_gravity_monopole_integrate_profiles(grav)) {
         prj_gravity_fill_active_lapse(mesh, grav, mpi);
     }

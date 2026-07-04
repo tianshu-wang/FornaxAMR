@@ -2256,7 +2256,7 @@ void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, 
 
         prj_timeint_imex_assemble_stage(mesh, eos, mpi, tableau,
             stage, stage, 0, stage, dt);
-        prj_gravity_monopole_update_lapse_active(mesh, eos, grav, mpi, stage);
+        prj_gravity_monopole_update_lapse_active(mesh, eos, rad, grav, mpi, stage);
         prj_timeint_step_im(mesh, coord, bc, eos, rad, grav, mpi, tableau,
             stage, dt, dt_implicit, dt_src, timer);
         prj_timeint_imex_fill_updated_stage(mesh, bc, eos, rad, grav, mpi, timer,

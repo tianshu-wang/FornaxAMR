@@ -658,7 +658,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
     prj_gravity_init(sim, mpi);
-    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
+    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
     prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
 #endif
     if (sim->mesh.max_level == 0) {
@@ -670,7 +670,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
     prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
-    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
+    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
     prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
 #endif
 
@@ -692,7 +692,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
         prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     #if PRJ_USE_GRAVITY
-        prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, mpi, 1);
+        prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
         prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
     #endif
 

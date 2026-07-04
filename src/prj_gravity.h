@@ -14,10 +14,11 @@
 void prj_gravity_init(prj_sim *sim, const prj_mpi *mpi);
 void prj_gravity_rebuild_grid(prj_sim *sim, const prj_mpi *mpi);
 void prj_gravity_free(prj_grav *grav);
-void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi, int stage);
+void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav,
+    const prj_rad *rad, const prj_mpi *mpi, int stage);
 void prj_gravity_monopole_integrate(prj_mesh *mesh, prj_grav *grav, const prj_mpi *mpi);
 void prj_gravity_monopole_update_lapse_active(prj_mesh *mesh, prj_eos *eos,
-    prj_grav *grav, const prj_mpi *mpi, int stage_slot);
+    const prj_rad *rad, prj_grav *grav, const prj_mpi *mpi, int stage_slot);
 void prj_gravity_cache_block(prj_block *block, const prj_mesh *mesh, const prj_grav *grav);
 void prj_gravity_cache_mesh(prj_mesh *mesh, const prj_grav *grav);
 double prj_gravity_block_lapse_at(const prj_grav *grav, const prj_block *block, int i, int j, int k);
