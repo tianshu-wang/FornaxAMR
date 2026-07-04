@@ -1979,6 +1979,9 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         double Pg[PRJ_NEGROUP][3][3];
         double Mq[PRJ_NEGROUP][3]; /* Q_g : dvdx, the only way Q is ever used */
         double Acon[PRJ_NEGROUP];  /* P_g : dvdx, the energy-space drift per group */
+        double inv_dnu[PRJ_NEGROUP];
+        double Mq_spec[PRJ_NEGROUP][3];
+        double Acon_spec[PRJ_NEGROUP];
         double energy_face[PRJ_NEGROUP + 1] = {0.0};
         double momentum_face[PRJ_NEGROUP + 1][PRJ_NDIM] = {{0.0}};
         double energy_available[PRJ_NEGROUP];
@@ -1987,10 +1990,26 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         int ii;
         int jj;
 
+        if (nu_face == 0) {
+            fprintf(stderr, "prj_rad_freq_flux_apply: missing eedge for field %d\n",
+                field);
+            exit(1);
+        }
+
         /* Per-group cell-centred state and closure tensors.  P and Q are built
          * once here and shared: P by the GR redshift terms below, and both P, Q
          * by the SR frequency flux (reconstructed to the frequency faces). */
         for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double dnu = nu_face[g + 1] - nu_face[g];
+
+            if (dnu <= 0.0) {
+                fprintf(stderr,
+                    "prj_rad_freq_flux_apply: non-positive eedge width for field %d group %d\n",
+                    field, g);
+                exit(1);
+            }
+            inv_dnu[g] = 1.0 / dnu;
+
             Eg[g] = W_state[WIDX(PRJ_PRIM_RAD_E(field, g), ic, jc, kc)];
             Fg[g][0] = W_state[WIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
             Fg[g][1] = W_state[WIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
@@ -2004,6 +2023,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                     Acon[g] += Pg[g][jj][ii] * dvdx[jj][ii];
                 }
             }
+            Acon_spec[g] = Acon[g] * inv_dnu[g];
+            for (jj = 0; jj < 3; ++jj) {
+                Mq_spec[g][jj] = Mq[g][jj] * inv_dnu[g];
+            }
             energy_available[g] = u[PRJ_CONS_RAD_E(field, g)];
         }
 
@@ -2015,21 +2038,26 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
          * (P = E/3·I  =>  P:dvdx = E/3·div v) but stays upwind-correct when the
          * anisotropic/shearing part of ∂_j v_i dominates the trace, where a
          * single trace-based side could disagree with the true drift.  The
-         * energy flux at face gf is ν_face[gf]·(P_gu:dvdx) = ν_face[gf]·Acon[gu]
-         * and the momentum flux is ν_face[gf]·(Q_gu:dvdx) = ν_face[gf]·Mq[gu];
-         * it is the upper (g+1/2) face of group gf-1 and the lower (g-1/2) face
-         * of group gf, so it is scattered into both with opposite signs. */
+         * stored M1 moments are group-integrated.  rad->eedge[field] stores
+         * energy-bin edges in MeV, so nu_face[gf] and dnu are both in MeV; the
+         * nu_face/dnu factor is dimensionless and needs no PRJ_MEV_TO_ERG.
+         * Thus the energy flux at face gf is
+         * ν_face[gf]·(P_gu:dvdx)/dν_gu = ν_face[gf]·Acon_spec[gu],
+         * and the momentum flux is
+         * ν_face[gf]·(Q_gu:dvdx)/dν_gu = ν_face[gf]·Mq_spec[gu].  This is the
+         * upper (g+1/2) face of group gf-1 and the lower (g-1/2) face of group
+         * gf, so it is scattered into both with opposite signs. */
         {
             int gf;
 
             for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
-                double face_drift = Acon[gf - 1] + Acon[gf];
+                double face_drift = Acon_spec[gf - 1] + Acon_spec[gf];
                 int gu = (face_drift >= 0.0) ? gf : gf - 1;
                 double nu = nu_face[gf];
 
-                energy_face[gf] += nu * Acon[gu];
+                energy_face[gf] += nu * Acon_spec[gu];
                 for (jj = 0; jj < 3; ++jj) {
-                    momentum_face[gf][jj] += nu * Mq[gu][jj];
+                    momentum_face[gf][jj] += nu * Mq_spec[gu][jj];
                 }
             }
         }
@@ -2062,7 +2090,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                     continue;
                 }
                 for (g = 0; g < PRJ_NEGROUP; ++g) {
-                    q[g] = Fg[g][ii];
+                    q[g] = Fg[g][ii] * inv_dnu[g];
                 }
                 face_val[0] = 0.0;
                 face_val[PRJ_NEGROUP] = 0.0;
@@ -2089,7 +2117,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                         continue;
                     }
                     for (g = 0; g < PRJ_NEGROUP; ++g) {
-                        q[g] = Pg[g][ii][jj];
+                        q[g] = Pg[g][ii][jj] * inv_dnu[g];
                     }
                     face_val[0] = 0.0;
                     face_val[PRJ_NEGROUP] = 0.0;
@@ -2143,11 +2171,14 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             }
         }
 
-        /* Apply.  dt is the effective stage weight (full dt in stage1, 0.5·dt
-         * in stage2 to match the RK2-Heun mixing of dUdt).  The lapse factor
-         * α(r) accounts for the GR proper-time slowdown in the gravitational
-         * well, consistent with the lapse multipliers already on the spatial
-         * radiation flux and on the gravity source. */
+        /* Apply to the stored group-integrated E_g/F_g.  Only the energy-space
+         * face states above are spectral; the finite-volume update remains the
+         * face difference for each group-integrated conserved variable.  dt is
+         * the effective stage weight (full dt in stage1, 0.5·dt in stage2 to
+         * match the RK2-Heun mixing of dUdt).  The lapse factor α(r) accounts
+         * for the GR proper-time slowdown in the gravitational well, consistent
+         * with the lapse multipliers already on the spatial radiation flux and
+         * on the gravity source. */
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             u[PRJ_CONS_RAD_E(field, g)] += dt_lapse *
                 (energy_face[g + 1] - energy_face[g]);
@@ -2222,9 +2253,28 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         double omega_face[PRJ_NEGROUP + 1];
+        double dnu[PRJ_NEGROUP];
+        double inv_dnu[PRJ_NEGROUP];
         int angle;
+        int g;
 
         prj_rad_fsa_omega_faces(rad, field, omega_face);
+        /* omega_face is the energy-face coordinate for the FSA frequency flux.
+         * It is copied from rad->eedge[field] when present, otherwise rebuilt
+         * from rad->emin/emax; all of these radiation energy coordinates are in
+         * MeV.  Since the numerator face energy and the denominator group width
+         * below both use MeV, omega_face / dnu is dimensionless and no
+         * PRJ_MEV_TO_ERG factor appears here. */
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            dnu[g] = omega_face[g + 1] - omega_face[g];
+            if (dnu[g] <= 0.0) {
+                fprintf(stderr,
+                    "prj_rad_freq_flux_apply: non-positive FSA energy width for field %d group %d\n",
+                    field, g);
+                exit(1);
+            }
+            inv_dnu[g] = 1.0 / dnu[g];
+        }
 
         for (angle = 0; angle < PRJ_NANGLE; ++angle) {
             const double *n = rad->n0[angle];
@@ -2232,13 +2282,13 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             double a_dot_n = a[0] * n[0] + a[1] * n[1] + a[2] * n[2];
             double drift;
             double I_group[PRJ_NEGROUP];
+            double I_spec[PRJ_NEGROUP];
             double freq_face[PRJ_NEGROUP + 1] = {0.0};
             double intensity_available[PRJ_NEGROUP];
             double outgoing[PRJ_NEGROUP] = {0.0};
             double theta[PRJ_NEGROUP];
             int ii;
             int jj;
-            int g;
             int gf;
 
             for (jj = 0; jj < 3; ++jj) {
@@ -2255,6 +2305,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 int v = PRJ_CONS_RAD_I(field, g, angle);
 
                 I_group[g] = W_state[WIDX(PRJ_PRIM_RAD_I(field, g, angle), ic, jc, kc)];
+                I_spec[g] = I_group[g] * inv_dnu[g];
                 intensity_available[g] = u[v];
             }
 
@@ -2264,10 +2315,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
 
                 if (drift >= 0.0) {
                     gu = gf;
-                    I_face = prj_rad_recon_face(I_group, gu, -1);
+                    I_face = prj_rad_recon_face(I_spec, gu, -1);
                 } else {
                     gu = gf - 1;
-                    I_face = prj_rad_recon_face(I_group, gu, +1);
+                    I_face = prj_rad_recon_face(I_spec, gu, +1);
                 }
                 freq_face[gf] = omega_face[gf] * drift * I_face;
             }
@@ -2299,6 +2350,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 freq_face[gf] *= factor;
             }
 
+            /* Stored FSA intensities remain group-integrated per direction per
+             * solid angle.  Only the face state above is spectral, so the
+             * finite-volume update still applies face[g+1] - face[g] directly
+             * to each group-integrated angular variable. */
             for (g = 0; g < PRJ_NEGROUP; ++g) {
                 u[PRJ_CONS_RAD_I(field, g, angle)] += dt_lapse *
                     (freq_face[g + 1] - freq_face[g]);
