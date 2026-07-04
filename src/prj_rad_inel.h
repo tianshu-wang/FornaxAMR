@@ -17,6 +17,11 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
 
 int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell);
 
+#if PRJ_USE_RADIATION_FSA
+void prj_rad_eleinel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell);
+int prj_rad_nucinel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell);
+#endif
+
 #endif
 
 #endif

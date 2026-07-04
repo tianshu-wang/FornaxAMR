@@ -943,4 +943,131 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
     return status;
 }
 
+#if PRJ_USE_RADIATION_FSA
+static void prj_rad_inel_fsa_build_m1_tmp(const prj_rad *rad,
+    const double *u, double *u_tmp)
+{
+    int v;
+    int nu;
+    int g;
+    int angle;
+    int d;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_tmp[v] = u[v];
+    }
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double E = 0.0;
+            double F[PRJ_NDIM] = {0.0, 0.0, 0.0};
+
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int iv = PRJ_CONS_RAD_I(nu, g, angle);
+                double J = u[iv];
+
+                E += J;
+                for (d = 0; d < PRJ_NDIM; ++d) {
+                    F[d] += PRJ_CLIGHT * J * rad->n0[angle][d];
+                }
+            }
+
+            u_tmp[PRJ_CONS_RAD_E(nu, g)] = E;
+            u_tmp[PRJ_CONS_RAD_F1(nu, g)] = F[0];
+            u_tmp[PRJ_CONS_RAD_F2(nu, g)] = F[1];
+            u_tmp[PRJ_CONS_RAD_F3(nu, g)] = F[2];
+        }
+    }
+}
+
+static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
+    double *u, const double *u_tmp)
+{
+    const double four_pi = 4.0 * M_PI;
+    double rho = u[PRJ_CONS_RHO];
+    double e_unchanged;
+    double dE_matter = 0.0;
+    double dmom[PRJ_NDIM] = {0.0, 0.0, 0.0};
+    int nu;
+    int g;
+    int angle;
+    int d;
+
+    e_unchanged = u[PRJ_CONS_ETOT] - 0.5 *
+        (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
+         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
+         u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double E_old = 0.0;
+            double E_new = u_tmp[PRJ_CONS_RAD_E(nu, g)];
+            double scale = 0.0;
+
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                E_old += u[PRJ_CONS_RAD_I(nu, g, angle)];
+            }
+            if (E_old != 0.0) {
+                scale = E_new / E_old;
+            }
+
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int iv = PRJ_CONS_RAD_I(nu, g, angle);
+                double J_old = u[iv];
+                double J_new;
+                double dE;
+
+                if (E_old != 0.0) {
+                    J_new = J_old * scale;
+                } else if (E_new != 0.0) {
+                    J_new = E_new * rad->solid_angle[angle] / four_pi;
+                } else {
+                    J_new = 0.0;
+                }
+
+                u[iv] = J_new;
+                dE = J_old - J_new;
+                dE_matter += dE;
+                for (d = 0; d < PRJ_NDIM; ++d) {
+                    dmom[d] += dE * rad->n0[angle][d] / PRJ_CLIGHT;
+                }
+            }
+        }
+    }
+
+    /* M1 inelastic scattering only back-reacts through matter energy.  FSA
+       rescales angular-cell J, so the radiation momentum changes too and the
+       gas receives both energy and momentum. */
+    u[PRJ_CONS_YE] = u_tmp[PRJ_CONS_YE];
+    u[PRJ_CONS_MOM1] += dmom[0] * RAD_SCALE;
+    u[PRJ_CONS_MOM2] += dmom[1] * RAD_SCALE;
+    u[PRJ_CONS_MOM3] += dmom[2] * RAD_SCALE;
+    u[PRJ_CONS_ETOT] = e_unchanged + dE_matter * RAD_SCALE + 0.5 *
+        (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
+         u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
+         u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
+}
+
+void prj_rad_eleinel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
+{
+    double u_tmp[PRJ_NVAR_CONS];
+
+    prj_rad_inel_fsa_build_m1_tmp(rad, u, u_tmp);
+    prj_rad_eleinel_step(rad, eos, u_tmp, dt, T_cell);
+    prj_rad_inel_fsa_apply_m1_tmp(rad, u, u_tmp);
+}
+
+int prj_rad_nucinel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
+{
+    double u_tmp[PRJ_NVAR_CONS];
+    int status;
+
+    prj_rad_inel_fsa_build_m1_tmp(rad, u, u_tmp);
+    status = prj_rad_nucinel_step(rad, eos, u_tmp, dt, T_cell);
+    prj_rad_inel_fsa_apply_m1_tmp(rad, u, u_tmp);
+
+    return status;
+}
+#endif
+
 #endif

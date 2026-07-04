@@ -699,7 +699,7 @@ void prj_rad_init(prj_rad *rad)
 #if PRJ_USE_RADIATION_M1 || PRJ_USE_RADIATION_FSA
     prj_rad3_opac_init(rad);
 #endif
-#if PRJ_USE_RADIATION_M1
+#if PRJ_USE_RADIATION_M1 || PRJ_USE_RADIATION_FSA
     prj_rad_eleinel_init(rad);
 #elif PRJ_NRAD == 0
     (void)rad;
