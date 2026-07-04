@@ -1285,7 +1285,7 @@ void prj_timeint_init(const prj_timeint_imex_tableau *tableau)
 #endif
 }
 
-#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_M1
 static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
 {
     double max_denom = 0.0;
@@ -1398,7 +1398,7 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mp
                         (fabs(w[PRJ_PRIM_V2]) + cs) / block->dx[1] +
                         (fabs(w[PRJ_PRIM_V3]) + cs) / block->dx[2];
                     dt_cell = cfl / denom;
-#if PRJ_NRAD > 0
+#if PRJ_USE_RADIATION_M1
                     {
                         double rad_denom = prj_timeint_cell_rad_denom(w, block->dx);
 
@@ -1408,6 +1408,19 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mp
                             if (dt_rad < dt_cell) {
                                 dt_cell = dt_rad;
                             }
+                        }
+                    }
+#endif
+#if PRJ_USE_RADIATION_FSA
+                    {
+                        double rad_denom =
+                            (fabs(w[PRJ_PRIM_V1]) + PRJ_CLIGHT) / block->dx[0] +
+                            (fabs(w[PRJ_PRIM_V2]) + PRJ_CLIGHT) / block->dx[1] +
+                            (fabs(w[PRJ_PRIM_V3]) + PRJ_CLIGHT) / block->dx[2];
+                        double dt_rad = cfl / rad_denom;
+
+                        if (dt_rad < dt_cell) {
+                            dt_cell = dt_rad;
                         }
                     }
 #endif
