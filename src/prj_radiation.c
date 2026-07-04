@@ -2380,10 +2380,14 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     double a[3] = {0.0, 0.0, 0.0};
     double dt_lapse;
     double inv_c = 1.0 / PRJ_CLIGHT;
+    double arc_factor[PRJ_NARC];
+    int arc_donor[PRJ_NARC];
     int have_v_riemann;
     int cell_idx;
     int field;
     int group;
+    int arc;
+    int have_arc_flux;
 
     if (rad == 0 || block == 0 || W_state == 0 || u == 0) {
         return;
@@ -2441,52 +2445,70 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
         return;
     }
 
+    have_arc_flux = 0;
+    for (arc = 0; arc < PRJ_NARC; ++arc) {
+        int c0 = rad->arc_neighbor[2 * arc];
+        int c1 = rad->arc_neighbor[2 * arc + 1];
+        double nface[3];
+        double b[3];
+        double speed;
+        double nmag;
+        int d;
+        int jj;
+
+        arc_factor[arc] = 0.0;
+        arc_donor[arc] = -1;
+        if (c0 < 0 || c0 >= PRJ_NANGLE || c1 < 0 || c1 >= PRJ_NANGLE) {
+            continue;
+        }
+        for (d = 0; d < 3; ++d) {
+            nface[d] = rad->n0[c0][d] + rad->n0[c1][d];
+        }
+        nmag = sqrt(nface[0] * nface[0] + nface[1] * nface[1] +
+            nface[2] * nface[2]);
+        if (nmag <= 0.0) {
+            continue;
+        }
+        for (d = 0; d < 3; ++d) {
+            nface[d] /= nmag;
+            b[d] = a[d] * inv_c;
+        }
+        for (d = 0; d < 3; ++d) {
+            for (jj = 0; jj < 3; ++jj) {
+                b[d] += nface[jj] * dvdx[jj][d];
+            }
+        }
+
+        speed = b[0] * rad->arc_vec[3 * arc] +
+            b[1] * rad->arc_vec[3 * arc + 1] +
+            b[2] * rad->arc_vec[3 * arc + 2];
+        if (speed == 0.0) {
+            continue;
+        }
+
+        /* The angular face speed and donor depend only on this spatial cell,
+         * not on radiation species or energy group, so reuse them below. */
+        arc_factor[arc] = speed * rad->arc_angle[arc];
+        arc_donor[arc] = speed > 0.0 ? c1 : c0;
+        have_arc_flux = 1;
+    }
+    if (!have_arc_flux) {
+        return;
+    }
+
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             double arc_flux[PRJ_NARC];
             double outgoing[PRJ_NANGLE];
             double theta[PRJ_NANGLE];
-            int arc;
             int angle;
 
             for (arc = 0; arc < PRJ_NARC; ++arc) {
-                int c0 = rad->arc_neighbor[2 * arc];
-                int c1 = rad->arc_neighbor[2 * arc + 1];
-                double nface[3];
-                double b[3];
-                double speed;
+                int donor = arc_donor[arc];
                 double I_face;
-                double nmag;
-                int donor;
-                int d;
-                int jj;
 
                 arc_flux[arc] = 0.0;
-                if (c0 < 0 || c0 >= PRJ_NANGLE || c1 < 0 || c1 >= PRJ_NANGLE) {
-                    continue;
-                }
-                for (d = 0; d < 3; ++d) {
-                    nface[d] = rad->n0[c0][d] + rad->n0[c1][d];
-                }
-                nmag = sqrt(nface[0] * nface[0] + nface[1] * nface[1] +
-                    nface[2] * nface[2]);
-                if (nmag <= 0.0) {
-                    continue;
-                }
-                for (d = 0; d < 3; ++d) {
-                    nface[d] /= nmag;
-                    b[d] = a[d] * inv_c;
-                }
-                for (d = 0; d < 3; ++d) {
-                    for (jj = 0; jj < 3; ++jj) {
-                        b[d] += nface[jj] * dvdx[jj][d];
-                    }
-                }
-
-                speed = b[0] * rad->arc_vec[3 * arc] +
-                    b[1] * rad->arc_vec[3 * arc + 1] +
-                    b[2] * rad->arc_vec[3 * arc + 2];
-                if (speed == 0.0) {
+                if (donor < 0) {
                     continue;
                 }
 
@@ -2495,10 +2517,9 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
                  * LHS contains -alpha div_n(I b), so after moving it to the
                  * update side a positive b·arc_vec drains the second angular
                  * cell and fills the first. */
-                donor = speed > 0.0 ? c1 : c0;
                 I_face = W_state[WIDX(PRJ_PRIM_RAD_I(field, group, donor), ic, jc, kc)] /
                     rad->solid_angle[donor];
-                arc_flux[arc] = speed * I_face * rad->arc_angle[arc];
+                arc_flux[arc] = arc_factor[arc] * I_face;
             }
 
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
