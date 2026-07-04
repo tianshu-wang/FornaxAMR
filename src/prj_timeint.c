@@ -1413,10 +1413,11 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mp
 #endif
 #if PRJ_USE_RADIATION_FSA
                     {
+                        double lapse_c = prj_timeint_cell_lapse(block, i, j, k) * PRJ_CLIGHT;
                         double rad_denom =
-                            (fabs(w[PRJ_PRIM_V1]) + PRJ_CLIGHT) / block->dx[0] +
-                            (fabs(w[PRJ_PRIM_V2]) + PRJ_CLIGHT) / block->dx[1] +
-                            (fabs(w[PRJ_PRIM_V3]) + PRJ_CLIGHT) / block->dx[2];
+                            (fabs(w[PRJ_PRIM_V1]) + lapse_c) / block->dx[0] +
+                            (fabs(w[PRJ_PRIM_V2]) + lapse_c) / block->dx[1] +
+                            (fabs(w[PRJ_PRIM_V3]) + lapse_c) / block->dx[2];
                         double dt_rad = cfl / rad_denom;
 
                         if (dt_rad < dt_cell) {
