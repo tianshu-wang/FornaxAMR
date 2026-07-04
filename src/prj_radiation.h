@@ -40,6 +40,7 @@ void prj_rad_flux_fsa(const prj_rad *rad, const double *WL, const double *WR,
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out);
 void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature, const double *kappa_in);
 #if PRJ_USE_RADIATION_FSA
+void prj_rad_energy_update_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *final_ye, double *kappa_out, double *eta_out);
 void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
     double *u, double dt, double lapse);
 #endif

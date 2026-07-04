@@ -551,14 +551,8 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     int jr;
     int jt;
     int jye;
-    double r1i;
-    double r2i;
     double dri;
-    double t1i;
-    double t2i;
     double dti;
-    double ye1i;
-    double ye2i;
     double dyei;
     double coff[8];
     size_t corner[8];
@@ -584,19 +578,15 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     if (jye < 0) jye = 0;
     if (jye > nyemax - 2) jye = nyemax - 2;
 
-    r1i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)jr / (double)(nromax - 1);
-    r2i = rad->log_romin + (rad->log_romax - rad->log_romin) * (double)(jr + 1) / (double)(nromax - 1);
-    dri = (rl - r1i) / (r2i - r1i);
+    /* Fractional interpolation weights use the same arithmetic as
+     * prj_rad3_opac_lookup_ke (deltar - jr) so the two routines return
+     * bit-identical kappa/eta at identical (rho, T, Ye); the FSA energy-momentum
+     * update relies on that to reuse the solver's kappa/eta. */
+    dri = deltar - (double)jr;
     if (dri < 0.0) dri = 0.0;
-
-    t1i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)jt / (double)(ntmax - 1);
-    t2i = rad->log_tmin + (rad->log_tmax - rad->log_tmin) * (double)(jt + 1) / (double)(ntmax - 1);
-    dti = (tl_c - t1i) / (t2i - t1i);
+    dti = deltat - (double)jt;
     if (dti < 0.0) dti = 0.0;
-
-    ye1i = rad->yemin + (rad->yemax - rad->yemin) * (double)jye / (double)(nyemax - 1);
-    ye2i = rad->yemin + (rad->yemax - rad->yemin) * (double)(jye + 1) / (double)(nyemax - 1);
-    dyei = (ye_c - ye1i) / (ye2i - ye1i);
+    dyei = deltaye - (double)jye;
 
     coff[0] = (1.0 - dri) * (1.0 - dti) * (1.0 - dyei);
     coff[1] = dri * (1.0 - dti) * (1.0 - dyei);

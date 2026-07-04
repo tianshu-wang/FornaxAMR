@@ -1222,15 +1222,16 @@ static void prj_rad_energy_failure_diagnostics(const char *reason,
 static void prj_rad_implicit_residuals(prj_rad *rad, prj_eos *eos, double *u,
     double dt, double lapse, double rho, double Uint_old, double Ye_old,
     const double *E_nu_old, double T, double Ye, double *F1, double *F2,
-    double *E_nu_new_out, double *kappa_out, prj_rad_resid_deriv *deriv)
+    double *E_nu_new_out, double *kappa_out, double *eta_out, prj_rad_resid_deriv *deriv)
 {
     double kappa_local[PRJ_NRAD * PRJ_NEGROUP];
-    double eta[PRJ_NRAD * PRJ_NEGROUP];
+    double eta_local[PRJ_NRAD * PRJ_NEGROUP];
     double dlnkappa_dlnT_local[PRJ_NRAD * PRJ_NEGROUP];
     double dlnkappa_dYe_local[PRJ_NRAD * PRJ_NEGROUP];
     double dlneta_dlnT_local[PRJ_NRAD * PRJ_NEGROUP];
     double dlneta_dYe_local[PRJ_NRAD * PRJ_NEGROUP];
     double *kappa = kappa_out != 0 ? kappa_out : kappa_local;
+    double *eta = eta_out != 0 ? eta_out : eta_local;
     double *dlnkappa_dlnT = deriv != 0 ? deriv->dlnkappa_dlnT : dlnkappa_dlnT_local;
     double *dlnkappa_dYe = deriv != 0 ? deriv->dlnkappa_dYe : dlnkappa_dYe_local;
     double *dlneta_dlnT = deriv != 0 ? deriv->dlneta_dlnT : dlneta_dlnT_local;
@@ -1332,12 +1333,16 @@ static void prj_rad_implicit_jacobian_from_deriv(const prj_rad *rad,
     *dFdY_2 = dF2_dYe;
 }
 
-void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out)
+static void prj_rad_energy_update_impl(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *final_ye, double *kappa_out, double *eta_out)
 {
     double u_input[PRJ_NVAR_CONS];
     double E_nu_old[PRJ_NRAD * PRJ_NEGROUP];
     double E_nu_new[PRJ_NRAD * PRJ_NEGROUP];
     double last_kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double last_eta[PRJ_NRAD * PRJ_NEGROUP];
+    /* eta is threaded out only when the caller asks for it (FSA); NULL keeps the
+     * M1 path free of the extra per-iteration eta copy. */
+    double *eta_capture = eta_out != 0 ? last_eta : 0;
     double rho;
     double KE;
     double Emag = 0.0;
@@ -1441,7 +1446,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             have_final_residual = 1;
         } else {
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, T, Ye, &F1, &F2, E_nu_new, last_kappa, &deriv);
+                E_nu_old, T, Ye, &F1, &F2, E_nu_new, last_kappa, eta_capture, &deriv);
             f1 = F1 / err_scale_1;
             f2 = F2 / err_scale_2;
             res_cur = 0.5 * (f1 * f1 + f2 * f2);
@@ -1534,7 +1539,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             Ytrial = Ye + lam * dY;
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
                 E_nu_old, Ttrial, Ytrial, &F1_trial, &F2_trial, E_nu_new,
-                last_kappa, &trial_deriv);
+                last_kappa, eta_capture, &trial_deriv);
             ft1 = F1_trial / err_scale_1;
             ft2 = F2_trial / err_scale_2;
             res_trial = 0.5 * (ft1 * ft1 + ft2 * ft2);
@@ -1602,7 +1607,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
         double f2_final;
 
         prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-            E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa, 0);
+            E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa, eta_capture, 0);
         f1_final = F1_final / err_scale_1;
         f2_final = F2_final / err_scale_2;
         res_cur = 0.5 * (f1_final * f1_final + f2_final * f2_final);
@@ -1622,7 +1627,7 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
             double F2_final;
 
             prj_rad_implicit_residuals(rad, eos, u, dt, lapse, rho, Uint_old, Ye_old,
-                E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa, 0);
+                E_nu_old, T, Ye, &F1_final, &F2_final, E_nu_new, last_kappa, eta_capture, 0);
         }
         prj_eos_rty(eos, rho, T, Ye, eos_q, PRJ_EOS_CTX_MAIN);
         eint_new = eos_q[PRJ_EOS_EINT];
@@ -1638,13 +1643,39 @@ void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, dou
     if (final_temperature != 0) {
         *final_temperature = T;
     }
+    if (final_ye != 0) {
+        *final_ye = Ye;
+    }
     if (kappa_out != 0) {
         int i;
         for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
             kappa_out[i] = last_kappa[i];
         }
     }
+    if (eta_out != 0) {
+        int i;
+        for (i = 0; i < PRJ_NRAD * PRJ_NEGROUP; ++i) {
+            eta_out[i] = last_eta[i];
+        }
+    }
 }
+
+void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out)
+{
+    prj_rad_energy_update_impl(rad, eos, u, dt, lapse, final_temperature, 0, kappa_out, 0);
+}
+
+#if PRJ_USE_RADIATION_FSA
+/* Same converged implicit energy/lepton solve as prj_rad_energy_update, but also
+ * returns the converged Ye and the emissivity eta at the converged (T, Ye).  The
+ * FSA energy-momentum update reuses kappa and eta from here (and looks up only
+ * sigma/delta at the same converged Ye) so the opacity is self-consistent and no
+ * redundant kappa/eta interpolation is done. */
+void prj_rad_energy_update_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *final_ye, double *kappa_out, double *eta_out)
+{
+    prj_rad_energy_update_impl(rad, eos, u, dt, lapse, final_temperature, final_ye, kappa_out, eta_out);
+}
+#endif
 
 void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature, const double *kappa_in)
 {
@@ -1729,8 +1760,8 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
     double delta[PRJ_NRAD * PRJ_NEGROUP];
     double emis[PRJ_NRAD * PRJ_NEGROUP];
     double final_temperature = 0.0;
+    double final_ye = 0.0;
     double rho;
-    double Ye;
     double dt_lapse;
     double e_unchanged;
     double dmom[3] = {0.0, 0.0, 0.0};
@@ -1782,12 +1813,15 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
         }
     }
 
-    prj_rad_energy_update(rad, eos, u_tmp, dt, lapse, &final_temperature, 0);
+    /* kappa and emis(eta) come back from the converged solve, evaluated at the
+     * exact converged (T, Ye); reuse them and look up only the scattering pair at
+     * that same converged Ye (not u_tmp[YE]/rho, which round-trips through rho and
+     * would perturb kappa/emis relative to sigma/delta). */
+    prj_rad_energy_update_fsa(rad, eos, u_tmp, dt, lapse, &final_temperature, &final_ye, kappa, emis);
 
     rho = u_tmp[PRJ_CONS_RHO];
-    Ye = rho != 0.0 ? u_tmp[PRJ_CONS_YE] / rho : 0.0;
-    prj_rad3_opac_lookup(rad, rho, final_temperature, Ye,
-        kappa, sigma, delta, emis);
+    prj_rad3_opac_lookup(rad, rho, final_temperature, final_ye,
+        0, sigma, delta, 0);
 
     rho = u[PRJ_CONS_RHO];
     e_unchanged = u[PRJ_CONS_ETOT] - 0.5 *
