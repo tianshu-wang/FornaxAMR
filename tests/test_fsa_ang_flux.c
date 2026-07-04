@@ -57,7 +57,8 @@ static double pattern_intensity(int field, int group, int angle, double scale)
     return scale * val;
 }
 
-static void fill_state(prj_block *block, double u[PRJ_NVAR_CONS], double scale)
+static void fill_state(const prj_rad *rad, prj_block *block,
+    double u[PRJ_NVAR_CONS], double scale)
 {
     int field;
     int group;
@@ -69,15 +70,16 @@ static void fill_state(prj_block *block, double u[PRJ_NVAR_CONS], double scale)
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int v = PRJ_CONS_RAD_I(field, group, angle);
                 double I = pattern_intensity(field, group, angle, scale);
+                double J = rad->solid_angle[angle] * I;
 
-                block->W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), 0, 0, 0)] = I;
-                u[v] = I;
+                block->W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), 0, 0, 0)] = J;
+                u[v] = J;
             }
         }
     }
 }
 
-static double weighted_total(const prj_rad *rad, const double u[PRJ_NVAR_CONS])
+static double integrated_total(const double u[PRJ_NVAR_CONS])
 {
     double total = 0.0;
     int field;
@@ -87,8 +89,7 @@ static double weighted_total(const prj_rad *rad, const double u[PRJ_NVAR_CONS])
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
-                total += rad->solid_angle[angle] *
-                    u[PRJ_CONS_RAD_I(field, group, angle)];
+                total += u[PRJ_CONS_RAD_I(field, group, angle)];
             }
         }
     }
@@ -113,7 +114,7 @@ static void check_zero_speed_noop(const prj_rad *rad, prj_block *block)
     int angle;
 
     set_gravity(block, 0.0, 0.0, 0.0);
-    fill_state(block, u, 1.0);
+    fill_state(rad, block, u, 1.0);
     memcpy(before, u, sizeof(u));
 
     prj_rad_ang_flux_apply(rad, block, block->W, u, 0, 0, 0, 1.0, 0.25);
@@ -124,7 +125,7 @@ static void check_zero_speed_noop(const prj_rad *rad, prj_block *block)
                 int v = PRJ_CONS_RAD_I(field, group, angle);
 
                 if (u[v] != before[v]) {
-                    die("zero angular speed changed an intensity");
+                    die("zero angular speed changed angular-cell energy");
                 }
             }
         }
@@ -142,22 +143,23 @@ static void check_conservation(const prj_rad *rad, prj_block *block)
     int angle;
 
     set_gravity(block, 0.6 * PRJ_CLIGHT, -0.25 * PRJ_CLIGHT, 0.4 * PRJ_CLIGHT);
-    fill_state(block, u, 1.0);
-    total_before = weighted_total(rad, u);
+    fill_state(rad, block, u, 1.0);
+    total_before = integrated_total(u);
 
     prj_rad_ang_flux_apply(rad, block, block->W, u, 0, 0, 0, 1.0, 1.0e-4);
 
-    total_after = weighted_total(rad, u);
+    total_after = integrated_total(u);
     if (fabs(total_after - total_before) >
         1.0e-12 * fmax(fabs(total_before), 1.0)) {
-        die("angular flux did not conserve solid-angle-weighted intensity");
+        die("angular flux did not conserve angular-cell-integrated energy");
     }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int v = PRJ_CONS_RAD_I(field, group, angle);
-                double ref = pattern_intensity(field, group, angle, 1.0);
+                double ref = rad->solid_angle[angle] *
+                    pattern_intensity(field, group, angle, 1.0);
                 double delta = fabs(u[v] - ref);
 
                 if (delta > max_delta) {
@@ -182,26 +184,27 @@ static void check_positivity_limiter(const prj_rad *rad, prj_block *block)
     int angle;
 
     set_gravity(block, 80.0 * PRJ_CLIGHT, -55.0 * PRJ_CLIGHT, 35.0 * PRJ_CLIGHT);
-    fill_state(block, u, 1.0e-3);
-    total_before = weighted_total(rad, u);
+    fill_state(rad, block, u, 1.0e-3);
+    total_before = integrated_total(u);
 
     prj_rad_ang_flux_apply(rad, block, block->W, u, 0, 0, 0, 1.0, 1.0);
 
-    total_after = weighted_total(rad, u);
+    total_after = integrated_total(u);
     if (fabs(total_after - total_before) >
         1.0e-10 * fmax(fabs(total_before), 1.0)) {
-        die("limited angular flux did not conserve weighted intensity");
+        die("limited angular flux did not conserve angular-cell-integrated energy");
     }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int v = PRJ_CONS_RAD_I(field, group, angle);
-                double ref = pattern_intensity(field, group, angle, 1.0e-3);
+                double ref = rad->solid_angle[angle] *
+                    pattern_intensity(field, group, angle, 1.0e-3);
                 double delta = fabs(u[v] - ref);
 
                 if (u[v] < -1.0e-14) {
-                    die("angular flux limiter left a negative intensity");
+                    die("angular flux limiter left a negative angular-cell energy");
                 }
                 if (delta > max_delta) {
                     max_delta = delta;

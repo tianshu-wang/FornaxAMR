@@ -1149,10 +1149,10 @@ void prj_rad_flux_fsa(const prj_rad *rad, const double *WL, const double *WR,
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int v = PRJ_CONS_RAD_I(field, group, angle);
                 double speed = v_face + lapse * PRJ_CLIGHT * rad->n0[angle][dir];
-                double I_face = speed >= 0.0 ? WL[PRJ_PRIM_RAD_I(field, group, angle)] :
+                double J_face = speed >= 0.0 ? WL[PRJ_PRIM_RAD_I(field, group, angle)] :
                     WR[PRJ_PRIM_RAD_I(field, group, angle)];
 
-                flux[v] = speed * I_face;
+                flux[v] = speed * J_face;
             }
         }
     }
@@ -1741,12 +1741,11 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
 
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int iv = PRJ_CONS_RAD_I(field, group, angle);
-                double domega = rad->solid_angle[angle];
-                double I = u[iv];
+                double J = u[iv];
 
-                E += domega * I;
+                E += J;
                 for (d = 0; d < 3; ++d) {
-                    first_moment[d] += domega * I * rad->n0[angle][d];
+                    first_moment[d] += J * rad->n0[angle][d];
                 }
             }
 
@@ -1773,32 +1772,32 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
-            double I_old[PRJ_NANGLE];
-            double I_abs[PRJ_NANGLE];
+            double J_old[PRJ_NANGLE];
+            double J_abs[PRJ_NANGLE];
             double E_abs = 0.0;
             double E_matter_group = 0.0;
             double scatter_rate = sigma[idx] * (1.0 - delta[idx] / 3.0);
             double scatter_den = 1.0 + dt_lapse * PRJ_CLIGHT * scatter_rate;
             double scatter_fac = 1.0 / scatter_den;
-            double iso;
 
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int iv = PRJ_CONS_RAD_I(field, group, angle);
+                double domega = rad->solid_angle[angle];
                 double den = 1.0 + dt_lapse * PRJ_CLIGHT * kappa[idx];
 
-                I_old[angle] = u[iv];
-                I_abs[angle] = (I_old[angle] + dt_lapse * emis[idx] / four_pi) / den;
-                E_abs += rad->solid_angle[angle] * I_abs[angle];
+                J_old[angle] = u[iv];
+                J_abs[angle] = (J_old[angle] +
+                    dt_lapse * emis[idx] * domega / four_pi) / den;
+                E_abs += J_abs[angle];
             }
 
-            iso = E_abs / four_pi;
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int iv = PRJ_CONS_RAD_I(field, group, angle);
-                double I_new = iso + (I_abs[angle] - iso) * scatter_fac;
-                double dI_matter = I_old[angle] - I_new;
-                double dE = rad->solid_angle[angle] * dI_matter;
+                double J_iso = rad->solid_angle[angle] * E_abs / four_pi;
+                double J_new = J_iso + (J_abs[angle] - J_iso) * scatter_fac;
+                double dE = J_old[angle] - J_new;
 
-                u[iv] = I_new;
+                u[iv] = J_new;
                 E_matter_group += dE;
                 for (d = 0; d < 3; ++d) {
                     dmom[d] += dE * rad->n0[angle][d] / PRJ_CLIGHT;
@@ -1892,10 +1891,10 @@ static void prj_rad_fsa_omega_faces(const prj_rad *rad, int field,
  *
  * (Equivalently dE_g/dt += v^i_{;j} ΔνP^{ji} and dF_{gj}/dt += v^i_{;k} ΔνQ^{kji}.)
  *
- * The FSA branch applies the third LHS term of the intensity equation after
- * moving it to the update side:
+ * The FSA branch applies the angular-cell-integrated form of the third LHS term
+ * of the intensity equation after moving it to the update side:
  *
- *   ∂_t I_g += α A_n ∂_ω(ω I_g),  A_n = n · ∇'v · n + a · n / c.
+ *   ∂_t J_g,a += α A_n ∂_ω(ω J_g,a),  A_n = n · ∇'v · n + a · n / c.
  *
  * The face values are picked by upwinding in frequency space.  With the update
  * written as dU_g/dt = face[g+1] - face[g], a positive drift drains the upper
@@ -2281,10 +2280,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             double ndvdxn = 0.0;
             double a_dot_n = a[0] * n[0] + a[1] * n[1] + a[2] * n[2];
             double drift;
-            double I_group[PRJ_NEGROUP];
-            double I_spec[PRJ_NEGROUP];
+            double J_group[PRJ_NEGROUP];
+            double J_spec[PRJ_NEGROUP];
             double freq_face[PRJ_NEGROUP + 1] = {0.0};
-            double intensity_available[PRJ_NEGROUP];
+            double energy_available[PRJ_NEGROUP];
             double outgoing[PRJ_NEGROUP] = {0.0};
             double theta[PRJ_NEGROUP];
             int ii;
@@ -2304,27 +2303,27 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             for (g = 0; g < PRJ_NEGROUP; ++g) {
                 int v = PRJ_CONS_RAD_I(field, g, angle);
 
-                I_group[g] = W_state[WIDX(PRJ_PRIM_RAD_I(field, g, angle), ic, jc, kc)];
-                I_spec[g] = I_group[g] * inv_dnu[g];
-                intensity_available[g] = u[v];
+                J_group[g] = W_state[WIDX(PRJ_PRIM_RAD_I(field, g, angle), ic, jc, kc)];
+                J_spec[g] = J_group[g] * inv_dnu[g];
+                energy_available[g] = u[v];
             }
 
             for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
                 int gu;
-                double I_face;
+                double J_face;
 
                 if (drift >= 0.0) {
                     gu = gf;
-                    I_face = prj_rad_recon_face(I_spec, gu, -1);
+                    J_face = prj_rad_recon_face(J_spec, gu, -1);
                 } else {
                     gu = gf - 1;
-                    I_face = prj_rad_recon_face(I_spec, gu, +1);
+                    J_face = prj_rad_recon_face(J_spec, gu, +1);
                 }
-                freq_face[gf] = omega_face[gf] * drift * I_face;
+                freq_face[gf] = omega_face[gf] * drift * J_face;
             }
 
             /* Same donor-group positivity limiter as the M1 frequency flux:
-             * dI_g/dt = face[g+1] - face[g], so a positive face drains its
+             * dJ_g/dt = face[g+1] - face[g], so a positive face drains its
              * upper group and a negative face drains its lower group. */
             for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
                 if (freq_face[gf] > 0.0) {
@@ -2337,9 +2336,9 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 double drain = dt_lapse * outgoing[g];
 
                 theta[g] = 1.0;
-                if (drain > intensity_available[g]) {
-                    theta[g] = intensity_available[g] > 0.0 && drain > 0.0
-                        ? nextafter(intensity_available[g] / drain, 0.0)
+                if (drain > energy_available[g]) {
+                    theta[g] = energy_available[g] > 0.0 && drain > 0.0
+                        ? nextafter(energy_available[g] / drain, 0.0)
                         : 0.0;
                 }
             }
@@ -2350,8 +2349,8 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
                 freq_face[gf] *= factor;
             }
 
-            /* Stored FSA intensities remain group-integrated per direction per
-             * solid angle.  Only the face state above is spectral, so the
+            /* Stored FSA angular variables are group-integrated energy density
+             * in each angular cell.  Only the face state above is spectral, so the
              * finite-volume update still applies face[g+1] - face[g] directly
              * to each group-integrated angular variable. */
             for (g = 0; g < PRJ_NEGROUP; ++g) {
@@ -2491,11 +2490,14 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
                     continue;
                 }
 
-                /* The LHS contains -alpha div_n(I b), so after moving it to
-                 * the update side a positive b·arc_vec drains the second
-                 * angular cell and fills the first. */
+                /* The stored angular variable is J = ΔΩ I, but the angular
+                 * face flux still needs the per-solid-angle intensity I.  The
+                 * LHS contains -alpha div_n(I b), so after moving it to the
+                 * update side a positive b·arc_vec drains the second angular
+                 * cell and fills the first. */
                 donor = speed > 0.0 ? c1 : c0;
-                I_face = W_state[WIDX(PRJ_PRIM_RAD_I(field, group, donor), ic, jc, kc)];
+                I_face = W_state[WIDX(PRJ_PRIM_RAD_I(field, group, donor), ic, jc, kc)] /
+                    rad->solid_angle[donor];
                 arc_flux[arc] = speed * I_face * rad->arc_angle[arc];
             }
 
@@ -2508,9 +2510,9 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
                 double flux = arc_flux[arc];
 
                 if (flux > 0.0) {
-                    outgoing[c1] += flux / rad->solid_angle[c1];
+                    outgoing[c1] += flux;
                 } else if (flux < 0.0) {
-                    outgoing[c0] -= flux / rad->solid_angle[c0];
+                    outgoing[c0] -= flux;
                 }
             }
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
@@ -2543,10 +2545,8 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
                 int c1 = rad->arc_neighbor[2 * arc + 1];
                 double flux = arc_flux[arc];
 
-                u[PRJ_CONS_RAD_I(field, group, c0)] +=
-                    dt_lapse * flux / rad->solid_angle[c0];
-                u[PRJ_CONS_RAD_I(field, group, c1)] -=
-                    dt_lapse * flux / rad->solid_angle[c1];
+                u[PRJ_CONS_RAD_I(field, group, c0)] += dt_lapse * flux;
+                u[PRJ_CONS_RAD_I(field, group, c1)] -= dt_lapse * flux;
             }
         }
     }

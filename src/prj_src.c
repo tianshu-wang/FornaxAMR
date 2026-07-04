@@ -104,10 +104,10 @@ void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
                             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                                 const double *n = rad->n0[angle];
                                 double a_dot_n = g1 * n[0] + g2 * n[1] + g3 * n[2];
-                                double I = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)];
+                                double J = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)];
 
                                 dUdt[VIDX(PRJ_CONS_RAD_I(field, group, angle), i, j, k)] -=
-                                    lapse * a_dot_n * inv_c * I;
+                                    lapse * a_dot_n * inv_c * J;
                             }
                         }
                     }
@@ -121,11 +121,11 @@ void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
 /* Velocity-gradient radiation source.  The M1 branch applies the O(v/c)
  * "source-like" piece of the SR redshift (Eq. 12a/12b of the comoving-frame
  * mixed-frame moment equations), while the FSA branch applies the first
- * intensity-equation RHS term -α (n·∇v·n) I:
+ * angular-cell-integrated intensity-equation RHS term -α (n·∇v·n) J:
  *
  *     ∂_t E_g   -= (∂_j v_i) P^{ji}_g                          (Eq. 12a piece)
  *     ∂_t F_{gj} -= (∂_j v_i) F_{gi}                            (Eq. 12b piece)
- *     ∂_t I_{g,n} -= α (n_j ∂_j v_i n_i) I_{g,n}                 (FSA piece)
+ *     ∂_t J_{g,a} -= α (n_j ∂_j v_i n_i) J_{g,a}                 (FSA piece)
  *
  * Indices: i,j ∈ {1,2,3}; sums over i (and i,j for the energy term).  ∂_j v_i is
  * built by central differencing the face-centred Riemann velocities stored in
@@ -296,7 +296,7 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
                         for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                             const double *n = rad->n0[angle];
                             double ndvdxn = 0.0;
-                            double I;
+                            double J;
                             int jj;
                             int ii;
 
@@ -306,9 +306,9 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
                                 }
                             }
 
-                            I = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)];
+                            J = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)];
                             dUdt[VIDX(PRJ_CONS_RAD_I(field, group, angle), i, j, k)] -=
-                                lapse * ndvdxn * I;
+                                lapse * ndvdxn * J;
                         }
                     }
                 }
