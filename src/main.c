@@ -472,7 +472,7 @@ int main(int argc, char *argv[])
             double dt_new;
 
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "calc_dt");
-            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, &mpi, sim.cfl,
+            dt_new = prj_timeint_calc_dt(&sim.mesh, &sim.eos, &sim.rad, &mpi, sim.cfl,
                 &PRJ_TIMEINT_TABLEAU_NAME);
             PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "calc_dt");
 

@@ -1359,14 +1359,17 @@ static double prj_timeint_cell_rad_denom(const double *w, const double dx[3])
 }
 #endif
 
-double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
-    double cfl, const prj_timeint_imex_tableau *tableau)
+double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_rad *rad,
+    const prj_mpi *mpi, double cfl, const prj_timeint_imex_tableau *tableau)
 {
     double dt_min = 1.0e99;
     double dt_global;
     int bidx;
 
     (void)eos;
+#if !PRJ_USE_RADIATION_FSA
+    (void)rad;
+#endif
 #if TIME_INTEGRATION != PRJ_TIMEINT_IMEX
     (void)tableau;
 #endif
@@ -1414,14 +1417,28 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_mpi *mp
 #if PRJ_USE_RADIATION_FSA
                     {
                         double lapse_c = prj_timeint_cell_lapse(block, i, j, k) * PRJ_CLIGHT;
-                        double rad_denom =
-                            (fabs(w[PRJ_PRIM_V1]) + lapse_c) / block->dx[0] +
-                            (fabs(w[PRJ_PRIM_V2]) + lapse_c) / block->dx[1] +
-                            (fabs(w[PRJ_PRIM_V3]) + lapse_c) / block->dx[2];
-                        double dt_rad = cfl / rad_denom;
+                        double rad_denom = 0.0;
+                        int a;
 
-                        if (dt_rad < dt_cell) {
-                            dt_cell = dt_rad;
+                        /* The angular-cell directions n0 are shared across all
+                         * radiation species and energy groups, so iterate over
+                         * angles only and take the fastest projected signal. */
+                        for (a = 0; a < PRJ_NANGLE; ++a) {
+                            double denom_a =
+                                (fabs(w[PRJ_PRIM_V1]) + lapse_c * rad->n0[a][0]) / block->dx[0] +
+                                (fabs(w[PRJ_PRIM_V2]) + lapse_c * rad->n0[a][1]) / block->dx[1] +
+                                (fabs(w[PRJ_PRIM_V3]) + lapse_c * rad->n0[a][2]) / block->dx[2];
+
+                            if (a == 0 || denom_a > rad_denom) {
+                                rad_denom = denom_a;
+                            }
+                        }
+                        if (rad_denom > 0.0) {
+                            double dt_rad = cfl / rad_denom;
+
+                            if (dt_rad < dt_cell) {
+                                dt_cell = dt_rad;
+                            }
                         }
                     }
 #endif
