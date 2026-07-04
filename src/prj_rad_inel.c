@@ -953,7 +953,12 @@ static void prj_rad_inel_fsa_build_m1_tmp(const prj_rad *rad,
     int angle;
     int d;
 
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+    /* The M1 inelastic step (prj_rad_eleinel_step/prj_rad_nucinel_step) reads
+     * only the hydro slots and the per-group E/F moment slots, and apply_m1_tmp
+     * reads only u_tmp's E and Ye slots.  The reconstruction below writes every
+     * E/F slot, so copying only the hydro block is bit-identical and skips the
+     * dead angular-intensity slots of u_tmp. */
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
         u_tmp[v] = u[v];
     }
 

@@ -394,6 +394,9 @@ static void prj_rad_fsa_build_arcs(const double vertices[PRJ_NANGLE][3],
         rad->arc_vec[3 * idx] = 0.0;
         rad->arc_vec[3 * idx + 1] = 0.0;
         rad->arc_vec[3 * idx + 2] = 0.0;
+        rad->arc_nface[3 * idx] = 0.0;
+        rad->arc_nface[3 * idx + 1] = 0.0;
+        rad->arc_nface[3 * idx + 2] = 0.0;
         rad->arc_neighbor[2 * idx] = -1;
         rad->arc_neighbor[2 * idx + 1] = -1;
     }
@@ -460,6 +463,20 @@ static void prj_rad_fsa_build_arcs(const double vertices[PRJ_NANGLE][3],
         for (d = 0; d < 3; ++d) {
             rad->arc_vec[3 * a + d] = v[d];
         }
+        {
+            /* The angular face normal nface = normalize(n0[c0] + n0[c1]) is
+             * purely geometric (n0 == vertices), so precompute the unit vector
+             * once instead of rebuilding it per spatial cell in the kernel. */
+            double nf[3];
+
+            for (d = 0; d < 3; ++d) {
+                nf[d] = vertices[c0][d] + vertices[c1][d];
+            }
+            prj_rad_fsa_normalize(nf);
+            for (d = 0; d < 3; ++d) {
+                rad->arc_nface[3 * a + d] = nf[d];
+            }
+        }
         prj_rad_fsa_cell_add_arc(rad->cell_neighbor, c0, a);
         prj_rad_fsa_cell_add_arc(rad->cell_neighbor, c1, a);
     }
@@ -488,10 +505,12 @@ void prj_rad_fsa_free_geometry(prj_rad *rad)
     }
     free(rad->arc_angle);
     free(rad->arc_vec);
+    free(rad->arc_nface);
     free(rad->arc_neighbor);
     free(rad->cell_neighbor);
     rad->arc_angle = 0;
     rad->arc_vec = 0;
+    rad->arc_nface = 0;
     rad->arc_neighbor = 0;
     rad->cell_neighbor = 0;
 }
@@ -645,6 +664,8 @@ void prj_rad_fsa_calculate_directions(prj_rad *rad)
     rad->arc_angle = (double *)prj_malloc((size_t)PRJ_NARC * sizeof(*rad->arc_angle));
     rad->arc_vec = (double *)prj_malloc((size_t)3 * (size_t)PRJ_NARC *
         sizeof(*rad->arc_vec));
+    rad->arc_nface = (double *)prj_malloc((size_t)3 * (size_t)PRJ_NARC *
+        sizeof(*rad->arc_nface));
     rad->arc_neighbor = (int *)prj_malloc((size_t)2 * (size_t)PRJ_NARC *
         sizeof(*rad->arc_neighbor));
     rad->cell_neighbor = (int *)prj_malloc((size_t)PRJ_RAD_FSA_MAX_CELL_VERTS *
@@ -1730,7 +1751,12 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
         return;
     }
 
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+    /* prj_rad_energy_update reads only the hydro slots and the per-group E slots
+     * (prj_rad_implicit_residuals ignores u entirely), and the reconstruction
+     * below writes every E/F moment slot.  The angular intensity slots of u_tmp
+     * are never read, so copying only the hydro block is bit-identical and skips
+     * ~NANGLE-4 dead doubles per group. */
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
         u_tmp[v] = u[v];
     }
 
@@ -1779,11 +1805,13 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
             double scatter_rate = sigma[idx] * (1.0 - delta[idx] / 3.0);
             double scatter_den = 1.0 + dt_lapse * PRJ_CLIGHT * scatter_rate;
             double scatter_fac = 1.0 / scatter_den;
+            /* den depends only on the group (idx), not the angle: hoist the
+             * NANGLE-fold redundant recomputation out of the angle loop. */
+            double den = 1.0 + dt_lapse * PRJ_CLIGHT * kappa[idx];
 
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int iv = PRJ_CONS_RAD_I(field, group, angle);
                 double domega = rad->solid_angle[angle];
-                double den = 1.0 + dt_lapse * PRJ_CLIGHT * kappa[idx];
 
                 J_old[angle] = u[iv];
                 J_abs[angle] = (J_old[angle] +
@@ -2392,7 +2420,7 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     if (rad == 0 || block == 0 || W_state == 0 || u == 0) {
         return;
     }
-    if (rad->arc_angle == 0 || rad->arc_vec == 0 ||
+    if (rad->arc_angle == 0 || rad->arc_vec == 0 || rad->arc_nface == 0 ||
         rad->arc_neighbor == 0 || rad->cell_neighbor == 0) {
         return;
     }
@@ -2449,10 +2477,9 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     for (arc = 0; arc < PRJ_NARC; ++arc) {
         int c0 = rad->arc_neighbor[2 * arc];
         int c1 = rad->arc_neighbor[2 * arc + 1];
-        double nface[3];
+        const double *nface = &rad->arc_nface[3 * arc];
         double b[3];
         double speed;
-        double nmag;
         int d;
         int jj;
 
@@ -2462,15 +2489,6 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
             continue;
         }
         for (d = 0; d < 3; ++d) {
-            nface[d] = rad->n0[c0][d] + rad->n0[c1][d];
-        }
-        nmag = sqrt(nface[0] * nface[0] + nface[1] * nface[1] +
-            nface[2] * nface[2]);
-        if (nmag <= 0.0) {
-            continue;
-        }
-        for (d = 0; d < 3; ++d) {
-            nface[d] /= nmag;
             b[d] = a[d] * inv_c;
         }
         for (d = 0; d < 3; ++d) {

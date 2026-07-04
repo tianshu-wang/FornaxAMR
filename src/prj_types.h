@@ -295,6 +295,7 @@ struct prj_rad {
     double solid_angle[PRJ_NANGLE];
     double *arc_angle;
     double *arc_vec;
+    double *arc_nface;
     int *arc_neighbor;
     int *cell_neighbor;
 #endif
