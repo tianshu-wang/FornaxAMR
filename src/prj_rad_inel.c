@@ -991,14 +991,18 @@ static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
     const double four_pi = 4.0 * M_PI;
     double rho = u[PRJ_CONS_RHO];
     double e_unchanged;
-    double dE_matter = 0.0;
     double dmom[PRJ_NDIM] = {0.0, 0.0, 0.0};
     int nu;
     int g;
     int angle;
     int d;
 
-    e_unchanged = u[PRJ_CONS_ETOT] - 0.5 *
+    /* The eleinel/nucinel steps already applied the matter energy and Ye
+       exchange to u_tmp (internal energy in u_tmp[ETOT], Ye in u_tmp[YE]).  Take
+       the internal+magnetic energy from there (it uses the unchanged momentum,
+       since the steps never touch it) and re-add only the kinetic energy after
+       the radiation-momentum back-reaction below. */
+    e_unchanged = u_tmp[PRJ_CONS_ETOT] - 0.5 *
         (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
          u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
          u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
@@ -1009,9 +1013,20 @@ static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
             double E_new = u_tmp[PRJ_CONS_RAD_E(nu, g)];
             double scale = 0.0;
 
+            /* Reset any unphysical negative angular intensities to zero before
+               rescaling, so the group total and the rescale factor are built
+               from non-negative intensities only. */
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
-                E_old += u[PRJ_CONS_RAD_I(nu, g, angle)];
+                int iv = PRJ_CONS_RAD_I(nu, g, angle);
+
+                if (u[iv] < 0.0) {
+                    u[iv] = 0.0;
+                }
+                E_old += u[iv];
             }
+            /* Rescale the angular intensities so the group's total (and hence its
+               neutrino number, since all angles share the group energy) matches
+               the post-eleinel/nucinel moment E_new, keeping the angular shape. */
             if (E_old != 0.0) {
                 scale = E_new / E_old;
             }
@@ -1020,7 +1035,6 @@ static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
                 int iv = PRJ_CONS_RAD_I(nu, g, angle);
                 double J_old = u[iv];
                 double J_new;
-                double dE;
 
                 if (E_old != 0.0) {
                     J_new = J_old * scale;
@@ -1031,43 +1045,39 @@ static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
                 }
 
                 u[iv] = J_new;
-                dE = J_old - J_new;
-                dE_matter += dE;
                 for (d = 0; d < PRJ_NDIM; ++d) {
-                    dmom[d] += dE * rad->n0[angle][d] / PRJ_CLIGHT;
+                    dmom[d] += (J_old - J_new) * rad->n0[angle][d] / PRJ_CLIGHT;
                 }
             }
         }
     }
 
-    /* M1 inelastic scattering only back-reacts through matter energy.  FSA
-       rescales angular-cell J, so the radiation momentum changes too and the
-       gas receives both energy and momentum. */
+    /* Ye already updated on u_tmp by the inelastic steps.  Rescaling J changes
+       the radiation flux, so the gas absorbs the momentum change; rebuild the
+       total energy as unchanged (internal+magnetic) energy plus the new kinetic
+       energy.  The corresponding energy exchange is already in e_unchanged. */
     u[PRJ_CONS_YE] = u_tmp[PRJ_CONS_YE];
     u[PRJ_CONS_MOM1] += dmom[0] * RAD_SCALE;
     u[PRJ_CONS_MOM2] += dmom[1] * RAD_SCALE;
     u[PRJ_CONS_MOM3] += dmom[2] * RAD_SCALE;
-    u[PRJ_CONS_ETOT] = e_unchanged + dE_matter * RAD_SCALE + 0.5 *
+    u[PRJ_CONS_ETOT] = e_unchanged + 0.5 *
         (u[PRJ_CONS_MOM1] * u[PRJ_CONS_MOM1] +
          u[PRJ_CONS_MOM2] * u[PRJ_CONS_MOM2] +
          u[PRJ_CONS_MOM3] * u[PRJ_CONS_MOM3]) / rho;
 }
 
-void prj_rad_eleinel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
-{
-    double u_tmp[PRJ_NVAR_CONS];
-
-    prj_rad_inel_fsa_build_m1_tmp(rad, u, u_tmp);
-    prj_rad_eleinel_step(rad, eos, u_tmp, dt, T_cell);
-    prj_rad_inel_fsa_apply_m1_tmp(rad, u, u_tmp);
-}
-
-int prj_rad_nucinel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
+/* Combined FSA inelastic update.  The J<->(E,F) conversion is done once:
+   J -> (E,F) -> eleinel -> E1 -> nucinel -> E2 -> J, instead of once per
+   process.  eleinel_step and nucinel_step run in-place on the M1 moments in
+   u_tmp (nucinel sees eleinel's updated state), then the single apply projects
+   the combined moment change back onto the angular intensities. */
+int prj_rad_inel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
 {
     double u_tmp[PRJ_NVAR_CONS];
     int status;
 
     prj_rad_inel_fsa_build_m1_tmp(rad, u, u_tmp);
+    prj_rad_eleinel_step(rad, eos, u_tmp, dt, T_cell);
     status = prj_rad_nucinel_step(rad, eos, u_tmp, dt, T_cell);
     prj_rad_inel_fsa_apply_m1_tmp(rad, u, u_tmp);
 
