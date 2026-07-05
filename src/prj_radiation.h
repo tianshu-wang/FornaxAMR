@@ -43,6 +43,9 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
 void prj_rad_energy_update_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *final_ye, double *kappa_out, double *eta_out);
 void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
     double *u, double dt, double lapse);
+#if DO_FFC
+void prj_rad_ffc_fsa(prj_rad *rad, double *u, double dt);
+#endif
 #endif
 void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, double F3, double P[3][3]);
 #if PRJ_NRAD > 0

@@ -118,6 +118,20 @@ static void prj_rad3_build_egroups(prj_rad *rad)
             }
         }
     }
+
+#if DO_FFC
+    /* Fast flavor conversion mixes species per (group, angle), so every species
+       must share the same energy grid.  Enforce identical energy ranges. */
+    for (nu = 1; nu < PRJ_NRAD; ++nu) {
+        if (rad->emin[nu] != rad->emin[0] || rad->emax[nu] != rad->emax[0]) {
+            fprintf(stderr, "prj_rad3_opac: DO_FFC requires all species to share "
+                "the same energy range, but species %d [%g, %g] != species 0 "
+                "[%g, %g]\n", nu, rad->emin[nu], rad->emax[nu],
+                rad->emin[0], rad->emax[0]);
+            exit(1);
+        }
+    }
+#endif
 }
 
 static void prj_rad3_read_param(prj_rad *rad)

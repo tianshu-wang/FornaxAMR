@@ -628,6 +628,11 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_START("sub_rad_energy_momentum");
         prj_rad_energy_momentum_update_fsa(rad, eos, u, dt, lapse_cell);
         PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
+#if DO_FFC
+        PRJ_SUBTIMER_START("sub_rad_ffc");
+        prj_rad_ffc_fsa(rad, u, dt);
+        PRJ_SUBTIMER_STOP("sub_rad_ffc");
+#endif
 #else
         PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
@@ -687,6 +692,9 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_USE_RADIATION_FSA
         prj_rad_inel_fsa(rad, eos, u1, dt, T_cell);
         prj_rad_energy_momentum_update_fsa(rad, eos, u1, dt, lapse_cell);
+#if DO_FFC
+        prj_rad_ffc_fsa(rad, u1, dt);
+#endif
 #else
         prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
         prj_rad_nucinel_step(rad, eos, u1, dt, T_cell);
@@ -816,6 +824,11 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_START("sub_rad_energy_momentum");
         prj_rad_energy_momentum_update_fsa(rad, eos, u, 0.5 * dt, lapse_cell);
         PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
+#if DO_FFC
+        PRJ_SUBTIMER_START("sub_rad_ffc");
+        prj_rad_ffc_fsa(rad, u, 0.5 * dt);
+        PRJ_SUBTIMER_STOP("sub_rad_ffc");
+#endif
 #else
         PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
@@ -869,6 +882,9 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_USE_RADIATION_FSA
         prj_rad_inel_fsa(rad, eos, u, 0.5 * dt, T_cell);
         prj_rad_energy_momentum_update_fsa(rad, eos, u, 0.5 * dt, lapse_cell);
+#if DO_FFC
+        prj_rad_ffc_fsa(rad, u, 0.5 * dt);
+#endif
 #else
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
         prj_rad_nucinel_step(rad, eos, u, 0.5 * dt, T_cell);
@@ -2205,6 +2221,11 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                         prj_rad_energy_momentum_update_fsa(rad, eos, u1,
                             dt_implicit, lapse_cell);
                         PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
+#if DO_FFC
+                        PRJ_SUBTIMER_START("sub_rad_ffc");
+                        prj_rad_ffc_fsa(rad, u1, dt_implicit);
+                        PRJ_SUBTIMER_STOP("sub_rad_ffc");
+#endif
 #else
                         double T_cell = 0.0;
                         double kappa[PRJ_NRAD * PRJ_NEGROUP];

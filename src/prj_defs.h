@@ -165,6 +165,16 @@ typedef double prj_table_real;
 #if PRJ_USE_RADIATION_FSA && PRJ_N_ANGLE_LEV < 1
 #error "PRJ_N_ANGLE_LEV must be at least 1 for RADIATION_FSA"
 #endif
+/* Fast-flavor conversion of neutrinos (default off).  Set here only. */
+#ifndef DO_FFC
+#define DO_FFC 0
+#endif
+#if DO_FFC && !PRJ_USE_RADIATION_FSA
+#error "DO_FFC requires RADIATION_FSA"
+#endif
+#if DO_FFC && PRJ_NRAD < 3
+#error "DO_FFC requires at least 3 neutrino species (nu_e, nubar_e, nu_x)"
+#endif
 #define PRJ_NANGLE (10 * (PRJ_N_ANGLE_LEV) * (PRJ_N_ANGLE_LEV) + 2)
 #define PRJ_NARC (30 * (PRJ_N_ANGLE_LEV) * (PRJ_N_ANGLE_LEV))
 #ifndef INEL_PHI_NT

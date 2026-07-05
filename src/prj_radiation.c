@@ -1883,6 +1883,96 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
 }
 #endif
 
+#if PRJ_USE_RADIATION_FSA && DO_FFC
+/* Fermi constant used by the fast-flavor-conversion rate [MeV cm^3]. */
+#define PRJ_FFC_GF 8.958e-44
+
+/* Fast flavor conversion of neutrinos.  Species 0 = nu_e (J1), 1 = nubar_e (J2),
+ * 2 = nu_x (J3, one of the four heavy-lepton flavors, hence the /4 factors).
+ * All species must share the same energy grid (checked at init).  J in the
+ * physics formulae is the physical intensity, i.e. the stored intensity times
+ * RAD_SCALE; the mixing and BGK relaxation are linear so they run directly in
+ * stored units, while Ip/Im (the growth rate) carry the RAD_SCALE factor. */
+void prj_rad_ffc_fsa(prj_rad *rad, double *u, double dt)
+{
+    /* Ip/Im coefficient: sqrt(2) G_F / (hbar c), with G_F converted to erg cm^3
+     * and hbar c = HPLANCK*CLIGHT/(2*pi).  The stored->physical RAD_SCALE for J
+     * is folded in here so Ip/Im come out as physical inverse lengths. */
+    const double ffc_coeff = sqrt(2.0) * (PRJ_FFC_GF * PRJ_MEV_TO_ERG)
+        / (PRJ_HPLANCK * PRJ_CLIGHT / (2.0 * M_PI)) * RAD_SCALE;
+    double Ip = 0.0;
+    double Im = 0.0;
+    double rate;
+    double decay;
+    int g;
+    int angle;
+
+    if (rad == 0 || u == 0 || dt <= 0.0) {
+        return;
+    }
+
+    /* Ip = sum over (group, angle) of max(J1-J2,0)/erg * coeff, Im likewise with
+     * max(J2-J1,0).  erg is the group-center energy (shared by all species). */
+    for (g = 0; g < PRJ_NEGROUP; ++g) {
+        double inv_erg = 1.0 / rad->egroup_erg[0][g];
+
+        for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+            double d = u[PRJ_CONS_RAD_I(0, g, angle)] - u[PRJ_CONS_RAD_I(1, g, angle)];
+
+            if (d > 0.0) {
+                Ip += d * inv_erg;
+            } else if (d < 0.0) {
+                Im += (-d) * inv_erg;
+            }
+        }
+    }
+    Ip *= ffc_coeff;
+    Im *= ffc_coeff;
+
+    rate = sqrt(Ip * Im);
+    decay = exp(-rate * PRJ_CLIGHT * dt);
+
+    for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+        double eln = 0.0;
+        double P;
+
+        /* Per-angle electron lepton number sets which side of the crossing this
+         * angle is on; the survival probability is shared by all energy groups. */
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            eln += (u[PRJ_CONS_RAD_I(0, g, angle)] - u[PRJ_CONS_RAD_I(1, g, angle)])
+                / rad->egroup_erg[0][g];
+        }
+
+        if (Ip > Im) {
+            /* J1>J2 side depleted to 1 - 2/3 Im/Ip; J2>J1 side fully mixed. */
+            P = (eln > 0.0) ? (1.0 - (2.0 / 3.0) * Im / Ip) : (1.0 / 3.0);
+        } else {
+            double ratio = (Im > 0.0) ? (Ip / Im) : 0.0;
+
+            P = (eln > 0.0) ? (1.0 / 3.0) : (1.0 - (2.0 / 3.0) * ratio);
+        }
+
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            int i1 = PRJ_CONS_RAD_I(0, g, angle);
+            int i2 = PRJ_CONS_RAD_I(1, g, angle);
+            int i3 = PRJ_CONS_RAD_I(2, g, angle);
+            double J1 = u[i1];
+            double J2 = u[i2];
+            double J3 = u[i3];
+            double J1a = P * J1 + (1.0 - P) * J3 / 4.0;
+            double J2a = P * J2 + (1.0 - P) * J3 / 4.0;
+            double J3a = (1.0 - P) * J1 + (1.0 + P) / 4.0 * J3
+                + (1.0 - P) * J2 + (1.0 + P) / 4.0 * J3;
+
+            /* BGK relaxation toward the mixed state J_a with the FFC rate. */
+            u[i1] = J1a + (J1 - J1a) * decay;
+            u[i2] = J2a + (J2 - J2a) * decay;
+            u[i3] = J3a + (J3 - J3a) * decay;
+        }
+    }
+}
+#endif
+
 /* Koren slope-limiter function φ(r) = max(0, min(2r, (2+r)/3, 2)). */
 static double prj_rad_koren_phi(double r)
 {
