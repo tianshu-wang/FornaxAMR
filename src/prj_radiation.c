@@ -1158,6 +1158,36 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
 }
 
 #if PRJ_USE_RADIATION_FSA
+/* Clamp negative angular intensities to zero.  A negative J is an unphysical
+ * numerical undershoot (the FSA spatial advection is not strictly positivity-
+ * preserving at a marginal multidimensional CFL), not real radiation.  We
+ * discard it WITHOUT any matter back-reaction: the energy/Ye/momentum the gas
+ * would appear to exchange for this J change is fictitious (it is not emission
+ * or absorption), so only the radiation slots are touched here and the hydro
+ * slots are left untouched.  Applied to the conserved state before the
+ * radiation update so the transport and the matter coupling never see J < 0. */
+void prj_rad_fsa_clamp_intensities(double *u)
+{
+    int field;
+    int group;
+    int angle;
+
+    if (u == 0) {
+        return;
+    }
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            for (angle = 0; angle < PRJ_NANGLE; ++angle) {
+                int iv = PRJ_CONS_RAD_I(field, group, angle);
+
+                if (u[iv] < 0.0) {
+                    u[iv] = 0.0;
+                }
+            }
+        }
+    }
+}
+
 void prj_rad_flux_fsa(const prj_rad *rad, const double *WL, const double *WR,
     double lapse, int dir, double v_face, double *flux)
 {
