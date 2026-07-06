@@ -5,10 +5,6 @@
 #include "prj.h"
 #include "prj_rad_inel.h"
 
-#ifndef M_SQRT3
-#define M_SQRT3 1.7320508075688772935
-#endif
-
 #if PRJ_NRAD > 0
 static double prj_timeint_cell_lapse(const prj_block *block, int i, int j, int k)
 {
@@ -1450,28 +1446,22 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_rad *ra
 #if PRJ_USE_RADIATION_FSA
                     {
                         double lapse_c = prj_timeint_cell_lapse(block, i, j, k) * PRJ_CLIGHT;
-                        double min_dx = block->dx[0];
-                        double rad_denom;
+                        double rad_denom = 0.0;
+                        int a;
 
-                        if (block->dx[1] < min_dx) {
-                            min_dx = block->dx[1];
+                        /* The angular-cell directions n0 are shared across all
+                         * radiation species and energy groups, so iterate over
+                         * angles only and take the fastest projected signal. */
+                        for (a = 0; a < PRJ_NANGLE; ++a) {
+                            double denom_a =
+                                (fabs(w[PRJ_PRIM_V1]) + lapse_c * rad->n0[a][0]) / block->dx[0] +
+                                (fabs(w[PRJ_PRIM_V2]) + lapse_c * rad->n0[a][1]) / block->dx[1] +
+                                (fabs(w[PRJ_PRIM_V3]) + lapse_c * rad->n0[a][2]) / block->dx[2];
+
+                            if (a == 0 || denom_a > rad_denom) {
+                                rad_denom = denom_a;
+                            }
                         }
-                        if (block->dx[2] < min_dx) {
-                            min_dx = block->dx[2];
-                        }
-                        /* The FSA spatial advection is dimensionally unsplit and
-                         * each angular intensity streams at |n|=1 in a fixed lab
-                         * direction, so the positivity-limiting signal is the
-                         * summed multidimensional CFL.  Bound it with the fluid
-                         * advection (Sum_i |v_i|/dx_i) plus the worst-case
-                         * neutrino streaming alpha*c*sqrt(3)/min_i(dx_i): sqrt(3)
-                         * covers a fully diagonal direction and min(dx) the
-                         * tightest cell dimension. */
-                        rad_denom =
-                            fabs(w[PRJ_PRIM_V1]) / block->dx[0] +
-                            fabs(w[PRJ_PRIM_V2]) / block->dx[1] +
-                            fabs(w[PRJ_PRIM_V3]) / block->dx[2] +
-                            lapse_c * M_SQRT3 / min_dx;
                         if (rad_denom > 0.0) {
                             double dt_rad = cfl / rad_denom;
 
