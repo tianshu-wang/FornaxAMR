@@ -2,6 +2,7 @@
 #define PRJ_TYPES_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "prj_defs.h"
 
@@ -71,14 +72,20 @@ struct prj_neighbor {
     int rank;
     int rel_level;
     int type;
-    int send_loc_start[3];
-    int send_loc_end[3];
-    int recv_loc_start[3];
-    int recv_loc_end[3];
-    int send_loc_start_rad[3];
-    int send_loc_end_rad[3];
-    int recv_loc_start_rad[3];
-    int recv_loc_end_rad[3];
+    /* In-block cell-index ranges for ghost exchange; values lie in
+     * [-PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST] (~[-2, 10]), so int8_t is
+     * ample and shrinks these fields 4x.  mesh->blocks is preallocated at
+     * max_blocks, and each block holds slot[56], so trimming prj_neighbor
+     * scales across the whole (GB-scale) struct array.  Read-only in
+     * arithmetic/loop bounds; integer promotion keeps every use identical. */
+    int8_t send_loc_start[3];
+    int8_t send_loc_end[3];
+    int8_t recv_loc_start[3];
+    int8_t recv_loc_end[3];
+    int8_t send_loc_start_rad[3];
+    int8_t send_loc_end_rad[3];
+    int8_t recv_loc_start_rad[3];
+    int8_t recv_loc_end_rad[3];
     double xmin[3];
     double xmax[3];
     double dx[3];

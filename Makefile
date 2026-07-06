@@ -132,7 +132,13 @@ $(TARGET): $(OBJS)
 $(SRC_DIR)/%.o: $(SRC_DIR)/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-$(RK_TABLEAU_DIR)/%.o: $(RK_TABLEAU_DIR)/%.c $(SRC_DIR)/prj_timeint.h $(SRC_DIR)/prj_defs.h
+$(RK_TABLEAU_DIR)/%.o: $(RK_TABLEAU_DIR)/%.c $(SRC_DIR)/prj_timeint.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+# Problem TUs reference prj_block/prj_neighbor; without an explicit rule make
+# uses the built-in %.o pattern (no header prereqs) and silently keeps stale
+# objects when the layout headers change, producing a mixed-ABI binary.
+problems/%.o: problems/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_DIR)/%: $(TEST_DIR)/%.c $(CORE_OBJS)
