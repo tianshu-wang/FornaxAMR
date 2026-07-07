@@ -233,6 +233,7 @@ struct prj_mesh {
     double amr_init_scale_factor;
     double amr_reach_highest_level_at_density;
     double E_floor;
+    double mhd_eta;
     prj_amr_init_refine_fn amr_init_refine_fn;
     void *amr_init_refine_userdata;
 };

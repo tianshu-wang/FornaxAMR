@@ -262,6 +262,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.amr_init_scale_factor = 0.5;
     sim->mesh.amr_reach_highest_level_at_density = -1.0;
     sim->mesh.E_floor = -1.0;
+    sim->mesh.mhd_eta = 0.0;
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
     sim->eos.E_injected = 0.0;
@@ -417,6 +418,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.max_blocks = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "min_dx") == 0) {
             sim->mesh.min_dx = strtod(value, &endptr);
+        } else if (strcmp(key, "mhd_eta") == 0) {
+            sim->mesh.mhd_eta = strtod(value, &endptr);
         } else if (prj_io_parse_amr_slot_key(key, "amr_estimator", &amr_slot)) {
             if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator[amr_slot]) != 0) {
                 endptr = value;

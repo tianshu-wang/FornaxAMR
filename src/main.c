@@ -258,6 +258,9 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "amr_init_scale_factor: %.6e\n", sim->mesh.amr_init_scale_factor);
     fprintf(stderr, "amr_reach_highest_level_at_density: %.6e\n",
         sim->mesh.amr_reach_highest_level_at_density);
+#if PRJ_MHD
+    fprintf(stderr, "mhd_eta: %.6e\n", sim->mesh.mhd_eta);
+#endif
     fprintf(stderr, "timer_interval: %d\n", sim->timer_interval);
 }
 

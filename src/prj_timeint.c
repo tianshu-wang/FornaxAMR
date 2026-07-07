@@ -52,6 +52,7 @@ static void prj_timeint_mhd_fail(const char *message)
     exit(EXIT_FAILURE);
 }
 
+
 static int prj_timeint_mhd_face_axis_max(int dir, int axis)
 {
     return dir == axis ? PRJ_BLOCK_SIZE : PRJ_BLOCK_SIZE - 1;
@@ -131,12 +132,82 @@ static double prj_timeint_mhd_face_vnorm(const prj_block *block, int face_dir,
     return value;
 }
 
-static void prj_timeint_mhd_update_emf(prj_block *block, double *W)
+/* Locally boost the CT resistivity across an EMF edge whose four adjacent cells
+ * straddle a sudden density jump produced by the tabulated nuclear EOS.  Such
+ * near-discontinuous jumps (dense material, min rho > 1e13) drive an unstable
+ * mode in the ideal EMF stencil that shows up as a large temperature spread
+ * between the neighbouring cells; adding a large resistivity there diffuses the
+ * offending mode away and removes the instability. */
+static double prj_timeint_mhd_edge_eta_boost(const prj_block *block, const double *W,
+    const int cell0[3], const int cell1[3], const int cell2[3], const int cell3[3])
 {
+    const int *cells[4];
+    double rho_min = 0.0;
+    double t_min = 0.0;
+    double t_max = 0.0;
+    double t_sum = 0.0;
+    double t_avg;
+    int n;
+
+    if (block == 0 || block->eosvar == 0 || W == 0) {
+        return 0.0;
+    }
+    cells[0] = cell0;
+    cells[1] = cell1;
+    cells[2] = cell2;
+    cells[3] = cell3;
+    for (n = 0; n < 4; ++n) {
+        int i = cells[n][0];
+        int j = cells[n][1];
+        int k = cells[n][2];
+        double rho = W[WIDX(PRJ_PRIM_RHO, i, j, k)];
+        double t = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
+
+        if (!isfinite(rho) || !isfinite(t)) {
+            return 0.0;
+        }
+        if (n == 0 || rho < rho_min) {
+            rho_min = rho;
+        }
+        if (n == 0 || t < t_min) {
+            t_min = t;
+        }
+        if (n == 0 || t > t_max) {
+            t_max = t;
+        }
+        t_sum += t;
+    }
+    if (rho_min <= 1.0e13) {
+        return 0.0;
+    }
+    t_avg = 0.25 * t_sum;
+    if (t_avg <= 0.0) {
+        return 0.0;
+    }
+    if ((t_max - t_min) / t_avg > 0.2) {
+        return 1.0e12;
+    }
+    return 0.0;
+}
+
+static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
+{
+    double *W;
+    const double *bf[3];
     int dir;
 
-    if (block == 0 || W == 0) {
+    if (block == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_update_emf: invalid input");
+    }
+    W = prj_block_prim_stage(block, stage);
+    if (W == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_update_emf: missing prim storage");
+    }
+    for (dir = 0; dir < 3; ++dir) {
+        bf[dir] = prj_block_bf_stage(block, dir, stage);
+        if (bf[dir] == 0) {
+            prj_timeint_mhd_fail("prj_timeint_mhd_update_emf: missing Bf storage");
+        }
     }
     for (dir = 0; dir < 3; ++dir) {
         int up = (dir + 1) % 3;
@@ -205,8 +276,11 @@ static void prj_timeint_mhd_update_emf(prj_block *block, double *W)
                         face2[0], face2[1], face2[2]);
                     v_norm[3] = prj_timeint_mhd_face_vnorm(block, up,
                         face3[0], face3[1], face3[2]);
+                    double edge_eta = eta + prj_timeint_mhd_edge_eta_boost(block, W,
+                        cell0, cell1, cell2, cell3);
+
                     prj_mhd_emf_upwind(block, dir, e[0], e[1], e[2],
-                        emf_face, emf_cell, v_norm);
+                        emf_face, emf_cell, v_norm, bf, edge_eta);
                 }
             }
         }
@@ -309,34 +383,22 @@ static void prj_timeint_mhd_set_cons_b_from_bf(const prj_block *block,
 
 #if TIME_INTEGRATION != PRJ_TIMEINT_IMEX
 static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, const prj_mpi *mpi,
-    double *(*stage_array)(prj_block *))
+    int stage)
 {
     int bidx;
 
-    if (mesh == 0 || stage_array == 0) {
+    if (mesh == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_update_mesh_emf: invalid input");
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(mpi, block)) {
-            prj_timeint_mhd_update_emf(block, stage_array(block));
+            prj_timeint_mhd_update_emf(block, stage, mesh->mhd_eta);
         }
     }
     prj_mhd_emf_send(mesh, mpi);
 }
-
-static double *prj_timeint_stage1_array(prj_block *block)
-{
-    return prj_block_prim_stage(block, 0);
-}
-
-#if TIME_INTEGRATION == RK2
-static double *prj_timeint_stage2_array(prj_block *block)
-{
-    return prj_block_prim_stage(block, 1);
-}
-#endif
 #endif
 #endif
 
@@ -1079,7 +1141,7 @@ static void prj_timeint_mhd_update_mesh_emf_stage(prj_mesh *mesh, const prj_mpi 
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(mpi, block)) {
-            prj_timeint_mhd_update_emf(block, prj_block_prim_stage(block, stage));
+            prj_timeint_mhd_update_emf(block, stage, mesh->mhd_eta);
         }
     }
     prj_mhd_emf_send(mesh, mpi);
@@ -1705,7 +1767,7 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
 
 #if PRJ_MHD
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_mhd_emf");
-    prj_timeint_mhd_update_mesh_emf(mesh, mpi, prj_timeint_stage1_array);
+    prj_timeint_mhd_update_mesh_emf(mesh, mpi, 0);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_mhd_emf");
 #endif
 
@@ -1881,7 +1943,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
 #if PRJ_MHD
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_mhd_emf");
-    prj_timeint_mhd_update_mesh_emf(mesh, mpi, prj_timeint_stage1_array);
+    prj_timeint_mhd_update_mesh_emf(mesh, mpi, 0);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_mhd_emf");
 #endif
 
@@ -1986,7 +2048,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
 #if PRJ_MHD
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_mhd_emf");
-    prj_timeint_mhd_update_mesh_emf(mesh, mpi, prj_timeint_stage2_array);
+    prj_timeint_mhd_update_mesh_emf(mesh, mpi, 1);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_mhd_emf");
 #endif
 

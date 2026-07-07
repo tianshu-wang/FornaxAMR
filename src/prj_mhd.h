@@ -12,7 +12,8 @@ void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
     prj_block *fine, int ci, int cj, int ck, int fi, int fj, int fk,
     int use_bf1, int use_BJ);
 double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
-    const double emf_face[4], const double emf_cell[4], const double v_norm[4]);
+    const double emf_face[4], const double emf_cell[4], const double v_norm[4],
+    const double *bf[3], double eta);
 void prj_mhd_emf_send(prj_mesh *mesh, const prj_mpi *mpi);
 void prj_mhd_debug_check_emf(const prj_mesh *mesh, const prj_mpi *mpi);
 void prj_mhd_debug_check_divb(const prj_mesh *mesh, const prj_mpi *mpi, int use_bf1);
@@ -58,7 +59,8 @@ static inline void prj_mhd_prolong_bf_from_buffer(const double *buf[3],
 }
 
 static inline double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
-    const double emf_face[4], const double emf_cell[4], const double v_norm[4])
+    const double emf_face[4], const double emf_cell[4], const double v_norm[4],
+    const double *bf[3], double eta)
 {
     (void)block;
     (void)dir;
@@ -68,6 +70,8 @@ static inline double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j,
     (void)emf_face;
     (void)emf_cell;
     (void)v_norm;
+    (void)bf;
+    (void)eta;
     return 0.0;
 }
 

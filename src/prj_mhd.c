@@ -588,7 +588,8 @@ void prj_mhd_bf2bc_all(prj_eos *eos, prj_block *block, int use_bf1)
 }
 
 double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
-    const double emf_face[4], const double emf_cell[4], const double v_norm[4])
+    const double emf_face[4], const double emf_cell[4], const double v_norm[4],
+    const double *bf[3], double eta)
 {
     double emf;
     int n;
@@ -638,6 +639,38 @@ double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
         emf += 0.25 * (emf_face[0] - emf_cell[3]);
     } else {
         emf += 0.125 * (emf_face[2] - emf_cell[2] + emf_face[0] - emf_cell[3]);
+    }
+
+    /* Resistive electric field: E = -v x B + eta * (curl B).  The edge along
+     * `dir` lives at a cell centre in `dir` and at transverse faces in the two
+     * orthogonal directions, so (curl B)_dir is a staggered difference of the
+     * face-centred field components on the faces that meet at this edge. */
+    if (eta != 0.0) {
+        double curl_b;
+
+        if (bf == 0 || bf[0] == 0 || bf[1] == 0 || bf[2] == 0) {
+            prj_mhd_fail("prj_mhd_emf_upwind: null face field for resistive term");
+        }
+        if (dir == X1DIR) {
+            curl_b = (bf[X3DIR][FACE_IDX(X3DIR, i, j, k)] -
+                      bf[X3DIR][FACE_IDX(X3DIR, i, j - 1, k)]) / block->dx[1] -
+                     (bf[X2DIR][FACE_IDX(X2DIR, i, j, k)] -
+                      bf[X2DIR][FACE_IDX(X2DIR, i, j, k - 1)]) / block->dx[2];
+        } else if (dir == X2DIR) {
+            curl_b = (bf[X1DIR][FACE_IDX(X1DIR, i, j, k)] -
+                      bf[X1DIR][FACE_IDX(X1DIR, i, j, k - 1)]) / block->dx[2] -
+                     (bf[X3DIR][FACE_IDX(X3DIR, i, j, k)] -
+                      bf[X3DIR][FACE_IDX(X3DIR, i - 1, j, k)]) / block->dx[0];
+        } else {
+            curl_b = (bf[X2DIR][FACE_IDX(X2DIR, i, j, k)] -
+                      bf[X2DIR][FACE_IDX(X2DIR, i - 1, j, k)]) / block->dx[0] -
+                     (bf[X1DIR][FACE_IDX(X1DIR, i, j, k)] -
+                      bf[X1DIR][FACE_IDX(X1DIR, i, j - 1, k)]) / block->dx[1];
+        }
+        if (!isfinite(curl_b)) {
+            prj_mhd_fail("prj_mhd_emf_upwind: non-finite resistive curl B");
+        }
+        emf += eta * curl_b;
     }
 
     if (!isfinite(emf)) {
