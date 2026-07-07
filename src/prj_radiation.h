@@ -27,6 +27,15 @@ void prj_rad_init(prj_rad *rad);
 #if PRJ_USE_RADIATION_FSA
 void prj_rad_fsa_calculate_directions(prj_rad *rad);
 void prj_rad_fsa_free_geometry(prj_rad *rad);
+#if PRJ_USE_RADIAL_FRAME_FSA
+void prj_rad_fsa_refresh_block_geometry(const prj_rad *rad, prj_block *block);
+void prj_rad_fsa_refresh_mesh_geometry(const prj_rad *rad, prj_mesh *mesh,
+    const prj_mpi *mpi);
+#endif
+void prj_rad_fsa_rotated_dir(const prj_block *block, int i, int j, int k,
+    const double n0[3], double n[3]);
+void prj_rad_fsa_rotated_angle_dir(const prj_rad *rad, const prj_block *block,
+    int angle, int i, int j, int k, double n[3]);
 #endif
 void prj_rad_prim2cons(const double *W, double *U);
 void prj_rad_cons2prim(const double *U, double *W);
@@ -34,16 +43,17 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
     double lapse, const double *chi_face,
     double dx_dir, double v_face, double *flux);
 #if PRJ_USE_RADIATION_FSA
-void prj_rad_flux_fsa(const prj_rad *rad, const double *WL, const double *WR,
-    double lapse, int dir, double v_face, double *flux);
+void prj_rad_flux_fsa(const prj_rad *rad, const prj_block *block,
+    const double *WL, const double *WR, double lapse, int dir, double v_face,
+    int il, int jl, int kl, int ir, int jr, int kr, double *flux);
 #endif
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out);
 void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double temperature, const double *kappa_in);
 #if PRJ_USE_RADIATION_FSA
 void prj_rad_fsa_clamp_intensities(double *u);
 void prj_rad_energy_update_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *final_ye, double *kappa_out, double *eta_out);
-void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
-    double *u, double dt, double lapse);
+void prj_rad_energy_momentum_update_fsa(prj_rad *rad, const prj_block *block,
+    int i, int j, int k, prj_eos *eos, double *u, double dt, double lapse);
 #if DO_FFC
 void prj_rad_ffc_fsa(prj_rad *rad, double *u, double dt);
 #endif

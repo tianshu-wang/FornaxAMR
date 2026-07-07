@@ -2172,6 +2172,10 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             child->grav[2] = 0;
             child->r_com = 0;
             child->Ylm = 0;
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+            child->rotation_matrix_fsa = 0;
+            child->ang_geom_fsa = 0;
+#endif
 #if PRJ_MHD
             child->deriv_Bf[0] = 0;
             child->deriv_Bf[1] = 0;

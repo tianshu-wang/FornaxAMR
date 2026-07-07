@@ -22,6 +22,13 @@
 #ifndef PRJ_USE_RADIATION_FSA
 #define PRJ_USE_RADIATION_FSA 0
 #endif
+#ifndef PRJ_USE_RADIAL_FRAME_FSA
+#ifdef USE_RADIAL_FRAME_FSA
+#define PRJ_USE_RADIAL_FRAME_FSA USE_RADIAL_FRAME_FSA
+#else
+#define PRJ_USE_RADIAL_FRAME_FSA 1
+#endif
+#endif
 #if PRJ_USE_RADIATION_M1 && PRJ_USE_RADIATION_FSA
 #error "RADIATION_M1 and RADIATION_FSA are separate solvers; enable only one"
 #endif
@@ -324,6 +331,11 @@ typedef double prj_table_real;
 #define VIDX(v, i, j, k) BIDX(PRJ_NVAR_CONS, v, i, j, k)
 #define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
 #define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+#define PRJ_FSA_ROT_IDX(row, col, i, j, k) BIDX(9, 3 * (row) + (col), i, j, k)
+#define PRJ_FSA_ANG_GEOM_IDX(arc, d, i, j, k) \
+    BIDX(3 * PRJ_NARC, 3 * (arc) + (d), i, j, k)
+#endif
 #define WIDX(v, i, j, k) \
     (((size_t)(v) * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NCELLS) + \
      (size_t)IDX(i, j, k))

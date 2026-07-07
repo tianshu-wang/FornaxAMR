@@ -998,7 +998,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         double lapse_face = 0.5 *
                             (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
 
-                        prj_rad_flux_fsa(rad, WL, WR, lapse_face, dir, v_face_loc[0], Fl);
+                        prj_rad_flux_fsa(rad, block, WL, WR, lapse_face, dir,
+                            v_face_loc[0], il, jl, kl, ir, jr, kr, Fl);
 #else
                         double dx_dir;
                         double lapse_face = 1.0;

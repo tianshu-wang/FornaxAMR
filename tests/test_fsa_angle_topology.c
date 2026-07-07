@@ -64,6 +64,15 @@ static int cell_arc_count(const prj_rad *rad, int cell)
     return count;
 }
 
+static void check_first_cell_points_north(const prj_rad *rad)
+{
+    if (fabs(rad->n0[0][0]) > 1.0e-14 ||
+        fabs(rad->n0[0][1]) > 1.0e-14 ||
+        fabs(rad->n0[0][2] - 1.0) > 1.0e-14) {
+        die("first angular cell is not aligned with +z");
+    }
+}
+
 static void check_cells(const prj_rad *rad, int cell_degree[PRJ_NANGLE])
 {
     const double pi = acos(-1.0);
@@ -132,11 +141,14 @@ static void check_arcs(const prj_rad *rad, const int cell_degree[PRJ_NANGLE])
         int c0 = rad->arc_neighbor[2 * arc];
         int c1 = rad->arc_neighbor[2 * arc + 1];
         double vec[3];
+        double nface[3];
         double mid[3];
         double delta[3];
         double delta_proj[3];
         double delta_dot_mid;
         double vec_norm;
+        double nface_norm;
+        double nface_err;
         double tangent_err;
         double alignment;
         int d;
@@ -165,6 +177,7 @@ static void check_arcs(const prj_rad *rad, const int cell_degree[PRJ_NANGLE])
 
         for (d = 0; d < 3; ++d) {
             vec[d] = rad->arc_vec[3 * arc + d];
+            nface[d] = rad->arc_nface[3 * arc + d];
             mid[d] = rad->n0[c0][d] + rad->n0[c1][d];
             delta[d] = rad->n0[c1][d] - rad->n0[c0][d];
         }
@@ -172,6 +185,21 @@ static void check_arcs(const prj_rad *rad, const int cell_degree[PRJ_NANGLE])
         vec_norm = sqrt(dot3(vec, vec));
         if (!isfinite(vec_norm) || fabs(vec_norm - 1.0) > 1.0e-12) {
             die("arc_vec is not a unit vector");
+        }
+        nface_norm = sqrt(dot3(nface, nface));
+        if (!isfinite(nface_norm) || fabs(nface_norm - 1.0) > 1.0e-12) {
+            die("arc_nface is not a unit vector");
+        }
+        nface_err = 0.0;
+        for (d = 0; d < 3; ++d) {
+            double err = fabs(nface[d] - mid[d]);
+
+            if (err > nface_err) {
+                nface_err = err;
+            }
+        }
+        if (nface_err > 1.0e-12) {
+            die("arc_nface is not the normalized angular-cell average");
         }
         tangent_err = fabs(dot3(vec, mid));
         if (tangent_err > 1.0e-12) {
@@ -207,10 +235,11 @@ int main(void)
     memset(&rad, 0, sizeof(rad));
     prj_rad_fsa_calculate_directions(&rad);
     if (rad.arc_angle == 0 || rad.arc_vec == 0 ||
-        rad.arc_neighbor == 0 || rad.cell_neighbor == 0) {
+        rad.arc_nface == 0 || rad.arc_neighbor == 0 || rad.cell_neighbor == 0) {
         die("FSA angular topology arrays were not allocated");
     }
 
+    check_first_cell_points_north(&rad);
     check_cells(&rad, cell_degree);
     check_arcs(&rad, cell_degree);
     prj_rad_fsa_free_geometry(&rad);

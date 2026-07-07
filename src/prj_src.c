@@ -102,10 +102,12 @@ void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
                     for (field = 0; field < PRJ_NRAD; ++field) {
                         for (group = 0; group < PRJ_NEGROUP; ++group) {
                             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
-                                const double *n = rad->n0[angle];
-                                double a_dot_n = g1 * n[0] + g2 * n[1] + g3 * n[2];
+                                double n[3];
+                                double a_dot_n;
                                 double J = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)];
 
+                                prj_rad_fsa_rotated_angle_dir(rad, block, angle, i, j, k, n);
+                                a_dot_n = g1 * n[0] + g2 * n[1] + g3 * n[2];
                                 dUdt[VIDX(PRJ_CONS_RAD_I(field, group, angle), i, j, k)] -=
                                     lapse * a_dot_n * inv_c * J;
                             }
@@ -294,12 +296,13 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
                 for (field = 0; field < PRJ_NRAD; ++field) {
                     for (group = 0; group < PRJ_NEGROUP; ++group) {
                         for (angle = 0; angle < PRJ_NANGLE; ++angle) {
-                            const double *n = rad->n0[angle];
+                            double n[3];
                             double ndvdxn = 0.0;
                             double J;
                             int jj;
                             int ii;
 
+                            prj_rad_fsa_rotated_angle_dir(rad, block, angle, i, j, k, n);
                             for (jj = 0; jj < 3; ++jj) {
                                 for (ii = 0; ii < 3; ++ii) {
                                     ndvdxn += n[jj] * dvdx[jj][ii] * n[ii];

@@ -1045,13 +1045,17 @@ static void prj_gravity_fill_empty_bins(prj_grav *grav, int use_multipole)
     }
 }
 
-static void prj_gravity_radiation_reduce_cell(const prj_rad *rad, const double *W,
-    int i, int j, int k, double dx1, double dx2, double dx3, double r,
+static void prj_gravity_radiation_reduce_cell(const prj_rad *rad,
+    const prj_block *block, const double *W, int i, int j, int k,
+    double dx1, double dx2, double dx3, double r,
     double v1, double v2, double v3, double *erad, double *prad, double *vdotF)
 {
     *erad = 0.0;
     *prad = 0.0;
     *vdotF = 0.0;
+#if !PRJ_USE_RADIATION_FSA
+    (void)block;
+#endif
 #if PRJ_NRAD > 0
 #if PRJ_USE_RADIATION_FSA
     /* In FSA builds PRJ_PRIM_RAD_E/F* alias angular-cell slots, not moments.
@@ -1080,10 +1084,11 @@ static void prj_gravity_radiation_reduce_cell(const prj_rad *rad, const double *
                 int angle;
 
                 for (angle = 0; angle < PRJ_NANGLE; ++angle) {
-                    const double *n = rad->n0[angle];
+                    double n[3];
                     double J = W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), i, j, k)] *
                         RAD_SCALE;
 
+                    prj_rad_fsa_rotated_angle_dir(rad, block, angle, i, j, k, n);
                     e_rad += J;
                     f1 += PRJ_CLIGHT * J * n[0];
                     f2 += PRJ_CLIGHT * J * n[1];
@@ -1251,7 +1256,7 @@ void prj_gravity_monopole_reduce(prj_mesh *mesh, prj_grav *grav,
                         erad = 0.0;
                         prad = 0.0;
                         vdotF = 0.0;
-                        prj_gravity_radiation_reduce_cell(rad, W, i, j, k,
+                        prj_gravity_radiation_reduce_cell(rad, block, W, i, j, k,
                             dx1, dx2, dx3, r, v1, v2, v3, &erad, &prad, &vdotF);
                         grav->vol[idx] += block->vol;
                         grav->rho_avg[idx] += block->vol * rho;
@@ -1461,7 +1466,7 @@ static int prj_gravity_monopole_reduce_stage_slot_active(prj_mesh *mesh, prj_eos
                         prj_eos_rey(eos, rho, eint, ye, eos_q, PRJ_EOS_CTX_MAIN);
                         pgas = eos_q[PRJ_EOS_PRESSURE];
                         vr = r > 0.0 ? (v1 * dx1 + v2 * dx2 + v3 * dx3) / r : 0.0;
-                        prj_gravity_radiation_reduce_cell(rad, W, i, j, k,
+                        prj_gravity_radiation_reduce_cell(rad, block, W, i, j, k,
                             dx1, dx2, dx3, r, v1, v2, v3, &erad, &prad, &vdotF);
                         grav->vol[idx] += block->vol;
                         grav->rho_avg[idx] += block->vol * rho;

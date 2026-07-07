@@ -945,7 +945,7 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
 
 #if PRJ_USE_RADIATION_FSA
 static void prj_rad_inel_fsa_build_m1_tmp(const prj_rad *rad,
-    const double *u, double *u_tmp)
+    const prj_block *block, int ic, int jc, int kc, const double *u, double *u_tmp)
 {
     int v;
     int nu;
@@ -970,10 +970,12 @@ static void prj_rad_inel_fsa_build_m1_tmp(const prj_rad *rad,
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int iv = PRJ_CONS_RAD_I(nu, g, angle);
                 double J = u[iv];
+                double n[PRJ_NDIM];
 
                 E += J;
+                prj_rad_fsa_rotated_angle_dir(rad, block, angle, ic, jc, kc, n);
                 for (d = 0; d < PRJ_NDIM; ++d) {
-                    F[d] += PRJ_CLIGHT * J * rad->n0[angle][d];
+                    F[d] += PRJ_CLIGHT * J * n[d];
                 }
             }
 
@@ -986,7 +988,7 @@ static void prj_rad_inel_fsa_build_m1_tmp(const prj_rad *rad,
 }
 
 static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
-    double *u, const double *u_tmp)
+    const prj_block *block, int ic, int jc, int kc, double *u, const double *u_tmp)
 {
     const double four_pi = 4.0 * M_PI;
     double rho = u[PRJ_CONS_RHO];
@@ -1045,8 +1047,13 @@ static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
                 }
 
                 u[iv] = J_new;
-                for (d = 0; d < PRJ_NDIM; ++d) {
-                    dmom[d] += (J_old - J_new) * rad->n0[angle][d] / PRJ_CLIGHT;
+                {
+                    double n[PRJ_NDIM];
+
+                    prj_rad_fsa_rotated_angle_dir(rad, block, angle, ic, jc, kc, n);
+                    for (d = 0; d < PRJ_NDIM; ++d) {
+                        dmom[d] += (J_old - J_new) * n[d] / PRJ_CLIGHT;
+                    }
                 }
             }
         }
@@ -1071,15 +1078,16 @@ static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
    process.  eleinel_step and nucinel_step run in-place on the M1 moments in
    u_tmp (nucinel sees eleinel's updated state), then the single apply projects
    the combined moment change back onto the angular intensities. */
-int prj_rad_inel_fsa(prj_rad *rad, prj_eos *eos, double *u, double dt, double T_cell)
+int prj_rad_inel_fsa(prj_rad *rad, const prj_block *block, int ic, int jc, int kc,
+    prj_eos *eos, double *u, double dt, double T_cell)
 {
     double u_tmp[PRJ_NVAR_CONS];
     int status;
 
-    prj_rad_inel_fsa_build_m1_tmp(rad, u, u_tmp);
+    prj_rad_inel_fsa_build_m1_tmp(rad, block, ic, jc, kc, u, u_tmp);
     prj_rad_eleinel_step(rad, eos, u_tmp, dt, T_cell);
     status = prj_rad_nucinel_step(rad, eos, u_tmp, dt, T_cell);
-    prj_rad_inel_fsa_apply_m1_tmp(rad, u, u_tmp);
+    prj_rad_inel_fsa_apply_m1_tmp(rad, block, ic, jc, kc, u, u_tmp);
 
     return status;
 }

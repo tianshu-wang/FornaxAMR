@@ -173,6 +173,61 @@ static void prj_rad_fsa_normalize(double a[3])
     a[2] /= n;
 }
 
+static void prj_rad_fsa_rotate_vector_to_north(const double from[3], double v[3])
+{
+    double c = prj_rad_fsa_clamp_dot(from[2]);
+    double axis[3] = {from[1], -from[0], 0.0};
+    double s2 = prj_rad_fsa_dot(axis, axis);
+    double s;
+    double cross1[3];
+    double axis_dot_v;
+    double out[3];
+    int d;
+
+    if (c > 1.0 - 1.0e-14) {
+        return;
+    }
+    if (c < -1.0 + 1.0e-14) {
+        v[1] = -v[1];
+        v[2] = -v[2];
+        return;
+    }
+
+    s = sqrt(s2);
+    for (d = 0; d < 3; ++d) {
+        axis[d] /= s;
+    }
+    prj_rad_fsa_cross(axis, v, cross1);
+    axis_dot_v = prj_rad_fsa_dot(axis, v);
+    for (d = 0; d < 3; ++d) {
+        out[d] = c * v[d] + s * cross1[d] + (1.0 - c) * axis_dot_v * axis[d];
+    }
+    for (d = 0; d < 3; ++d) {
+        v[d] = out[d];
+    }
+}
+
+static void prj_rad_fsa_rotate_icosahedron_to_north(
+    double x[PRJ_RAD_FSA_ICOS_NVERT][3])
+{
+    double from[3];
+    int i;
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        from[d] = x[0][d];
+    }
+    prj_rad_fsa_normalize(from);
+
+    for (i = 0; i < PRJ_RAD_FSA_ICOS_NVERT; ++i) {
+        prj_rad_fsa_rotate_vector_to_north(from, x[i]);
+        prj_rad_fsa_normalize(x[i]);
+    }
+    x[0][0] = 0.0;
+    x[0][1] = 0.0;
+    x[0][2] = 1.0;
+}
+
 static void prj_rad_fsa_init_icosahedron(double x[PRJ_RAD_FSA_ICOS_NVERT][3])
 {
     const double phi = 0.5 * (1.0 + sqrt(5.0));
@@ -193,6 +248,7 @@ static void prj_rad_fsa_init_icosahedron(double x[PRJ_RAD_FSA_ICOS_NVERT][3])
         }
         prj_rad_fsa_normalize(x[i]);
     }
+    prj_rad_fsa_rotate_icosahedron_to_north(x);
 }
 
 static void prj_rad_fsa_flat_face_point(
@@ -707,6 +763,283 @@ void prj_rad_fsa_calculate_directions(prj_rad *rad)
     free(triangles);
     free(vertices);
 }
+
+#if PRJ_USE_RADIAL_FRAME_FSA
+static void prj_rad_fsa_set_rotation_axis_fallback(double qz, double R[9],
+    double omega[3][3])
+{
+    int i;
+    int j;
+
+    for (i = 0; i < 9; ++i) {
+        R[i] = 0.0;
+    }
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            omega[i][j] = 0.0;
+        }
+    }
+
+    if (qz >= 0.0) {
+        R[0] = 1.0;
+        R[4] = 1.0;
+        R[8] = 1.0;
+    } else {
+        R[0] = 1.0;
+        R[4] = -1.0;
+        R[8] = -1.0;
+    }
+}
+
+static void prj_rad_fsa_rotation_omega_at(double x1, double x2, double x3,
+    double R[9], double omega[3][3])
+{
+    const double eps_s2 = 1.0e-28;
+    double r2 = x1 * x1 + x2 * x2 + x3 * x3;
+    double r;
+    double inv_r;
+    double qx;
+    double qy;
+    double qz;
+    double s2;
+    double s;
+    double inv_s;
+    double inv_s2;
+    int i;
+    int j;
+
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            omega[i][j] = 0.0;
+        }
+    }
+
+    if (r2 <= 0.0) {
+        prj_rad_fsa_set_rotation_axis_fallback(1.0, R, omega);
+        return;
+    }
+
+    r = sqrt(r2);
+    inv_r = 1.0 / r;
+    qx = x1 * inv_r;
+    qy = x2 * inv_r;
+    qz = x3 * inv_r;
+    s2 = qx * qx + qy * qy;
+    if (s2 <= eps_s2) {
+        prj_rad_fsa_set_rotation_axis_fallback(qz, R, omega);
+        return;
+    }
+    s = sqrt(s2);
+    inv_s = 1.0 / s;
+    inv_s2 = 1.0 / s2;
+
+    R[0] = qx * qz * inv_s;
+    R[1] = -qy * inv_s;
+    R[2] = qx;
+    R[3] = qy * qz * inv_s;
+    R[4] = qx * inv_s;
+    R[5] = qy;
+    R[6] = -s;
+    R[7] = 0.0;
+    R[8] = qz;
+
+    omega[0][0] = -qx * qy * qz * inv_s2 * inv_r;
+    omega[0][1] = qx * qx * qz * inv_s2 * inv_r;
+    omega[0][2] = -qy * inv_s2 * inv_r;
+    omega[1][0] = -qy * qy * qz * inv_s2 * inv_r;
+    omega[1][1] = qx * qy * qz * inv_s2 * inv_r;
+    omega[1][2] = qx * inv_s2 * inv_r;
+    omega[2][0] = qy * inv_r;
+    omega[2][1] = -qx * inv_r;
+    omega[2][2] = 0.0;
+}
+
+static void prj_rad_fsa_mat_vec(const double R[9], const double a[3], double out[3])
+{
+    out[0] = R[0] * a[0] + R[1] * a[1] + R[2] * a[2];
+    out[1] = R[3] * a[0] + R[4] * a[1] + R[5] * a[2];
+    out[2] = R[6] * a[0] + R[7] * a[1] + R[8] * a[2];
+}
+#endif
+
+void prj_rad_fsa_rotated_dir(const prj_block *block, int i, int j, int k,
+    const double n0[3], double n[3])
+{
+#if PRJ_USE_RADIAL_FRAME_FSA
+    int row;
+#endif
+
+    if (n == 0) {
+        return;
+    }
+    if (n0 == 0) {
+        n[0] = 0.0;
+        n[1] = 0.0;
+        n[2] = 0.0;
+        return;
+    }
+#if PRJ_USE_RADIAL_FRAME_FSA
+    if (block == 0 || block->rotation_matrix_fsa == 0) {
+        n[0] = n0[0];
+        n[1] = n0[1];
+        n[2] = n0[2];
+        return;
+    }
+    for (row = 0; row < 3; ++row) {
+        n[row] =
+            block->rotation_matrix_fsa[PRJ_FSA_ROT_IDX(row, 0, i, j, k)] * n0[0] +
+            block->rotation_matrix_fsa[PRJ_FSA_ROT_IDX(row, 1, i, j, k)] * n0[1] +
+            block->rotation_matrix_fsa[PRJ_FSA_ROT_IDX(row, 2, i, j, k)] * n0[2];
+    }
+#else
+    (void)block;
+    (void)i;
+    (void)j;
+    (void)k;
+    n[0] = n0[0];
+    n[1] = n0[1];
+    n[2] = n0[2];
+#endif
+}
+
+void prj_rad_fsa_rotated_angle_dir(const prj_rad *rad, const prj_block *block,
+    int angle, int i, int j, int k, double n[3])
+{
+    if (rad == 0 || angle < 0 || angle >= PRJ_NANGLE) {
+        if (n != 0) {
+            n[0] = 0.0;
+            n[1] = 0.0;
+            n[2] = 0.0;
+        }
+        return;
+    }
+    prj_rad_fsa_rotated_dir(block, i, j, k, rad->n0[angle], n);
+}
+
+#if PRJ_USE_RADIAL_FRAME_FSA
+static void prj_rad_fsa_store_rotation(prj_block *block, int i, int j, int k,
+    const double R[9])
+{
+    int row;
+    int col;
+
+    if (block == 0 || block->rotation_matrix_fsa == 0) {
+        return;
+    }
+    for (row = 0; row < 3; ++row) {
+        for (col = 0; col < 3; ++col) {
+            block->rotation_matrix_fsa[PRJ_FSA_ROT_IDX(row, col, i, j, k)] =
+                R[3 * row + col];
+        }
+    }
+}
+
+static void prj_rad_fsa_store_ang_geom(prj_block *block, int arc, int i, int j, int k,
+    const double geom[3])
+{
+    int d;
+
+    if (block == 0 || block->ang_geom_fsa == 0) {
+        return;
+    }
+    for (d = 0; d < 3; ++d) {
+        block->ang_geom_fsa[PRJ_FSA_ANG_GEOM_IDX(arc, d, i, j, k)] = geom[d];
+    }
+}
+
+void prj_rad_fsa_refresh_block_geometry(const prj_rad *rad, prj_block *block)
+{
+    int i;
+    int j;
+    int k;
+
+    if (block == 0 || block->rotation_matrix_fsa == 0) {
+        return;
+    }
+
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                double R[9];
+                double omega[3][3];
+                int arc;
+
+                prj_rad_fsa_rotation_omega_at(x1, x2, x3, R, omega);
+                prj_rad_fsa_store_rotation(block, i, j, k, R);
+
+                if (block->ang_geom_fsa == 0) {
+                    continue;
+                }
+                for (arc = 0; arc < PRJ_NARC; ++arc) {
+                    double geom[3] = {0.0, 0.0, 0.0};
+
+                    if (rad != 0 && rad->arc_neighbor != 0) {
+                        int c0 = rad->arc_neighbor[2 * arc];
+                        int c1 = rad->arc_neighbor[2 * arc + 1];
+
+                        if (c0 >= 0 && c0 < PRJ_NANGLE && c1 >= 0 && c1 < PRJ_NANGLE) {
+                            double n0[3];
+                            double n1[3];
+                            double n_arc[3];
+                            double mag;
+                            int d;
+                            int axis;
+
+                            prj_rad_fsa_mat_vec(R, rad->n0[c0], n0);
+                            prj_rad_fsa_mat_vec(R, rad->n0[c1], n1);
+                            for (d = 0; d < 3; ++d) {
+                                n_arc[d] = n0[d] + n1[d];
+                            }
+                            mag = sqrt(prj_rad_fsa_dot(n_arc, n_arc));
+                            if (mag > 0.0) {
+                                for (d = 0; d < 3; ++d) {
+                                    n_arc[d] /= mag;
+                                }
+                                for (axis = 0; axis < 3; ++axis) {
+                                    double cross[3];
+
+                                    prj_rad_fsa_cross(omega[axis], n_arc, cross);
+                                    for (d = 0; d < 3; ++d) {
+                                        geom[d] += n_arc[axis] * cross[d];
+                                    }
+                                }
+                                for (d = 0; d < 3; ++d) {
+                                    geom[d] *= PRJ_CLIGHT;
+                                }
+                            }
+                        }
+                    }
+                    prj_rad_fsa_store_ang_geom(block, arc, i, j, k, geom);
+                }
+            }
+        }
+    }
+}
+
+void prj_rad_fsa_refresh_mesh_geometry(const prj_rad *rad, prj_mesh *mesh,
+    const prj_mpi *mpi)
+{
+    int bidx;
+
+    if (mesh == 0) {
+        return;
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+
+        if (block->id < 0 || block->active != 1 || block->W == 0) {
+            continue;
+        }
+        if (mpi != 0 && block->rank != mpi->rank) {
+            continue;
+        }
+        prj_rad_fsa_refresh_block_geometry(rad, block);
+    }
+}
+#endif
 #endif
 
 void prj_rad_init(prj_rad *rad)
@@ -1188,8 +1521,9 @@ void prj_rad_fsa_clamp_intensities(double *u)
     }
 }
 
-void prj_rad_flux_fsa(const prj_rad *rad, const double *WL, const double *WR,
-    double lapse, int dir, double v_face, double *flux)
+void prj_rad_flux_fsa(const prj_rad *rad, const prj_block *block,
+    const double *WL, const double *WR, double lapse, int dir, double v_face,
+    int il, int jl, int kl, int ir, int jr, int kr, double *flux)
 {
     int field;
     int group;
@@ -1199,10 +1533,18 @@ void prj_rad_flux_fsa(const prj_rad *rad, const double *WL, const double *WR,
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int v = PRJ_CONS_RAD_I(field, group, angle);
-                double speed = v_face + lapse * PRJ_CLIGHT * rad->n0[angle][dir];
-                double J_face = speed >= 0.0 ? WL[PRJ_PRIM_RAD_I(field, group, angle)] :
-                    WR[PRJ_PRIM_RAD_I(field, group, angle)];
+                double nL[3];
+                double nR[3];
+                double n_face_dir;
+                double speed;
+                double J_face;
 
+                prj_rad_fsa_rotated_angle_dir(rad, block, angle, il, jl, kl, nL);
+                prj_rad_fsa_rotated_angle_dir(rad, block, angle, ir, jr, kr, nR);
+                n_face_dir = 0.5 * (nL[dir] + nR[dir]);
+                speed = v_face + lapse * PRJ_CLIGHT * n_face_dir;
+                J_face = speed >= 0.0 ? WL[PRJ_PRIM_RAD_I(field, group, angle)] :
+                    WR[PRJ_PRIM_RAD_I(field, group, angle)];
                 flux[v] = speed * J_face;
             }
         }
@@ -1781,8 +2123,8 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
 }
 
 #if PRJ_USE_RADIATION_FSA
-void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
-    double *u, double dt, double lapse)
+void prj_rad_energy_momentum_update_fsa(prj_rad *rad, const prj_block *block,
+    int ic, int jc, int kc, prj_eos *eos, double *u, double dt, double lapse)
 {
     double u_tmp[PRJ_NVAR_CONS];
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
@@ -1829,10 +2171,12 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
             for (angle = 0; angle < PRJ_NANGLE; ++angle) {
                 int iv = PRJ_CONS_RAD_I(field, group, angle);
                 double J = u[iv];
+                double n[3];
 
                 E += J;
+                prj_rad_fsa_rotated_angle_dir(rad, block, angle, ic, jc, kc, n);
                 for (d = 0; d < 3; ++d) {
-                    first_moment[d] += J * rad->n0[angle][d];
+                    first_moment[d] += J * n[d];
                 }
             }
 
@@ -1888,11 +2232,13 @@ void prj_rad_energy_momentum_update_fsa(prj_rad *rad, prj_eos *eos,
                 double J_iso = rad->solid_angle[angle] * E_abs / four_pi;
                 double J_new = J_iso + (J_abs[angle] - J_iso) * scatter_fac;
                 double dE = J_old[angle] - J_new;
+                double n[3];
 
                 u[iv] = J_new;
                 E_matter_group += dE;
+                prj_rad_fsa_rotated_angle_dir(rad, block, angle, ic, jc, kc, n);
                 for (d = 0; d < 3; ++d) {
-                    dmom[d] += dE * rad->n0[angle][d] / PRJ_CLIGHT;
+                    dmom[d] += dE * n[d] / PRJ_CLIGHT;
                 }
             }
 
@@ -2458,9 +2804,9 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
         }
 
         for (angle = 0; angle < PRJ_NANGLE; ++angle) {
-            const double *n = rad->n0[angle];
+            double n[3];
             double ndvdxn = 0.0;
-            double a_dot_n = a[0] * n[0] + a[1] * n[1] + a[2] * n[2];
+            double a_dot_n;
             double drift;
             double J_group[PRJ_NEGROUP];
             double J_spec[PRJ_NEGROUP];
@@ -2472,6 +2818,8 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             int jj;
             int gf;
 
+            prj_rad_fsa_rotated_angle_dir(rad, block, angle, ic, jc, kc, n);
+            a_dot_n = a[0] * n[0] + a[1] * n[1] + a[2] * n[2];
             for (jj = 0; jj < 3; ++jj) {
                 for (ii = 0; ii < 3; ++ii) {
                     ndvdxn += n[jj] * dvdx[jj][ii] * n[ii];
@@ -2574,7 +2922,10 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     if (rad == 0 || block == 0 || W_state == 0 || u == 0) {
         return;
     }
-    if (rad->arc_angle == 0 || rad->arc_vec == 0 || rad->arc_nface == 0 ||
+    if (rad->arc_angle == 0 || rad->arc_vec == 0 ||
+#if !PRJ_USE_RADIAL_FRAME_FSA
+        rad->arc_nface == 0 ||
+#endif
         rad->arc_neighbor == 0 || rad->cell_neighbor == 0) {
         return;
     }
@@ -2631,7 +2982,18 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     for (arc = 0; arc < PRJ_NARC; ++arc) {
         int c0 = rad->arc_neighbor[2 * arc];
         int c1 = rad->arc_neighbor[2 * arc + 1];
+#if PRJ_USE_RADIAL_FRAME_FSA
+        const double *arc_vec_ref = &rad->arc_vec[3 * arc];
+        double n0[3];
+        double n1[3];
+        double n_arc[3];
+        double arc_vec[3];
+        double mag;
+        double geom[3] = {0.0, 0.0, 0.0};
+#else
         const double *nface = &rad->arc_nface[3 * arc];
+        const double *arc_vec = &rad->arc_vec[3 * arc];
+#endif
         double b[3];
         double speed;
         int d;
@@ -2642,6 +3004,37 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
         if (c0 < 0 || c0 >= PRJ_NANGLE || c1 < 0 || c1 >= PRJ_NANGLE) {
             continue;
         }
+#if PRJ_USE_RADIAL_FRAME_FSA
+        prj_rad_fsa_rotated_angle_dir(rad, block, c0, ic, jc, kc, n0);
+        prj_rad_fsa_rotated_angle_dir(rad, block, c1, ic, jc, kc, n1);
+        for (d = 0; d < 3; ++d) {
+            n_arc[d] = n0[d] + n1[d];
+        }
+        mag = sqrt(prj_rad_fsa_dot(n_arc, n_arc));
+        if (mag <= 0.0) {
+            continue;
+        }
+        for (d = 0; d < 3; ++d) {
+            n_arc[d] /= mag;
+        }
+        prj_rad_fsa_rotated_dir(block, ic, jc, kc, arc_vec_ref, arc_vec);
+        if (block->ang_geom_fsa != 0) {
+            for (d = 0; d < 3; ++d) {
+                geom[d] = block->ang_geom_fsa[PRJ_FSA_ANG_GEOM_IDX(arc, d, ic, jc, kc)];
+            }
+        }
+        for (d = 0; d < 3; ++d) {
+            b[d] = a[d] * inv_c;
+        }
+        for (d = 0; d < 3; ++d) {
+            for (jj = 0; jj < 3; ++jj) {
+                b[d] += n_arc[jj] * dvdx[jj][d];
+            }
+        }
+
+        speed = b[0] * arc_vec[0] + b[1] * arc_vec[1] + b[2] * arc_vec[2] -
+            (geom[0] * arc_vec[0] + geom[1] * arc_vec[1] + geom[2] * arc_vec[2]);
+#else
         for (d = 0; d < 3; ++d) {
             b[d] = a[d] * inv_c;
         }
@@ -2651,9 +3044,8 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
             }
         }
 
-        speed = b[0] * rad->arc_vec[3 * arc] +
-            b[1] * rad->arc_vec[3 * arc + 1] +
-            b[2] * rad->arc_vec[3 * arc + 2];
+        speed = b[0] * arc_vec[0] + b[1] * arc_vec[1] + b[2] * arc_vec[2];
+#endif
         if (speed == 0.0) {
             continue;
         }

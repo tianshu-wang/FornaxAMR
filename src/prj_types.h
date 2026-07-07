@@ -134,6 +134,10 @@ struct prj_block {
     double *r_com;
     /* Cell-major: Ylm[cell * (LMAX * LMAX) + yidx]. */
     double *Ylm;
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+    double *rotation_matrix_fsa;
+    double *ang_geom_fsa;
+#endif
 #if PRJ_MHD
     int *face_fidelity[3];
     int *edge_fidelity[3];

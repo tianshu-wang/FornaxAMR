@@ -401,6 +401,9 @@ int main(int argc, char *argv[])
         prj_print_config(&sim, mpi.rank);
     }
     prj_rad_init(&sim.rad);
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+    prj_rad_fsa_refresh_mesh_geometry(&sim.rad, &sim.mesh, &mpi);
+#endif
  #if PRJ_USE_GRAVITY
     prj_gravity_init(&sim, &mpi);
  #endif
@@ -549,6 +552,11 @@ int main(int argc, char *argv[])
 #endif
             }
             if (block_changed) {
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+                PRJ_SUBTIMER_START("sub_amr_fsa_geometry");
+                prj_rad_fsa_refresh_mesh_geometry(&sim.rad, &sim.mesh, &mpi);
+                PRJ_SUBTIMER_STOP("sub_amr_fsa_geometry");
+#endif
                 PRJ_SUBTIMER_START("sub_amr_post_eos_active");
                 prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
                 PRJ_SUBTIMER_STOP("sub_amr_post_eos_active");

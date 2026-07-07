@@ -232,6 +232,10 @@ static void prj_block_init_empty(prj_block *b)
     }
     b->r_com = 0;
     b->Ylm = 0;
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+    b->rotation_matrix_fsa = 0;
+    b->ang_geom_fsa = 0;
+#endif
 #if PRJ_MHD
     for (n = 0; n < 3; ++n) {
         b->face_fidelity[n] = 0;
@@ -289,6 +293,9 @@ size_t prj_block_data_count(void)
 #endif
     total_count += 5U * (size_t)PRJ_BLOCK_NCELLS;
     total_count += (size_t)(LMAX*LMAX) * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+    total_count += (9U + 3U * (size_t)PRJ_NARC) * (size_t)PRJ_BLOCK_NCELLS;
+#endif
 #if PRJ_MHD
     total_count += 3U * (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NFACES +
         6U * (size_t)PRJ_BLOCK_NCELLS + 3U * (size_t)PRJ_BLOCK_NEDGES;
@@ -405,6 +412,12 @@ int prj_block_alloc_data(prj_block *b)
     base += (size_t)PRJ_BLOCK_NCELLS;
     b->Ylm = base;
     base += (size_t)(LMAX * LMAX) * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+    b->rotation_matrix_fsa = base;
+    base += 9U * (size_t)PRJ_BLOCK_NCELLS;
+    b->ang_geom_fsa = base;
+    base += 3U * (size_t)PRJ_NARC * (size_t)PRJ_BLOCK_NCELLS;
+#endif
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = face_fidelity[d];
@@ -443,6 +456,10 @@ int prj_block_alloc_data(prj_block *b)
     }
     prj_fill(b->r_com, (size_t)PRJ_BLOCK_NCELLS, 0.0);
     prj_fill(b->Ylm, (size_t)(LMAX * LMAX) * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+    prj_fill(b->rotation_matrix_fsa, 9U * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    prj_fill(b->ang_geom_fsa, 3U * (size_t)PRJ_NARC * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+#endif
     return 0;
 }
 
@@ -483,6 +500,10 @@ void prj_block_free_data(prj_block *b)
     }
     b->r_com = 0;
     b->Ylm = 0;
+#if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
+    b->rotation_matrix_fsa = 0;
+    b->ang_geom_fsa = 0;
+#endif
 #if PRJ_MHD
     for (int d = 0; d < 3; ++d) {
         b->face_fidelity[d] = 0;

@@ -690,10 +690,10 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
 #if PRJ_USE_RADIATION_FSA
         PRJ_SUBTIMER_START("sub_rad_inel");
-        prj_rad_inel_fsa(rad, eos, u, dt, T_cell);
+        prj_rad_inel_fsa(rad, block, i, j, k, eos, u, dt, T_cell);
         PRJ_SUBTIMER_STOP("sub_rad_inel");
         PRJ_SUBTIMER_START("sub_rad_energy_momentum");
-        prj_rad_energy_momentum_update_fsa(rad, eos, u, dt, lapse_cell);
+        prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u, dt, lapse_cell);
         PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
 #if DO_FFC
         PRJ_SUBTIMER_START("sub_rad_ffc");
@@ -762,8 +762,8 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         prj_rad_freq_flux_apply(rad, block, block->W, u1, i, j, k, lapse_cell, dt);
         prj_rad_ang_flux_apply(rad, block, block->W, u1, i, j, k, lapse_cell, dt);
 #if PRJ_USE_RADIATION_FSA
-        prj_rad_inel_fsa(rad, eos, u1, dt, T_cell);
-        prj_rad_energy_momentum_update_fsa(rad, eos, u1, dt, lapse_cell);
+        prj_rad_inel_fsa(rad, block, i, j, k, eos, u1, dt, T_cell);
+        prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u1, dt, lapse_cell);
 #if DO_FFC
         prj_rad_ffc_fsa(rad, u1, dt);
 #endif
@@ -896,10 +896,10 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
 #if PRJ_USE_RADIATION_FSA
         PRJ_SUBTIMER_START("sub_rad_inel");
-        prj_rad_inel_fsa(rad, eos, u, 0.5 * dt, T_cell);
+        prj_rad_inel_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, T_cell);
         PRJ_SUBTIMER_STOP("sub_rad_inel");
         PRJ_SUBTIMER_START("sub_rad_energy_momentum");
-        prj_rad_energy_momentum_update_fsa(rad, eos, u, 0.5 * dt, lapse_cell);
+        prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, lapse_cell);
         PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
 #if DO_FFC
         PRJ_SUBTIMER_START("sub_rad_ffc");
@@ -962,8 +962,8 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         prj_rad_freq_flux_apply(rad, block, W_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
         prj_rad_ang_flux_apply(rad, block, W_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
 #if PRJ_USE_RADIATION_FSA
-        prj_rad_inel_fsa(rad, eos, u, 0.5 * dt, T_cell);
-        prj_rad_energy_momentum_update_fsa(rad, eos, u, 0.5 * dt, lapse_cell);
+        prj_rad_inel_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, T_cell);
+        prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, lapse_cell);
 #if DO_FFC
         prj_rad_ffc_fsa(rad, u, 0.5 * dt);
 #endif
@@ -1326,7 +1326,7 @@ static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
     T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
 #if PRJ_USE_RADIATION_FSA
     PRJ_SUBTIMER_START("sub_rad_inel");
-    prj_rad_inel_fsa(rad, eos, u1, dt, T_cell);
+    prj_rad_inel_fsa(rad, block, i, j, k, eos, u1, dt, T_cell);
     PRJ_SUBTIMER_STOP("sub_rad_inel");
 #else
     PRJ_SUBTIMER_START("sub_rad_eleinel");
@@ -1515,10 +1515,15 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_rad *ra
                          * radiation species and energy groups, so iterate over
                          * angles only and take the fastest projected signal. */
                         for (a = 0; a < PRJ_NANGLE; ++a) {
+                            double n[3];
                             double denom_a =
-                                (fabs(w[PRJ_PRIM_V1]) + lapse_c * rad->n0[a][0]) / block->dx[0] +
-                                (fabs(w[PRJ_PRIM_V2]) + lapse_c * rad->n0[a][1]) / block->dx[1] +
-                                (fabs(w[PRJ_PRIM_V3]) + lapse_c * rad->n0[a][2]) / block->dx[2];
+                                0.0;
+
+                            prj_rad_fsa_rotated_angle_dir(rad, block, a, i, j, k, n);
+                            denom_a =
+                                (fabs(w[PRJ_PRIM_V1]) + lapse_c * n[0]) / block->dx[0] +
+                                (fabs(w[PRJ_PRIM_V2]) + lapse_c * n[1]) / block->dx[1] +
+                                (fabs(w[PRJ_PRIM_V3]) + lapse_c * n[2]) / block->dx[2];
 
                             if (a == 0 || denom_a > rad_denom) {
                                 rad_denom = denom_a;
@@ -2303,7 +2308,7 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
 #if PRJ_USE_RADIATION_FSA
                         PRJ_SUBTIMER_START("sub_rad_energy_momentum");
-                        prj_rad_energy_momentum_update_fsa(rad, eos, u1,
+                        prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u1,
                             dt_implicit, lapse_cell);
                         PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
 #if DO_FFC
