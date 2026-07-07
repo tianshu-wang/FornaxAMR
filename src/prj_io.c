@@ -16,6 +16,7 @@
 
 #define PRJ_IO_METADATA_SIZE 639
 #define PRJ_IO_DUMP_NAME_SIZE 32
+#define PRJ_IO_RESTART_FORMAT_VERSION 2
 
 #if PRJ_DUMP_SINGLE_PRECISION
 typedef float prj_io_dump_real;
@@ -1029,6 +1030,8 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     dims_bf[2] = (hsize_t)PRJ_BLOCK_NFACES;
 #endif
     file = prj_io_create_file(mpi, filename);
+    prj_io_write_attr_int(file, "restart_format_version",
+        PRJ_IO_RESTART_FORMAT_VERSION);
     prj_io_write_attr_double(file, "time", time);
     prj_io_write_attr_int(file, "step", step);
     prj_io_write_attr_int(file, "dump_count", dump_count);
@@ -1118,22 +1121,13 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
             const prj_block *block = &mesh->blocks[run_start + ridx];
 
             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                double wscale = 1.0;
-#if PRJ_NRAD > 0
-                /* Radiation vars (v >= PRJ_NHYDRO) live in RAD_SCALE*erg units
-                   internally; write them in physical erg so restart files stay
-                   bit-identical to the pre-scaling format. */
-                if (v >= PRJ_NHYDRO) {
-                    wscale = RAD_SCALE;
-                }
-#endif
                 for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                     for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                         for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            buffer[offset] = block->W[WIDX(v, i, j, k)] * wscale;
+                            buffer[offset] = block->W[WIDX(v, i, j, k)];
                         }
                     }
                 }
@@ -1226,8 +1220,17 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         PRJ_BC_OUTFLOW, PRJ_BC_OUTFLOW,
         PRJ_BC_OUTFLOW, PRJ_BC_OUTFLOW
     };
+    int restart_format_version;
 
     file = prj_io_open_file_readonly(mpi, filename);
+    if (H5Aexists(file, "restart_format_version") <= 0) {
+        prj_io_fail("prj_io_read_restart: missing restart_format_version");
+    }
+    prj_io_read_attr_int(file, "restart_format_version",
+        &restart_format_version);
+    if (restart_format_version != PRJ_IO_RESTART_FORMAT_VERSION) {
+        prj_io_fail("prj_io_read_restart: incompatible restart_format_version");
+    }
     prj_io_read_attr_double(file, "time", time);
     prj_io_read_attr_int(file, "step", step);
     if (dump_count != 0) {
@@ -1379,21 +1382,13 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
             prj_block *block = &mesh->blocks[run_start + ridx];
 
             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                double wscale = 1.0;
-#if PRJ_NRAD > 0
-                /* On-disk radiation vars are in physical erg; convert back to
-                   the internal RAD_SCALE*erg units on read. */
-                if (v >= PRJ_NHYDRO) {
-                    wscale = 1.0 / RAD_SCALE;
-                }
-#endif
                 for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                     for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                         for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            block->W[WIDX(v, i, j, k)] = buffer[offset] * wscale;
+                            block->W[WIDX(v, i, j, k)] = buffer[offset];
                         }
                     }
                 }
@@ -1481,10 +1476,10 @@ static int prj_io_dump_write_eos_block(const prj_block *block)
     return block != 0 && block->active == 1 && block->eosvar != 0;
 }
 
-/* The dump now mirrors the restart on-disk layout: a small fixed number of fat
-   datasets written as contiguous per-rank runs, instead of ~18 thin per-variable
-   datasets. This collapses the collective HDF5 metadata work (dataset creates +
-   attributes), which dominated dump time at high MPI-rank/block counts.
+/* The dump uses a small fixed number of fat datasets written as contiguous
+   per-rank runs, instead of ~18 thin per-variable datasets. This collapses the
+   collective HDF5 metadata work (dataset creates + attributes), which dominated
+   dump time at high MPI-rank/block counts.
 
    Datasets, all indexed by global block id (dim 0 = mesh->nblocks):
      MetaData : double[nblocks][PRJ_IO_METADATA_SIZE]   (geometry/AMR tree, root)
@@ -1492,10 +1487,11 @@ static int prj_io_dump_write_eos_block(const prj_block *block)
      Eos      : real[nblocks][PRJ_NVAR_EOSVAR][BS^3]      (pressure,temp,gamma)
      Bf       : double[nblocks][3][NFACES]                (MHD face fields)
    Cell data uses the dump real type (single precision by default). Radiation
-   prims are written in physical erg (* RAD_SCALE) to match the restart format;
-   B is written unscaled (no sqrt(4*pi)) like the restart W. Only active blocks
-   that this rank owns (W/eosvar/Bf allocated) are filled; inactive rows are left
-   at the HDF5 fill value, exactly as prj_io_write_restart does. */
+   prims are written in physical erg (* RAD_SCALE) for analysis output; restart
+   files keep internal double values exactly for bit-identical continuation. B is
+   written unscaled (no sqrt(4*pi)). Only active blocks that this rank owns
+   (W/eosvar/Bf allocated) are filled; inactive rows are left at the HDF5 fill
+   value, exactly as prj_io_write_restart does. */
 void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi *mpi,
     int dump_index, int step, double time)
 {
