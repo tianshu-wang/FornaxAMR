@@ -146,6 +146,9 @@ struct prj_block {
     double *Bv1[3];
     double *Bv2[3];
     double *emf[3];
+    /* Per-cell flag marking cells at the tabulated-EOS density jump; every EMF
+     * edge incident to a flagged cell gets the anomalous CT resistivity. */
+    int *eta_mask;
 #endif
     int *ridx;
     double *fr;

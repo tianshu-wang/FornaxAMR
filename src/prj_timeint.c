@@ -132,62 +132,95 @@ static double prj_timeint_mhd_face_vnorm(const prj_block *block, int face_dir,
     return value;
 }
 
-/* Locally boost the CT resistivity across an EMF edge whose four adjacent cells
- * straddle a sudden density jump produced by the tabulated nuclear EOS.  Such
- * near-discontinuous jumps (dense material, min rho > 1e13) drive an unstable
- * mode in the ideal EMF stencil that shows up as a large temperature spread
- * between the neighbouring cells; adding a large resistivity there diffuses the
- * offending mode away and removes the instability. */
-static double prj_timeint_mhd_edge_eta_boost(const prj_block *block, const double *W,
+/* Anomalous CT resistivity applied at the sudden density jump produced by the
+ * tabulated nuclear EOS.  Such near-discontinuous jumps (dense material, sharp
+ * |dln rho|) drive a grid-scale instability in the ideal EMF stencil that
+ * amplifies the magnetic field into axis-aligned hot spots; a large resistivity
+ * there diffuses the offending mode away.
+ *
+ * The cells at the jump are flagged once per stage in prj_timeint_mhd_fill_eta_mask
+ * (below), and every EMF edge incident to a flagged cell receives PRJ_MHD_ETA_BOOST.
+ * Flagging on the density jump (rather than the temperature spread it induces)
+ * keeps the resistivity co-located with the amplification and confined to the
+ * ~few-km transition shell; applying it on all incident edges (rather than only
+ * those that straddle the jump) makes it orientation-independent. */
+#define PRJ_MHD_ETA_BOOST 1.0e12
+#define PRJ_MHD_ETA_RHO_FLOOR 1.0e13
+#define PRJ_MHD_ETA_DLNRHO_THR 0.20
+
+/* Flag every cell over the active region plus one ghost layer -- the range the
+ * EMF edge loop reads -- that sits at the EOS density jump: rho > RHO_FLOOR and
+ * the largest |dln rho| to its six face neighbours exceeds DLNRHO_THR.  Computed
+ * from the current stage's primitive density, whose ghost zones are a faithful
+ * copy of the neighbour blocks, so adjacent blocks agree on shared edges with no
+ * extra exchange.  |dln rho| needs rho at +-1, so this range is exactly what the
+ * two ghost layers (PRJ_NGHOST=2) can support -- there is no room to dilate. */
+static void prj_timeint_mhd_fill_eta_mask(prj_block *block, const double *W)
+{
+    static const int off[6][3] = {
+        {-1, 0, 0}, {1, 0, 0},
+        {0, -1, 0}, {0, 1, 0},
+        {0, 0, -1}, {0, 0, 1}
+    };
+    int i;
+    int j;
+    int k;
+
+    if (block == 0 || block->eta_mask == 0 || W == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_fill_eta_mask: invalid input");
+    }
+    for (i = -1; i <= PRJ_BLOCK_SIZE; ++i) {
+        for (j = -1; j <= PRJ_BLOCK_SIZE; ++j) {
+            for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
+                double rho = W[WIDX(PRJ_PRIM_RHO, i, j, k)];
+                int flagged = 0;
+
+                if (isfinite(rho) && rho > PRJ_MHD_ETA_RHO_FLOOR) {
+                    double lnrho = log(rho);
+                    double dmax = 0.0;
+                    int a;
+
+                    for (a = 0; a < 6; ++a) {
+                        double rn = W[WIDX(PRJ_PRIM_RHO,
+                            i + off[a][0], j + off[a][1], k + off[a][2])];
+                        double d;
+
+                        if (!isfinite(rn) || rn <= 0.0) {
+                            continue;
+                        }
+                        d = fabs(log(rn) - lnrho);
+                        if (d > dmax) {
+                            dmax = d;
+                        }
+                    }
+                    flagged = (dmax > PRJ_MHD_ETA_DLNRHO_THR);
+                }
+                block->eta_mask[IDX(i, j, k)] = flagged;
+            }
+        }
+    }
+}
+
+/* True if any of the four cells incident to an EMF edge is flagged. */
+static int prj_timeint_mhd_edge_eta_flagged(const prj_block *block,
     const int cell0[3], const int cell1[3], const int cell2[3], const int cell3[3])
 {
     const int *cells[4];
-    double rho_min = 0.0;
-    double t_min = 0.0;
-    double t_max = 0.0;
-    double t_sum = 0.0;
-    double t_avg;
     int n;
 
-    if (block == 0 || block->eosvar == 0 || W == 0) {
-        return 0.0;
+    if (block == 0 || block->eta_mask == 0) {
+        return 0;
     }
     cells[0] = cell0;
     cells[1] = cell1;
     cells[2] = cell2;
     cells[3] = cell3;
     for (n = 0; n < 4; ++n) {
-        int i = cells[n][0];
-        int j = cells[n][1];
-        int k = cells[n][2];
-        double rho = W[WIDX(PRJ_PRIM_RHO, i, j, k)];
-        double t = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
-
-        if (!isfinite(rho) || !isfinite(t)) {
-            return 0.0;
+        if (block->eta_mask[IDX(cells[n][0], cells[n][1], cells[n][2])] != 0) {
+            return 1;
         }
-        if (n == 0 || rho < rho_min) {
-            rho_min = rho;
-        }
-        if (n == 0 || t < t_min) {
-            t_min = t;
-        }
-        if (n == 0 || t > t_max) {
-            t_max = t;
-        }
-        t_sum += t;
     }
-    if (rho_min <= 1.0e13) {
-        return 0.0;
-    }
-    t_avg = 0.25 * t_sum;
-    if (t_avg <= 0.0) {
-        return 0.0;
-    }
-    if ((t_max - t_min) / t_avg > 0.2) {
-        return 1.0e12;
-    }
-    return 0.0;
+    return 0;
 }
 
 static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
@@ -209,6 +242,7 @@ static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
             prj_timeint_mhd_fail("prj_timeint_mhd_update_emf: missing Bf storage");
         }
     }
+    prj_timeint_mhd_fill_eta_mask(block, W);
     for (dir = 0; dir < 3; ++dir) {
         int up = (dir + 1) % 3;
         int right = (dir + 2) % 3;
@@ -276,8 +310,8 @@ static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
                         face2[0], face2[1], face2[2]);
                     v_norm[3] = prj_timeint_mhd_face_vnorm(block, up,
                         face3[0], face3[1], face3[2]);
-                    double edge_eta = eta + prj_timeint_mhd_edge_eta_boost(block, W,
-                        cell0, cell1, cell2, cell3);
+                    double edge_eta = eta + (prj_timeint_mhd_edge_eta_flagged(block,
+                        cell0, cell1, cell2, cell3) ? PRJ_MHD_ETA_BOOST : 0.0);
 
                     prj_mhd_emf_upwind(block, dir, e[0], e[1], e[2],
                         emf_face, emf_cell, v_norm, bf, edge_eta);

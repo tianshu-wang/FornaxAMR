@@ -246,6 +246,7 @@ static void prj_block_init_empty(prj_block *b)
         b->Bv2[n] = 0;
         b->emf[n] = 0;
     }
+    b->eta_mask = 0;
 #endif
     b->ridx = 0;
     b->fr = 0;
@@ -321,6 +322,7 @@ int prj_block_alloc_data(prj_block *b)
 #if PRJ_MHD
     int *face_fidelity[3] = {0, 0, 0};
     int *edge_fidelity[3] = {0, 0, 0};
+    int *eta_mask = 0;
 #endif
     int *ridx;
     double *fr;
@@ -350,6 +352,7 @@ int prj_block_alloc_data(prj_block *b)
         face_fidelity[d] = (int *)prj_calloc((size_t)PRJ_BLOCK_NFACES, sizeof(*face_fidelity[d]));
         edge_fidelity[d] = (int *)prj_calloc((size_t)PRJ_BLOCK_NEDGES, sizeof(*edge_fidelity[d]));
     }
+    eta_mask = (int *)prj_calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eta_mask));
 #endif
     ridx = (int *)prj_malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
     fr = (double *)prj_malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
@@ -357,11 +360,13 @@ int prj_block_alloc_data(prj_block *b)
 #if PRJ_MHD
         face_fidelity[0] == 0 || face_fidelity[1] == 0 || face_fidelity[2] == 0 ||
         edge_fidelity[0] == 0 || edge_fidelity[1] == 0 || edge_fidelity[2] == 0 ||
+        eta_mask == 0 ||
 #endif
         ridx == 0 || fr == 0) {
         free(fr);
         free(ridx);
 #if PRJ_MHD
+        free(eta_mask);
         for (int d = 0; d < 3; ++d) {
             free(edge_fidelity[d]);
             free(face_fidelity[d]);
@@ -441,6 +446,7 @@ int prj_block_alloc_data(prj_block *b)
         b->emf[d] = base;
         base += (size_t)PRJ_BLOCK_NEDGES;
     }
+    b->eta_mask = eta_mask;
 #endif
 #if PRJ_NRAD > 0
     b->kappa_cell = base;
@@ -472,6 +478,7 @@ void prj_block_free_data(prj_block *b)
     free(b->W);
     free(b->cell_derived_done);
 #if PRJ_MHD
+    free(b->eta_mask);
     for (int d = 0; d < 3; ++d) {
         free(b->face_fidelity[d]);
         free(b->edge_fidelity[d]);
@@ -514,6 +521,7 @@ void prj_block_free_data(prj_block *b)
         b->Bv2[d] = 0;
         b->emf[d] = 0;
     }
+    b->eta_mask = 0;
 #endif
     b->ridx = 0;
     b->fr = 0;
