@@ -1490,11 +1490,12 @@ static int prj_io_dump_write_eos_block(const prj_block *block)
      Eos      : real[nblocks][PRJ_NVAR_EOSVAR][BS^3]      (pressure,temp,gamma)
      Bf       : double[nblocks][3][NFACES]                (MHD face fields)
    Cell data uses the dump real type (single precision by default). Radiation
-   prims are written in physical erg (* RAD_SCALE) for analysis output; restart
-   files keep internal double values exactly for bit-identical continuation. B is
-   written unscaled (no sqrt(4*pi)). Only active blocks that this rank owns
-   (W/eosvar/Bf allocated) are filled; inactive rows are left at the HDF5 fill
-   value, exactly as prj_io_write_restart does. */
+   primitives are written in the same internal RAD_SCALE-scaled code units as
+   W; the file-level rad_scale attribute records the multiplier for consumers
+   that want physical radiation units. B is written unscaled (no sqrt(4*pi)).
+   Only active blocks that this rank owns (W/eosvar/Bf allocated) are filled;
+   inactive rows are left at the HDF5 fill value, exactly as
+   prj_io_write_restart does. */
 void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi *mpi,
     int dump_index, int step, double time)
 {
@@ -1540,10 +1541,15 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
 #endif
 
     file = prj_io_create_file(mpi, filename);
-    prj_io_write_attr_int(file, "dump_format_version", 3);
+    prj_io_write_attr_int(file, "dump_format_version", 4);
     prj_io_write_attr_int(file, "dump_index", dump_index);
     prj_io_write_attr_int(file, "step", step);
     prj_io_write_attr_double(file, "time", time);
+#if PRJ_NRAD > 0
+    prj_io_write_attr_double(file, "rad_scale", RAD_SCALE);
+#else
+    prj_io_write_attr_double(file, "rad_scale", 1.0);
+#endif
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
     prj_io_write_attr_int(file, "nvar_eos", PRJ_NVAR_EOSVAR);
@@ -1629,19 +1635,13 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
             const prj_block *block = &mesh->blocks[run_start + ridx];
 
             for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                double wscale = 1.0;
-#if PRJ_NRAD > 0
-                if (v >= PRJ_NHYDRO) {
-                    wscale = RAD_SCALE;
-                }
-#endif
                 for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                     for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                         for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                             size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE + (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
                             size_t offset = ((size_t)ridx * (size_t)PRJ_NVAR_PRIM + (size_t)v) * ncells + cell;
 
-                            buffer[offset] = (prj_io_dump_real)(block->W[WIDX(v, i, j, k)] * wscale);
+                            buffer[offset] = (prj_io_dump_real)block->W[WIDX(v, i, j, k)];
                         }
                     }
                 }
