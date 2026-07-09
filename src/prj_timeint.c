@@ -132,36 +132,22 @@ static double prj_timeint_mhd_face_vnorm(const prj_block *block, int face_dir,
     return value;
 }
 
-/* Anomalous CT resistivity applied at the sudden density jump produced by the
- * tabulated nuclear EOS.  Such near-discontinuous jumps (dense material, sharp
- * |dln rho|) drive a grid-scale instability in the ideal EMF stencil that
- * amplifies the magnetic field into axis-aligned hot spots; a large resistivity
- * there diffuses the offending mode away.
+/* Anomalous CT resistivity applied in dense, proton-rich EOS-transition material.
+ * The per-cell artificial eta grows smoothly with both rho/RHO_FLOOR and
+ * Ye/YE_THR, and the EMF edge uses the maximum eta from its incident cells.
  *
- * The cells at the jump are flagged once per stage in prj_timeint_mhd_fill_eta_mask
- * (below), and every EMF edge incident to a flagged cell receives PRJ_MHD_ETA_BOOST.
- * Flagging on the density jump (rather than the temperature spread it induces)
- * keeps the resistivity co-located with the amplification and confined to the
- * ~few-km transition shell; applying it on all incident edges (rather than only
- * those that straddle the jump) makes it orientation-independent. */
+ * Applying the value on all incident edges (rather than only those that straddle
+ * a feature) makes the damping orientation-independent. */
 #define PRJ_MHD_ETA_BOOST 1.0e12
 #define PRJ_MHD_ETA_RHO_FLOOR 1.0e13
-#define PRJ_MHD_ETA_DLNRHO_THR 0.20
+#define PRJ_MHD_ETA_YE_THR 0.25
 
-/* Flag every cell over the active region plus one ghost layer -- the range the
- * EMF edge loop reads -- that sits at the EOS density jump: rho > RHO_FLOOR and
- * the largest |dln rho| to its six face neighbours exceeds DLNRHO_THR.  Computed
- * from the current stage's primitive density, whose ghost zones are a faithful
- * copy of the neighbour blocks, so adjacent blocks agree on shared edges with no
- * extra exchange.  |dln rho| needs rho at +-1, so this range is exactly what the
- * two ghost layers (PRJ_NGHOST=2) can support -- there is no room to dilate. */
+/* Fill every cell over the active region plus one ghost layer -- the range the
+ * EMF edge loop reads.  The current stage primitives already include ghost zones
+ * copied from neighbour blocks, so adjacent blocks agree on shared edges with no
+ * extra exchange. */
 static void prj_timeint_mhd_fill_eta_mask(prj_block *block, const double *W)
 {
-    static const int off[6][3] = {
-        {-1, 0, 0}, {1, 0, 0},
-        {0, -1, 0}, {0, 1, 0},
-        {0, 0, -1}, {0, 0, 1}
-    };
     int i;
     int j;
     int k;
@@ -173,54 +159,53 @@ static void prj_timeint_mhd_fill_eta_mask(prj_block *block, const double *W)
         for (j = -1; j <= PRJ_BLOCK_SIZE; ++j) {
             for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
                 double rho = W[WIDX(PRJ_PRIM_RHO, i, j, k)];
-                int flagged = 0;
+                double ye = W[WIDX(PRJ_PRIM_YE, i, j, k)];
+                double rho_factor = 0.0;
+                double ye_factor = 0.0;
+                double eta_art = 0.0;
 
-                if (isfinite(rho) && rho > PRJ_MHD_ETA_RHO_FLOOR) {
-                    double lnrho = log(rho);
-                    double dmax = 0.0;
-                    int a;
-
-                    for (a = 0; a < 6; ++a) {
-                        double rn = W[WIDX(PRJ_PRIM_RHO,
-                            i + off[a][0], j + off[a][1], k + off[a][2])];
-                        double d;
-
-                        if (!isfinite(rn) || rn <= 0.0) {
-                            continue;
-                        }
-                        d = fabs(log(rn) - lnrho);
-                        if (d > dmax) {
-                            dmax = d;
-                        }
-                    }
-                    flagged = (dmax > PRJ_MHD_ETA_DLNRHO_THR);
+                if (isfinite(rho) && rho > 0.0) {
+                    rho_factor = PRJ_MAX(0.0, log(rho / PRJ_MHD_ETA_RHO_FLOOR));
                 }
-                block->eta_mask[IDX(i, j, k)] = flagged;
+                if (isfinite(ye) && ye > 0.0) {
+                    ye_factor = PRJ_MAX(0.0, log(ye / PRJ_MHD_ETA_YE_THR));
+                }
+                eta_art = PRJ_MHD_ETA_BOOST * rho_factor * ye_factor;
+                if (!isfinite(eta_art)) {
+                    prj_timeint_mhd_fail("prj_timeint_mhd_fill_eta_mask: non-finite artificial eta");
+                }
+                block->eta_mask[IDX(i, j, k)] = eta_art;
             }
         }
     }
 }
 
-/* True if any of the four cells incident to an EMF edge is flagged. */
-static int prj_timeint_mhd_edge_eta_flagged(const prj_block *block,
+/* Maximum artificial eta from the four cells incident to an EMF edge. */
+static double prj_timeint_mhd_edge_eta_mask(const prj_block *block,
     const int cell0[3], const int cell1[3], const int cell2[3], const int cell3[3])
 {
     const int *cells[4];
     int n;
+    double eta = 0.0;
 
     if (block == 0 || block->eta_mask == 0) {
-        return 0;
+        return 0.0;
     }
     cells[0] = cell0;
     cells[1] = cell1;
     cells[2] = cell2;
     cells[3] = cell3;
     for (n = 0; n < 4; ++n) {
-        if (block->eta_mask[IDX(cells[n][0], cells[n][1], cells[n][2])] != 0) {
-            return 1;
+        double cell_eta = block->eta_mask[IDX(cells[n][0], cells[n][1], cells[n][2])];
+
+        if (!isfinite(cell_eta) || cell_eta < 0.0) {
+            prj_timeint_mhd_fail("prj_timeint_mhd_edge_eta_mask: invalid artificial eta");
+        }
+        if (cell_eta > eta) {
+            eta = cell_eta;
         }
     }
-    return 0;
+    return eta;
 }
 
 static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
@@ -310,8 +295,8 @@ static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
                         face2[0], face2[1], face2[2]);
                     v_norm[3] = prj_timeint_mhd_face_vnorm(block, up,
                         face3[0], face3[1], face3[2]);
-                    double edge_eta = eta + (prj_timeint_mhd_edge_eta_flagged(block,
-                        cell0, cell1, cell2, cell3) ? PRJ_MHD_ETA_BOOST : 0.0);
+                    double edge_eta = eta + prj_timeint_mhd_edge_eta_mask(block,
+                        cell0, cell1, cell2, cell3);
 
                     prj_mhd_emf_upwind(block, dir, e[0], e[1], e[2],
                         emf_face, emf_cell, v_norm, bf, edge_eta);

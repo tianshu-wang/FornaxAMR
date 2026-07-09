@@ -322,7 +322,7 @@ int prj_block_alloc_data(prj_block *b)
 #if PRJ_MHD
     int *face_fidelity[3] = {0, 0, 0};
     int *edge_fidelity[3] = {0, 0, 0};
-    int *eta_mask = 0;
+    double *eta_mask = 0;
 #endif
     int *ridx;
     double *fr;
@@ -352,7 +352,7 @@ int prj_block_alloc_data(prj_block *b)
         face_fidelity[d] = (int *)prj_calloc((size_t)PRJ_BLOCK_NFACES, sizeof(*face_fidelity[d]));
         edge_fidelity[d] = (int *)prj_calloc((size_t)PRJ_BLOCK_NEDGES, sizeof(*edge_fidelity[d]));
     }
-    eta_mask = (int *)prj_calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eta_mask));
+    eta_mask = (double *)prj_calloc((size_t)PRJ_BLOCK_NCELLS, sizeof(*eta_mask));
 #endif
     ridx = (int *)prj_malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*ridx));
     fr = (double *)prj_malloc((size_t)PRJ_BLOCK_NCELLS * sizeof(*fr));
