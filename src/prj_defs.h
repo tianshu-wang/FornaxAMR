@@ -59,9 +59,16 @@ typedef double prj_table_real;
 #define PRJ_MHD_DEBUG 0
 #endif
 
-/* PRJ_LHLLD_RIEMANN=1 selects the default Minoshima & Miyoshi LHLLD
+/* PRJ_HLL_RIEMANN=1 selects the two-wave HLL MHD solver.  Otherwise,
+ * PRJ_LHLLD_RIEMANN=1 selects the default Minoshima & Miyoshi LHLLD
  * MHD solver.  Set PRJ_LHLLD_RIEMANN=0 for the legacy current-HLLD
  * comparison path. */
+#ifndef PRJ_HLL_RIEMANN
+#define PRJ_HLL_RIEMANN 0
+#endif
+#ifndef PRJ_HLL_RIEMANN_DENSITY_THRESHOLD
+#define PRJ_HLL_RIEMANN_DENSITY_THRESHOLD 1.0e13
+#endif
 #ifndef PRJ_LHLLD_RIEMANN
 #define PRJ_LHLLD_RIEMANN 1
 #endif
