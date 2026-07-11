@@ -23,6 +23,7 @@
 #include "prj_timer.h"
 #include "prj_timeint.h"
 #include "prj_utils.h"
+#include "prj_z4c.h"
 
 void prj_problem_initial_condition(double x1, double x2, double x3, double *data);
 void prj_problem_general(prj_sim *sim, prj_mpi *mpi);
@@ -31,5 +32,7 @@ void prj_problem_ccsn(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_sedov(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_sedov_offcenter(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_shock1d(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_z4c_one_puncture(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_z4c_two_puncture(prj_sim *sim, prj_mpi *mpi);
 
 #endif

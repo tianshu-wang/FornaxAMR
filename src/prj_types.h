@@ -23,6 +23,7 @@ typedef struct prj_morton_lookup_entry prj_morton_lookup_entry;
 typedef struct prj_bc prj_bc;
 typedef struct prj_grav prj_grav;
 typedef struct prj_rad prj_rad;
+typedef struct prj_z4c_params prj_z4c_params;
 typedef struct prj_mpi_buffer prj_mpi_buffer;
 typedef struct prj_mpi prj_mpi;
 typedef void (*prj_problem_init_fn)(prj_sim *sim, prj_mpi *mpi);
@@ -108,6 +109,39 @@ struct prj_bc {
     int bc_x3_outer;
 };
 
+struct prj_z4c_params {
+    int use_z4c;
+    int floor_chi;
+    int slow_start_lapse;
+    int ssl_damping_index;
+    int user_Sbc;
+    double chi_psi_power;
+    double chi_div_floor;
+    double chi_min_floor;
+    double diss;
+    double damp_kappa1_inv_cm;
+    double damp_kappa2;
+    double lapse_harmonicf;
+    double lapse_harmonic;
+    double lapse_oplog;
+    double lapse_advect;
+    double ssl_damping_amp_inv_cm;
+    double ssl_damping_time_cm;
+    double shift_Gamma;
+    double shift_advect;
+    double shift_alpha2Gamma;
+    double shift_H;
+    double shift_eta_inv_cm;
+    double puncture_mass_cm;
+    double puncture_center_cm[3];
+    double puncture_floor_radius_cm;
+    double puncture_mass_plus_cm;
+    double puncture_mass_minus_cm;
+    double puncture_half_separation_cm;
+    double puncture_momentum_plus_cm[3];
+    double puncture_momentum_minus_cm[3];
+};
+
 struct prj_block {
     int id;
     int rank;
@@ -119,6 +153,10 @@ struct prj_block {
     double xmax[3];
     double dx[3];
     double *W;
+#if PRJ_DYNAMIC_GR
+    double *z4c;
+    double *z4c_rhs;
+#endif
     double *eosvar;
     int *cell_derived_done;
     double *U;
@@ -183,6 +221,60 @@ static inline const double *prj_block_deriv_stage_const(const double *deriv, int
         &deriv[(size_t)stage * (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS] : 0;
 }
 
+#if PRJ_DYNAMIC_GR
+static inline double *prj_block_z4c_stage(prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->z4c != 0 ?
+        PRJ_BLOCK_STAGE_Z4C(block->z4c, stage) : 0;
+}
+
+static inline const double *prj_block_z4c_stage_const(const prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->z4c != 0 ?
+        PRJ_BLOCK_STAGE_Z4C(block->z4c, stage) : 0;
+}
+
+static inline double *prj_block_z4c_rhs_stage(prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->z4c_rhs != 0 ?
+        PRJ_BLOCK_STAGE_Z4C(block->z4c_rhs, stage) : 0;
+}
+
+static inline const double *prj_block_z4c_rhs_stage_const(const prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->z4c_rhs != 0 ?
+        PRJ_BLOCK_STAGE_Z4C(block->z4c_rhs, stage) : 0;
+}
+#else
+static inline double *prj_block_z4c_stage(prj_block *block, int stage)
+{
+    (void)block;
+    (void)stage;
+    return 0;
+}
+
+static inline const double *prj_block_z4c_stage_const(const prj_block *block, int stage)
+{
+    (void)block;
+    (void)stage;
+    return 0;
+}
+
+static inline double *prj_block_z4c_rhs_stage(prj_block *block, int stage)
+{
+    (void)block;
+    (void)stage;
+    return 0;
+}
+
+static inline const double *prj_block_z4c_rhs_stage_const(const prj_block *block, int stage)
+{
+    (void)block;
+    (void)stage;
+    return 0;
+}
+#endif
+
 #if PRJ_MHD
 static inline double *prj_block_bf_stage(prj_block *block, int dir, int stage)
 {
@@ -219,6 +311,7 @@ struct prj_mesh {
     int max_blocks;
     int max_level;
     double min_dx;
+    double time_seconds;
     double min_allowable_cell_size;
     int max_active_level;
     int root_nx[3];
@@ -237,10 +330,14 @@ struct prj_mesh {
     int amr_criterion_set[PRJ_AMR_N];
     int use_amr_angular_resolution_limit;
     int use_BJ;
+    int use_dynamic_gr;
+    int z4c_initialized;
+    int z4c_extrap_order;
     double amr_init_scale_factor;
     double amr_reach_highest_level_at_density;
     double E_floor;
     double mhd_eta;
+    prj_z4c_params z4c_params;
     prj_amr_init_refine_fn amr_init_refine_fn;
     void *amr_init_refine_userdata;
 };

@@ -1239,6 +1239,16 @@ static void prj_timeint_imex_assemble_stage(prj_mesh *mesh, prj_eos *eos,
     int dst_stage, int coeff_row, int final_stage, int nterms, double dt)
 {
     int bidx;
+    double z4c_coeff[PRJ_BLOCK_NSTAGES];
+    int s;
+
+    for (s = 0; s < PRJ_BLOCK_NSTAGES; ++s) {
+        z4c_coeff[s] = 0.0;
+    }
+    for (s = 0; s < nterms; ++s) {
+        z4c_coeff[s] = final_stage != 0 ? tableau->b_ex[s] :
+            prj_timeint_imex_a_ex(tableau, coeff_row, s);
+    }
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -1283,6 +1293,8 @@ static void prj_timeint_imex_assemble_stage(prj_mesh *mesh, prj_eos *eos,
             }
         }
     }
+    prj_z4c_imex_assemble_stage(mesh, mpi, dst_stage, z4c_coeff, nterms,
+        PRJ_CLIGHT * dt);
 }
 
 #if PRJ_NRAD > 0
@@ -1362,6 +1374,8 @@ static void prj_timeint_imex_fill_updated_stage(prj_mesh *mesh, const prj_bc *bc
     PRJ_TIMER_BARRIER_START(timer, mpi, "imex_eos_fill_mesh");
     prj_eos_fill_mesh(mesh, eos, mpi, stage + 1, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_eos_fill_mesh");
+
+    prj_z4c_finalize_stage(mesh, mpi, bc, stage);
 
     if (fill_opacity_halo) {
         prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, stage + 1);
@@ -1547,6 +1561,13 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_rad *ra
     }
 
     dt_global = prj_mpi_min_dt(mpi, dt_min);
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double dt_z4c = prj_z4c_calc_dt_seconds(mesh, mpi, cfl);
+
+        if (dt_z4c < dt_global) {
+            dt_global = dt_z4c;
+        }
+    }
 #if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
     dt_global *= (double)(PRJ_TIMEINT_ESSPRK_N - 1);
 #elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
@@ -1646,6 +1667,7 @@ static void prj_timeint_eSSPRK_save_state(prj_mesh *mesh, const prj_mpi *mpi, in
         }
 #endif
     }
+    prj_z4c_save_stage(mesh, mpi, saved_state, 0);
 }
 
 #if PRJ_MHD
@@ -1732,6 +1754,8 @@ static void prj_timeint_eSSPRK_blend_with_saved(prj_mesh *mesh, const prj_bc *bc
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, cell_timer);
 
+    prj_z4c_blend_with_saved(mesh, mpi, bc, saved_state, saved_weight);
+
     PRJ_TIMER_BARRIER_START(timer, mpi, active_timer);
     prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, active_timer);
@@ -1817,6 +1841,15 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_src_cell_update");
+
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+        double dtau_cm = PRJ_CLIGHT * dt;
+
+        prj_z4c_compute_rhs(mesh, mpi, 0, 0, tau_cm);
+        prj_z4c_update_linear(mesh, mpi, 0, 0, 1.0, 0, 0.0, 0, dtau_cm);
+        prj_z4c_finalize_stage(mesh, mpi, bc, 0);
+    }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_eos_fill_active");
     prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
@@ -1995,6 +2028,15 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_src_cell_update");
 
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+        double dtau_cm = PRJ_CLIGHT * dt;
+
+        prj_z4c_compute_rhs(mesh, mpi, 0, 0, tau_cm);
+        prj_z4c_update_linear(mesh, mpi, 1, 0, 1.0, 0, 0.0, 0, dtau_cm);
+        prj_z4c_finalize_stage(mesh, mpi, bc, 1);
+    }
+
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_active");
     prj_eos_fill_active_cells(mesh, eos, mpi, 2, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_eos_fill_active");
@@ -2098,6 +2140,15 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_src_cell_update");
+
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+        double dtau_cm = PRJ_CLIGHT * dt;
+
+        prj_z4c_compute_rhs(mesh, mpi, 1, 0, tau_cm);
+        prj_z4c_update_linear(mesh, mpi, 0, 0, 0.5, 1, 0.5, 0, 0.5 * dtau_cm);
+        prj_z4c_finalize_stage(mesh, mpi, bc, 0);
+    }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_active");
     prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
@@ -2242,6 +2293,12 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
         PRJ_SUBTIMER_STOP("sub_cell_ex_deriv");
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_step_ex_src_deriv");
+
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+
+        prj_z4c_compute_rhs(mesh, mpi, stage, stage, tau_cm);
+    }
 #else
     (void)mesh;
     (void)coord;

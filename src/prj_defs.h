@@ -59,6 +59,10 @@ typedef double prj_table_real;
 #define PRJ_MHD_DEBUG 0
 #endif
 
+#ifndef PRJ_DYNAMIC_GR
+#define PRJ_DYNAMIC_GR 0
+#endif
+
 /* PRJ_HLL_RIEMANN=1 selects the two-wave HLL MHD solver.  Otherwise,
  * PRJ_LHLLD_RIEMANN=1 selects the default Minoshima & Miyoshi LHLLD
  * MHD solver.  Set PRJ_LHLLD_RIEMANN=0 for the legacy current-HLLD
@@ -338,6 +342,7 @@ typedef double prj_table_real;
 #define VIDX(v, i, j, k) BIDX(PRJ_NVAR_CONS, v, i, j, k)
 #define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
 #define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
+#define Z4CIDX(v, i, j, k) BIDX(PRJ_NZ4C, v, i, j, k)
 #if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
 #define PRJ_FSA_ROT_IDX(row, col, i, j, k) BIDX(9, 3 * (row) + (col), i, j, k)
 #define PRJ_FSA_ANG_GEOM_IDX(arc, d, i, j, k) \
@@ -350,6 +355,8 @@ typedef double prj_table_real;
     (&(W)[(size_t)(stage) * (size_t)PRJ_BLOCK_NCELLS])
 #define PRJ_BLOCK_STAGE_BF(BF, stage) \
     (&(BF)[(size_t)(stage) * (size_t)PRJ_BLOCK_NFACES])
+#define PRJ_BLOCK_STAGE_Z4C(Z, stage) \
+    (&(Z)[(size_t)(stage) * (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS])
 
 /* Legacy SoA per-variable plane base (valid only at PRJ_AOSOA_W==1).  Still used
  * by the pencil-reconstruction scratch; removed from block-array access in the
@@ -384,6 +391,32 @@ enum prj_prim_var {
     PRJ_PRIM_B2 = 7,
     PRJ_PRIM_B3 = 8
 #endif
+};
+
+enum prj_z4c_var {
+    PRJ_Z4C_CHI = 0,
+    PRJ_Z4C_GXX = 1,
+    PRJ_Z4C_GXY = 2,
+    PRJ_Z4C_GXZ = 3,
+    PRJ_Z4C_GYY = 4,
+    PRJ_Z4C_GYZ = 5,
+    PRJ_Z4C_GZZ = 6,
+    PRJ_Z4C_KHAT = 7,
+    PRJ_Z4C_AXX = 8,
+    PRJ_Z4C_AXY = 9,
+    PRJ_Z4C_AXZ = 10,
+    PRJ_Z4C_AYY = 11,
+    PRJ_Z4C_AYZ = 12,
+    PRJ_Z4C_AZZ = 13,
+    PRJ_Z4C_GAMX = 14,
+    PRJ_Z4C_GAMY = 15,
+    PRJ_Z4C_GAMZ = 16,
+    PRJ_Z4C_THETA = 17,
+    PRJ_Z4C_ALPHA = 18,
+    PRJ_Z4C_BETAX = 19,
+    PRJ_Z4C_BETAY = 20,
+    PRJ_Z4C_BETAZ = 21,
+    PRJ_NZ4C = 22
 };
 
 #if PRJ_USE_RADIATION_FSA

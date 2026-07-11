@@ -212,6 +212,10 @@ static void prj_block_init_empty(prj_block *b)
     b->refine_flag = 0;
     b->can_refine = 1;
     b->W = 0;
+#if PRJ_DYNAMIC_GR
+    b->z4c = 0;
+    b->z4c_rhs = 0;
+#endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
@@ -286,9 +290,16 @@ size_t prj_block_data_count(void)
         (size_t)PRJ_BLOCK_NCELLS;
     size_t eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     size_t cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_DYNAMIC_GR
+    size_t z4c_count = (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+        (size_t)PRJ_BLOCK_NCELLS;
+#endif
     size_t total_count;
 
     total_count = prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_DYNAMIC_GR
+    total_count += 2U * z4c_count;
+#endif
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     total_count += 2U * (size_t)PRJ_BLOCK_NSTAGES * cons_count;  /* deriv_ex + deriv_im */
 #endif
@@ -311,6 +322,9 @@ size_t prj_block_data_count(void)
 int prj_block_alloc_data(prj_block *b)
 {
     size_t prim_count;
+#if PRJ_DYNAMIC_GR
+    size_t z4c_count;
+#endif
     size_t eosvar_count;
     size_t cons_count;
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
@@ -335,6 +349,10 @@ int prj_block_alloc_data(prj_block *b)
 
     prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
         (size_t)PRJ_BLOCK_NCELLS;
+#if PRJ_DYNAMIC_GR
+    z4c_count = (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+        (size_t)PRJ_BLOCK_NCELLS;
+#endif
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
@@ -379,6 +397,12 @@ int prj_block_alloc_data(prj_block *b)
 
     b->W = base;
     base += prim_count;
+#if PRJ_DYNAMIC_GR
+    b->z4c = base;
+    base += z4c_count;
+    b->z4c_rhs = base;
+    base += z4c_count;
+#endif
     b->eosvar = base;
     base += eosvar_count;
     b->cell_derived_done = cell_derived_done;
@@ -487,6 +511,10 @@ void prj_block_free_data(prj_block *b)
     free(b->ridx);
     free(b->fr);
     b->W = 0;
+#if PRJ_DYNAMIC_GR
+    b->z4c = 0;
+    b->z4c_rhs = 0;
+#endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
@@ -1308,6 +1336,11 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     double saved_amr_lohner_eps[PRJ_AMR_N];
     int saved_use_amr_angular_resolution_limit;
     int saved_use_BJ;
+    int saved_use_dynamic_gr;
+    int saved_z4c_initialized;
+    int saved_z4c_extrap_order;
+    double saved_time_seconds;
+    prj_z4c_params saved_z4c_params;
     double saved_amr_init_scale_factor;
     double saved_amr_reach_highest_level_at_density;
     double saved_E_floor;
@@ -1330,6 +1363,11 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     }
     saved_use_amr_angular_resolution_limit = mesh->use_amr_angular_resolution_limit;
     saved_use_BJ = mesh->use_BJ;
+    saved_use_dynamic_gr = mesh->use_dynamic_gr;
+    saved_z4c_initialized = mesh->z4c_initialized;
+    saved_z4c_extrap_order = mesh->z4c_extrap_order;
+    saved_time_seconds = mesh->time_seconds;
+    saved_z4c_params = mesh->z4c_params;
     saved_amr_init_scale_factor = mesh->amr_init_scale_factor;
     saved_amr_reach_highest_level_at_density =
         mesh->amr_reach_highest_level_at_density;
@@ -1341,6 +1379,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     mesh->nblocks_max = 0;
     mesh->max_level = max_level;
     mesh->min_dx = saved_min_dx;
+    mesh->time_seconds = saved_time_seconds;
     mesh->max_active_level = -1;
     mesh->root_nx[0] = root_nx1;
     mesh->root_nx[1] = root_nx2;
@@ -1361,6 +1400,10 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     }
     mesh->use_amr_angular_resolution_limit = saved_use_amr_angular_resolution_limit;
     mesh->use_BJ = saved_use_BJ;
+    mesh->use_dynamic_gr = saved_use_dynamic_gr;
+    mesh->z4c_initialized = saved_z4c_initialized;
+    mesh->z4c_extrap_order = saved_z4c_extrap_order;
+    mesh->z4c_params = saved_z4c_params;
     mesh->amr_init_scale_factor = saved_amr_init_scale_factor;
     mesh->amr_reach_highest_level_at_density =
         saved_amr_reach_highest_level_at_density;

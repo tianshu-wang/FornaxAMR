@@ -16,7 +16,7 @@
 
 #define PRJ_IO_METADATA_SIZE 639
 #define PRJ_IO_DUMP_NAME_SIZE 32
-#define PRJ_IO_RESTART_FORMAT_VERSION 2
+#define PRJ_IO_RESTART_FORMAT_VERSION 3
 
 #if PRJ_DUMP_SINGLE_PRECISION
 typedef float prj_io_dump_real;
@@ -193,6 +193,30 @@ static int prj_io_parse_amr_slot_key(const char *key, const char *prefix, int *s
     return 1;
 }
 
+static void prj_io_finalize_dynamic_gr_params(prj_sim *sim)
+{
+    int max_order;
+
+    if (sim == 0) {
+        return;
+    }
+    max_order = PRJ_NGHOST < 4 ? PRJ_NGHOST : 4;
+    if (max_order < 2) {
+        max_order = 2;
+    }
+    if (sim->mesh.z4c_extrap_order < 2) {
+        sim->mesh.z4c_extrap_order = 2;
+    }
+    if (sim->mesh.z4c_extrap_order > max_order) {
+        sim->mesh.z4c_extrap_order = max_order;
+    }
+#if !PRJ_DYNAMIC_GR
+    if (sim->mesh.use_dynamic_gr != 0) {
+        prj_io_fail("use_dynamic_gr=1 requires rebuilding with DYNAMIC_GR=1");
+    }
+#endif
+}
+
 static void prj_io_set_default_runtime(prj_sim *sim)
 {
     if (sim == 0) {
@@ -240,6 +264,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.x_com[2] = 0.0;
     sim->mesh.max_level = 0;
     sim->mesh.min_dx = 0.0;
+    sim->mesh.time_seconds = 0.0;
     sim->mesh.min_allowable_cell_size = 0.0;
     sim->mesh.max_blocks = 65536;
     {
@@ -259,10 +284,14 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     }
     sim->mesh.use_amr_angular_resolution_limit = 0;
     sim->mesh.use_BJ = 0;
+    sim->mesh.use_dynamic_gr = 0;
+    sim->mesh.z4c_initialized = 0;
+    sim->mesh.z4c_extrap_order = 2;
     sim->mesh.amr_init_scale_factor = 0.5;
     sim->mesh.amr_reach_highest_level_at_density = -1.0;
     sim->mesh.E_floor = -1.0;
     sim->mesh.mhd_eta = 0.0;
+    prj_z4c_init_params(&sim->mesh.z4c_params);
     sim->eos.kind = PRJ_EOS_KIND_IDEAL;
     sim->eos.filename[0] = '\0';
     sim->eos.E_injected = 0.0;
@@ -316,6 +345,7 @@ void prj_io_parser(prj_sim *sim, char *filename)
 
     prj_io_set_default_runtime(sim);
     if (filename == 0) {
+        prj_io_finalize_dynamic_gr_params(sim);
         return;
     }
 
@@ -420,6 +450,112 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->mesh.min_dx = strtod(value, &endptr);
         } else if (strcmp(key, "mhd_eta") == 0) {
             sim->mesh.mhd_eta = strtod(value, &endptr);
+        } else if (strcmp(key, "use_dynamic_gr") == 0 || strcmp(key, "dynamic_gr") == 0) {
+            sim->mesh.use_dynamic_gr = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "z4c_extrap_order") == 0) {
+            sim->mesh.z4c_extrap_order = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "shift_eta") == 0 || strcmp(key, "damp_kappa1") == 0 ||
+                   strcmp(key, "z4c_shift_eta") == 0 || strcmp(key, "z4c_damp_kappa1") == 0) {
+            fprintf(stderr,
+                "prj_io_parser: key '%s' is dimensionful in AthenaK units; use "
+                "z4c_shift_eta_inv_cm or z4c_damp_kappa1_inv_cm in PRJ cgs units\n",
+                key);
+            fclose(fp);
+            exit(1);
+        } else if (strcmp(key, "punc_ADM_mass") == 0 ||
+                   strcmp(key, "punc_center_x1") == 0 ||
+                   strcmp(key, "punc_center_x2") == 0 ||
+                   strcmp(key, "punc_center_x3") == 0 ||
+                   strcmp(key, "par_b") == 0 ||
+                   strcmp(key, "par_m_plus") == 0 ||
+                   strcmp(key, "par_m_minus") == 0 ||
+                   strcmp(key, "par_P_plus1") == 0 ||
+                   strcmp(key, "par_P_plus2") == 0 ||
+                   strcmp(key, "par_P_plus3") == 0 ||
+                   strcmp(key, "par_P_minus1") == 0 ||
+                   strcmp(key, "par_P_minus2") == 0 ||
+                   strcmp(key, "par_P_minus3") == 0 ||
+                   strcmp(key, "TP_epsilon") == 0) {
+            fprintf(stderr,
+                "prj_io_parser: key '%s' is dimensionful in AthenaK units; use "
+                "the PRJ cgs/geometric names such as z4c_puncture_mass_cm, "
+                "z4c_puncture_half_separation_cm, z4c_puncture_momentum_plus2_cm, "
+                "or z4c_puncture_floor_radius_cm\n",
+                key);
+            fclose(fp);
+            exit(1);
+        } else if (strcmp(key, "z4c_damp_kappa1_inv_cm") == 0) {
+            sim->mesh.z4c_params.damp_kappa1_inv_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_shift_eta_inv_cm") == 0) {
+            sim->mesh.z4c_params.shift_eta_inv_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_ssl_damping_amp_inv_cm") == 0) {
+            sim->mesh.z4c_params.ssl_damping_amp_inv_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_ssl_damping_time_cm") == 0) {
+            sim->mesh.z4c_params.ssl_damping_time_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_chi_psi_power") == 0) {
+            sim->mesh.z4c_params.chi_psi_power = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_chi_div_floor") == 0) {
+            sim->mesh.z4c_params.chi_div_floor = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_chi_min_floor") == 0) {
+            sim->mesh.z4c_params.chi_min_floor = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_floor_chi") == 0) {
+            sim->mesh.z4c_params.floor_chi = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "z4c_diss") == 0) {
+            sim->mesh.z4c_params.diss = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_damp_kappa2") == 0) {
+            sim->mesh.z4c_params.damp_kappa2 = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_lapse_harmonicf") == 0) {
+            sim->mesh.z4c_params.lapse_harmonicf = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_lapse_harmonic") == 0) {
+            sim->mesh.z4c_params.lapse_harmonic = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_lapse_oplog") == 0) {
+            sim->mesh.z4c_params.lapse_oplog = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_lapse_advect") == 0) {
+            sim->mesh.z4c_params.lapse_advect = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_slow_start_lapse") == 0) {
+            sim->mesh.z4c_params.slow_start_lapse = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "z4c_ssl_damping_index") == 0) {
+            sim->mesh.z4c_params.ssl_damping_index = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "z4c_shift_Gamma") == 0) {
+            sim->mesh.z4c_params.shift_Gamma = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_shift_advect") == 0) {
+            sim->mesh.z4c_params.shift_advect = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_shift_alpha2Gamma") == 0) {
+            sim->mesh.z4c_params.shift_alpha2Gamma = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_shift_H") == 0) {
+            sim->mesh.z4c_params.shift_H = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_use_z4c") == 0) {
+            sim->mesh.z4c_params.use_z4c = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "z4c_user_Sbc") == 0) {
+            sim->mesh.z4c_params.user_Sbc = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "z4c_puncture_mass_cm") == 0) {
+            sim->mesh.z4c_params.puncture_mass_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_center_x1_cm") == 0) {
+            sim->mesh.z4c_params.puncture_center_cm[0] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_center_x2_cm") == 0) {
+            sim->mesh.z4c_params.puncture_center_cm[1] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_center_x3_cm") == 0) {
+            sim->mesh.z4c_params.puncture_center_cm[2] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_floor_radius_cm") == 0) {
+            sim->mesh.z4c_params.puncture_floor_radius_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_mass_plus_cm") == 0) {
+            sim->mesh.z4c_params.puncture_mass_plus_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_mass_minus_cm") == 0) {
+            sim->mesh.z4c_params.puncture_mass_minus_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_half_separation_cm") == 0) {
+            sim->mesh.z4c_params.puncture_half_separation_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_momentum_plus1_cm") == 0) {
+            sim->mesh.z4c_params.puncture_momentum_plus_cm[0] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_momentum_plus2_cm") == 0) {
+            sim->mesh.z4c_params.puncture_momentum_plus_cm[1] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_momentum_plus3_cm") == 0) {
+            sim->mesh.z4c_params.puncture_momentum_plus_cm[2] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_momentum_minus1_cm") == 0) {
+            sim->mesh.z4c_params.puncture_momentum_minus_cm[0] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_momentum_minus2_cm") == 0) {
+            sim->mesh.z4c_params.puncture_momentum_minus_cm[1] = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_puncture_momentum_minus3_cm") == 0) {
+            sim->mesh.z4c_params.puncture_momentum_minus_cm[2] = strtod(value, &endptr);
         } else if (prj_io_parse_amr_slot_key(key, "amr_estimator", &amr_slot)) {
             if (prj_io_parse_amr_estimator(value, &sim->mesh.amr_estimator[amr_slot]) != 0) {
                 endptr = value;
@@ -612,6 +748,7 @@ void prj_io_parser(prj_sim *sim, char *filename)
     }
 
     fclose(fp);
+    prj_io_finalize_dynamic_gr_params(sim);
 }
 
 static void prj_io_fail(const char *message)
@@ -640,6 +777,18 @@ static int prj_io_restart_read_data_block(const prj_mpi *mpi, const prj_block *b
     return block != 0 && block->id >= 0 && block->active == 1 &&
         prj_io_is_local_owner(mpi, block) && block->W != 0;
 }
+
+#if PRJ_DYNAMIC_GR
+static int prj_io_restart_write_z4c_block(const prj_block *block)
+{
+    return prj_io_restart_write_data_block(block) && block->z4c != 0;
+}
+
+static int prj_io_restart_read_z4c_block(const prj_mpi *mpi, const prj_block *block)
+{
+    return prj_io_restart_read_data_block(mpi, block) && block->z4c != 0;
+}
+#endif
 
 #if PRJ_MHD
 static int prj_io_restart_write_bf_block(const prj_block *block)
@@ -1007,12 +1156,19 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     hid_t space_meta;
     hid_t dset_data;
     hid_t dset_meta;
+#if PRJ_DYNAMIC_GR
+    hid_t space_z4c = -1;
+    hid_t dset_z4c = -1;
+#endif
 #if PRJ_MHD
     hid_t space_bf;
     hid_t dset_bf;
 #endif
     hsize_t dims_data[3];
     hsize_t dims_meta[2];
+#if PRJ_DYNAMIC_GR
+    hsize_t dims_z4c[3];
+#endif
 #if PRJ_MHD
     hsize_t dims_bf[3];
 #endif
@@ -1027,6 +1183,11 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     dims_data[2] = (hsize_t)(PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE);
     dims_meta[0] = (hsize_t)mesh->nblocks;
     dims_meta[1] = (hsize_t)PRJ_IO_METADATA_SIZE;
+#if PRJ_DYNAMIC_GR
+    dims_z4c[0] = (hsize_t)mesh->nblocks;
+    dims_z4c[1] = (hsize_t)PRJ_NZ4C;
+    dims_z4c[2] = dims_data[2];
+#endif
 #if PRJ_MHD
     dims_bf[0] = (hsize_t)mesh->nblocks;
     dims_bf[1] = 3;
@@ -1044,6 +1205,13 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     prj_io_write_attr_double(file, "dt", dt);
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
+#if PRJ_DYNAMIC_GR
+    prj_io_write_attr_int(file, "use_dynamic_gr", mesh->use_dynamic_gr != 0);
+    prj_io_write_attr_int(file, "nvar_z4c", PRJ_NZ4C);
+#else
+    prj_io_write_attr_int(file, "use_dynamic_gr", 0);
+    prj_io_write_attr_int(file, "nvar_z4c", 0);
+#endif
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
     prj_io_write_attr_int(file, "max_level", mesh->max_level);
     prj_io_write_attr_double(file, "min_dx", mesh->min_dx);
@@ -1067,6 +1235,13 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
 
     space_meta = H5Screate_simple(2, dims_meta, dims_meta);
     dset_meta = H5Dcreate2(file, "MetaData", H5T_NATIVE_DOUBLE, space_meta, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        space_z4c = H5Screate_simple(3, dims_z4c, dims_z4c);
+        dset_z4c = H5Dcreate2(file, "Z4c", H5T_NATIVE_DOUBLE, space_z4c,
+            H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    }
+#endif
 #if PRJ_MHD
     space_bf = H5Screate_simple(3, dims_bf, dims_bf);
     dset_bf = H5Dcreate2(file, "Bf", H5T_NATIVE_DOUBLE, space_bf, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -1139,6 +1314,67 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
         prj_io_write_hyperslab(dset_data, mpi, H5T_NATIVE_DOUBLE, 3, start_data, count_data, buffer);
         free(buffer);
     }
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        bidx = 0;
+        while (bidx < mesh->nblocks) {
+            int run_start;
+            int run_len;
+            hsize_t start_z4c[3];
+            hsize_t count_z4c[3];
+            double *buffer;
+            int ridx;
+            int v;
+            int i;
+            int j;
+            int k;
+            size_t ncells = (size_t)PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE;
+
+            while (bidx < mesh->nblocks && !prj_io_restart_write_z4c_block(&mesh->blocks[bidx])) {
+                bidx += 1;
+            }
+            run_start = bidx;
+            while (bidx < mesh->nblocks && prj_io_restart_write_z4c_block(&mesh->blocks[bidx])) {
+                bidx += 1;
+            }
+            run_len = bidx - run_start;
+            if (run_len == 0) {
+                continue;
+            }
+            start_z4c[0] = (hsize_t)run_start;
+            start_z4c[1] = 0;
+            start_z4c[2] = 0;
+            count_z4c[0] = (hsize_t)run_len;
+            count_z4c[1] = (hsize_t)PRJ_NZ4C;
+            count_z4c[2] = (hsize_t)ncells;
+            buffer = (double *)prj_calloc((size_t)run_len * (size_t)PRJ_NZ4C * ncells, sizeof(*buffer));
+            if (buffer == 0) {
+                prj_io_fail("prj_io_write_restart: Z4c allocation failed");
+            }
+            for (ridx = 0; ridx < run_len; ++ridx) {
+                const prj_block *block = &mesh->blocks[run_start + ridx];
+                const double *z = prj_block_z4c_stage_const(block, 0);
+
+                for (v = 0; v < PRJ_NZ4C; ++v) {
+                    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                                size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE +
+                                    (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                                size_t offset = ((size_t)ridx * (size_t)PRJ_NZ4C +
+                                    (size_t)v) * ncells + cell;
+
+                                buffer[offset] = z[Z4CIDX(v, i, j, k)];
+                            }
+                        }
+                    }
+                }
+            }
+            prj_io_write_hyperslab(dset_z4c, mpi, H5T_NATIVE_DOUBLE, 3, start_z4c, count_z4c, buffer);
+            free(buffer);
+        }
+    }
+#endif
 #if PRJ_MHD
     bidx = 0;
     while (bidx < mesh->nblocks) {
@@ -1191,6 +1427,12 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     H5Dclose(dset_bf);
     H5Sclose(space_bf);
 #endif
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        H5Dclose(dset_z4c);
+        H5Sclose(space_z4c);
+    }
+#endif
     H5Dclose(dset_data);
     H5Sclose(space_data);
     H5Dclose(dset_meta);
@@ -1205,6 +1447,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     hid_t file;
     hid_t dset_data;
     hid_t dset_meta;
+#if PRJ_DYNAMIC_GR
+    hid_t dset_z4c = -1;
+#endif
 #if PRJ_MHD
     hid_t dset_bf;
 #endif
@@ -1231,7 +1476,8 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     }
     prj_io_read_attr_int(file, "restart_format_version",
         &restart_format_version);
-    if (restart_format_version != PRJ_IO_RESTART_FORMAT_VERSION) {
+    if (restart_format_version != PRJ_IO_RESTART_FORMAT_VERSION &&
+        !(restart_format_version == 2 && mesh->use_dynamic_gr == 0)) {
         prj_io_fail("prj_io_read_restart: incompatible restart_format_version");
     }
     prj_io_read_attr_double(file, "time", time);
@@ -1339,6 +1585,17 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     prj_mesh_update_r_com(mesh);
 
     dset_data = H5Dopen2(file, "Data", H5P_DEFAULT);
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        int nvar_z4c = prj_io_read_attr_int_optional(file, "nvar_z4c", 0);
+
+        if (restart_format_version < PRJ_IO_RESTART_FORMAT_VERSION ||
+            nvar_z4c != PRJ_NZ4C || H5Lexists(file, "Z4c", H5P_DEFAULT) <= 0) {
+            prj_io_fail("prj_io_read_restart: dynamic GR restart is missing compatible Z4c data");
+        }
+        dset_z4c = H5Dopen2(file, "Z4c", H5P_DEFAULT);
+    }
+#endif
 #if PRJ_MHD
     if (H5Lexists(file, "Bf", H5P_DEFAULT) <= 0) {
         prj_io_fail("prj_io_read_restart: MHD restart is missing Bf dataset");
@@ -1435,6 +1692,55 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
             free(bf_buffer);
         }
 #endif
+#if PRJ_DYNAMIC_GR
+        if (mesh->use_dynamic_gr != 0) {
+            hsize_t start_z4c[3] = {(hsize_t)run_start, 0, 0};
+            hsize_t count_z4c[3] = {(hsize_t)run_len, (hsize_t)PRJ_NZ4C, (hsize_t)ncells};
+            double *z4c_buffer = (double *)prj_calloc((size_t)run_len *
+                (size_t)PRJ_NZ4C * ncells, sizeof(*z4c_buffer));
+
+            if (z4c_buffer == 0) {
+                prj_io_fail("prj_io_read_restart: Z4c allocation failed");
+            }
+            for (ridx = 0; ridx < run_len; ++ridx) {
+                prj_block *block = &mesh->blocks[run_start + ridx];
+
+                if (!prj_io_restart_read_z4c_block(mpi, block)) {
+                    prj_io_fail("prj_io_read_restart: missing Z4c block storage");
+                }
+            }
+            prj_io_read_hyperslab(dset_z4c, mpi, H5T_NATIVE_DOUBLE, 3, start_z4c,
+                count_z4c, z4c_buffer);
+            for (ridx = 0; ridx < run_len; ++ridx) {
+                prj_block *block = &mesh->blocks[run_start + ridx];
+                double *z0 = prj_block_z4c_stage(block, 0);
+                int stage;
+
+                for (v = 0; v < PRJ_NZ4C; ++v) {
+                    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                                size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE +
+                                    (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                                size_t offset = ((size_t)ridx * (size_t)PRJ_NZ4C +
+                                    (size_t)v) * ncells + cell;
+
+                                z0[Z4CIDX(v, i, j, k)] = z4c_buffer[offset];
+                            }
+                        }
+                    }
+                }
+                for (stage = 1; stage < PRJ_BLOCK_NSTAGES; ++stage) {
+                    double *zs = prj_block_z4c_stage(block, stage);
+
+                    memcpy(zs, z0, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS * sizeof(*zs));
+                }
+                prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES *
+                    (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+            }
+            free(z4c_buffer);
+        }
+#endif
         for (ridx = 0; ridx < run_len; ++ridx) {
             prj_block *block = &mesh->blocks[run_start + ridx];
 
@@ -1462,6 +1768,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     }
 #if PRJ_MHD
     H5Dclose(dset_bf);
+#endif
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        H5Dclose(dset_z4c);
+    }
 #endif
     H5Dclose(dset_data);
     H5Fclose(file);
@@ -1507,6 +1818,10 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     hid_t dset_eos;
     hid_t space_meta;
     hid_t dset_meta;
+#if PRJ_DYNAMIC_GR
+    hid_t space_z4c = -1;
+    hid_t dset_z4c = -1;
+#endif
 #if PRJ_MHD && PRJ_MHD_DEBUG
     hid_t space_bf;
     hid_t dset_bf;
@@ -1514,6 +1829,9 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     hsize_t dims_data[3];
     hsize_t dims_eos[3];
     hsize_t dims_meta[2];
+#if PRJ_DYNAMIC_GR
+    hsize_t dims_z4c[3];
+#endif
 #if PRJ_MHD && PRJ_MHD_DEBUG
     hsize_t dims_bf[3];
 #endif
@@ -1534,6 +1852,11 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     dims_eos[2] = (hsize_t)ncells;
     dims_meta[0] = (hsize_t)mesh->nblocks;
     dims_meta[1] = (hsize_t)PRJ_IO_METADATA_SIZE;
+#if PRJ_DYNAMIC_GR
+    dims_z4c[0] = (hsize_t)mesh->nblocks;
+    dims_z4c[1] = (hsize_t)PRJ_NZ4C;
+    dims_z4c[2] = (hsize_t)ncells;
+#endif
 #if PRJ_MHD && PRJ_MHD_DEBUG
     dims_bf[0] = (hsize_t)mesh->nblocks;
     dims_bf[1] = 3;
@@ -1553,6 +1876,13 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     prj_io_write_attr_int(file, "nblocks", mesh->nblocks);
     prj_io_write_attr_int(file, "nvar_prim", PRJ_NVAR_PRIM);
     prj_io_write_attr_int(file, "nvar_eos", PRJ_NVAR_EOSVAR);
+#if PRJ_DYNAMIC_GR
+    prj_io_write_attr_int(file, "use_dynamic_gr", mesh->use_dynamic_gr != 0);
+    prj_io_write_attr_int(file, "nvar_z4c", PRJ_NZ4C);
+#else
+    prj_io_write_attr_int(file, "use_dynamic_gr", 0);
+    prj_io_write_attr_int(file, "nvar_z4c", 0);
+#endif
     prj_io_write_attr_int(file, "block_size", PRJ_BLOCK_SIZE);
     prj_io_write_attr_int(file, "max_level", mesh->max_level);
     prj_io_write_attr_double(file, "min_dx", mesh->min_dx);
@@ -1577,6 +1907,13 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
     dset_eos = H5Dcreate2(file, "Eos", dump_real_type, space_eos, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
     space_meta = H5Screate_simple(2, dims_meta, dims_meta);
     dset_meta = H5Dcreate2(file, "MetaData", H5T_NATIVE_DOUBLE, space_meta, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        space_z4c = H5Screate_simple(3, dims_z4c, dims_z4c);
+        dset_z4c = H5Dcreate2(file, "Z4c", dump_real_type, space_z4c,
+            H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    }
+#endif
 #if PRJ_MHD && PRJ_MHD_DEBUG
     space_bf = H5Screate_simple(3, dims_bf, dims_bf);
     dset_bf = H5Dcreate2(file, "Bf", dump_real_type, space_bf, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -1650,6 +1987,69 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
         prj_io_write_hyperslab(dset_data, mpi, dump_real_type, 3, start_data, count_data, buffer);
         free(buffer);
     }
+
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        bidx = 0;
+        while (bidx < mesh->nblocks) {
+            int run_start;
+            int run_len;
+            hsize_t start_z4c[3];
+            hsize_t count_z4c[3];
+            prj_io_dump_real *buffer;
+            int ridx;
+            int v;
+            int i;
+            int j;
+            int k;
+
+            while (bidx < mesh->nblocks && !prj_io_restart_write_z4c_block(&mesh->blocks[bidx])) {
+                bidx += 1;
+            }
+            run_start = bidx;
+            while (bidx < mesh->nblocks && prj_io_restart_write_z4c_block(&mesh->blocks[bidx])) {
+                bidx += 1;
+            }
+            run_len = bidx - run_start;
+            if (run_len == 0) {
+                continue;
+            }
+            start_z4c[0] = (hsize_t)run_start;
+            start_z4c[1] = 0;
+            start_z4c[2] = 0;
+            count_z4c[0] = (hsize_t)run_len;
+            count_z4c[1] = (hsize_t)PRJ_NZ4C;
+            count_z4c[2] = (hsize_t)ncells;
+            buffer = (prj_io_dump_real *)prj_calloc((size_t)run_len *
+                (size_t)PRJ_NZ4C * ncells, sizeof(*buffer));
+            if (buffer == 0) {
+                prj_io_fail("prj_io_write_dump: Z4c allocation failed");
+            }
+            for (ridx = 0; ridx < run_len; ++ridx) {
+                const prj_block *block = &mesh->blocks[run_start + ridx];
+                const double *z = prj_block_z4c_stage_const(block, 0);
+
+                for (v = 0; v < PRJ_NZ4C; ++v) {
+                    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+                        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                                size_t cell = (size_t)i * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE +
+                                    (size_t)j * PRJ_BLOCK_SIZE + (size_t)k;
+                                size_t offset = ((size_t)ridx * (size_t)PRJ_NZ4C +
+                                    (size_t)v) * ncells + cell;
+
+                                buffer[offset] = (prj_io_dump_real)z[Z4CIDX(v, i, j, k)];
+                            }
+                        }
+                    }
+                }
+            }
+            prj_io_write_hyperslab(dset_z4c, mpi, dump_real_type, 3, start_z4c,
+                count_z4c, buffer);
+            free(buffer);
+        }
+    }
+#endif
 
     bidx = 0;
     while (bidx < mesh->nblocks) {
@@ -1783,6 +2183,12 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
 #if PRJ_MHD && PRJ_MHD_DEBUG
     H5Dclose(dset_bf);
     H5Sclose(space_bf);
+#endif
+#if PRJ_DYNAMIC_GR
+    if (mesh->use_dynamic_gr != 0) {
+        H5Dclose(dset_z4c);
+        H5Sclose(space_z4c);
+    }
 #endif
     H5Dclose(dset_meta);
     H5Sclose(space_meta);

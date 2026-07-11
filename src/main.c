@@ -62,6 +62,16 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     if (strcmp(name, "shock1d") == 0) {
         return prj_problem_shock1d;
     }
+    if (strcmp(name, "z4c_one_puncture") == 0 ||
+        strcmp(name, "z4c_single_puncture") == 0 ||
+        strcmp(name, "single_puncture") == 0) {
+        return prj_problem_z4c_one_puncture;
+    }
+    if (strcmp(name, "z4c_two_puncture") == 0 ||
+        strcmp(name, "z4c_equal_mass_punctures") == 0 ||
+        strcmp(name, "two_puncture") == 0) {
+        return prj_problem_z4c_two_puncture;
+    }
     return prj_problem_general;
 }
 
@@ -240,6 +250,13 @@ static void prj_print_config(const prj_sim *sim, int rank)
         "off"
 #endif
     );
+    fprintf(stderr, "dynamic_gr: %s%s\n",
+#if PRJ_DYNAMIC_GR
+        "compiled, ",
+#else
+        "not compiled, ",
+#endif
+        sim->mesh.use_dynamic_gr != 0 ? "on" : "off");
     fprintf(stderr, "eos: %s\n",
         prj_eos_label(sim)
     );
@@ -337,7 +354,10 @@ int main(int argc, char *argv[])
         sim.mesh.max_level = max_level_override;
     }
 
-    init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn || init_fn == prj_problem_sedov);
+    init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn ||
+        init_fn == prj_problem_sedov ||
+        init_fn == prj_problem_z4c_one_puncture ||
+        init_fn == prj_problem_z4c_two_puncture);
     prj_mpi_init(&argc, &argv, &mpi);
     prj_timeint_init(&PRJ_TIMEINT_TABLEAU_NAME);
     if (sim.restart_from_latest != 0 && mpi.rank == 0) {
@@ -415,6 +435,14 @@ int main(int argc, char *argv[])
             sim.perturbation_gaussian_norm, sim.perturbation_seed);
     }
     prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
+    sim.mesh.time_seconds = sim.time;
+    if (sim.restart_from_file == 0 && sim.mesh.use_dynamic_gr != 0 &&
+        sim.mesh.z4c_initialized == 0) {
+        prj_z4c_init_mesh_flat(&sim.mesh, &mpi);
+        prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
+    } else if (sim.mesh.use_dynamic_gr != 0) {
+        prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
+    }
     prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos, 0,
         &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
@@ -508,6 +536,7 @@ int main(int argc, char *argv[])
         if (sim.time + dt_step > sim.t_end) {
             dt_step = sim.t_end - sim.time;
         }
+        sim.mesh.time_seconds = sim.time;
         prj_timeint_step(&sim.mesh, &sim.coord, &sim.bc, &sim.eos, &sim.rad, &sim.grav, &mpi,
             &PRJ_TIMEINT_TABLEAU_NAME, dt_step, &dt_src,
 #if PRJ_TIMER
@@ -570,6 +599,11 @@ int main(int argc, char *argv[])
                 PRJ_SUBTIMER_START("sub_amr_post_opac_halo");
                 prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
                 PRJ_SUBTIMER_STOP("sub_amr_post_opac_halo");
+                if (sim.mesh.use_dynamic_gr != 0) {
+                    PRJ_SUBTIMER_START("sub_amr_post_z4c");
+                    prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
+                    PRJ_SUBTIMER_STOP("sub_amr_post_z4c");
+                }
             #if PRJ_USE_GRAVITY
                 PRJ_SUBTIMER_START("sub_amr_post_grav");
                 prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
