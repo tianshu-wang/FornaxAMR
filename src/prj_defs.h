@@ -342,6 +342,7 @@ typedef double prj_table_real;
 #define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
 #define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
 #define Z4CIDX(v, i, j, k) BIDX(PRJ_NZ4C, v, i, j, k)
+#define TMUNUIDX(v, i, j, k) BIDX(PRJ_NTMUNU, v, i, j, k)
 #if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
 #define PRJ_FSA_ROT_IDX(row, col, i, j, k) BIDX(9, 3 * (row) + (col), i, j, k)
 #define PRJ_FSA_ANG_GEOM_IDX(arc, d, i, j, k) \
@@ -356,6 +357,8 @@ typedef double prj_table_real;
     (&(BF)[(size_t)(stage) * (size_t)PRJ_BLOCK_NFACES])
 #define PRJ_BLOCK_STAGE_Z4C(Z, stage) \
     (&(Z)[(size_t)(stage) * (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS])
+#define PRJ_BLOCK_STAGE_TMUNU(T, stage) \
+    (&(T)[(size_t)(stage) * (size_t)PRJ_NTMUNU * (size_t)PRJ_BLOCK_NCELLS])
 
 /* Legacy SoA per-variable plane base (valid only at PRJ_AOSOA_W==1).  Still used
  * by the pencil-reconstruction scratch; removed from block-array access in the
@@ -416,6 +419,20 @@ enum prj_z4c_var {
     PRJ_Z4C_BETAY = 20,
     PRJ_Z4C_BETAZ = 21,
     PRJ_NZ4C = 22
+};
+
+enum prj_z4c_tmunu_var {
+    PRJ_TMUNU_SXX = 0,
+    PRJ_TMUNU_SXY = 1,
+    PRJ_TMUNU_SXZ = 2,
+    PRJ_TMUNU_SYY = 3,
+    PRJ_TMUNU_SYZ = 4,
+    PRJ_TMUNU_SZZ = 5,
+    PRJ_TMUNU_E = 6,
+    PRJ_TMUNU_SX = 7,
+    PRJ_TMUNU_SY = 8,
+    PRJ_TMUNU_SZ = 9,
+    PRJ_NTMUNU = 10
 };
 
 #if PRJ_USE_RADIATION_FSA

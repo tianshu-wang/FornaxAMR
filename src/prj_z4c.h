@@ -4,6 +4,7 @@
 #include "prj_types.h"
 
 const char *prj_z4c_var_name(int var);
+const char *prj_z4c_tmunu_var_name(int var);
 int prj_z4c_runtime_enabled(const prj_mesh *mesh);
 void prj_z4c_init_params(prj_z4c_params *params);
 
@@ -16,6 +17,9 @@ void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
 
 void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     int state_stage, int rhs_stage, double tau_cm);
+void prj_z4c_clear_tmunu(prj_mesh *mesh, const prj_mpi *mpi, int stage);
+void prj_z4c_build_tmunu_from_matter(prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_rad *rad, int stage);
 void prj_z4c_update_linear(prj_mesh *mesh, const prj_mpi *mpi,
     int dst_stage, int a_stage, double a_w, int b_stage, double b_w,
     int rhs_stage, double dtau_cm);

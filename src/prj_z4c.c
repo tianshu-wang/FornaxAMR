@@ -22,9 +22,21 @@ static const char *const prj_z4c_names[PRJ_NZ4C] = {
     "z4c_betax", "z4c_betay", "z4c_betaz"
 };
 
+static const char *const prj_z4c_tmunu_names[PRJ_NTMUNU] = {
+    "z4c_tmunu_Sxx", "z4c_tmunu_Sxy", "z4c_tmunu_Sxz",
+    "z4c_tmunu_Syy", "z4c_tmunu_Syz", "z4c_tmunu_Szz",
+    "z4c_tmunu_E", "z4c_tmunu_Sx", "z4c_tmunu_Sy", "z4c_tmunu_Sz"
+};
+
 const char *prj_z4c_var_name(int var)
 {
     return var >= 0 && var < PRJ_NZ4C ? prj_z4c_names[var] : "z4c_unknown";
+}
+
+const char *prj_z4c_tmunu_var_name(int var)
+{
+    return var >= 0 && var < PRJ_NTMUNU ? prj_z4c_tmunu_names[var] :
+        "z4c_tmunu_unknown";
 }
 
 void prj_z4c_init_params(prj_z4c_params *params)
@@ -89,7 +101,7 @@ int prj_z4c_runtime_enabled(const prj_mesh *mesh)
 static int prj_z4c_local_block(const prj_mpi *mpi, const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        block->z4c != 0 && block->z4c_rhs != 0 &&
+        block->z4c != 0 && block->z4c_rhs != 0 && block->z4c_tmunu != 0 &&
         (mpi == 0 || block->rank == mpi->rank);
 }
 
@@ -131,6 +143,38 @@ static int prj_z4c_Gam_var(int a)
 static int prj_z4c_beta_var(int a)
 {
     return PRJ_Z4C_BETAX + a;
+}
+
+static int prj_z4c_tmunu_stress_var(int a, int b)
+{
+    static const int vars[3][3] = {
+        {PRJ_TMUNU_SXX, PRJ_TMUNU_SXY, PRJ_TMUNU_SXZ},
+        {PRJ_TMUNU_SXY, PRJ_TMUNU_SYY, PRJ_TMUNU_SYZ},
+        {PRJ_TMUNU_SXZ, PRJ_TMUNU_SYZ, PRJ_TMUNU_SZZ}
+    };
+    return vars[a][b];
+}
+
+static int prj_z4c_tmunu_mom_var(int a)
+{
+    return PRJ_TMUNU_SX + a;
+}
+
+static double prj_z4c_tmunu_cgs_to_geo(double value)
+{
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    return value * PRJ_GNEWT / (c2 * c2);
+}
+
+static void prj_z4c_matter_projection_metric(double g[3][3])
+{
+    int a, b;
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            g[a][b] = a == b ? 1.0 : 0.0;
+        }
+    }
 }
 
 static double prj_z4c_get(const double *z, int v, int i, int j, int k)
@@ -552,6 +596,8 @@ void prj_z4c_init_mesh_flat(prj_mesh *mesh, const prj_mpi *mpi)
             (size_t)PRJ_BLOCK_NCELLS, 0.0);
         prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
             (size_t)PRJ_BLOCK_NCELLS, 0.0);
+        prj_fill(block->z4c_tmunu, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NTMUNU *
+            (size_t)PRJ_BLOCK_NCELLS, 0.0);
         for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
             double *z = prj_block_z4c_stage(block, stage);
             int i, j, k;
@@ -597,6 +643,8 @@ void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
         prj_fill(block->z4c, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
             (size_t)PRJ_BLOCK_NCELLS, 0.0);
         prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+        prj_fill(block->z4c_tmunu, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NTMUNU *
             (size_t)PRJ_BLOCK_NCELLS, 0.0);
         for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
             double *z = prj_block_z4c_stage(block, stage);
@@ -1147,8 +1195,178 @@ void prj_z4c_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int sta
     }
 }
 
+void prj_z4c_clear_tmunu(prj_mesh *mesh, const prj_mpi *mpi, int stage)
+{
+    int bidx;
+
+    if (!prj_z4c_runtime_enabled(mesh)) {
+        return;
+    }
+    if (stage < 0 || stage >= PRJ_BLOCK_NSTAGES) {
+        prj_z4c_fail("prj_z4c_clear_tmunu: invalid stage");
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        double *tmunu;
+
+        if (!prj_z4c_local_block(mpi, block) || block->z4c_tmunu == 0) {
+            continue;
+        }
+        tmunu = prj_block_z4c_tmunu_stage(block, stage);
+        prj_fill(tmunu, (size_t)PRJ_NTMUNU * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    }
+}
+
+static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *block,
+    const double *W_mhd, const double *W_rad, int i, int j, int k, double t_cgs[PRJ_NTMUNU])
+{
+    double gflat[3][3];
+    double v[3] = {0.0, 0.0, 0.0};
+    double stress[3][3];
+    double mom[3] = {0.0, 0.0, 0.0};
+    double rho = 0.0;
+    double eint = 0.0;
+    double pressure = 0.0;
+    double v2 = 0.0;
+    int a, b;
+
+    (void)rad;
+    memset(t_cgs, 0, (size_t)PRJ_NTMUNU * sizeof(*t_cgs));
+    memset(stress, 0, sizeof(stress));
+    prj_z4c_matter_projection_metric(gflat);
+
+    if (W_mhd != 0) {
+        rho = W_mhd[WIDX(PRJ_PRIM_RHO, i, j, k)];
+        v[0] = W_mhd[WIDX(PRJ_PRIM_V1, i, j, k)];
+        v[1] = W_mhd[WIDX(PRJ_PRIM_V2, i, j, k)];
+        v[2] = W_mhd[WIDX(PRJ_PRIM_V3, i, j, k)];
+        eint = W_mhd[WIDX(PRJ_PRIM_EINT, i, j, k)];
+        pressure = block->eosvar != 0 ?
+            block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] : 0.0;
+
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                v2 += gflat[a][b] * v[a] * v[b];
+            }
+        }
+        t_cgs[PRJ_TMUNU_E] += rho * PRJ_CLIGHT * PRJ_CLIGHT +
+            rho * eint + 0.5 * rho * v2;
+        for (a = 0; a < 3; ++a) {
+            mom[a] += rho * v[a] * PRJ_CLIGHT;
+            for (b = 0; b < 3; ++b) {
+                stress[a][b] += rho * v[a] * v[b] + pressure * gflat[a][b];
+            }
+        }
+#if PRJ_MHD
+        {
+            double B[3] = {
+                W_mhd[WIDX(PRJ_PRIM_B1, i, j, k)],
+                W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)],
+                W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)]
+            };
+            double B2 = 0.0;
+
+            for (a = 0; a < 3; ++a) {
+                for (b = 0; b < 3; ++b) {
+                    B2 += gflat[a][b] * B[a] * B[b];
+                }
+            }
+            t_cgs[PRJ_TMUNU_E] += 0.5 * B2;
+            for (a = 0; a < 3; ++a) {
+                for (b = 0; b < 3; ++b) {
+                    stress[a][b] += 0.5 * B2 * gflat[a][b] - B[a] * B[b];
+                }
+            }
+        }
+#endif
+    }
+
+#if PRJ_USE_RADIATION_M1
+    if (rad != 0 && W_rad != 0) {
+        int field, group;
+
+        for (field = 0; field < PRJ_NRAD; ++field) {
+            for (group = 0; group < PRJ_NEGROUP; ++group) {
+                double Erad = W_rad[WIDX(PRJ_RAD_PRIM_E(field, group), i, j, k)] *
+                    RAD_SCALE;
+                double Frad[3] = {
+                    W_rad[WIDX(PRJ_RAD_PRIM_F1(field, group), i, j, k)] * RAD_SCALE,
+                    W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)] * RAD_SCALE,
+                    W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)] * RAD_SCALE
+                };
+                double P[3][3];
+
+                prj_rad_m1_pressure(rad, Erad, Frad[0], Frad[1], Frad[2], P);
+                t_cgs[PRJ_TMUNU_E] += Erad;
+                for (a = 0; a < 3; ++a) {
+                    mom[a] += Frad[a] / PRJ_CLIGHT;
+                    for (b = 0; b < 3; ++b) {
+                        stress[a][b] += P[a][b];
+                    }
+                }
+            }
+        }
+    }
+#else
+    (void)W_rad;
+#endif
+
+    for (a = 0; a < 3; ++a) {
+        t_cgs[prj_z4c_tmunu_mom_var(a)] = mom[a];
+        for (b = a; b < 3; ++b) {
+            t_cgs[prj_z4c_tmunu_stress_var(a, b)] = stress[a][b];
+        }
+    }
+}
+
+void prj_z4c_build_tmunu_from_matter(prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_rad *rad, int stage)
+{
+    int bidx;
+
+    if (!prj_z4c_runtime_enabled(mesh)) {
+        return;
+    }
+    if (stage < 0 || stage >= PRJ_BLOCK_NSTAGES) {
+        prj_z4c_fail("prj_z4c_build_tmunu_from_matter: invalid stage");
+    }
+    prj_z4c_clear_tmunu(mesh, mpi, stage);
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        const double *W_mhd;
+        const double *W_rad;
+        double *tmunu;
+        int i, j, k;
+
+        if (!prj_z4c_local_block(mpi, block) || block->z4c_tmunu == 0) {
+            continue;
+        }
+        W_mhd = prj_block_mhd_stage_const(block, stage);
+        W_rad = prj_block_rad_stage_const(block, stage);
+        tmunu = prj_block_z4c_tmunu_stage(block, stage);
+        if (W_mhd == 0 || tmunu == 0) {
+            continue;
+        }
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    double t_cgs[PRJ_NTMUNU];
+                    int v;
+
+                    prj_z4c_build_tmunu_cell_cgs(rad, block, W_mhd, W_rad,
+                        i, j, k, t_cgs);
+                    for (v = 0; v < PRJ_NTMUNU; ++v) {
+                        tmunu[TMUNUIDX(v, i, j, k)] =
+                            prj_z4c_tmunu_cgs_to_geo(t_cgs[v]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *block,
-    const double *z, double *rhs, int i, int j, int k, double tau_cm)
+    const double *z, const double *tmunu, double *rhs, int i, int j, int k, double tau_cm)
 {
     const prj_z4c_params *opt = &mesh->z4c_params;
     double idx[3] = {1.0 / block->dx[0], 1.0 / block->dx[1], 1.0 / block->dx[2]};
@@ -1160,6 +1378,7 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
     double ddalpha[3][3], ddchi[3][3], dbeta[3][3], dGam[3][3];
     double ddbeta[3][3][3];
     double Gamma_u[3], DA_u[3], LGam[3], Lbeta[3], Lg[3][3], LA[3][3];
+    double T_S_dd[3][3], T_S_d[3], T_E = 0.0, T_S = 0.0;
     double Lalpha = 0.0, Lchi = 0.0, LKhat = 0.0, LTheta = 0.0;
     double detg, chi, chi_guarded, oopsi4, K, AA = 0.0, R = 0.0, Ht, Ddalpha = 0.0;
     double div_beta = 0.0;
@@ -1195,6 +1414,8 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
     memset(Lbeta, 0, sizeof(Lbeta));
     memset(Lg, 0, sizeof(Lg));
     memset(LA, 0, sizeof(LA));
+    memset(T_S_dd, 0, sizeof(T_S_dd));
+    memset(T_S_d, 0, sizeof(T_S_d));
 
     prj_z4c_load_metric(z, i, j, k, g);
     prj_z4c_load_A(z, i, j, k, A);
@@ -1209,6 +1430,17 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
     K = prj_z4c_get(z, PRJ_Z4C_KHAT, i, j, k) +
         2.0 * prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k);
     alpha = prj_z4c_get(z, PRJ_Z4C_ALPHA, i, j, k);
+    if (tmunu != 0) {
+        T_E = tmunu[TMUNUIDX(PRJ_TMUNU_E, i, j, k)];
+        for (a = 0; a < 3; ++a) {
+            T_S_d[a] = tmunu[TMUNUIDX(prj_z4c_tmunu_mom_var(a), i, j, k)];
+            for (b = 0; b < 3; ++b) {
+                T_S_dd[a][b] =
+                    tmunu[TMUNUIDX(prj_z4c_tmunu_stress_var(a, b), i, j, k)];
+                T_S += oopsi4 * gu[a][b] * T_S_dd[a][b];
+            }
+        }
+    }
 
     for (a = 0; a < 3; ++a) {
         dalpha[a] = prj_z4c_Dx(z, PRJ_Z4C_ALPHA, a, idx, i, j, k);
@@ -1436,13 +1668,14 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
     rhs[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)] =
         -Ddalpha + alpha * (AA + (1.0 / 3.0) * K * K) + LKhat +
         opt->damp_kappa1_inv_cm * (1.0 - opt->damp_kappa2) * alpha *
-        prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k);
+        prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k) +
+        4.0 * M_PI * alpha * (T_S + T_E);
     rhs[Z4CIDX(PRJ_Z4C_CHI, i, j, k)] =
         Lchi - (1.0 / 6.0) * opt->chi_psi_power * chi_guarded * alpha * K;
     rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)] =
         (LTheta + alpha * (0.5 * Ht - (2.0 + opt->damp_kappa2) *
-        opt->damp_kappa1_inv_cm * prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k))) *
-        (double)opt->use_z4c;
+        opt->damp_kappa1_inv_cm * prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k)) -
+        8.0 * M_PI * alpha * T_E) * (double)opt->use_z4c;
     for (a = 0; a < 3; ++a) {
         double value = 2.0 * alpha * DA_u[a] + LGam[a] -
             2.0 * alpha * opt->damp_kappa1_inv_cm *
@@ -1450,6 +1683,7 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
 
         for (b = 0; b < 3; ++b) {
             value -= 2.0 * Auu[a][b] * dalpha[b];
+            value -= 16.0 * M_PI * alpha * gu[a][b] * T_S_d[b];
         }
         rhs[Z4CIDX(prj_z4c_Gam_var(a), i, j, k)] = value;
     }
@@ -1464,6 +1698,8 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
             rhs_A -= (1.0 / 3.0) * g[a][b] * (-Ddalpha + alpha * R);
             rhs_A += alpha * (K * A[a][b] - 2.0 * AA_dd[a][b]);
             rhs_A += LA[a][b];
+            rhs_A -= 8.0 * M_PI * alpha *
+                (oopsi4 * T_S_dd[a][b] - (1.0 / 3.0) * T_S * g[a][b]);
             rhs[Z4CIDX(prj_z4c_A_var(a, b), i, j, k)] = rhs_A;
         }
     }
@@ -1526,6 +1762,7 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
         const double *z;
+        const double *tmunu;
         double *rhs;
         int i, j, k;
 
@@ -1533,12 +1770,14 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
             continue;
         }
         z = prj_block_z4c_stage_const(block, state_stage);
+        tmunu = prj_block_z4c_tmunu_stage_const(block, state_stage);
         rhs = prj_block_z4c_rhs_stage(block, rhs_stage);
         prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, 0.0);
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    prj_z4c_compute_rhs_cell(mesh, block, z, rhs, i, j, k, tau_cm);
+                    prj_z4c_compute_rhs_cell(mesh, block, z, tmunu, rhs,
+                        i, j, k, tau_cm);
                 }
             }
         }
@@ -1813,6 +2052,22 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     (void)state_stage;
     (void)rhs_stage;
     (void)tau_cm;
+}
+
+void prj_z4c_clear_tmunu(prj_mesh *mesh, const prj_mpi *mpi, int stage)
+{
+    (void)mesh;
+    (void)mpi;
+    (void)stage;
+}
+
+void prj_z4c_build_tmunu_from_matter(prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_rad *rad, int stage)
+{
+    (void)mesh;
+    (void)mpi;
+    (void)rad;
+    (void)stage;
 }
 
 void prj_z4c_update_linear(prj_mesh *mesh, const prj_mpi *mpi,
