@@ -24,7 +24,7 @@ static inline int prj_mhd_local_block(const prj_mpi *mpi, const prj_block *block
 static inline int prj_mhd_initialized_storage_block(const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        block->W != 0 && block->Bf[0] != 0 && block->emf[0] != 0;
+        block->W_mhd != 0 && block->Bf[0] != 0 && block->emf[0] != 0;
 }
 
 static inline void prj_mhd_check_block_storage(const prj_block *block)
@@ -34,7 +34,7 @@ static inline void prj_mhd_check_block_storage(const prj_block *block)
     if (block == 0) {
         prj_mhd_fail("prj_mhd: block is null");
     }
-    if (block->W == 0) {
+    if (block->W_mhd == 0) {
         prj_mhd_fail("prj_mhd: missing cell-centered block storage");
     }
     for (d = 0; d < 3; ++d) {

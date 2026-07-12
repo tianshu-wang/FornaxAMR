@@ -13,10 +13,8 @@ static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const 
 {
     int v;
 
-    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-        block->W[WIDX(v, i, j, k)] = W[v];
-        prj_block_prim_stage(block, 1)[WIDX(v, i, j, k)] = W[v];
-    }
+    prj_block_store_prim_cell(block, 0, i, j, k, W);
+    prj_block_store_prim_cell(block, 1, i, j, k, W);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         block->U[VIDX(v, i, j, k)] = U[v];
     }
@@ -225,10 +223,8 @@ static void prj_problem_inject_energy(prj_sim *sim, const prj_mpi *mpi, double c
                         U[v] = block->U[VIDX(v, i, j, k)];
                     }
                     prj_eos_cons2prim(&sim->eos, U, W);
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        block->W[WIDX(v, i, j, k)] = W[v];
-                        prj_block_prim_stage(block, 1)[WIDX(v, i, j, k)] = W[v];
-                    }
+                    prj_block_store_prim_cell(block, 0, i, j, k, W);
+                    prj_block_store_prim_cell(block, 1, i, j, k, W);
                 }
             }
         }

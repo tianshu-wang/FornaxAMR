@@ -19,7 +19,7 @@ static int prj_diagnostics_is_root_rank(const prj_mpi *mpi)
 static int prj_diagnostics_block_is_local_active(const prj_mpi *mpi, const prj_block *block)
 {
     return block != 0 && block->id >= 0 && block->active == 1 &&
-        block->W != 0 && (mpi == 0 || block->rank == mpi->rank);
+        block->W_mhd != 0 && (mpi == 0 || block->rank == mpi->rank);
 }
 
 void prj_diagnostics_truncate_dqdt(const prj_mpi *mpi)
@@ -62,10 +62,10 @@ static void prj_diagnostics_calc_dqdt_local(const prj_mesh *mesh, const prj_mpi 
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    const double rho = block->W[WIDX(PRJ_PRIM_RHO, i, j, k)];
-                    const double v0 = block->W[WIDX(PRJ_PRIM_V1, i, j, k)];
-                    const double v1 = block->W[WIDX(PRJ_PRIM_V2, i, j, k)];
-                    const double v2 = block->W[WIDX(PRJ_PRIM_V3, i, j, k)];
+                    const double rho = block->W_mhd[WIDX(PRJ_PRIM_RHO, i, j, k)];
+                    const double v0 = block->W_mhd[WIDX(PRJ_PRIM_V1, i, j, k)];
+                    const double v1 = block->W_mhd[WIDX(PRJ_PRIM_V2, i, j, k)];
+                    const double v2 = block->W_mhd[WIDX(PRJ_PRIM_V3, i, j, k)];
                     const double x0 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                     const double x1 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                     const double x2 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];

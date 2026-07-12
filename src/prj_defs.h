@@ -204,8 +204,12 @@ typedef double prj_table_real;
 #else
 #define PRJ_NRAD_VAR (PRJ_NRAD * PRJ_NEGROUP * (1 + PRJ_NDIM))
 #endif
-#define PRJ_NVAR_CONS (PRJ_NHYDRO + PRJ_NRAD_VAR)
-#define PRJ_NVAR_PRIM (PRJ_NHYDRO + PRJ_NRAD_VAR)
+#define PRJ_NVAR_MHD_PRIM PRJ_NHYDRO
+#define PRJ_NVAR_RAD_PRIM PRJ_NRAD_VAR
+#define PRJ_NVAR_MHD_CONS PRJ_NHYDRO
+#define PRJ_NVAR_RAD_CONS PRJ_NRAD_VAR
+#define PRJ_NVAR_CONS (PRJ_NVAR_MHD_CONS + PRJ_NVAR_RAD_CONS)
+#define PRJ_NVAR_PRIM (PRJ_NVAR_MHD_PRIM + PRJ_NVAR_RAD_PRIM)
 #define PRJ_NVAR_EOSVAR 3
 #ifndef PRJ_BLOCK_SIZE
 #define PRJ_BLOCK_SIZE 8
@@ -333,6 +337,8 @@ typedef double prj_table_real;
 
 #define IDX(i, j, k) BIDX(1, 0, i, j, k)
 #define VIDX(v, i, j, k) BIDX(PRJ_NVAR_CONS, v, i, j, k)
+#define MHDVIDX(v, i, j, k) BIDX(PRJ_NVAR_MHD_CONS, v, i, j, k)
+#define RADVIDX(v, i, j, k) BIDX(PRJ_NVAR_RAD_CONS, v, i, j, k)
 #define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
 #define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
 #define Z4CIDX(v, i, j, k) BIDX(PRJ_NZ4C, v, i, j, k)
@@ -427,6 +433,16 @@ enum prj_z4c_var {
 #define PRJ_PRIM_RAD_F3(field, group) PRJ_CONS_RAD_F3(field, group)
 #define PRJ_CONS_RAD_I(field, group, angle) (PRJ_NHYDRO + (((field) * PRJ_NEGROUP + (group)) * PRJ_NANGLE + (angle)))
 #define PRJ_PRIM_RAD_I(field, group, angle) PRJ_CONS_RAD_I(field, group, angle)
+#define PRJ_RAD_PRIM_E(field, group) ((((field) * PRJ_NEGROUP + (group)) * PRJ_RAD_GROUP_STRIDE))
+#define PRJ_RAD_PRIM_F1(field, group) (PRJ_RAD_PRIM_E(field, group) + 1)
+#define PRJ_RAD_PRIM_F2(field, group) (PRJ_RAD_PRIM_E(field, group) + 2)
+#define PRJ_RAD_PRIM_F3(field, group) (PRJ_RAD_PRIM_E(field, group) + 3)
+#define PRJ_RAD_PRIM_I(field, group, angle) ((((field) * PRJ_NEGROUP + (group)) * PRJ_NANGLE + (angle)))
+#define PRJ_RAD_CONS_E(field, group) PRJ_RAD_PRIM_E(field, group)
+#define PRJ_RAD_CONS_F1(field, group) PRJ_RAD_PRIM_F1(field, group)
+#define PRJ_RAD_CONS_F2(field, group) PRJ_RAD_PRIM_F2(field, group)
+#define PRJ_RAD_CONS_F3(field, group) PRJ_RAD_PRIM_F3(field, group)
+#define PRJ_RAD_CONS_I(field, group, angle) PRJ_RAD_PRIM_I(field, group, angle)
 
 enum prj_dir {
     X1DIR = 0,

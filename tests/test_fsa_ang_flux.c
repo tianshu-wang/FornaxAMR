@@ -30,8 +30,10 @@ static void setup_block(prj_block *block)
     block->dx[0] = 1.0;
     block->dx[1] = 1.0;
     block->dx[2] = 1.0;
-    block->W = (double *)xcalloc((size_t)PRJ_NVAR_PRIM *
-        (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NCELLS, sizeof(*block->W));
+    block->W_mhd = (double *)xcalloc((size_t)PRJ_NVAR_MHD_PRIM *
+        (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NCELLS, sizeof(*block->W_mhd));
+    block->W_rad = (double *)xcalloc((size_t)PRJ_NVAR_RAD_PRIM *
+        (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_BLOCK_NCELLS, sizeof(*block->W_rad));
 #if PRJ_USE_RADIAL_FRAME_FSA
     block->ang_geom_fsa = (double *)xcalloc(3U * (size_t)PRJ_NARC *
         (size_t)PRJ_BLOCK_NCELLS, sizeof(*block->ang_geom_fsa));
@@ -45,8 +47,10 @@ static void free_block(prj_block *block)
 {
     int d;
 
-    free(block->W);
-    block->W = 0;
+    free(block->W_mhd);
+    free(block->W_rad);
+    block->W_mhd = 0;
+    block->W_rad = 0;
 #if PRJ_USE_RADIAL_FRAME_FSA
     free(block->ang_geom_fsa);
     block->ang_geom_fsa = 0;
@@ -80,7 +84,7 @@ static void fill_state(const prj_rad *rad, prj_block *block,
                 double I = pattern_intensity(field, group, angle, scale);
                 double J = rad->solid_angle[angle] * I;
 
-                block->W[WIDX(PRJ_PRIM_RAD_I(field, group, angle), 0, 0, 0)] = J;
+                block->W_rad[WIDX(PRJ_RAD_PRIM_I(field, group, angle), 0, 0, 0)] = J;
                 u[v] = J;
             }
         }
@@ -125,7 +129,7 @@ static void check_zero_speed_noop(const prj_rad *rad, prj_block *block)
     fill_state(rad, block, u, 1.0);
     memcpy(before, u, sizeof(u));
 
-    prj_rad_ang_flux_apply(rad, block, block->W, u, 0, 0, 0, 1.0, 0.25);
+    prj_rad_ang_flux_apply(rad, block, block->W_rad, u, 0, 0, 0, 1.0, 0.25);
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -154,7 +158,7 @@ static void check_conservation(const prj_rad *rad, prj_block *block)
     fill_state(rad, block, u, 1.0);
     total_before = integrated_total(u);
 
-    prj_rad_ang_flux_apply(rad, block, block->W, u, 0, 0, 0, 1.0, 1.0e-4);
+    prj_rad_ang_flux_apply(rad, block, block->W_rad, u, 0, 0, 0, 1.0, 1.0e-4);
 
     total_after = integrated_total(u);
     if (fabs(total_after - total_before) >
@@ -195,7 +199,7 @@ static void check_positivity_limiter(const prj_rad *rad, prj_block *block)
     fill_state(rad, block, u, 1.0e-3);
     total_before = integrated_total(u);
 
-    prj_rad_ang_flux_apply(rad, block, block->W, u, 0, 0, 0, 1.0, 1.0);
+    prj_rad_ang_flux_apply(rad, block, block->W_rad, u, 0, 0, 0, 1.0, 1.0);
 
     total_after = integrated_total(u);
     if (fabs(total_after - total_before) >
@@ -248,7 +252,7 @@ static void check_geometry_flux_direction(const prj_rad *rad, prj_block *block)
             -speed * rad->arc_vec[3 * arc + d];
     }
 
-    prj_rad_ang_flux_apply(rad, block, block->W, u, 0, 0, 0, 1.0, 1.0e-4);
+    prj_rad_ang_flux_apply(rad, block, block->W_rad, u, 0, 0, 0, 1.0, 1.0e-4);
 
     total_after = integrated_total(u);
     if (fabs(total_after - total_before) >

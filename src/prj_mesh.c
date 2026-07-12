@@ -211,7 +211,8 @@ static void prj_block_init_empty(prj_block *b)
     b->active = 1;
     b->refine_flag = 0;
     b->can_refine = 1;
-    b->W = 0;
+    b->W_mhd = 0;
+    b->W_rad = 0;
 #if PRJ_DYNAMIC_GR
     b->z4c = 0;
     b->z4c_rhs = 0;
@@ -219,7 +220,8 @@ static void prj_block_init_empty(prj_block *b)
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
-    b->dUdt = 0;
+    b->mhd_rhs = 0;
+    b->rad_rhs = 0;
     b->deriv_ex = 0;
     b->deriv_im = 0;
     b->flux[0] = 0;
@@ -280,23 +282,28 @@ static void prj_block_init_empty(prj_block *b)
 }
 
 /* Number of doubles in a block's flat cell-data array (the single contiguous
- * allocation rooted at block->W).  This is the SINGLE SOURCE OF TRUTH for the
+ * allocation rooted at block->W_mhd).  This is the SINGLE SOURCE OF TRUTH for the
  * flat layout size: prj_block_alloc_data allocates exactly this many doubles,
  * and MPI block migration transfers exactly this many, so the two can never
  * drift apart.  It must stay in lockstep with the field carving below. */
 size_t prj_block_data_count(void)
 {
-    size_t prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+    size_t mhd_prim_count = (size_t)PRJ_NVAR_MHD_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+        (size_t)PRJ_BLOCK_NCELLS;
+    size_t rad_prim_count = (size_t)PRJ_NVAR_RAD_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
         (size_t)PRJ_BLOCK_NCELLS;
     size_t eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     size_t cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    size_t mhd_rhs_count = (size_t)PRJ_NVAR_MHD_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    size_t rad_rhs_count = (size_t)PRJ_NVAR_RAD_CONS * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_DYNAMIC_GR
     size_t z4c_count = (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
         (size_t)PRJ_BLOCK_NCELLS;
 #endif
     size_t total_count;
 
-    total_count = prim_count + eosvar_count + 5U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
+    total_count = mhd_prim_count + rad_prim_count + eosvar_count + cons_count +
+        mhd_rhs_count + rad_rhs_count + 3U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_DYNAMIC_GR
     total_count += 2U * z4c_count;
 #endif
@@ -321,12 +328,15 @@ size_t prj_block_data_count(void)
 
 int prj_block_alloc_data(prj_block *b)
 {
-    size_t prim_count;
+    size_t mhd_prim_count;
+    size_t rad_prim_count;
 #if PRJ_DYNAMIC_GR
     size_t z4c_count;
 #endif
     size_t eosvar_count;
     size_t cons_count;
+    size_t mhd_rhs_count;
+    size_t rad_rhs_count;
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     size_t deriv_count;
 #endif
@@ -347,7 +357,9 @@ int prj_block_alloc_data(prj_block *b)
 
     prj_block_free_data(b);
 
-    prim_count = (size_t)PRJ_NVAR_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+    mhd_prim_count = (size_t)PRJ_NVAR_MHD_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
+        (size_t)PRJ_BLOCK_NCELLS;
+    rad_prim_count = (size_t)PRJ_NVAR_RAD_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
         (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_DYNAMIC_GR
     z4c_count = (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
@@ -355,6 +367,8 @@ int prj_block_alloc_data(prj_block *b)
 #endif
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    mhd_rhs_count = (size_t)PRJ_NVAR_MHD_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    rad_rhs_count = (size_t)PRJ_NVAR_RAD_CONS * (size_t)PRJ_BLOCK_NCELLS;
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     deriv_count = (size_t)PRJ_BLOCK_NSTAGES * cons_count;
 #endif
@@ -395,8 +409,10 @@ int prj_block_alloc_data(prj_block *b)
         return 2;
     }
 
-    b->W = base;
-    base += prim_count;
+    b->W_mhd = base;
+    base += mhd_prim_count;
+    b->W_rad = PRJ_NVAR_RAD_PRIM > 0 ? base : 0;
+    base += rad_prim_count;
 #if PRJ_DYNAMIC_GR
     b->z4c = base;
     base += z4c_count;
@@ -408,8 +424,10 @@ int prj_block_alloc_data(prj_block *b)
     b->cell_derived_done = cell_derived_done;
     b->U = base;
     base += cons_count;
-    b->dUdt = base;
-    base += cons_count;
+    b->mhd_rhs = base;
+    base += mhd_rhs_count;
+    b->rad_rhs = PRJ_NVAR_RAD_CONS > 0 ? base : 0;
+    base += rad_rhs_count;
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     b->deriv_ex = base;
     base += deriv_count;
@@ -499,7 +517,7 @@ void prj_block_free_data(prj_block *b)
         return;
     }
 
-    free(b->W);
+    free(b->W_mhd);
     free(b->cell_derived_done);
 #if PRJ_MHD
     free(b->eta_mask);
@@ -510,7 +528,8 @@ void prj_block_free_data(prj_block *b)
 #endif
     free(b->ridx);
     free(b->fr);
-    b->W = 0;
+    b->W_mhd = 0;
+    b->W_rad = 0;
 #if PRJ_DYNAMIC_GR
     b->z4c = 0;
     b->z4c_rhs = 0;
@@ -518,7 +537,8 @@ void prj_block_free_data(prj_block *b)
     b->eosvar = 0;
     b->cell_derived_done = 0;
     b->U = 0;
-    b->dUdt = 0;
+    b->mhd_rhs = 0;
+    b->rad_rhs = 0;
     b->deriv_ex = 0;
     b->deriv_im = 0;
     b->flux[0] = 0;
@@ -841,13 +861,13 @@ int prj_mesh_update_center_of_mass(prj_mesh *mesh, const prj_mpi *mpi, double x_
         int j;
         int k;
 
-        if (!prj_mesh_block_is_local_active(mpi, block) || block->W == 0) {
+        if (!prj_mesh_block_is_local_active(mpi, block) || block->W_mhd == 0) {
             continue;
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    double rho = block->W[WIDX(PRJ_PRIM_RHO, i, j, k)];
+                    double rho = block->W_mhd[WIDX(PRJ_PRIM_RHO, i, j, k)];
                     double dm = rho * block->vol;
                     double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                     double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];

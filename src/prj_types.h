@@ -152,7 +152,8 @@ struct prj_block {
     double xmin[3];
     double xmax[3];
     double dx[3];
-    double *W;
+    double *W_mhd;
+    double *W_rad;
 #if PRJ_DYNAMIC_GR
     double *z4c;
     double *z4c_rhs;
@@ -160,7 +161,8 @@ struct prj_block {
     double *eosvar;
     int *cell_derived_done;
     double *U;
-    double *dUdt;
+    double *mhd_rhs;
+    double *rad_rhs;
     double *deriv_ex;
     double *deriv_im;
     double *flux[3];
@@ -197,16 +199,99 @@ struct prj_block {
     prj_neighbor slot[56];
 };
 
+static inline double *prj_block_mhd_stage(prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W_mhd != 0 ?
+        PRJ_BLOCK_STAGE_W(block->W_mhd, stage) : 0;
+}
+
+static inline const double *prj_block_mhd_stage_const(const prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W_mhd != 0 ?
+        PRJ_BLOCK_STAGE_W(block->W_mhd, stage) : 0;
+}
+
+static inline double *prj_block_rad_stage(prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W_rad != 0 ?
+        PRJ_BLOCK_STAGE_W(block->W_rad, stage) : 0;
+}
+
+static inline const double *prj_block_rad_stage_const(const prj_block *block, int stage)
+{
+    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W_rad != 0 ?
+        PRJ_BLOCK_STAGE_W(block->W_rad, stage) : 0;
+}
+
 static inline double *prj_block_prim_stage(prj_block *block, int stage)
 {
-    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W != 0 ?
-        PRJ_BLOCK_STAGE_W(block->W, stage) : 0;
+    return prj_block_mhd_stage(block, stage);
 }
 
 static inline const double *prj_block_prim_stage_const(const prj_block *block, int stage)
 {
-    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->W != 0 ?
-        PRJ_BLOCK_STAGE_W(block->W, stage) : 0;
+    return prj_block_mhd_stage_const(block, stage);
+}
+
+static inline double prj_block_prim_value_const(const prj_block *block, int stage, int v,
+    int i, int j, int k)
+{
+    if (v < PRJ_NVAR_MHD_PRIM) {
+        const double *W_mhd = prj_block_mhd_stage_const(block, stage);
+        return W_mhd != 0 ? W_mhd[WIDX(v, i, j, k)] : 0.0;
+    } else {
+        const double *W_rad = prj_block_rad_stage_const(block, stage);
+        const int rv = v - PRJ_NVAR_MHD_PRIM;
+        return W_rad != 0 ? W_rad[WIDX(rv, i, j, k)] : 0.0;
+    }
+}
+
+static inline void prj_block_set_prim_value(prj_block *block, int stage, int v,
+    int i, int j, int k, double value)
+{
+    if (v < PRJ_NVAR_MHD_PRIM) {
+        double *W_mhd = prj_block_mhd_stage(block, stage);
+        if (W_mhd != 0) {
+            W_mhd[WIDX(v, i, j, k)] = value;
+        }
+    } else {
+        double *W_rad = prj_block_rad_stage(block, stage);
+        const int rv = v - PRJ_NVAR_MHD_PRIM;
+        if (W_rad != 0) {
+            W_rad[WIDX(rv, i, j, k)] = value;
+        }
+    }
+}
+
+static inline void prj_block_load_prim_cell_const(const prj_block *block, int stage,
+    int i, int j, int k, double *w)
+{
+    int v;
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        w[v] = prj_block_prim_value_const(block, stage, v, i, j, k);
+    }
+}
+
+static inline void prj_block_store_prim_cell(prj_block *block, int stage,
+    int i, int j, int k, const double *w)
+{
+    int v;
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        prj_block_set_prim_value(block, stage, v, i, j, k, w[v]);
+    }
+}
+
+static inline double prj_block_rhs_value_const(const prj_block *block, int v,
+    int i, int j, int k)
+{
+    if (v < PRJ_NVAR_MHD_CONS) {
+        const double *mhd_rhs = block != 0 ? block->mhd_rhs : 0;
+        return mhd_rhs != 0 ? mhd_rhs[MHDVIDX(v, i, j, k)] : 0.0;
+    } else {
+        const double *rad_rhs = block != 0 ? block->rad_rhs : 0;
+        const int rv = v - PRJ_NVAR_MHD_CONS;
+        return rad_rhs != 0 ? rad_rhs[RADVIDX(rv, i, j, k)] : 0.0;
+    }
 }
 
 static inline double *prj_block_deriv_stage(double *deriv, int stage)

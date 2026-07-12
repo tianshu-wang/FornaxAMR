@@ -22,7 +22,7 @@ static void test_set_state(double *W, double rho, double vx, double vy, double v
 {
     int v;
 
-    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+    for (v = 0; v < PRJ_NVAR_MHD_PRIM; ++v) {
         W[v] = 0.0;
     }
     W[PRJ_PRIM_RHO] = rho;
@@ -40,7 +40,7 @@ static void test_mirror_state(const double *src, double *dst)
 {
     int v;
 
-    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+    for (v = 0; v < PRJ_NVAR_MHD_PRIM; ++v) {
         dst[v] = src[v];
     }
     dst[PRJ_PRIM_V1] = -src[PRJ_PRIM_V1];
@@ -85,8 +85,8 @@ static void test_assert_face_parity(const double *v_face, const double *v_face_m
 static void test_direct_case(const char *name, const double *WL, const double *WR,
     double gamma, double bn, double deltau, double deltav, double deltaw)
 {
-    double WML[PRJ_NVAR_PRIM];
-    double WMR[PRJ_NVAR_PRIM];
+    double WML[PRJ_NVAR_MHD_PRIM];
+    double WMR[PRJ_NVAR_MHD_PRIM];
     double F[PRJ_NVAR_CONS] = {0.0};
     double FM[PRJ_NVAR_CONS] = {0.0};
     double v_face[3] = {0.0, 0.0, 0.0};
@@ -114,8 +114,8 @@ static void test_direct_case(const char *name, const double *WL, const double *W
 static void test_direct_solver_symmetry(void)
 {
     const double gamma = 5.0 / 3.0;
-    double WL[PRJ_NVAR_PRIM];
-    double WR[PRJ_NVAR_PRIM];
+    double WL[PRJ_NVAR_MHD_PRIM];
+    double WR[PRJ_NVAR_MHD_PRIM];
 
     test_set_state(WL, 1.1, 0.23, -0.17, 0.11, 0.95, 0.12,
         0.05, 0.07, -0.04, gamma);
@@ -155,8 +155,8 @@ static void test_fill_cell(prj_block *block, int i, int j, int k,
 {
     int v;
 
-    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-        block->W[WIDX(v, i, j, k)] = W[v];
+    for (v = 0; v < PRJ_NVAR_MHD_PRIM; ++v) {
+        block->W_mhd[WIDX(v, i, j, k)] = W[v];
     }
     test_fill_eosvar(block, i, j, k, p, gamma);
 }
@@ -184,8 +184,8 @@ static void test_fill_block_pair(prj_block *block, prj_block *mirror)
     for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
         for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
             for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
-                double W[PRJ_NVAR_PRIM];
-                double WM[PRJ_NVAR_PRIM];
+                double W[PRJ_NVAR_MHD_PRIM];
+                double WM[PRJ_NVAR_MHD_PRIM];
                 double p;
                 double pm;
                 int io = PRJ_BLOCK_SIZE - 1 - i;
@@ -270,8 +270,8 @@ static void test_flux_update_symmetry(void)
         flux_m[dir] = mirror.flux[dir];
     }
 
-    prj_flux_update(&eos, 0, &block, block.W, block.eosvar, flux, 0);
-    prj_flux_update(&eos, 0, &mirror, mirror.W, mirror.eosvar, flux_m, 0);
+    prj_flux_update(&eos, 0, &block, block.W_mhd, block.eosvar, flux, 0);
+    prj_flux_update(&eos, 0, &mirror, mirror.W_mhd, mirror.eosvar, flux_m, 0);
 
     {
         double F[PRJ_NHYDRO] = {0.0};
@@ -285,14 +285,14 @@ static void test_flux_update_symmetry(void)
         test_assert_flux_parity(F, FM);
     }
     test_assert_close("integrated vface1 parity",
-        mirror.v_riemann[X1DIR][VRIDX(0, iface, j, k)],
-        -block.v_riemann[X1DIR][VRIDX(0, iface, j, k)]);
+        mirror.v_riemann[X1DIR][0 * PRJ_BLOCK_NCELLS + IDX(iface, j, k)],
+        -block.v_riemann[X1DIR][0 * PRJ_BLOCK_NCELLS + IDX(iface, j, k)]);
     test_assert_close("integrated vface2 parity",
-        mirror.v_riemann[X1DIR][VRIDX(1, iface, j, k)],
-        block.v_riemann[X1DIR][VRIDX(1, iface, j, k)]);
+        mirror.v_riemann[X1DIR][1 * PRJ_BLOCK_NCELLS + IDX(iface, j, k)],
+        block.v_riemann[X1DIR][1 * PRJ_BLOCK_NCELLS + IDX(iface, j, k)]);
     test_assert_close("integrated vface3 parity",
-        mirror.v_riemann[X1DIR][VRIDX(2, iface, j, k)],
-        block.v_riemann[X1DIR][VRIDX(2, iface, j, k)]);
+        mirror.v_riemann[X1DIR][2 * PRJ_BLOCK_NCELLS + IDX(iface, j, k)],
+        block.v_riemann[X1DIR][2 * PRJ_BLOCK_NCELLS + IDX(iface, j, k)]);
     test_assert_close("integrated Bv1 parity",
         mirror.Bv1[X1DIR][IDX(iface, j, k)], -block.Bv1[X1DIR][IDX(iface, j, k)]);
     test_assert_close("integrated Bv2 parity",

@@ -1030,7 +1030,7 @@ void prj_rad_fsa_refresh_mesh_geometry(const prj_rad *rad, prj_mesh *mesh,
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
-        if (block->id < 0 || block->active != 1 || block->W == 0) {
+        if (block->id < 0 || block->active != 1 || block->W_mhd == 0) {
             continue;
         }
         if (mpi != 0 && block->rank != mpi->rank) {
@@ -2537,10 +2537,10 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             }
             inv_dnu[g] = 1.0 / dnu;
 
-            Eg[g] = W_state[WIDX(PRJ_PRIM_RAD_E(field, g), ic, jc, kc)];
-            Fg[g][0] = W_state[WIDX(PRJ_PRIM_RAD_F1(field, g), ic, jc, kc)];
-            Fg[g][1] = W_state[WIDX(PRJ_PRIM_RAD_F2(field, g), ic, jc, kc)];
-            Fg[g][2] = W_state[WIDX(PRJ_PRIM_RAD_F3(field, g), ic, jc, kc)];
+            Eg[g] = W_state[WIDX(PRJ_RAD_PRIM_E(field, g), ic, jc, kc)];
+            Fg[g][0] = W_state[WIDX(PRJ_RAD_PRIM_F1(field, g), ic, jc, kc)];
+            Fg[g][1] = W_state[WIDX(PRJ_RAD_PRIM_F2(field, g), ic, jc, kc)];
+            Fg[g][2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
             prj_rad_m1_pressure(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2], Pg[g]);
             prj_rad_m1_third_moment_contract(rad, Eg[g], Fg[g][0], Fg[g][1], Fg[g][2],
                 dvdx, Mq[g]);
@@ -2702,7 +2702,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
          * face states above are spectral; the finite-volume update remains the
          * face difference for each group-integrated conserved variable.  dt is
          * the effective stage weight (full dt in stage1, 0.5·dt in stage2 to
-         * match the RK2-Heun mixing of dUdt).  The lapse factor α(r) accounts
+         * match the RK2-Heun mixing of the explicit RHS.  The lapse factor α(r) accounts
          * for the GR proper-time slowdown in the gravitational well, consistent
          * with the lapse multipliers already on the spatial radiation flux and
          * on the gravity source. */
@@ -2833,7 +2833,7 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
             for (g = 0; g < PRJ_NEGROUP; ++g) {
                 int v = PRJ_CONS_RAD_I(field, g, angle);
 
-                J_group[g] = W_state[WIDX(PRJ_PRIM_RAD_I(field, g, angle), ic, jc, kc)];
+                J_group[g] = W_state[WIDX(PRJ_RAD_PRIM_I(field, g, angle), ic, jc, kc)];
                 J_spec[g] = J_group[g] * inv_dnu[g];
                 energy_available[g] = u[v];
             }
@@ -3081,7 +3081,7 @@ void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
                  * LHS contains -alpha div_n(I b), so after moving it to the
                  * update side a positive b·arc_vec drains the second angular
                  * cell and fills the first. */
-                I_face = W_state[WIDX(PRJ_PRIM_RAD_I(field, group, donor), ic, jc, kc)] /
+                I_face = W_state[WIDX(PRJ_RAD_PRIM_I(field, group, donor), ic, jc, kc)] /
                     rad->solid_angle[donor];
                 arc_flux[arc] = arc_factor[arc] * I_face;
             }

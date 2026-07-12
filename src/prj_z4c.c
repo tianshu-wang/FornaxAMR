@@ -1409,13 +1409,13 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
     }
     Lchi += (1.0 / 6.0) * opt->chi_psi_power * chi_guarded * div_beta;
     for (a = 0; a < 3; ++a) {
-        double ddbeta_d = 0.0;
-
-        for (b = 0; b < 3; ++b) {
-            ddbeta_d += (1.0 / 3.0) * ddbeta[a][b][b];
-        }
         LGam[a] += (2.0 / 3.0) * Gamma_u[a] * div_beta;
         for (b = 0; b < 3; ++b) {
+            double ddbeta_d = 0.0;
+
+            for (c = 0; c < 3; ++c) {
+                ddbeta_d += (1.0 / 3.0) * ddbeta[b][c][c];
+            }
             LGam[a] += gu[a][b] * ddbeta_d - Gamma_u[b] * dbeta[b][a];
             for (c = 0; c < 3; ++c) {
                 LGam[a] += gu[b][c] * ddbeta[b][c][a];

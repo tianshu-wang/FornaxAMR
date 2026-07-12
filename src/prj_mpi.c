@@ -291,12 +291,12 @@ static void prj_mpi_assign_block_storage(prj_mesh *mesh, const prj_mpi *mpi)
             continue;
         }
         if (mpi != 0 && block->rank != mpi->rank) {
-            if (block->W != 0) {
+            if (block->W_mhd != 0) {
                 prj_block_free_data(block);
             }
             continue;
         }
-        if (block->W == 0) {
+        if (block->W_mhd == 0) {
             if (prj_block_alloc_data(block) != 0) {
                 /* DIAGNOSTIC: report how far we got vs. how much this rank owns,
                    so we can tell "rank owns too many blocks" (large counts =>
@@ -523,18 +523,18 @@ static void prj_mpi_migrate_active_blocks(prj_mesh *mesh, const prj_mpi *mpi, co
             int sendcount = 0;
 
             if (mpi->rank == new_rank) {
-                if (block->W == 0 && prj_block_alloc_data(block) != 0) {
+                if (block->W_mhd == 0 && prj_block_alloc_data(block) != 0) {
                     prj_mpi_fatal("prj_mpi_migrate_active_blocks: failed to allocate receiving block data");
                 }
-                recvbuf = block->W;
+                recvbuf = block->W_mhd;
                 recvcount = (int)data_count;
                 source = old_rank;
             }
             if (mpi->rank == old_rank) {
-                if (block->W == 0) {
+                if (block->W_mhd == 0) {
                     prj_mpi_fatal("prj_mpi_migrate_active_blocks: old owner is missing block data");
                 }
-                sendbuf = block->W;
+                sendbuf = block->W_mhd;
                 sendcount = (int)data_count;
                 dest = new_rank;
             }
@@ -1470,7 +1470,7 @@ static void prj_mpi_unpack_ghost_values(prj_mesh *mesh, prj_mpi *mpi,
             continue;
         }
         block = &mesh->blocks[block_id];
-        if (block->rank != mpi->rank || block->W == 0 || block->eosvar == 0) {
+        if (block->rank != mpi->rank || block->W_mhd == 0 || block->eosvar == 0) {
             pos += PRJ_MPI_GHOST_NVAR_HE;
             continue;
         }
@@ -1503,7 +1503,7 @@ static void prj_mpi_unpack_ghost_values(prj_mesh *mesh, prj_mpi *mpi,
             continue;
         }
         block = &mesh->blocks[block_id];
-        if (block->rank != mpi->rank || block->W == 0) {
+        if (block->rank != mpi->rank || block->W_mhd == 0) {
             pos_rad += PRJ_MPI_GHOST_NVAR_RAD;
             continue;
         }

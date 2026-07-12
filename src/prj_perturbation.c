@@ -91,12 +91,10 @@ void prj_set_perturbation(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
                     gauss = prj_perturb_standard_normal(&state);
                     factor = 1.0 + gaussian_norm * gauss;
 
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        W[v] = block->W[WIDX(v, i, j, k)];
-                    }
+                    prj_block_load_prim_cell_const(block, 0, i, j, k, W);
                     W[PRJ_PRIM_RHO] *= factor;
-                    block->W[WIDX(PRJ_PRIM_RHO, i, j, k)] = W[PRJ_PRIM_RHO];
-                    prj_block_prim_stage(block, 1)[WIDX(PRJ_PRIM_RHO, i, j, k)] = W[PRJ_PRIM_RHO];
+                    prj_block_set_prim_value(block, 0, PRJ_PRIM_RHO, i, j, k, W[PRJ_PRIM_RHO]);
+                    prj_block_set_prim_value(block, 1, PRJ_PRIM_RHO, i, j, k, W[PRJ_PRIM_RHO]);
 
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                         U[v] = block->U[VIDX(v, i, j, k)];

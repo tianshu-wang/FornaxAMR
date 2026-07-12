@@ -209,13 +209,13 @@ static void prj_zero_block_arrays(prj_block *b)
     size_t n;
     size_t total;
 
-    if (b == 0 || b->W == 0) {
+    if (b == 0 || b->W_mhd == 0) {
         return;
     }
 
     total = prj_block_data_count();
     for (n = 0; n < total; ++n) {
-        b->W[n] = 0.0;
+        b->W_mhd[n] = 0.0;
     }
 }
 
@@ -251,16 +251,16 @@ static void prj_amr_move_children_to_parent_rank(prj_mesh *mesh, const prj_mpi *
         }
 
         if (mpi->rank == parent_rank) {
-            if (child->W == 0 && prj_block_alloc_data(child) != 0) {
+            if (child->W_mhd == 0 && prj_block_alloc_data(child) != 0) {
                 prj_amr_fatal("prj_amr_move_children_to_parent_rank: failed to allocate receiving child data");
             }
-            MPI_Recv(child->W, (int)data_count, MPI_DOUBLE, source_rank,
+            MPI_Recv(child->W_mhd, (int)data_count, MPI_DOUBLE, source_rank,
                 PRJ_AMR_CHILD_TRANSFER_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         } else if (mpi->rank == source_rank) {
-            if (child->W == 0) {
+            if (child->W_mhd == 0) {
                 prj_amr_fatal("prj_amr_move_children_to_parent_rank: source child is missing block data");
             }
-            MPI_Send(child->W, (int)data_count, MPI_DOUBLE, parent_rank,
+            MPI_Send(child->W_mhd, (int)data_count, MPI_DOUBLE, parent_rank,
                 PRJ_AMR_CHILD_TRANSFER_TAG, MPI_COMM_WORLD);
             prj_block_free_data(child);
         }
@@ -620,7 +620,7 @@ static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, in
     i = prj_amr_clamp_storage_index(i);
     j = prj_amr_clamp_storage_index(j);
     k = prj_amr_clamp_storage_index(k);
-    return b->W[WIDX(v, i, j, k)];
+    return prj_block_prim_value_const(b, 0, v, i, j, k);
 }
 
 /* Total pressure used by the AMR estimators: gas pressure plus magnetic
@@ -634,9 +634,9 @@ static double prj_amr_total_pressure_at(const prj_block *b, int i, int j, int k)
 {
     double pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
 #if PRJ_MHD
-    double b1 = b->W[WIDX(PRJ_PRIM_B1, i, j, k)];
-    double b2 = b->W[WIDX(PRJ_PRIM_B2, i, j, k)];
-    double b3 = b->W[WIDX(PRJ_PRIM_B3, i, j, k)];
+    double b1 = b->W_mhd[WIDX(PRJ_PRIM_B1, i, j, k)];
+    double b2 = b->W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)];
+    double b3 = b->W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)];
 
     pressure += 0.5 * (b1 * b1 + b2 * b2 + b3 * b3);
 #endif
@@ -890,7 +890,7 @@ static double prj_fractional_jump_cell_value(const prj_block *b, int jump_var, i
     if (jump_var == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
         return prj_amr_total_pressure_at(b, i, j, k);
     }
-    return b->W[WIDX(PRJ_PRIM_RHO, i, j, k)];
+    return b->W_mhd[WIDX(PRJ_PRIM_RHO, i, j, k)];
 }
 
 static double prj_fractional_jump_cell_indicator(const prj_block *b, int jump_var, int i, int j, int k)
@@ -908,7 +908,7 @@ static double prj_fractional_jump_cell_indicator(const prj_block *b, int jump_va
     if (jump_var == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE && b->eosvar == 0) {
         return 0.0;
     }
-    if (jump_var != PRJ_FRACTIONAL_JUMP_VAR_PRESSURE && b->W == 0) {
+    if (jump_var != PRJ_FRACTIONAL_JUMP_VAR_PRESSURE && b->W_mhd == 0) {
         return 0.0;
     }
 
@@ -1168,9 +1168,7 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos,
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                         b->U[VIDX(v, i, j, k)] = Uc[v];
                     }
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        b->W[WIDX(v, i, j, k)] = Wc[v];
-                    }
+                    prj_block_store_prim_cell(b, 0, i, j, k, Wc);
                 }
             }
         }
@@ -1191,7 +1189,7 @@ static void prj_sync_conserved_from_primitive(prj_mesh *mesh, prj_eos *eos,
         int j;
         int k;
 
-        if (!prj_is_local_active_block(mpi, block) || block->W == 0 || block->U == 0) {
+        if (!prj_is_local_active_block(mpi, block) || block->W_mhd == 0 || block->U == 0) {
             continue;
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -1201,9 +1199,7 @@ static void prj_sync_conserved_from_primitive(prj_mesh *mesh, prj_eos *eos,
                     double Uc[PRJ_NVAR_CONS];
                     int v;
 
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                        Wc[v] = block->W[WIDX(v, i, j, k)];
-                    }
+                    prj_block_load_prim_cell_const(block, 0, i, j, k, Wc);
                     prj_eos_prim2cons(eos, Wc, Uc);
                     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                         block->U[VIDX(v, i, j, k)] = Uc[v];
@@ -1379,8 +1375,8 @@ void prj_amr_tag(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi)
                         continue;
                     }
                     if (mesh->amr_reach_highest_level_at_density > 0.0 &&
-                        b->W != 0 &&
-                        b->W[WIDX(PRJ_PRIM_RHO, ii, j, k)] >
+                        b->W_mhd != 0 &&
+                        b->W_mhd[WIDX(PRJ_PRIM_RHO, ii, j, k)] >
                         mesh->amr_reach_highest_level_at_density) {
                         has_refine_criterion = 1;
                         refine = 1;
@@ -1531,7 +1527,7 @@ static void prj_amr_mhd_check_block(const prj_block *block, const char *caller)
 {
     int d;
 
-    if (block == 0 || block->U == 0 || block->W == 0) {
+    if (block == 0 || block->U == 0 || block->W_mhd == 0) {
         prj_amr_mhd_fail(caller);
     }
     for (d = 0; d < 3; ++d) {
@@ -1609,12 +1605,12 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
                 block->U[VIDX(PRJ_CONS_B1, i, j, k)] = b1;
                 block->U[VIDX(PRJ_CONS_B2, i, j, k)] = b2;
                 block->U[VIDX(PRJ_CONS_B3, i, j, k)] = b3;
-                block->W[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
-                block->W[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
-                block->W[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
-                prj_block_prim_stage(block, 1)[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
-                prj_block_prim_stage(block, 1)[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
-                prj_block_prim_stage(block, 1)[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                block->W_mhd[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
+                block->W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
+                block->W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
+                prj_block_set_prim_value(block, 1, PRJ_PRIM_B1, i, j, k, b1);
+                prj_block_set_prim_value(block, 1, PRJ_PRIM_B2, i, j, k, b2);
+                prj_block_set_prim_value(block, 1, PRJ_PRIM_B3, i, j, k, b3);
             }
         }
     }
@@ -2152,10 +2148,11 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             prj_mesh_update_block_r_com(child, mesh);
             prj_amr_prolongate(mesh, mpi, parent, child, oct);
         } else {
-            child->W = 0;
+            child->W_mhd = 0;
             child->eosvar = 0;
             child->U = 0;
-            child->dUdt = 0;
+            child->mhd_rhs = 0;
+            child->rad_rhs = 0;
             child->deriv_ex = 0;
             child->deriv_im = 0;
             child->flux[0] = 0;
@@ -2236,7 +2233,7 @@ int prj_amr_coarsen_block(prj_mesh *mesh, const prj_mpi *mpi, int parent_id)
 
     prj_amr_move_children_to_parent_rank(mesh, mpi, parent);
     if (owner_local) {
-        if (parent->W == 0) {
+        if (parent->W_mhd == 0) {
             prj_block_alloc_data(parent);
             prj_block_setup_geometry(parent, &mesh->coord);
             prj_mesh_update_block_r_com(parent, mesh);
