@@ -132,8 +132,12 @@ static double prj_timeint_mhd_face_vnorm(const prj_block *block, int face_dir,
     return value;
 }
 
-/* Anomalous CT resistivity hook.  Currently disabled so dense-core behavior is
- * controlled by the Riemann solver choice alone. */
+/* Anomalous CT resistivity applied in dense, proton-rich EOS-transition material.
+ * The per-cell artificial eta grows smoothly with both rho/RHO_FLOOR and
+ * Ye/YE_THR, and the EMF edge uses the maximum eta from its incident cells.
+ *
+ * Applying the value on all incident edges (rather than only those that straddle
+ * a feature) makes the damping orientation-independent. */
 #define PRJ_MHD_ETA_BOOST 1.0e12
 #define PRJ_MHD_ETA_RHO_FLOOR 1.0e13
 #define PRJ_MHD_ETA_YE_THR 0.25
@@ -151,11 +155,26 @@ static void prj_timeint_mhd_fill_eta_mask(prj_block *block, const double *W)
     if (block == 0 || block->eta_mask == 0 || W == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_fill_eta_mask: invalid input");
     }
-    (void)W;
     for (i = -1; i <= PRJ_BLOCK_SIZE; ++i) {
         for (j = -1; j <= PRJ_BLOCK_SIZE; ++j) {
             for (k = -1; k <= PRJ_BLOCK_SIZE; ++k) {
-                block->eta_mask[IDX(i, j, k)] = 0.0;
+                double rho = W[WIDX(PRJ_PRIM_RHO, i, j, k)];
+                double ye = W[WIDX(PRJ_PRIM_YE, i, j, k)];
+                double rho_factor = 0.0;
+                double ye_factor = 0.0;
+                double eta_art = 0.0;
+
+                if (isfinite(rho) && rho > 0.0) {
+                    rho_factor = PRJ_MAX(0.0, log(rho / PRJ_MHD_ETA_RHO_FLOOR));
+                }
+                if (isfinite(ye) && ye > 0.0) {
+                    ye_factor = PRJ_MAX(0.0, log(ye / PRJ_MHD_ETA_YE_THR));
+                }
+                eta_art = PRJ_MHD_ETA_BOOST * rho_factor * ye_factor;
+                if (!isfinite(eta_art)) {
+                    prj_timeint_mhd_fail("prj_timeint_mhd_fill_eta_mask: non-finite artificial eta");
+                }
+                block->eta_mask[IDX(i, j, k)] = eta_art;
             }
         }
     }

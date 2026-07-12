@@ -9,10 +9,6 @@ void prj_riemann_hllc(const double *WL, const double *WR,
     const prj_eos *eos, double *flux, double v_face[3],
     double deltau, double deltav, double deltaw);
 #if PRJ_MHD
-void prj_riemann_hll(const double *WL, const double *WR,
-    double pL, double pR, double gL, double gR,
-    const prj_eos *eos, double bn, double *flux, double v_face[3],
-    double *Bv1, double *Bv2, double deltau, double deltav, double deltaw);
 void prj_riemann_hlld(const double *WL, const double *WR,
     double pL, double pR, double gL, double gR,
     const prj_eos *eos, double bn, double *flux, double v_face[3],
