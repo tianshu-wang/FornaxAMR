@@ -2003,15 +2003,23 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_mpi *mpi, const prj_bloc
 #if PRJ_MHD
     prj_amr_mhd_prolongate_bf(mesh, mpi, parent, child, child_oct);
 #endif
+#if PRJ_DYNAMIC_GR
+    if (prj_z4c_runtime_enabled(mesh)) {
+        prj_z4c_amr_prolongate_child(parent, child, child_oct);
+    }
+#endif
 }
 
-void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
+void prj_amr_restrict(const prj_mesh *mesh, const prj_block *children[8], prj_block *parent)
 {
     int v;
     int i;
     int j;
     int k;
 
+#if !PRJ_DYNAMIC_GR
+    (void)mesh;
+#endif
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -2072,6 +2080,11 @@ void prj_amr_restrict(const prj_block *children[8], prj_block *parent)
     }
 #if PRJ_MHD
     prj_amr_mhd_restrict_bf(children, parent);
+#endif
+#if PRJ_DYNAMIC_GR
+    if (prj_z4c_runtime_enabled(mesh)) {
+        prj_z4c_amr_restrict_parent(children, parent);
+    }
 #endif
 }
 
@@ -2238,7 +2251,7 @@ int prj_amr_coarsen_block(prj_mesh *mesh, const prj_mpi *mpi, int parent_id)
             prj_block_setup_geometry(parent, &mesh->coord);
             prj_mesh_update_block_r_com(parent, mesh);
         }
-        prj_amr_restrict(children, parent);
+        prj_amr_restrict(mesh, children, parent);
     }
     parent->active = 1;
     parent->refine_flag = 0;

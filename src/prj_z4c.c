@@ -269,6 +269,18 @@ static double prj_z4c_Dx(const double *z, int v, int dir, const double idx[3],
     return out * idx[dir];
 }
 
+static double prj_z4c_Dx2nd(const double *z, int v, int dir, const double idx[3],
+    int i, int j, int k)
+{
+    int im = i, jm = j, km = k;
+    int ip = i, jp = j, kp = k;
+
+    prj_z4c_shift_index(dir, -1, &im, &jm, &km);
+    prj_z4c_shift_index(dir, 1, &ip, &jp, &kp);
+    return 0.5 * idx[dir] *
+        (prj_z4c_get(z, v, ip, jp, kp) - prj_z4c_get(z, v, im, jm, km));
+}
+
 static double prj_z4c_Dxx(const double *z, int v, int dir, const double idx[3],
     int i, int j, int k)
 {
@@ -913,6 +925,167 @@ static double prj_z4c_prolong_value(const double *src, int var, int i, int j, in
         prj_z4c_get(src, var, i, j, k - 1));
 
     return c + target[0] * sx + target[1] * sy + target[2] * sz;
+}
+
+static void prj_z4c_clear_block_aux(prj_block *block)
+{
+    if (block == 0) {
+        return;
+    }
+    if (block->z4c_rhs != 0) {
+        prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    }
+    if (block->z4c_tmunu != 0) {
+        prj_fill(block->z4c_tmunu, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NTMUNU *
+            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    }
+}
+
+static void prj_z4c_amr_prolong_axis_weights(int parent_index, int fine_odd,
+    int *base, int *n, double w[5])
+{
+#if PRJ_NGHOST == 2
+    static const double pro[3] = {0.15625, 0.9375, -0.09375};
+    int q;
+
+    *n = 3;
+    *base = parent_index - 1;
+    for (q = 0; q < *n; ++q) {
+        w[q] = fine_odd ? pro[*n - 1 - q] : pro[q];
+    }
+#elif PRJ_NGHOST == 4
+    static const double pro[5] = {
+        -0.02197265625, 0.205078125, 0.9228515625, -0.123046875, 0.01708984375
+    };
+    int q;
+
+    *n = 5;
+    *base = parent_index - 2;
+    for (q = 0; q < *n; ++q) {
+        w[q] = fine_odd ? pro[*n - 1 - q] : pro[q];
+    }
+#else
+    (void)parent_index;
+    (void)fine_odd;
+    *base = 0;
+    *n = 0;
+    memset(w, 0, 5U * sizeof(*w));
+#endif
+}
+
+static double prj_z4c_amr_prolong_value(const double *src, int var,
+    int i, int j, int k, int child_oct)
+{
+#if PRJ_NGHOST == 2 || PRJ_NGHOST == 4
+    int gi = ((child_oct & 1) ? PRJ_BLOCK_SIZE : 0) + i;
+    int gj = ((child_oct & 2) ? PRJ_BLOCK_SIZE : 0) + j;
+    int gk = ((child_oct & 4) ? PRJ_BLOCK_SIZE : 0) + k;
+    int pi = gi / 2;
+    int pj = gj / 2;
+    int pk = gk / 2;
+    int ibase, jbase, kbase;
+    int ni, nj, nk;
+    double wi[5], wj[5], wk[5];
+    double out = 0.0;
+    int ii, jj, kk;
+
+    prj_z4c_amr_prolong_axis_weights(pi, gi & 1, &ibase, &ni, wi);
+    prj_z4c_amr_prolong_axis_weights(pj, gj & 1, &jbase, &nj, wj);
+    prj_z4c_amr_prolong_axis_weights(pk, gk & 1, &kbase, &nk, wk);
+    for (ii = 0; ii < ni; ++ii) {
+        for (jj = 0; jj < nj; ++jj) {
+            for (kk = 0; kk < nk; ++kk) {
+                out += wi[ii] * wj[jj] * wk[kk] *
+                    prj_z4c_get(src, var, ibase + ii, jbase + jj, kbase + kk);
+            }
+        }
+    }
+    return out;
+#else
+    double target[3] = {
+        (i % 2 == 0) ? -0.25 : 0.25,
+        (j % 2 == 0) ? -0.25 : 0.25,
+        (k % 2 == 0) ? -0.25 : 0.25
+    };
+    int pi = i / 2 + ((child_oct & 1) ? PRJ_BLOCK_SIZE / 2 : 0);
+    int pj = j / 2 + ((child_oct & 2) ? PRJ_BLOCK_SIZE / 2 : 0);
+    int pk = k / 2 + ((child_oct & 4) ? PRJ_BLOCK_SIZE / 2 : 0);
+
+    return prj_z4c_prolong_value(src, var, pi, pj, pk, target);
+#endif
+}
+
+static void prj_z4c_amr_restrict_axis_weights(int fine_even, int *base,
+    int *n, double w[5])
+{
+#if PRJ_NGHOST == 2
+    static const double res[3] = {0.375, 0.75, -0.125};
+    int left = fine_even < PRJ_BLOCK_SIZE / 2;
+    int q;
+
+    *n = 3;
+    *base = left ? fine_even : fine_even - 1;
+    for (q = 0; q < *n; ++q) {
+        w[q] = left ? res[q] : res[*n - 1 - q];
+    }
+#elif PRJ_NGHOST == 4
+    static const double res[5] = {
+        -0.0390625, 0.46875, 0.703125, -0.15625, 0.0234375
+    };
+    static const double res_edge[5] = {
+        0.2734375, 1.09375, -0.546875, 0.21875, -0.0390625
+    };
+    const double *rw = (fine_even == 0 || fine_even == PRJ_BLOCK_SIZE - 2) ?
+        res_edge : res;
+    int left = fine_even < PRJ_BLOCK_SIZE / 2;
+    int q;
+
+    *n = 5;
+    *base = left ? fine_even - 1 : fine_even - 2;
+    if (fine_even == 0) {
+        *base += 1;
+    } else if (fine_even == PRJ_BLOCK_SIZE - 2) {
+        *base -= 1;
+    }
+    for (q = 0; q < *n; ++q) {
+        w[q] = left ? rw[q] : rw[*n - 1 - q];
+    }
+#else
+    (void)fine_even;
+    *base = 0;
+    *n = 0;
+    memset(w, 0, 5U * sizeof(*w));
+#endif
+}
+
+static double prj_z4c_amr_restrict_value(const double *src, int var, int i, int j, int k)
+{
+#if PRJ_NGHOST == 2 || PRJ_NGHOST == 4
+    int fi = 2 * i;
+    int fj = 2 * j;
+    int fk = 2 * k;
+    int ibase, jbase, kbase;
+    int ni, nj, nk;
+    double wi[5], wj[5], wk[5];
+    double out = 0.0;
+    int ii, jj, kk;
+
+    prj_z4c_amr_restrict_axis_weights(fi, &ibase, &ni, wi);
+    prj_z4c_amr_restrict_axis_weights(fj, &jbase, &nj, wj);
+    prj_z4c_amr_restrict_axis_weights(fk, &kbase, &nk, wk);
+    for (ii = 0; ii < ni; ++ii) {
+        for (jj = 0; jj < nj; ++jj) {
+            for (kk = 0; kk < nk; ++kk) {
+                out += wi[ii] * wj[jj] * wk[kk] *
+                    prj_z4c_get(src, var, ibase + ii, jbase + jj, kbase + kk);
+            }
+        }
+    }
+    return out;
+#else
+    return prj_z4c_restrict_value(src, var, i, j, k);
+#endif
 }
 
 static int prj_z4c_fill_kind_from_rel_level(int rel_level)
@@ -1784,6 +1957,149 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     }
 }
 
+static int prj_z4c_sommerfeld_face_enabled(const prj_mesh *mesh, const prj_bc *bc,
+    const prj_block *block, int axis, int outer)
+{
+    double block_face;
+    double domain_face;
+    double tol;
+    int bc_type;
+
+    if (mesh == 0 || bc == 0 || block == 0) {
+        return 0;
+    }
+    block_face = outer ? block->xmax[axis] : block->xmin[axis];
+    domain_face = prj_z4c_axis_domain_face(mesh, axis, outer);
+    tol = 1.0e-8 * PRJ_MAX(fabs(block->dx[axis]), 1.0);
+    if (fabs(block_face - domain_face) > tol) {
+        return 0;
+    }
+    bc_type = prj_z4c_axis_bc_type(bc, axis, outer);
+    if (bc_type == PRJ_BC_OUTFLOW) {
+        return 1;
+    }
+    if (bc_type == PRJ_BC_USER && mesh->z4c_params.user_Sbc != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+static double prj_z4c_sommerfeld_rhs_var(const prj_block *block, const double *z,
+    int var, int i, int j, int k, const double s[3], double r, double speed)
+{
+    double idx[3] = {1.0 / block->dx[0], 1.0 / block->dx[1], 1.0 / block->dx[2]};
+    double adv = 0.0;
+    int axis;
+
+    for (axis = 0; axis < 3; ++axis) {
+        adv += s[axis] * prj_z4c_Dx2nd(z, var, axis, idx, i, j, k);
+    }
+    return -speed * prj_z4c_get(z, var, i, j, k) / r - speed * adv;
+}
+
+static void prj_z4c_apply_sommerfeld_cell(const prj_block *block, const double *z,
+    double *rhs, int i, int j, int k)
+{
+    double x[3];
+    double r;
+    double s[3];
+    double sqrt2 = sqrt(2.0);
+    int a;
+
+    x[0] = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+    x[1] = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+    x[2] = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+    r = sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
+    if (r < 1.0e-300) {
+        r = 1.0e-300;
+    }
+    for (a = 0; a < 3; ++a) {
+        s[a] = x[a] / r;
+    }
+
+    rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_THETA, i, j, k, s, r, 1.0);
+    rhs[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_KHAT, i, j, k, s, r, sqrt2);
+    for (a = 0; a < 3; ++a) {
+        rhs[Z4CIDX(prj_z4c_Gam_var(a), i, j, k)] =
+            prj_z4c_sommerfeld_rhs_var(block, z, prj_z4c_Gam_var(a),
+                i, j, k, s, r, 1.0);
+    }
+    rhs[Z4CIDX(PRJ_Z4C_AXX, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_AXX, i, j, k, s, r, 1.0);
+    rhs[Z4CIDX(PRJ_Z4C_AXY, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_AXY, i, j, k, s, r, 1.0);
+    rhs[Z4CIDX(PRJ_Z4C_AXZ, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_AXZ, i, j, k, s, r, 1.0);
+    rhs[Z4CIDX(PRJ_Z4C_AYY, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_AYY, i, j, k, s, r, 1.0);
+    rhs[Z4CIDX(PRJ_Z4C_AYZ, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_AYZ, i, j, k, s, r, 1.0);
+    rhs[Z4CIDX(PRJ_Z4C_AZZ, i, j, k)] =
+        prj_z4c_sommerfeld_rhs_var(block, z, PRJ_Z4C_AZZ, i, j, k, s, r, 1.0);
+}
+
+static void prj_z4c_apply_sommerfeld_face(const prj_mesh *mesh, const prj_bc *bc,
+    const prj_block *block, const double *z, double *rhs, int axis, int outer)
+{
+    int ilo = 0, ihi = PRJ_BLOCK_SIZE;
+    int jlo = 0, jhi = PRJ_BLOCK_SIZE;
+    int klo = 0, khi = PRJ_BLOCK_SIZE;
+    int i, j, k;
+
+    if (!prj_z4c_sommerfeld_face_enabled(mesh, bc, block, axis, outer)) {
+        return;
+    }
+    if (axis == X1DIR) {
+        ilo = outer ? PRJ_BLOCK_SIZE - 1 : 0;
+        ihi = ilo + 1;
+    } else if (axis == X2DIR) {
+        jlo = outer ? PRJ_BLOCK_SIZE - 1 : 0;
+        jhi = jlo + 1;
+    } else {
+        klo = outer ? PRJ_BLOCK_SIZE - 1 : 0;
+        khi = klo + 1;
+    }
+    for (i = ilo; i < ihi; ++i) {
+        for (j = jlo; j < jhi; ++j) {
+            for (k = klo; k < khi; ++k) {
+                prj_z4c_apply_sommerfeld_cell(block, z, rhs, i, j, k);
+            }
+        }
+    }
+}
+
+void prj_z4c_apply_sommerfeld_rhs(prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_bc *bc, int state_stage, int rhs_stage)
+{
+    int bidx;
+
+    if (!prj_z4c_runtime_enabled(mesh) || bc == 0) {
+        return;
+    }
+    if (state_stage < 0 || state_stage >= PRJ_BLOCK_NSTAGES ||
+        rhs_stage < 0 || rhs_stage >= PRJ_BLOCK_NSTAGES) {
+        prj_z4c_fail("prj_z4c_apply_sommerfeld_rhs: invalid stage");
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        const double *z;
+        double *rhs;
+        int axis;
+
+        if (!prj_z4c_local_block(mpi, block)) {
+            continue;
+        }
+        z = prj_block_z4c_stage_const(block, state_stage);
+        rhs = prj_block_z4c_rhs_stage(block, rhs_stage);
+        for (axis = 0; axis < 3; ++axis) {
+            prj_z4c_apply_sommerfeld_face(mesh, bc, block, z, rhs, axis, 0);
+            prj_z4c_apply_sommerfeld_face(mesh, bc, block, z, rhs, axis, 1);
+        }
+    }
+}
+
 void prj_z4c_update_linear(prj_mesh *mesh, const prj_mpi *mpi,
     int dst_stage, int a_stage, double a_w, int b_stage, double b_w,
     int rhs_stage, double dtau_cm)
@@ -1946,23 +2262,15 @@ void prj_z4c_amr_prolongate_child(const prj_block *parent, prj_block *child, int
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    double target[3] = {
-                        (i % 2 == 0) ? -0.25 : 0.25,
-                        (j % 2 == 0) ? -0.25 : 0.25,
-                        (k % 2 == 0) ? -0.25 : 0.25
-                    };
-                    int pi = i / 2 + ((child_oct & 1) ? PRJ_BLOCK_SIZE / 2 : 0);
-                    int pj = j / 2 + ((child_oct & 2) ? PRJ_BLOCK_SIZE / 2 : 0);
-                    int pk = k / 2 + ((child_oct & 4) ? PRJ_BLOCK_SIZE / 2 : 0);
-
                     for (var = 0; var < PRJ_NZ4C; ++var) {
                         dst[Z4CIDX(var, i, j, k)] =
-                            prj_z4c_prolong_value(src, var, pi, pj, pk, target);
+                            prj_z4c_amr_prolong_value(src, var, i, j, k, child_oct);
                     }
                 }
             }
         }
     }
+    prj_z4c_clear_block_aux(child);
 }
 
 void prj_z4c_amr_restrict_parent(const prj_block *children[8], prj_block *parent)
@@ -1992,13 +2300,14 @@ void prj_z4c_amr_restrict_parent(const prj_block *children[8], prj_block *parent
                     for (k = 0; k < PRJ_BLOCK_SIZE / 2; ++k) {
                         for (var = 0; var < PRJ_NZ4C; ++var) {
                             dst[Z4CIDX(var, i + ioff, j + joff, k + koff)] =
-                                prj_z4c_restrict_value(src, var, i, j, k);
+                                prj_z4c_amr_restrict_value(src, var, i, j, k);
                         }
                     }
                 }
             }
         }
     }
+    prj_z4c_clear_block_aux(parent);
 }
 
 #else
@@ -2052,6 +2361,16 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     (void)state_stage;
     (void)rhs_stage;
     (void)tau_cm;
+}
+
+void prj_z4c_apply_sommerfeld_rhs(prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_bc *bc, int state_stage, int rhs_stage)
+{
+    (void)mesh;
+    (void)mpi;
+    (void)bc;
+    (void)state_stage;
+    (void)rhs_stage;
 }
 
 void prj_z4c_clear_tmunu(prj_mesh *mesh, const prj_mpi *mpi, int stage)

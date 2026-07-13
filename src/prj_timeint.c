@@ -1872,6 +1872,7 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
 
         prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, 0);
         prj_z4c_compute_rhs(mesh, mpi, 0, 0, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
         prj_z4c_update_linear(mesh, mpi, 0, 0, 1.0, 0, 0.0, 0, dtau_cm);
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
     }
@@ -2060,6 +2061,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
         prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, 0);
         prj_z4c_compute_rhs(mesh, mpi, 0, 0, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
         prj_z4c_update_linear(mesh, mpi, 1, 0, 1.0, 0, 0.0, 0, dtau_cm);
         prj_z4c_finalize_stage(mesh, mpi, bc, 1);
     }
@@ -2175,6 +2177,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
         prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, 1);
         prj_z4c_compute_rhs(mesh, mpi, 1, 0, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 1, 0);
         prj_z4c_update_linear(mesh, mpi, 0, 0, 0.5, 1, 0.5, 0, 0.5 * dtau_cm);
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
     }
@@ -2331,6 +2334,7 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
 
         prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, stage);
         prj_z4c_compute_rhs(mesh, mpi, stage, stage, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, stage, stage);
     }
 #else
     (void)mesh;

@@ -144,6 +144,254 @@ static void check_flat_state(void)
     prj_mesh_destroy(&mesh);
 }
 
+static double z4c_linear_pattern(int var, double i, double j, double k, int stage)
+{
+    return 100.0 * (double)(stage + 1) + 10.0 * (double)(var + 1) +
+        0.125 * i + 0.25 * j + 0.5 * k;
+}
+
+static void fill_z4c_linear(prj_block *block)
+{
+    int stage, var, i, j, k;
+
+    for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
+        double *z = prj_block_z4c_stage(block, stage);
+
+        for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+            for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+                for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                    for (var = 0; var < PRJ_NZ4C; ++var) {
+                        z[Z4CIDX(var, i, j, k)] =
+                            z4c_linear_pattern(var, (double)i, (double)j, (double)k, stage);
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void init_allocated_test_block(prj_block *block, int id)
+{
+    memset(block, 0, sizeof(*block));
+    block->id = id;
+    block->active = 1;
+    block->rank = 0;
+    if (prj_block_alloc_data(block) != 0) {
+        die("test block allocation failed");
+    }
+}
+
+static void check_z4c_aux_cleared(const prj_block *block)
+{
+    size_t n;
+
+    for (n = 0; n < (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+        (size_t)PRJ_BLOCK_NCELLS; ++n) {
+        if (block->z4c_rhs[n] != 0.0) {
+            die("Z4c AMR transfer did not clear rhs");
+        }
+    }
+    for (n = 0; n < (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NTMUNU *
+        (size_t)PRJ_BLOCK_NCELLS; ++n) {
+        if (block->z4c_tmunu[n] != 0.0) {
+            die("Z4c AMR transfer did not clear tmunu");
+        }
+    }
+}
+
+static void check_z4c_amr_transfer(void)
+{
+    prj_block parent;
+    prj_block child;
+    prj_block children_storage[8];
+    const prj_block *children[8];
+    const int oct = 5;
+    const int i = 3, j = 4, k = 5;
+    const int var = PRJ_Z4C_THETA;
+    const int stage = 1;
+    double *z_child;
+    double expected;
+    int gi, gj, gk;
+    int pi, pj, pk;
+    int o;
+
+    init_allocated_test_block(&parent, 100);
+    init_allocated_test_block(&child, 101);
+    fill_z4c_linear(&parent);
+    prj_fill(child.z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+        (size_t)PRJ_BLOCK_NCELLS, 42.0);
+    prj_fill(child.z4c_tmunu, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NTMUNU *
+        (size_t)PRJ_BLOCK_NCELLS, 43.0);
+    prj_z4c_amr_prolongate_child(&parent, &child, oct);
+    z_child = prj_block_z4c_stage(&child, stage);
+    gi = ((oct & 1) ? PRJ_BLOCK_SIZE : 0) + i;
+    gj = ((oct & 2) ? PRJ_BLOCK_SIZE : 0) + j;
+    gk = ((oct & 4) ? PRJ_BLOCK_SIZE : 0) + k;
+    pi = gi / 2;
+    pj = gj / 2;
+    pk = gk / 2;
+    expected = z4c_linear_pattern(var,
+        (double)pi + ((gi & 1) ? 0.25 : -0.25),
+        (double)pj + ((gj & 1) ? 0.25 : -0.25),
+        (double)pk + ((gk & 1) ? 0.25 : -0.25), stage);
+    assert_close("z4c prolong", z_child[Z4CIDX(var, i, j, k)], expected, 1.0e-12);
+    check_z4c_aux_cleared(&child);
+
+    prj_fill(parent.z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+        (size_t)PRJ_BLOCK_NCELLS, 44.0);
+    prj_fill(parent.z4c_tmunu, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NTMUNU *
+        (size_t)PRJ_BLOCK_NCELLS, 45.0);
+    for (o = 0; o < 8; ++o) {
+        int st, v, ii, jj, kk;
+
+        init_allocated_test_block(&children_storage[o], 200 + o);
+        children[o] = &children_storage[o];
+        for (st = 0; st < PRJ_BLOCK_NSTAGES; ++st) {
+            double *z = prj_block_z4c_stage(&children_storage[o], st);
+
+            for (ii = -PRJ_NGHOST; ii < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++ii) {
+                for (jj = -PRJ_NGHOST; jj < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++jj) {
+                    for (kk = -PRJ_NGHOST; kk < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++kk) {
+                        for (v = 0; v < PRJ_NZ4C; ++v) {
+                            z[Z4CIDX(v, ii, jj, kk)] =
+                                1000.0 + 100.0 * (double)o + 10.0 * (double)st +
+                                0.01 * (double)v;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    prj_z4c_amr_restrict_parent(children, &parent);
+    for (o = 0; o < 8; ++o) {
+        int ioff = (o & 1) ? PRJ_BLOCK_SIZE / 2 : 0;
+        int joff = (o & 2) ? PRJ_BLOCK_SIZE / 2 : 0;
+        int koff = (o & 4) ? PRJ_BLOCK_SIZE / 2 : 0;
+        double *z_parent = prj_block_z4c_stage(&parent, stage);
+
+        expected = 1000.0 + 100.0 * (double)o + 10.0 * (double)stage +
+            0.01 * (double)var;
+        assert_close("z4c restrict",
+            z_parent[Z4CIDX(var, ioff + 1, joff + 1, koff + 1)], expected, 1.0e-12);
+    }
+    check_z4c_aux_cleared(&parent);
+    for (o = 0; o < 8; ++o) {
+        prj_block_free_data(&children_storage[o]);
+    }
+    prj_block_free_data(&child);
+    prj_block_free_data(&parent);
+}
+
+static void set_linear_sommerfeld_var(prj_block *block, int var, const double coeff[4])
+{
+    double *z = prj_block_z4c_stage(block, 0);
+    int i, j, k;
+
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                double x = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                double y = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                double zc = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+
+                z[Z4CIDX(var, i, j, k)] =
+                    coeff[0] + coeff[1] * x + coeff[2] * y + coeff[3] * zc;
+            }
+        }
+    }
+}
+
+static double expected_sommerfeld(const prj_block *block, int i, int j, int k,
+    const double coeff[4], double speed)
+{
+    double x = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+    double y = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+    double z = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+    double r = sqrt(x * x + y * y + z * z);
+    double value = coeff[0] + coeff[1] * x + coeff[2] * y + coeff[3] * z;
+    double adv = (x * coeff[1] + y * coeff[2] + z * coeff[3]) / r;
+
+    return -speed * value / r - speed * adv;
+}
+
+static prj_bc make_uniform_bc(int type)
+{
+    prj_bc bc;
+
+    bc.bc_x1_inner = type;
+    bc.bc_x1_outer = type;
+    bc.bc_x2_inner = type;
+    bc.bc_x2_outer = type;
+    bc.bc_x3_inner = type;
+    bc.bc_x3_outer = type;
+    return bc;
+}
+
+static void check_z4c_sommerfeld_rhs(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_block *block;
+    double *rhs;
+    prj_bc bc;
+    const int i = 0, j = 2, k = 3;
+    const double theta[4] = {2.0e-6, 1.0e-24, -2.0e-24, 3.0e-24};
+    const double khat[4] = {-3.0e-6, 2.0e-24, 1.0e-24, -1.0e-24};
+    const double gamx[4] = {4.0e-6, -1.0e-24, 4.0e-24, 2.0e-24};
+    const double axx[4] = {5.0e-6, 3.0e-24, -1.0e-24, 2.0e-24};
+    const double sentinel = 9.0e99;
+
+    init_one_block_mesh(&mesh, &coord);
+    block = &mesh.blocks[0];
+    prj_z4c_init_mesh_flat(&mesh, 0);
+    set_linear_sommerfeld_var(block, PRJ_Z4C_THETA, theta);
+    set_linear_sommerfeld_var(block, PRJ_Z4C_KHAT, khat);
+    set_linear_sommerfeld_var(block, PRJ_Z4C_GAMX, gamx);
+    set_linear_sommerfeld_var(block, PRJ_Z4C_AXX, axx);
+    rhs = prj_block_z4c_rhs_stage(block, 0);
+
+    bc = make_uniform_bc(PRJ_BC_REFLECT);
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
+    assert_close("sommerfeld reflect",
+        rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)], sentinel, 0.0);
+
+    bc = make_uniform_bc(PRJ_BC_REFLECT);
+    bc.bc_x1_inner = PRJ_BC_OUTFLOW;
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
+    assert_close_rel("sommerfeld theta",
+        rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
+        expected_sommerfeld(block, i, j, k, theta, 1.0), 1.0e-12);
+    assert_close_rel("sommerfeld khat",
+        rhs[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)],
+        expected_sommerfeld(block, i, j, k, khat, sqrt(2.0)), 1.0e-12);
+    assert_close_rel("sommerfeld gamx",
+        rhs[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)],
+        expected_sommerfeld(block, i, j, k, gamx, 1.0), 1.0e-12);
+    assert_close_rel("sommerfeld axx",
+        rhs[Z4CIDX(PRJ_Z4C_AXX, i, j, k)],
+        expected_sommerfeld(block, i, j, k, axx, 1.0), 1.0e-12);
+    assert_close("sommerfeld leaves alpha",
+        rhs[Z4CIDX(PRJ_Z4C_ALPHA, i, j, k)], sentinel, 0.0);
+    assert_close("sommerfeld leaves interior",
+        rhs[Z4CIDX(PRJ_Z4C_THETA, 1, j, k)], sentinel, 0.0);
+
+    bc.bc_x1_inner = PRJ_BC_USER;
+    mesh.z4c_params.user_Sbc = 0;
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
+    assert_close("sommerfeld user gated",
+        rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)], sentinel, 0.0);
+    mesh.z4c_params.user_Sbc = 1;
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
+    assert_close_rel("sommerfeld user enabled",
+        rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
+        expected_sommerfeld(block, i, j, k, theta, 1.0), 1.0e-12);
+    prj_mesh_destroy(&mesh);
+}
+
 static void check_tmunu_hydro_projection(void)
 {
     prj_mesh mesh;
@@ -318,6 +566,8 @@ int main(int argc, char **argv)
     check_enum_names();
 #if PRJ_DYNAMIC_GR
     check_flat_state();
+    check_z4c_amr_transfer();
+    check_z4c_sommerfeld_rhs();
     check_tmunu_hydro_projection();
 #if PRJ_USE_RADIATION_M1
     check_tmunu_m1_projection();

@@ -17,6 +17,8 @@ void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
 
 void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     int state_stage, int rhs_stage, double tau_cm);
+void prj_z4c_apply_sommerfeld_rhs(prj_mesh *mesh, const prj_mpi *mpi,
+    const prj_bc *bc, int state_stage, int rhs_stage);
 void prj_z4c_clear_tmunu(prj_mesh *mesh, const prj_mpi *mpi, int stage);
 void prj_z4c_build_tmunu_from_matter(prj_mesh *mesh, const prj_mpi *mpi,
     const prj_rad *rad, int stage);
