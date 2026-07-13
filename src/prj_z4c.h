@@ -17,6 +17,7 @@ typedef struct prj_z4c_hydro_geom {
     double dalpha[3];
     double dbeta[3][3];
     double sqrt_gamma;
+    double K_dd[3][3];
 } prj_z4c_hydro_geom;
 
 int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,

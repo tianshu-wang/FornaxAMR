@@ -1194,7 +1194,8 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * and the integrate writes per-cell lapse/grav from geometry, so
          * neither touches the W ghost zones the exchange is filling. The two
          * allreduces inside the reduce progress the posted Isend/Irecv. */
-        if (grav != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
+        if (grav != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL &&
+            !prj_eos_full_dynamic_gr_enabled(mesh)) {
             PRJ_SUBTIMER_START("sub_ghost_grav");
             prj_gravity_monopole_reduce(mesh, grav, rad, mpi, stage);
             prj_gravity_monopole_integrate(mesh, grav, mpi);

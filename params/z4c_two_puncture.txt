@@ -17,7 +17,7 @@ max_level = 0
 max_blocks = 2048
 
 use_multipole_gravity = 0
-use_dynamic_gr = 1
+use_full_dynamic_gr = 0
 z4c_lapse_oplog = 1.0
 z4c_shift_eta_inv_cm = 2.0
 z4c_diss = 0.1

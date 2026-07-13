@@ -250,13 +250,17 @@ static void prj_print_config(const prj_sim *sim, int rank)
         "off"
 #endif
     );
-    fprintf(stderr, "dynamic_gr: %s%s\n",
+    fprintf(stderr, "DYNAMIC_GR: %s\n",
 #if PRJ_DYNAMIC_GR
-        "compiled, ",
+        "compiled"
 #else
-        "not compiled, ",
+        "not compiled"
 #endif
-        sim->mesh.use_dynamic_gr != 0 ? "on" : "off");
+    );
+    fprintf(stderr, "z4c: %s\n",
+        prj_z4c_runtime_enabled(&sim->mesh) ? "on" : "off");
+    fprintf(stderr, "full_dynamic_gr: %s\n",
+        sim->mesh.use_full_dynamic_gr != 0 ? "on" : "off");
     fprintf(stderr, "eos: %s\n",
         prj_eos_label(sim)
     );
@@ -436,11 +440,11 @@ int main(int argc, char *argv[])
     }
     prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
     sim.mesh.time_seconds = sim.time;
-    if (sim.restart_from_file == 0 && sim.mesh.use_dynamic_gr != 0 &&
+    if (sim.restart_from_file == 0 && prj_z4c_runtime_enabled(&sim.mesh) &&
         sim.mesh.z4c_initialized == 0) {
         prj_z4c_init_mesh_flat(&sim.mesh, &mpi);
         prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
-    } else if (sim.mesh.use_dynamic_gr != 0) {
+    } else if (prj_z4c_runtime_enabled(&sim.mesh)) {
         prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
     }
     prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0, &sim.eos, 0,
@@ -448,8 +452,10 @@ int main(int argc, char *argv[])
     prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_MAIN);
     prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
 #if PRJ_USE_GRAVITY
-    prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
-    prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
+    if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
+        prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
+        prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
+    }
 #endif
 
     if (sim.restart_from_file == 0) {
@@ -493,9 +499,11 @@ int main(int argc, char *argv[])
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "mesh_update_x_com_grav");
 #if PRJ_USE_GRAVITY
             if (prj_mesh_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol)) {
-                prj_gravity_cache_mesh(&sim.mesh, &sim.grav);
-                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
-                prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
+                if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
+                    prj_gravity_cache_mesh(&sim.mesh, &sim.grav);
+                    prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
+                    prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
+                }
             }
 #else
             (void)prj_mesh_update_center_of_mass(&sim.mesh, &mpi, sim.x_com_err_tol);
@@ -575,9 +583,11 @@ int main(int argc, char *argv[])
                 prj_mpi_rebalance(&sim.mesh, &mpi);
                 PRJ_SUBTIMER_STOP("sub_amr_rebalance");
 #if PRJ_USE_GRAVITY
-                PRJ_SUBTIMER_START("sub_amr_rebuild_grav");
-                prj_gravity_rebuild_grid(&sim, &mpi);
-                PRJ_SUBTIMER_STOP("sub_amr_rebuild_grav");
+                if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
+                    PRJ_SUBTIMER_START("sub_amr_rebuild_grav");
+                    prj_gravity_rebuild_grid(&sim, &mpi);
+                    PRJ_SUBTIMER_STOP("sub_amr_rebuild_grav");
+                }
 #endif
             }
             if (block_changed) {
@@ -599,16 +609,18 @@ int main(int argc, char *argv[])
                 PRJ_SUBTIMER_START("sub_amr_post_opac_halo");
                 prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
                 PRJ_SUBTIMER_STOP("sub_amr_post_opac_halo");
-                if (sim.mesh.use_dynamic_gr != 0) {
+                if (prj_z4c_runtime_enabled(&sim.mesh)) {
                     PRJ_SUBTIMER_START("sub_amr_post_z4c");
                     prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
                     PRJ_SUBTIMER_STOP("sub_amr_post_z4c");
                 }
             #if PRJ_USE_GRAVITY
-                PRJ_SUBTIMER_START("sub_amr_post_grav");
-                prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
-                prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
-                PRJ_SUBTIMER_STOP("sub_amr_post_grav");
+                if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
+                    PRJ_SUBTIMER_START("sub_amr_post_grav");
+                    prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
+                    prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
+                    PRJ_SUBTIMER_STOP("sub_amr_post_grav");
+                }
             #endif
             }
             PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "amr");

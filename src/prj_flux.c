@@ -1163,7 +1163,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                     }
 #else
 #if PRJ_DYNAMIC_GR
-                    if (prj_eos_dynamic_gr_enabled(mesh)) {
+                    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
                         prj_flux_gr_hydro_hll(eos, mesh, block,
                             prj_stage_slot_from_bf_arg(use_bf1), dir, i, j, k,
                             il, jl, kl, ir, jr, kr, WL, WR, pL, pR, gL, gR,

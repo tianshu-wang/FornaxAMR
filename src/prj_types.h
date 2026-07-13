@@ -479,7 +479,7 @@ struct prj_mesh {
     int amr_criterion_set[PRJ_AMR_N];
     int use_amr_angular_resolution_limit;
     int use_BJ;
-    int use_dynamic_gr;
+    int use_full_dynamic_gr;
     int z4c_initialized;
     int z4c_extrap_order;
     double amr_init_scale_factor;

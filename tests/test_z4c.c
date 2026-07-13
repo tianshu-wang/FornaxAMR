@@ -79,11 +79,56 @@ static double geo_factor(void)
     return PRJ_GNEWT / (c2 * c2);
 }
 
+static void set_constant_diagonal_z4c_metric(prj_block *block,
+    double chi, double gxx, double gyy, double gzz)
+{
+    double *z;
+    int i;
+    int j;
+    int k;
+
+    if (block == 0) {
+        die("missing block for metric setup");
+    }
+    z = prj_block_z4c_stage(block, 0);
+    if (z == 0) {
+        die("missing z4c storage for metric setup");
+    }
+    for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+        for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+            for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
+                z[Z4CIDX(PRJ_Z4C_CHI, i, j, k)] = chi;
+                z[Z4CIDX(PRJ_Z4C_GXX, i, j, k)] = gxx;
+                z[Z4CIDX(PRJ_Z4C_GXY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GXZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GYY, i, j, k)] = gyy;
+                z[Z4CIDX(PRJ_Z4C_GYZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GZZ, i, j, k)] = gzz;
+                z[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AYY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AYZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AZZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_THETA, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_ALPHA, i, j, k)] = 1.0;
+                z[Z4CIDX(PRJ_Z4C_BETAX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_BETAY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_BETAZ, i, j, k)] = 0.0;
+            }
+        }
+    }
+}
+
 static void init_one_block_mesh(prj_mesh *mesh, prj_coord *coord)
 {
     memset(mesh, 0, sizeof(*mesh));
     prj_z4c_init_params(&mesh->z4c_params);
-    mesh->use_dynamic_gr = 1;
+    mesh->use_full_dynamic_gr = 0;
     coord->x1min = 0.0;
     coord->x1max = (double)PRJ_BLOCK_SIZE * 3.0e10;
     coord->x2min = 0.0;
@@ -471,6 +516,148 @@ static void check_rhs_hydro_matter_projection(void)
     prj_mesh_destroy(&mesh);
 }
 
+#if !PRJ_MHD
+static void check_rhs_hydro_matter_uses_z4c_metric(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_block *block;
+    double *W;
+    double *rhs;
+    const int i = 1, j = 2, k = 3;
+    const double pi = acos(-1.0);
+    const double chi = 0.25;
+    const double gxx = 2.0;
+    const double gyy = 0.5;
+    const double gzz = 1.0;
+    const double gamma_xx = gxx / chi;
+    const double gamma_yy = gyy / chi;
+    const double gamma_zz = gzz / chi;
+    const double gu_xx = 1.0 / gxx;
+    const double gamma_inv_xx = chi / gxx;
+    const double gamma_inv_yy = chi / gyy;
+    const double gamma_inv_zz = chi / gzz;
+    const double rho = 2.0;
+    const double v1 = 1.0e9;
+    const double eint = 7.0;
+    const double pressure = 11.0;
+    const double beta1 = v1 / PRJ_CLIGHT;
+    const double beta_cov1 = gamma_xx * beta1;
+    const double beta2 = gamma_xx * beta1 * beta1;
+    const double wlor2 = 1.0 / (1.0 - beta2);
+    const double rhoh = rho * PRJ_CLIGHT * PRJ_CLIGHT + rho * eint + pressure;
+    double fac = geo_factor();
+    double E;
+    double Sx;
+    double Sxx;
+    double Syy;
+    double Szz;
+    double S;
+
+    init_one_block_mesh(&mesh, &coord);
+    mesh.use_full_dynamic_gr = 1;
+    block = &mesh.blocks[0];
+    prj_z4c_init_mesh_flat(&mesh, 0);
+    set_constant_diagonal_z4c_metric(block, chi, gxx, gyy, gzz);
+    W = prj_block_mhd_stage(block, 0);
+    W[WIDX(PRJ_PRIM_RHO, i, j, k)] = rho;
+    W[WIDX(PRJ_PRIM_V1, i, j, k)] = v1;
+    W[WIDX(PRJ_PRIM_V2, i, j, k)] = 0.0;
+    W[WIDX(PRJ_PRIM_V3, i, j, k)] = 0.0;
+    W[WIDX(PRJ_PRIM_EINT, i, j, k)] = eint;
+    block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] = pressure;
+
+    E = fac * (rhoh * wlor2 - pressure);
+    Sx = fac * rhoh * wlor2 * beta_cov1;
+    Sxx = fac * (rhoh * wlor2 * beta_cov1 * beta_cov1 +
+        pressure * gamma_xx);
+    Syy = fac * pressure * gamma_yy;
+    Szz = fac * pressure * gamma_zz;
+    S = gamma_inv_xx * Sxx + gamma_inv_yy * Syy + gamma_inv_zz * Szz;
+
+    prj_z4c_compute_rhs(&mesh, 0, 0, 0, 0, 0.0);
+    rhs = prj_block_z4c_rhs_stage(block, 0);
+    assert_close_rel("rhs curved hydro Khat", rhs[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)],
+        4.0 * pi * (S + E), 1.0e-10);
+    assert_close_rel("rhs curved hydro Theta", rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
+        -8.0 * pi * E, 1.0e-10);
+    assert_close_rel("rhs curved hydro Gamx", rhs[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)],
+        -16.0 * pi * gu_xx * Sx, 1.0e-10);
+    assert_close_rel("rhs curved hydro Axx", rhs[Z4CIDX(PRJ_Z4C_AXX, i, j, k)],
+        -8.0 * pi * (chi * Sxx - S * gxx / 3.0), 1.0e-10);
+    assert_close_rel("rhs curved hydro Ayy", rhs[Z4CIDX(PRJ_Z4C_AYY, i, j, k)],
+        -8.0 * pi * (chi * Syy - S * gyy / 3.0), 1.0e-10);
+    prj_mesh_destroy(&mesh);
+}
+#endif
+
+static void check_rhs_hydro_matter_uses_minkowski_without_full_gr(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_block *block;
+    double *W;
+    double *rhs;
+    const int i = 1, j = 2, k = 3;
+    const double pi = acos(-1.0);
+    const double chi = 0.25;
+    const double gxx = 2.0;
+    const double gyy = 0.5;
+    const double gzz = 1.0;
+    const double gu_xx = 1.0 / gxx;
+    const double gu_yy = 1.0 / gyy;
+    const double gu_zz = 1.0 / gzz;
+    const double rho = 2.0;
+    const double v1 = 1.0e9;
+    const double eint = 7.0;
+    const double pressure = 11.0;
+    const double beta1 = v1 / PRJ_CLIGHT;
+    const double beta2 = beta1 * beta1;
+    const double wlor2 = 1.0 / (1.0 - beta2);
+    const double rhoh = rho * PRJ_CLIGHT * PRJ_CLIGHT + rho * eint + pressure;
+    double fac = geo_factor();
+    double E;
+    double Sx;
+    double Sxx;
+    double Syy;
+    double Szz;
+    double S;
+
+    init_one_block_mesh(&mesh, &coord);
+    mesh.use_full_dynamic_gr = 0;
+    block = &mesh.blocks[0];
+    prj_z4c_init_mesh_flat(&mesh, 0);
+    set_constant_diagonal_z4c_metric(block, chi, gxx, gyy, gzz);
+    W = prj_block_mhd_stage(block, 0);
+    W[WIDX(PRJ_PRIM_RHO, i, j, k)] = rho;
+    W[WIDX(PRJ_PRIM_V1, i, j, k)] = v1;
+    W[WIDX(PRJ_PRIM_V2, i, j, k)] = 0.0;
+    W[WIDX(PRJ_PRIM_V3, i, j, k)] = 0.0;
+    W[WIDX(PRJ_PRIM_EINT, i, j, k)] = eint;
+    block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] = pressure;
+
+    E = fac * (rhoh * wlor2 - pressure);
+    Sx = fac * rhoh * wlor2 * beta1;
+    Sxx = fac * (rhoh * wlor2 * beta1 * beta1 + pressure);
+    Syy = fac * pressure;
+    Szz = fac * pressure;
+    S = chi * (gu_xx * Sxx + gu_yy * Syy + gu_zz * Szz);
+
+    prj_z4c_compute_rhs(&mesh, 0, 0, 0, 0, 0.0);
+    rhs = prj_block_z4c_rhs_stage(block, 0);
+    assert_close_rel("rhs coevolved hydro Khat", rhs[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)],
+        4.0 * pi * (S + E), 1.0e-10);
+    assert_close_rel("rhs coevolved hydro Theta", rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
+        -8.0 * pi * E, 1.0e-10);
+    assert_close_rel("rhs coevolved hydro Gamx", rhs[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)],
+        -16.0 * pi * gu_xx * Sx, 1.0e-10);
+    assert_close_rel("rhs coevolved hydro Axx", rhs[Z4CIDX(PRJ_Z4C_AXX, i, j, k)],
+        -8.0 * pi * (chi * Sxx - S * gxx / 3.0), 1.0e-10);
+    assert_close_rel("rhs coevolved hydro Ayy", rhs[Z4CIDX(PRJ_Z4C_AYY, i, j, k)],
+        -8.0 * pi * (chi * Syy - S * gyy / 3.0), 1.0e-10);
+    prj_mesh_destroy(&mesh);
+}
+
 #if PRJ_USE_RADIATION_M1
 static double test_m1_chi_exact(double f)
 {
@@ -544,6 +731,10 @@ int main(int argc, char **argv)
     check_z4c_amr_transfer();
     check_z4c_sommerfeld_rhs();
     check_rhs_hydro_matter_projection();
+    check_rhs_hydro_matter_uses_minkowski_without_full_gr();
+#if !PRJ_MHD
+    check_rhs_hydro_matter_uses_z4c_metric();
+#endif
 #if PRJ_USE_RADIATION_M1
     check_rhs_m1_matter_projection();
 #endif

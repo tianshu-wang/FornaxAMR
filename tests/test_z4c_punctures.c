@@ -31,7 +31,7 @@ static void setup_mesh(prj_mesh *mesh)
 
     memset(mesh, 0, sizeof(*mesh));
     prj_z4c_init_params(&mesh->z4c_params);
-    mesh->use_dynamic_gr = 1;
+    mesh->use_full_dynamic_gr = 0;
     mesh->max_blocks = 16;
     coord.x1min = -4.0;
     coord.x1max = 4.0;

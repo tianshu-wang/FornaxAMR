@@ -99,7 +99,7 @@ static void prj_z4c_fail(const char *message)
 
 int prj_z4c_runtime_enabled(const prj_mesh *mesh)
 {
-    return mesh != 0 && mesh->use_dynamic_gr != 0;
+    return mesh != 0;
 }
 
 static int prj_z4c_local_block(const prj_mpi *mpi, const prj_block *block)
@@ -168,17 +168,6 @@ static double prj_z4c_tmunu_cgs_to_geo(double value)
 {
     double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
     return value * PRJ_GNEWT / (c2 * c2);
-}
-
-static void prj_z4c_matter_projection_metric(double g[3][3])
-{
-    int a, b;
-
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            g[a][b] = a == b ? 1.0 : 0.0;
-        }
-    }
 }
 
 static double prj_z4c_get(const double *z, int v, int i, int j, int k)
@@ -503,6 +492,8 @@ static double prj_z4c_guarded_chi(const prj_z4c_params *opt, double chi)
     return chi;
 }
 
+static void prj_z4c_load_A(const double *z, int i, int j, int k, double A[3][3]);
+
 static int prj_z4c_fd1_stencil_in_storage(int dir, int i, int j, int k)
 {
     int off[6];
@@ -601,6 +592,20 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
         }
     }
 
+    {
+        double A[3][3];
+        double Ktrace = prj_z4c_get(z, PRJ_Z4C_KHAT, i, j, k) +
+            2.0 * prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k);
+
+        prj_z4c_load_A(z, i, j, k, A);
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                geom->K_dd[a][b] = factor * A[a][b] +
+                    (1.0 / 3.0) * geom->gamma[a][b] * Ktrace;
+            }
+        }
+    }
+
     for (dir = 0; dir < 3; ++dir) {
         geom->dalpha[dir] = 0.0;
         for (a = 0; a < 3; ++a) {
@@ -631,6 +636,22 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
         }
     }
     return 1;
+}
+
+static void prj_z4c_load_minkowski_hydro_geom(prj_z4c_hydro_geom *geom)
+{
+    int a;
+    int b;
+
+    memset(geom, 0, sizeof(*geom));
+    geom->alpha = 1.0;
+    geom->sqrt_gamma = 1.0;
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            geom->gamma[a][b] = a == b ? 1.0 : 0.0;
+            geom->gamma_inv[a][b] = a == b ? 1.0 : 0.0;
+        }
+    }
 }
 
 static void prj_z4c_load_A(const double *z, int i, int j, int k, double A[3][3])
@@ -1525,25 +1546,50 @@ void prj_z4c_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int sta
     }
 }
 
-static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *block,
-    const double *W_mhd, const double *W_rad, int i, int j, int k, double t_cgs[PRJ_NTMUNU])
+static void prj_z4c_lower_vec(const double g[3][3], const double v_con[3],
+    double v_cov[3])
 {
-    double gflat[3][3];
+    int a, b;
+
+    for (a = 0; a < 3; ++a) {
+        v_cov[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            v_cov[a] += g[a][b] * v_con[b];
+        }
+    }
+}
+
+static double prj_z4c_dot_cov_con(const double v_cov[3], const double v_con[3])
+{
+    return v_cov[0] * v_con[0] + v_cov[1] * v_con[1] + v_cov[2] * v_con[2];
+}
+
+static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *block,
+    const prj_z4c_hydro_geom *geom, const double *W_mhd, const double *W_rad,
+    int i, int j, int k, double t_cgs[PRJ_NTMUNU])
+{
     double v[3] = {0.0, 0.0, 0.0};
+    double beta_con[3] = {0.0, 0.0, 0.0};
+    double beta_cov[3] = {0.0, 0.0, 0.0};
     double stress[3][3];
     double mom[3] = {0.0, 0.0, 0.0};
     double rho = 0.0;
     double eint = 0.0;
     double pressure = 0.0;
-    double v2 = 0.0;
     int a, b;
 
     (void)rad;
+    if (geom == 0) {
+        prj_z4c_fail("prj_z4c_build_tmunu_cell_cgs: missing geometry");
+    }
     memset(t_cgs, 0, (size_t)PRJ_NTMUNU * sizeof(*t_cgs));
     memset(stress, 0, sizeof(stress));
-    prj_z4c_matter_projection_metric(gflat);
 
     if (W_mhd != 0) {
+        double beta2;
+        double wlor2;
+        double rhoh;
+
         rho = W_mhd[WIDX(PRJ_PRIM_RHO, i, j, k)];
         v[0] = W_mhd[WIDX(PRJ_PRIM_V1, i, j, k)];
         v[1] = W_mhd[WIDX(PRJ_PRIM_V2, i, j, k)];
@@ -1553,16 +1599,23 @@ static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *bl
             block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] : 0.0;
 
         for (a = 0; a < 3; ++a) {
-            for (b = 0; b < 3; ++b) {
-                v2 += gflat[a][b] * v[a] * v[b];
-            }
+            beta_con[a] = v[a] / PRJ_CLIGHT;
         }
-        t_cgs[PRJ_TMUNU_E] += rho * PRJ_CLIGHT * PRJ_CLIGHT +
-            rho * eint + 0.5 * rho * v2;
+        prj_z4c_lower_vec(geom->gamma, beta_con, beta_cov);
+        beta2 = prj_z4c_dot_cov_con(beta_cov, beta_con);
+        if (!isfinite(beta2) || beta2 < 0.0 || beta2 >= 1.0 ||
+            rho < 0.0 || !isfinite(rho) || !isfinite(eint) ||
+            !isfinite(pressure)) {
+            prj_z4c_fail("prj_z4c_build_tmunu_cell_cgs: invalid hydro state");
+        }
+        wlor2 = 1.0 / (1.0 - beta2);
+        rhoh = rho * PRJ_CLIGHT * PRJ_CLIGHT + rho * eint + pressure;
+        t_cgs[PRJ_TMUNU_E] += rhoh * wlor2 - pressure;
         for (a = 0; a < 3; ++a) {
-            mom[a] += rho * v[a] * PRJ_CLIGHT;
+            mom[a] += rhoh * wlor2 * beta_cov[a];
             for (b = 0; b < 3; ++b) {
-                stress[a][b] += rho * v[a] * v[b] + pressure * gflat[a][b];
+                stress[a][b] += rhoh * wlor2 * beta_cov[a] * beta_cov[b] +
+                    pressure * geom->gamma[a][b];
             }
         }
 #if PRJ_MHD
@@ -1572,17 +1625,19 @@ static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *bl
                 W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)],
                 W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)]
             };
+            double Bcov[3];
             double B2 = 0.0;
 
-            for (a = 0; a < 3; ++a) {
-                for (b = 0; b < 3; ++b) {
-                    B2 += gflat[a][b] * B[a] * B[b];
-                }
+            prj_z4c_lower_vec(geom->gamma, B, Bcov);
+            B2 = prj_z4c_dot_cov_con(Bcov, B);
+            if (!isfinite(B2) || B2 < 0.0) {
+                prj_z4c_fail("prj_z4c_build_tmunu_cell_cgs: invalid magnetic field");
             }
             t_cgs[PRJ_TMUNU_E] += 0.5 * B2;
             for (a = 0; a < 3; ++a) {
                 for (b = 0; b < 3; ++b) {
-                    stress[a][b] += 0.5 * B2 * gflat[a][b] - B[a] * B[b];
+                    stress[a][b] += 0.5 * B2 * geom->gamma[a][b] -
+                        Bcov[a] * Bcov[b];
                 }
             }
         }
@@ -1602,14 +1657,30 @@ static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *bl
                     W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)] * RAD_SCALE,
                     W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)] * RAD_SCALE
                 };
+                double Frad_cov[3];
                 double P[3][3];
+                double Pcov[3][3];
 
                 prj_rad_m1_pressure(rad, Erad, Frad[0], Frad[1], Frad[2], P);
+                prj_z4c_lower_vec(geom->gamma, Frad, Frad_cov);
+                memset(Pcov, 0, sizeof(Pcov));
+                for (a = 0; a < 3; ++a) {
+                    for (b = 0; b < 3; ++b) {
+                        int c, d;
+
+                        for (c = 0; c < 3; ++c) {
+                            for (d = 0; d < 3; ++d) {
+                                Pcov[a][b] += geom->gamma[a][c] *
+                                    geom->gamma[b][d] * P[c][d];
+                            }
+                        }
+                    }
+                }
                 t_cgs[PRJ_TMUNU_E] += Erad;
                 for (a = 0; a < 3; ++a) {
-                    mom[a] += Frad[a] / PRJ_CLIGHT;
+                    mom[a] += Frad_cov[a] / PRJ_CLIGHT;
                     for (b = 0; b < 3; ++b) {
-                        stress[a][b] += P[a][b];
+                        stress[a][b] += Pcov[a][b];
                     }
                 }
             }
@@ -1628,12 +1699,14 @@ static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *bl
 }
 
 static void prj_z4c_build_tmunu_cell_geo(const prj_rad *rad, const prj_block *block,
-    const double *W_mhd, const double *W_rad, int i, int j, int k, double t_geo[PRJ_NTMUNU])
+    const prj_z4c_hydro_geom *geom, const double *W_mhd, const double *W_rad,
+    int i, int j, int k, double t_geo[PRJ_NTMUNU])
 {
     double t_cgs[PRJ_NTMUNU];
     int v;
 
-    prj_z4c_build_tmunu_cell_cgs(rad, block, W_mhd, W_rad, i, j, k, t_cgs);
+    prj_z4c_build_tmunu_cell_cgs(rad, block, geom, W_mhd, W_rad,
+        i, j, k, t_cgs);
     for (v = 0; v < PRJ_NTMUNU; ++v) {
         t_geo[v] = prj_z4c_tmunu_cgs_to_geo(t_cgs[v]);
     }
@@ -2024,6 +2097,7 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     const prj_rad *rad, int state_stage, int rhs_stage, double tau_cm)
 {
     int bidx;
+    int use_full_dynamic_gr;
 
     if (!prj_z4c_runtime_enabled(mesh)) {
         return;
@@ -2032,6 +2106,7 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
         rhs_stage < 0 || rhs_stage >= PRJ_BLOCK_NSTAGES) {
         prj_z4c_fail("prj_z4c_compute_rhs: invalid stage");
     }
+    use_full_dynamic_gr = prj_eos_full_dynamic_gr_enabled(mesh);
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
         const double *z;
@@ -2054,10 +2129,19 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    prj_z4c_hydro_geom geom;
                     double tmunu[PRJ_NTMUNU];
 
-                    prj_z4c_build_tmunu_cell_geo(rad, block, W_mhd, W_rad,
-                        i, j, k, tmunu);
+                    if (use_full_dynamic_gr) {
+                        if (!prj_z4c_load_hydro_geom(mesh, block, state_stage,
+                                i, j, k, &geom)) {
+                            prj_z4c_fail("prj_z4c_compute_rhs: failed to load matter geometry");
+                        }
+                    } else {
+                        prj_z4c_load_minkowski_hydro_geom(&geom);
+                    }
+                    prj_z4c_build_tmunu_cell_geo(rad, block, &geom,
+                        W_mhd, W_rad, i, j, k, tmunu);
                     prj_z4c_compute_rhs_cell(mesh, block, z, tmunu, rhs,
                         i, j, k, tau_cm);
                 }

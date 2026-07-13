@@ -363,7 +363,7 @@ static void prj_src_gr_hydro_z4c(prj_eos *eos, const prj_mesh *mesh,
     int j;
     int k;
 
-    if (!prj_eos_dynamic_gr_enabled(mesh) || block == 0 || block->id < 0 ||
+    if (!prj_eos_full_dynamic_gr_enabled(mesh) || block == 0 || block->id < 0 ||
         block->active != 1 || W_mhd == 0 || mhd_rhs == 0) {
         return;
     }
@@ -443,7 +443,8 @@ static void prj_src_gr_hydro_z4c(prj_eos *eos, const prj_mesh *mesh,
                     double src = -E * geom.dalpha[d];
 
                     for (a = 0; a < 3; ++a) {
-                        src += Uloc[PRJ_CONS_MOM1 + a] * geom.dbeta[d][a];
+                        src += PRJ_CLIGHT * Uloc[PRJ_CONS_MOM1 + a] *
+                            geom.dbeta[d][a];
                         for (b = 0; b < 3; ++b) {
                             src += 0.5 * geom.alpha * Tij[a][b] *
                                 geom.dgamma[d][a][b];
@@ -451,8 +452,14 @@ static void prj_src_gr_hydro_z4c(prj_eos *eos, const prj_mesh *mesh,
                     }
                     mhd_rhs[MHDVIDX(PRJ_CONS_MOM1 + d, i, j, k)] +=
                         geom.sqrt_gamma * src;
-                    energy_src -= geom.sqrt_gamma * PRJ_CLIGHT * Scon[d] *
-                        geom.dalpha[d];
+                    energy_src -= geom.sqrt_gamma * PRJ_CLIGHT * PRJ_CLIGHT *
+                        Scon[d] * geom.dalpha[d];
+                }
+                for (a = 0; a < 3; ++a) {
+                    for (b = 0; b < 3; ++b) {
+                        energy_src += geom.sqrt_gamma * PRJ_CLIGHT *
+                            geom.alpha * Tij[a][b] * geom.K_dd[a][b];
+                    }
                 }
                 mhd_rhs[MHDVIDX(PRJ_CONS_ETOT, i, j, k)] += energy_src;
             }
@@ -499,7 +506,7 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     PRJ_SUBTIMER_STOP("sub_src_user");
     PRJ_SUBTIMER_START("sub_src_gravity");
 #if PRJ_DYNAMIC_GR && !PRJ_MHD
-    if (prj_eos_dynamic_gr_enabled(mesh)) {
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
         prj_src_gr_hydro_z4c(eos, mesh, block, z4c_stage, W_mhd, mhd_rhs);
     } else
 #else

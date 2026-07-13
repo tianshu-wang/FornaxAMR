@@ -1592,10 +1592,10 @@ int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     return PRJ_EOS_GR_OK;
 }
 
-int prj_eos_dynamic_gr_enabled(const prj_mesh *mesh)
+int prj_eos_full_dynamic_gr_enabled(const prj_mesh *mesh)
 {
 #if PRJ_DYNAMIC_GR && !PRJ_MHD
-    return mesh != 0 && mesh->use_dynamic_gr != 0;
+    return mesh != 0 && mesh->use_full_dynamic_gr != 0;
 #else
     (void)mesh;
     return 0;
@@ -1657,7 +1657,7 @@ void prj_eos_cell_prim2cons(prj_eos *eos, const prj_mesh *mesh,
     int status;
     int v;
 
-    if (!prj_eos_dynamic_gr_enabled(mesh)) {
+    if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
         prj_eos_prim2cons(eos, (double *)W, U);
         return;
     }
@@ -1682,7 +1682,7 @@ void prj_eos_cell_cons2prim(prj_eos *eos, const prj_mesh *mesh,
     int status;
     int v;
 
-    if (!prj_eos_dynamic_gr_enabled(mesh)) {
+    if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
         prj_eos_cons2prim(eos, (double *)U, W);
         return;
     }

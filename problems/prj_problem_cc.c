@@ -653,8 +653,10 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
     prj_gravity_init(sim, mpi);
-    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
-    prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
+    if (!prj_eos_full_dynamic_gr_enabled(&sim->mesh)) {
+        prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
+        prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
+    }
 #endif
     if (sim->mesh.max_level == 0) {
         prj_cc_init_amr_ctx_free(&init_ctx);
@@ -665,8 +667,10 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
     prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
-    prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
-    prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
+    if (!prj_eos_full_dynamic_gr_enabled(&sim->mesh)) {
+        prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
+        prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
+    }
 #endif
 
     if (init_ctx_ok) {
@@ -679,7 +683,9 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
         prj_amr_adapt(&sim->mesh, &sim->eos, mpi);
         prj_mpi_rebalance(&sim->mesh, mpi);
     #if PRJ_USE_GRAVITY
-        prj_gravity_rebuild_grid(sim, mpi);
+        if (!prj_eos_full_dynamic_gr_enabled(&sim->mesh)) {
+            prj_gravity_rebuild_grid(sim, mpi);
+        }
     #endif
         prj_cc_fill_mesh(sim, mpi, profile);
 
@@ -687,8 +693,10 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
         prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
         prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
     #if PRJ_USE_GRAVITY
-        prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
-        prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
+        if (!prj_eos_full_dynamic_gr_enabled(&sim->mesh)) {
+            prj_gravity_monopole_reduce(&sim->mesh, &sim->grav, &sim->rad, mpi, 1);
+            prj_gravity_monopole_integrate(&sim->mesh, &sim->grav, mpi);
+        }
     #endif
 
         next_sig = prj_problem_mesh_signature(&sim->mesh);
@@ -715,7 +723,8 @@ void prj_problem_cc(prj_sim *sim, prj_mpi *mpi)
     }
     prj_mpi_decompose(&sim->mesh, mpi);
     prj_mpi_prepare(&sim->mesh, mpi);
-    if (sim->mesh.use_dynamic_gr != 0 && sim->mesh.z4c_initialized == 0) {
+    if (prj_z4c_runtime_enabled(&sim->mesh) &&
+        sim->mesh.z4c_initialized == 0) {
         prj_z4c_init_mesh_flat(&sim->mesh, mpi);
     }
 

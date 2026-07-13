@@ -58,7 +58,7 @@ int prj_eos_gr_prim2cons(prj_eos *eos, const prj_eos_gr_geom *geom,
     const double *W, double *U, enum prj_eos_call_ctx ctx);
 int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     const double *U, double *W, enum prj_eos_call_ctx ctx);
-int prj_eos_dynamic_gr_enabled(const prj_mesh *mesh);
+int prj_eos_full_dynamic_gr_enabled(const prj_mesh *mesh);
 void prj_eos_cell_prim2cons(prj_eos *eos, const prj_mesh *mesh,
     const prj_block *block, int z4c_stage, int i, int j, int k,
     const double *W, double *U, enum prj_eos_call_ctx ctx);

@@ -1438,7 +1438,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     double saved_amr_lohner_eps[PRJ_AMR_N];
     int saved_use_amr_angular_resolution_limit;
     int saved_use_BJ;
-    int saved_use_dynamic_gr;
+    int saved_use_full_dynamic_gr;
     int saved_z4c_initialized;
     int saved_z4c_extrap_order;
     double saved_time_seconds;
@@ -1465,7 +1465,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     }
     saved_use_amr_angular_resolution_limit = mesh->use_amr_angular_resolution_limit;
     saved_use_BJ = mesh->use_BJ;
-    saved_use_dynamic_gr = mesh->use_dynamic_gr;
+    saved_use_full_dynamic_gr = mesh->use_full_dynamic_gr;
     saved_z4c_initialized = mesh->z4c_initialized;
     saved_z4c_extrap_order = mesh->z4c_extrap_order;
     saved_time_seconds = mesh->time_seconds;
@@ -1502,7 +1502,7 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     }
     mesh->use_amr_angular_resolution_limit = saved_use_amr_angular_resolution_limit;
     mesh->use_BJ = saved_use_BJ;
-    mesh->use_dynamic_gr = saved_use_dynamic_gr;
+    mesh->use_full_dynamic_gr = saved_use_full_dynamic_gr;
     mesh->z4c_initialized = saved_z4c_initialized;
     mesh->z4c_extrap_order = saved_z4c_extrap_order;
     mesh->z4c_params = saved_z4c_params;

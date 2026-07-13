@@ -27,8 +27,8 @@ static int prj_problem_z4c_local_block(const prj_mpi *mpi, const prj_block *bloc
 static void prj_problem_z4c_require_enabled(const prj_sim *sim, const char *name)
 {
     (void)name;
-    if (sim == 0 || sim->mesh.use_dynamic_gr == 0) {
-        prj_problem_z4c_fail("Z4c puncture problems require use_dynamic_gr=1 in the parameter file");
+    if (sim == 0 || !prj_z4c_runtime_enabled(&sim->mesh)) {
+        prj_problem_z4c_fail("Z4c puncture problems require rebuilding with DYNAMIC_GR=1");
     }
 }
 
