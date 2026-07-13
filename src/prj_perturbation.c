@@ -96,7 +96,8 @@ void prj_set_perturbation(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi,
                     prj_block_set_prim_value(block, 1, PRJ_PRIM_RHO, i, j, k, W[PRJ_PRIM_RHO]);
 
                     prj_block_load_cons_cell_const(block, i, j, k, U);
-                    prj_eos_prim2cons(eos, W, U);
+                    prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, W, U,
+                        PRJ_EOS_CTX_MAIN);
                     prj_block_store_cons_cell(block, i, j, k, U);
                 }
             }

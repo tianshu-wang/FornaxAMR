@@ -1160,7 +1160,8 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos,
                     double Wc[PRJ_NVAR_PRIM];
 
                     prj_block_load_cons_cell_const(b, i, j, k, Uc);
-                    prj_eos_cons2prim(eos, Uc, Wc);
+                    prj_eos_cell_cons2prim(eos, mesh, b, 0, i, j, k, Uc, Wc,
+                        PRJ_EOS_CTX_AMR);
                     prj_apply_eint_floor(eos, mesh->E_floor, b->vol, Uc, Wc, e_injected);
                     prj_block_store_cons_cell(b, i, j, k, Uc);
                     prj_block_store_prim_cell(b, 0, i, j, k, Wc);
@@ -1195,7 +1196,8 @@ static void prj_sync_conserved_from_primitive(prj_mesh *mesh, prj_eos *eos,
                     double Uc[PRJ_NVAR_CONS];
 
                     prj_block_load_prim_cell_const(block, 0, i, j, k, Wc);
-                    prj_eos_prim2cons(eos, Wc, Uc);
+                    prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, Wc, Uc,
+                        PRJ_EOS_CTX_AMR);
                     prj_block_store_cons_cell(block, i, j, k, Uc);
                 }
             }

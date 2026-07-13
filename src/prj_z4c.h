@@ -8,6 +8,20 @@ const char *prj_z4c_tmunu_var_name(int var);
 int prj_z4c_runtime_enabled(const prj_mesh *mesh);
 void prj_z4c_init_params(prj_z4c_params *params);
 
+typedef struct prj_z4c_hydro_geom {
+    double gamma[3][3];
+    double gamma_inv[3][3];
+    double dgamma[3][3][3];
+    double alpha;
+    double beta[3];
+    double dalpha[3];
+    double dbeta[3][3];
+    double sqrt_gamma;
+} prj_z4c_hydro_geom;
+
+int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, prj_z4c_hydro_geom *geom);
+
 double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double cfl);
 void prj_z4c_init_mesh_flat(prj_mesh *mesh, const prj_mpi *mpi);
 void prj_z4c_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int stage);

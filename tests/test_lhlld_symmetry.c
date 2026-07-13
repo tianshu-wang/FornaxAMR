@@ -270,8 +270,8 @@ static void test_flux_update_symmetry(void)
         flux_m[dir] = mirror.flux[dir];
     }
 
-    prj_flux_update(&eos, 0, &block, block.W_mhd, block.eosvar, flux, 0);
-    prj_flux_update(&eos, 0, &mirror, mirror.W_mhd, mirror.eosvar, flux_m, 0);
+    prj_flux_update(&eos, 0, 0, &block, block.W_mhd, block.eosvar, flux, 0);
+    prj_flux_update(&eos, 0, 0, &mirror, mirror.W_mhd, mirror.eosvar, flux_m, 0);
 
     {
         double F[PRJ_NHYDRO] = {0.0};

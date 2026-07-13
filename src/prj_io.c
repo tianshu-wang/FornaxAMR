@@ -1758,7 +1758,8 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                         for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
                             Wcell[v] = prj_block_prim_value_const(block, 0, v, i, j, k);
                         }
-                        prj_eos_prim2cons((prj_eos *)eos, Wcell, Ucell);
+                        prj_eos_cell_prim2cons((prj_eos *)eos, mesh, block, 0,
+                            i, j, k, Wcell, Ucell, PRJ_EOS_CTX_MAIN);
                         prj_block_store_cons_cell(block, i, j, k, Ucell);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
                             block->flux[0][VIDX(v, i, j, k)] = 0.0;

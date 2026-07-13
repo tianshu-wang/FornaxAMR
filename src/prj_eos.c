@@ -1000,10 +1000,8 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
 {
     int bidx;
 
-    /* This routine rebuilds conserved ghost values via prj_eos_prim2cons and
-     * never performs a tabulated lookup, so it cannot trigger a range failure;
-     * ctx is accepted only for call-site consistency with the other fillers. */
-    (void)ctx;
+    /* This routine rebuilds conserved ghost values without an EOS lookup on the
+     * non-GR path; ctx is still passed through for dynamic-GR recovery errors. */
 
     if (mesh == 0) {
         return;
@@ -1055,7 +1053,8 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
                         }
                     }
 #endif
-                    prj_eos_prim2cons(eos, Wc, Uc);
+                    prj_eos_cell_prim2cons(eos, mesh, block,
+                        prj_stage_slot_from_stage_arg(stage), i, j, k, Wc, Uc, ctx);
                     for (v = 0; v < PRJ_NHYDRO; ++v) {
                         prj_block_set_cons_value(block, v, i, j, k, Uc[v]);
                     }
@@ -1591,6 +1590,115 @@ int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
         W[v] = Wtmp[v];
     }
     return PRJ_EOS_GR_OK;
+}
+
+int prj_eos_dynamic_gr_enabled(const prj_mesh *mesh)
+{
+#if PRJ_DYNAMIC_GR && !PRJ_MHD
+    return mesh != 0 && mesh->use_dynamic_gr != 0;
+#else
+    (void)mesh;
+    return 0;
+#endif
+}
+
+static const char *prj_eos_gr_status_name(int status)
+{
+    switch (status) {
+    case PRJ_EOS_GR_OK:
+        return "ok";
+    case PRJ_EOS_GR_NULL_ARG:
+        return "null_arg";
+    case PRJ_EOS_GR_BAD_METRIC:
+        return "bad_metric";
+    case PRJ_EOS_GR_BAD_STATE:
+        return "bad_state";
+    case PRJ_EOS_GR_NO_CONVERGE:
+        return "no_converge";
+    default:
+        return "missing_geometry";
+    }
+}
+
+static void prj_eos_gr_cell_fail(const char *op, int status,
+    int i, int j, int k, enum prj_eos_call_ctx ctx)
+{
+    fprintf(stderr, "dynamic GR %s failed at cell (%d,%d,%d): %s (ctx=%d)\n",
+        op, i, j, k, prj_eos_gr_status_name(status), (int)ctx);
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+#endif
+    exit(EXIT_FAILURE);
+}
+
+static void prj_eos_gr_load_cell_geom(const prj_mesh *mesh, const prj_block *block,
+    int z4c_stage, int i, int j, int k, prj_eos_gr_geom *geom,
+    enum prj_eos_call_ctx ctx)
+{
+    prj_z4c_hydro_geom zgeom;
+    int a, b;
+
+    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &zgeom)) {
+        prj_eos_gr_cell_fail("geometry load", -1, i, j, k, ctx);
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            geom->gamma[a][b] = zgeom.gamma[a][b];
+        }
+    }
+}
+
+void prj_eos_cell_prim2cons(prj_eos *eos, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, int i, int j, int k,
+    const double *W, double *U, enum prj_eos_call_ctx ctx)
+{
+    prj_eos_gr_geom geom;
+    double Ugr[PRJ_NVAR_CONS];
+    int status;
+    int v;
+
+    if (!prj_eos_dynamic_gr_enabled(mesh)) {
+        prj_eos_prim2cons(eos, (double *)W, U);
+        return;
+    }
+
+    prj_eos_prim2cons(eos, (double *)W, U);
+    prj_eos_gr_load_cell_geom(mesh, block, z4c_stage, i, j, k, &geom, ctx);
+    status = prj_eos_gr_prim2cons(eos, &geom, W, Ugr, ctx);
+    if (status != PRJ_EOS_GR_OK) {
+        prj_eos_gr_cell_fail("prim2cons", status, i, j, k, ctx);
+    }
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
+        U[v] = Ugr[v];
+    }
+}
+
+void prj_eos_cell_cons2prim(prj_eos *eos, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, int i, int j, int k,
+    const double *U, double *W, enum prj_eos_call_ctx ctx)
+{
+    prj_eos_gr_geom geom;
+    double Wgr[PRJ_NVAR_PRIM];
+    int status;
+    int v;
+
+    if (!prj_eos_dynamic_gr_enabled(mesh)) {
+        prj_eos_cons2prim(eos, (double *)U, W);
+        return;
+    }
+
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        W[v] = 0.0;
+    }
+    prj_rad_cons2prim(U, W);
+    prj_eos_gr_load_cell_geom(mesh, block, z4c_stage, i, j, k, &geom, ctx);
+    status = prj_eos_gr_cons2prim(eos, &geom, U, Wgr, ctx);
+    if (status != PRJ_EOS_GR_OK) {
+        prj_eos_gr_cell_fail("cons2prim", status, i, j, k, ctx);
+    }
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
+        W[v] = Wgr[v];
+    }
 }
 
 void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)

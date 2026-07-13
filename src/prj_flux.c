@@ -4,6 +4,10 @@
 
 #include "prj.h"
 
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
+
 /* The per-cell MC slope fast path (prj_flux_recon_var_mc) replaces the per-face
  * reconstruction when both physics use the MC scheme. The per-face face-value
  * helpers and macros below are only needed for the WENO fallback. */
@@ -640,6 +644,175 @@ static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
 #endif
 }
 
+#if PRJ_DYNAMIC_GR && !PRJ_MHD
+static void prj_flux_gr_fail(const char *op, int status, int dir, int i, int j, int k)
+{
+    fprintf(stderr, "dynamic GR flux %s failed at dir=%d face (%d,%d,%d): status=%d\n",
+        op, dir, i, j, k, status);
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+#endif
+    exit(EXIT_FAILURE);
+}
+
+static void prj_flux_local_axes(int dir, int axis[3])
+{
+    if (dir == X1DIR) {
+        axis[0] = 0;
+        axis[1] = 1;
+        axis[2] = 2;
+    } else if (dir == X2DIR) {
+        axis[0] = 1;
+        axis[1] = 2;
+        axis[2] = 0;
+    } else {
+        axis[0] = 2;
+        axis[1] = 0;
+        axis[2] = 1;
+    }
+}
+
+static double prj_flux_det3(const double g[3][3])
+{
+    return g[0][0] * (g[1][1] * g[2][2] - g[1][2] * g[2][1])
+        - g[0][1] * (g[1][0] * g[2][2] - g[1][2] * g[2][0])
+        + g[0][2] * (g[1][0] * g[2][1] - g[1][1] * g[2][0]);
+}
+
+static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
+    int stage, int dir, int il, int jl, int kl, int ir, int jr, int kr,
+    prj_z4c_hydro_geom *geom)
+{
+    prj_z4c_hydro_geom gl;
+    prj_z4c_hydro_geom gr;
+    int axis[3];
+    int a;
+    int b;
+
+    if (!prj_z4c_load_hydro_geom(mesh, block, stage, il, jl, kl, &gl) ||
+        !prj_z4c_load_hydro_geom(mesh, block, stage, ir, jr, kr, &gr)) {
+        return 0;
+    }
+    prj_flux_local_axes(dir, axis);
+    geom->alpha = 0.5 * (gl.alpha + gr.alpha);
+    geom->sqrt_gamma = 0.5 * (gl.sqrt_gamma + gr.sqrt_gamma);
+    for (a = 0; a < 3; ++a) {
+        geom->beta[a] = 0.5 * (gl.beta[axis[a]] + gr.beta[axis[a]]);
+        geom->dalpha[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            geom->gamma[a][b] =
+                0.5 * (gl.gamma[axis[a]][axis[b]] + gr.gamma[axis[a]][axis[b]]);
+            geom->gamma_inv[a][b] =
+                0.5 * (gl.gamma_inv[axis[a]][axis[b]] + gr.gamma_inv[axis[a]][axis[b]]);
+            geom->dgamma[a][b][0] = 0.0;
+            geom->dgamma[a][b][1] = 0.0;
+            geom->dgamma[a][b][2] = 0.0;
+            geom->dbeta[a][b] = 0.0;
+        }
+    }
+    return 1;
+}
+
+static void prj_flux_gr_hydro_state_flux(prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *W, double pressure,
+    double gas_gamma, double *U, double *F, double *speed, int dir, int i, int j, int k)
+{
+    prj_eos_gr_geom egeom;
+    double Uloc[PRJ_NVAR_CONS];
+    double det;
+    double sqrtg;
+    double vn;
+    double cs2;
+    double cs;
+    double gnn;
+    int status;
+    int a;
+    int b;
+    int v;
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            egeom.gamma[a][b] = geom->gamma[a][b];
+        }
+    }
+    status = prj_eos_gr_prim2cons(eos, &egeom, W, U, PRJ_EOS_CTX_MAIN);
+    if (status != PRJ_EOS_GR_OK) {
+        prj_flux_gr_fail("prim2cons", status, dir, i, j, k);
+    }
+    det = prj_flux_det3(geom->gamma);
+    if (!isfinite(det) || det <= 0.0) {
+        prj_flux_gr_fail("metric", PRJ_EOS_GR_BAD_METRIC, dir, i, j, k);
+    }
+    sqrtg = sqrt(det);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        Uloc[v] = U[v] / sqrtg;
+        F[v] = 0.0;
+    }
+    vn = geom->alpha * W[PRJ_PRIM_V1] - PRJ_CLIGHT * geom->beta[0];
+    F[PRJ_CONS_RHO] = sqrtg * Uloc[PRJ_CONS_RHO] * vn;
+    F[PRJ_CONS_MOM1] = sqrtg * (Uloc[PRJ_CONS_MOM1] * vn + geom->alpha * pressure);
+    F[PRJ_CONS_MOM2] = sqrtg * Uloc[PRJ_CONS_MOM2] * vn;
+    F[PRJ_CONS_MOM3] = sqrtg * Uloc[PRJ_CONS_MOM3] * vn;
+    F[PRJ_CONS_ETOT] =
+        sqrtg * (Uloc[PRJ_CONS_ETOT] * vn + geom->alpha * pressure * W[PRJ_PRIM_V1]);
+    F[PRJ_CONS_YE] = sqrtg * Uloc[PRJ_CONS_YE] * vn;
+
+    cs2 = gas_gamma * pressure / W[PRJ_PRIM_RHO];
+    if (!isfinite(cs2) || cs2 < 0.0) {
+        cs2 = 0.0;
+    }
+    if (cs2 > PRJ_CLIGHT * PRJ_CLIGHT) {
+        cs2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    }
+    cs = sqrt(cs2);
+    gnn = geom->gamma[0][0];
+    if (!isfinite(gnn) || gnn <= 0.0) {
+        gnn = 1.0;
+    }
+    *speed = fabs(vn) + geom->alpha * cs / sqrt(gnn);
+}
+
+static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, int dir, int i, int j, int k,
+    int il, int jl, int kl, int ir, int jr, int kr, const double *WL,
+    const double *WR, double pL, double pR, double gL, double gR,
+    double *Fl, double v_face_loc[3])
+{
+    prj_z4c_hydro_geom geom;
+    double UL[PRJ_NVAR_CONS];
+    double UR[PRJ_NVAR_CONS];
+    double FL[PRJ_NVAR_CONS];
+    double FR[PRJ_NVAR_CONS];
+    double sL;
+    double sR;
+    double smax;
+    int v;
+
+    if (!prj_flux_gr_face_geom(mesh, block, z4c_stage, dir,
+            il, jl, kl, ir, jr, kr, &geom)) {
+        prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
+    }
+    prj_flux_gr_hydro_state_flux(eos, &geom, WL, pL, gL, UL, FL, &sL, dir, i, j, k);
+    prj_flux_gr_hydro_state_flux(eos, &geom, WR, pR, gR, UR, FR, &sR, dir, i, j, k);
+    smax = fmax(sL, sR);
+    if (!isfinite(smax)) {
+        prj_flux_gr_fail("wavespeed", PRJ_EOS_GR_BAD_STATE, dir, i, j, k);
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        Fl[v] = 0.5 * (FL[v] + FR[v]) - 0.5 * smax * (UR[v] - UL[v]);
+    }
+    if (Fl[PRJ_CONS_RHO] >= 0.0) {
+        v_face_loc[0] = WL[PRJ_PRIM_V1];
+        v_face_loc[1] = WL[PRJ_PRIM_V2];
+        v_face_loc[2] = WL[PRJ_PRIM_V3];
+    } else {
+        v_face_loc[0] = WR[PRJ_PRIM_V1];
+        v_face_loc[1] = WR[PRJ_PRIM_V2];
+        v_face_loc[2] = WR[PRJ_PRIM_V3];
+    }
+}
+#endif
+
 static void prj_flux_velocity_deltas(double *W, int dir,
     int il, int jl, int kl, int ir, int jr, int kr,
     double *deltau, double *deltav, double *deltaw)
@@ -821,8 +994,8 @@ void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
 #endif
 }
 
-void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
-    double *eosvar, double *flux[3], int use_bf1)
+void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
+    prj_block *block, double *W, double *eosvar, double *flux[3], int use_bf1)
 {
     /* Block-wide face-state scratch for the variable-outermost reconstruction
      * pass.  Reused across calls (this code path is serial); WL/WR use layout
@@ -848,7 +1021,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
 #if PRJ_NRAD == 0
     (void)rad;
 #endif
-#if !PRJ_MHD
+#if !(PRJ_DYNAMIC_GR && !PRJ_MHD)
+    (void)mesh;
+#endif
+#if !PRJ_MHD && !PRJ_DYNAMIC_GR
     (void)use_bf1;
 #endif
 
@@ -986,6 +1162,14 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, prj_block *block, double *W,
                         block->Bv2[dir][IDX(i, j, k)] = bv2;
                     }
 #else
+#if PRJ_DYNAMIC_GR
+                    if (prj_eos_dynamic_gr_enabled(mesh)) {
+                        prj_flux_gr_hydro_hll(eos, mesh, block,
+                            prj_stage_slot_from_bf_arg(use_bf1), dir, i, j, k,
+                            il, jl, kl, ir, jr, kr, WL, WR, pL, pR, gL, gR,
+                            Fl, v_face_loc);
+                    } else
+#endif
                     prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl,
                         v_face_loc, deltau, deltav, deltaw);
 #endif

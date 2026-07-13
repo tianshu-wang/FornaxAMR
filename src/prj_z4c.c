@@ -486,6 +486,153 @@ static void prj_z4c_load_metric(const double *z, int i, int j, int k, double g[3
     }
 }
 
+static double prj_z4c_guarded_chi(const prj_z4c_params *opt, double chi)
+{
+    double floor = opt != 0 ? opt->chi_min_floor : 1.0e-12;
+    double div_floor = opt != 0 ? opt->chi_div_floor : -1000.0;
+
+    if (!isfinite(chi)) {
+        return floor;
+    }
+    if (chi <= div_floor) {
+        chi = div_floor;
+    }
+    if (chi <= floor) {
+        chi = floor;
+    }
+    return chi;
+}
+
+static int prj_z4c_fd1_stencil_in_storage(int dir, int i, int j, int k)
+{
+    int off[6];
+    double c[6];
+    int n;
+    int p;
+
+    prj_z4c_fd1_coeff(&n, off, c);
+    (void)c;
+    for (p = 0; p < n; ++p) {
+        int ii = i;
+        int jj = j;
+        int kk = k;
+
+        prj_z4c_shift_index(dir, off[p], &ii, &jj, &kk);
+        if (!prj_z4c_cell_in_storage(ii, jj, kk)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, prj_z4c_hydro_geom *geom)
+{
+    const prj_z4c_params *opt;
+    const double *z;
+    double g[3][3];
+    double gu[3][3];
+    double det_g;
+    double idx[3];
+    double chi;
+    double chi_guarded;
+    double chi_power;
+    double inv_factor;
+    double factor;
+    double dchi[3] = {0.0, 0.0, 0.0};
+    int deriv_ok[3];
+    int a;
+    int b;
+    int dir;
+
+    if (!prj_z4c_runtime_enabled(mesh) || block == 0 || geom == 0 ||
+        !prj_z4c_cell_in_storage(i, j, k)) {
+        return 0;
+    }
+    z = prj_block_z4c_stage_const(block, prj_stage_slot_from_bf_arg(stage));
+    if (z == 0) {
+        return 0;
+    }
+    opt = &mesh->z4c_params;
+    for (dir = 0; dir < 3; ++dir) {
+        if (block->dx[dir] == 0.0) {
+            return 0;
+        }
+        idx[dir] = 1.0 / block->dx[dir];
+        deriv_ok[dir] = prj_z4c_fd1_stencil_in_storage(dir, i, j, k);
+    }
+
+    prj_z4c_load_metric(z, i, j, k, g);
+    prj_z4c_inv3(g, gu, &det_g);
+    if (!isfinite(det_g) || det_g <= 0.0) {
+        return 0;
+    }
+
+    chi = prj_z4c_get(z, PRJ_Z4C_CHI, i, j, k);
+    chi_guarded = prj_z4c_guarded_chi(opt, chi);
+    chi_power = opt->chi_psi_power;
+    if (!isfinite(chi_power) || fabs(chi_power) < 1.0e-300) {
+        chi_power = -4.0;
+    }
+    inv_factor = pow(chi_guarded, -4.0 / chi_power);
+    if (!isfinite(inv_factor) || inv_factor <= 0.0) {
+        return 0;
+    }
+    factor = 1.0 / inv_factor;
+
+    geom->sqrt_gamma = sqrt(det_g * factor * factor * factor);
+    if (!isfinite(geom->sqrt_gamma) || geom->sqrt_gamma <= 0.0) {
+        return 0;
+    }
+    geom->alpha = prj_z4c_get(z, PRJ_Z4C_ALPHA, i, j, k);
+    if (!isfinite(geom->alpha) || geom->alpha <= 0.0) {
+        geom->alpha = 1.0e-12;
+    }
+    for (a = 0; a < 3; ++a) {
+        geom->beta[a] = prj_z4c_get(z, prj_z4c_beta_var(a), i, j, k);
+        if (!isfinite(geom->beta[a])) {
+            geom->beta[a] = 0.0;
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            geom->gamma[a][b] = factor * g[a][b];
+            geom->gamma_inv[a][b] = inv_factor * gu[a][b];
+        }
+    }
+
+    for (dir = 0; dir < 3; ++dir) {
+        geom->dalpha[dir] = 0.0;
+        for (a = 0; a < 3; ++a) {
+            geom->dbeta[dir][a] = 0.0;
+        }
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                geom->dgamma[dir][a][b] = 0.0;
+            }
+        }
+        if (!deriv_ok[dir]) {
+            continue;
+        }
+        dchi[dir] = prj_z4c_Dx(z, PRJ_Z4C_CHI, dir, idx, i, j, k);
+        geom->dalpha[dir] = prj_z4c_Dx(z, PRJ_Z4C_ALPHA, dir, idx, i, j, k);
+        for (a = 0; a < 3; ++a) {
+            geom->dbeta[dir][a] =
+                prj_z4c_Dx(z, prj_z4c_beta_var(a), dir, idx, i, j, k);
+        }
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                double dg = prj_z4c_Dx(z, prj_z4c_g_var(a, b), dir, idx, i, j, k);
+                double dfactor = factor * (4.0 / chi_power) *
+                    dchi[dir] / chi_guarded;
+
+                geom->dgamma[dir][a][b] = factor * dg + dfactor * g[a][b];
+            }
+        }
+    }
+    return 1;
+}
+
 static void prj_z4c_load_A(const double *z, int i, int j, int k, double A[3][3])
 {
     int a, b;
@@ -2277,6 +2424,19 @@ void prj_z4c_amr_restrict_parent(const prj_block *children[8], prj_block *parent
 int prj_z4c_runtime_enabled(const prj_mesh *mesh)
 {
     (void)mesh;
+    return 0;
+}
+
+int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, prj_z4c_hydro_geom *geom)
+{
+    (void)mesh;
+    (void)block;
+    (void)stage;
+    (void)i;
+    (void)j;
+    (void)k;
+    (void)geom;
     return 0;
 }
 

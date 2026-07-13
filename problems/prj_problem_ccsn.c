@@ -565,7 +565,8 @@ static void prj_ccsn_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_ccsn_
                     /* Volume-averaged primitives over the cell, using the same
                        quadrature as the r_com calculation. */
                     prj_ccsn_quadrature_primitives(sim, profile, block, i, j, k, W);
-                    prj_eos_prim2cons(&sim->eos, W, U);
+                    prj_eos_cell_prim2cons(&sim->eos, &sim->mesh, block, 0,
+                        i, j, k, W, U, PRJ_EOS_CTX_MAIN);
                     prj_problem_store_cell(block, i, j, k, W, U);
                 }
             }
@@ -672,6 +673,9 @@ void prj_problem_ccsn(prj_sim *sim, prj_mpi *mpi)
     }
     prj_mpi_decompose(&sim->mesh, mpi);
     prj_mpi_prepare(&sim->mesh, mpi);
+    if (sim->mesh.use_dynamic_gr != 0 && sim->mesh.z4c_initialized == 0) {
+        prj_z4c_init_mesh_flat(&sim->mesh, mpi);
+    }
 
     if (prj_ccsn_profile_load(&profile, sim->progenitor_file) != 0) {
         return;
