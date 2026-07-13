@@ -1,3 +1,4 @@
+#include <float.h>
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -734,6 +735,131 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }
 
+static int prj_eos_pressure_try(prj_eos *eos, double rho, double eint, double ye,
+    double *pressure)
+{
+    double gamma;
+
+    if (pressure == 0 || !isfinite(rho) || !isfinite(eint) || !isfinite(ye) ||
+        rho <= 0.0 || eint < 0.0) {
+        return 0;
+    }
+    if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE && eos->filename[0] != '\0') {
+        double e_table;
+        double rl;
+        double jyf;
+        double jrf;
+        int jy;
+        int jyp;
+        int jr;
+        int jrp;
+        double dye;
+        double drho;
+        double coeff0;
+        double coeff1;
+        double coeff2;
+        double coeff3;
+        int jt;
+        int jtp;
+        double elo;
+        double ehi;
+        double dtemp;
+        double pressure_log;
+        int jt_lo;
+        int jt_hi;
+        int jt_mid;
+        int base_eint;
+        int off_y_r;
+        int off_yp_r;
+        int off_y_rp;
+        int off_yp_rp;
+
+        if (prj_eos_prepare_table(eos, 0) != 0 || eos->table_loaded != 1) {
+            return 0;
+        }
+        if (rho < eos->rho_min || rho > eos->rho_max ||
+            ye < eos->y1c || ye > eos->y2c) {
+            return 0;
+        }
+        e_table = eint / PRJ_EOS_ENERGY_SCALE;
+        rl = log10(rho);
+        jrf = (rl - eos->r1) * eos->inv_dlogrho;
+        jyf = (ye - eos->y1c) * eos->inv_dYe;
+        jr = 1 + (int)jrf;
+        jy = 1 + (int)jyf;
+        jr = jr < 1 ? 1 : (jr >= eos->nr ? eos->nr - 1 : jr);
+        jy = jy < 1 ? 1 : (jy >= eos->ny ? eos->ny - 1 : jy);
+        jrp = jr + 1;
+        jyp = jy + 1;
+        drho = prj_eos_clamp_double(
+            (rl - (eos->r1 + (double)(jr - 1) * eos->dlogrho)) * eos->inv_dlogrho,
+            0.0, 1.0);
+        dye = prj_eos_clamp_double(
+            (ye - (eos->y1c + (double)(jy - 1) * eos->dYe)) * eos->inv_dYe,
+            0.0, 1.0);
+        coeff0 = (1.0 - drho) * (1.0 - dye);
+        coeff1 = (1.0 - drho) * dye;
+        coeff2 = drho * (1.0 - dye);
+        coeff3 = drho * dye;
+        base_eint = prj_eos_rec_to_compact(PRJ_EOS_REC_EINT) * eos->ny * eos->nr * eos->nt;
+        off_y_r = (jy - 1) * eos->nr * eos->nt + (jr - 1) * eos->nt;
+        off_yp_r = (jyp - 1) * eos->nr * eos->nt + (jr - 1) * eos->nt;
+        off_y_rp = (jy - 1) * eos->nr * eos->nt + (jrp - 1) * eos->nt;
+        off_yp_rp = (jyp - 1) * eos->nr * eos->nt + (jrp - 1) * eos->nt;
+
+        elo = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+            off_y_rp, off_yp_rp, 1, coeff0, coeff1, coeff2, coeff3);
+        ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+            off_y_rp, off_yp_rp, eos->nt, coeff0, coeff1, coeff2, coeff3);
+        if (e_table < elo || e_table > ehi) {
+            return 0;
+        }
+        if (e_table == elo) {
+            jt = 1;
+            ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+                off_y_rp, off_yp_rp, 2, coeff0, coeff1, coeff2, coeff3);
+        } else if (e_table == ehi) {
+            jt = eos->nt - 1;
+            elo = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+                off_y_rp, off_yp_rp, jt, coeff0, coeff1, coeff2, coeff3);
+            ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+                off_y_rp, off_yp_rp, eos->nt, coeff0, coeff1, coeff2, coeff3);
+        } else {
+            jt_lo = 1;
+            jt_hi = eos->nt;
+            while (jt_hi - jt_lo > 1) {
+                jt_mid = jt_lo + (jt_hi - jt_lo) / 2;
+                if (prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+                        off_y_rp, off_yp_rp, jt_mid, coeff0, coeff1, coeff2,
+                        coeff3) <= e_table) {
+                    jt_lo = jt_mid;
+                } else {
+                    jt_hi = jt_mid;
+                }
+            }
+            jt = jt_lo;
+            elo = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+                off_y_rp, off_yp_rp, jt, coeff0, coeff1, coeff2, coeff3);
+            ehi = prj_eos_rey_slice_eint(eos, base_eint, off_y_r, off_yp_r,
+                off_y_rp, off_yp_rp, jt + 1, coeff0, coeff1, coeff2, coeff3);
+        }
+        jtp = jt + 1;
+        if (fabs(ehi - elo) > 0.0) {
+            dtemp = prj_eos_clamp_double((e_table - elo) / (ehi - elo), 0.0, 1.0);
+        } else {
+            dtemp = 0.0;
+        }
+        pressure_log = prj_eos_pressure_log_interp(eos,
+            jy, jyp, jr, jrp, jt, jtp, dye, drho, dtemp);
+        *pressure = exp(pressure_log) * PRJ_EOS_PRESSURE_SCALE;
+        return isfinite(*pressure) && *pressure >= 0.0;
+    }
+
+    gamma = prj_eos_gamma_value();
+    *pressure = (gamma - 1.0) * rho * eint;
+    return isfinite(*pressure) && *pressure >= 0.0;
+}
+
 double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye, enum prj_eos_call_ctx ctx)
 {
     double rl;
@@ -944,6 +1070,527 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
             }
         }
     }
+}
+
+typedef struct prj_eos_gr_recovery {
+    prj_eos *eos;
+    double gu[3][3];
+    double Bcon[3];
+    double Bcov[3];
+    double Scov[3];
+    double D;
+    double tau;
+    double Bsq;
+    double Ssq;
+    double SB;
+    double c2;
+    double ye;
+} prj_eos_gr_recovery;
+
+static double prj_eos_gr_det3(const double a[3][3])
+{
+    return a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
+        - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+        + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+}
+
+static void prj_eos_gr_inv3(const double a[3][3], double inv[3][3], double det)
+{
+    double idet = 1.0 / det;
+
+    inv[0][0] = (a[1][1] * a[2][2] - a[1][2] * a[2][1]) * idet;
+    inv[0][1] = (a[0][2] * a[2][1] - a[0][1] * a[2][2]) * idet;
+    inv[0][2] = (a[0][1] * a[1][2] - a[0][2] * a[1][1]) * idet;
+    inv[1][0] = (a[1][2] * a[2][0] - a[1][0] * a[2][2]) * idet;
+    inv[1][1] = (a[0][0] * a[2][2] - a[0][2] * a[2][0]) * idet;
+    inv[1][2] = (a[0][2] * a[1][0] - a[0][0] * a[1][2]) * idet;
+    inv[2][0] = (a[1][0] * a[2][1] - a[1][1] * a[2][0]) * idet;
+    inv[2][1] = (a[0][1] * a[2][0] - a[0][0] * a[2][1]) * idet;
+    inv[2][2] = (a[0][0] * a[1][1] - a[0][1] * a[1][0]) * idet;
+}
+
+static int prj_eos_gr_metric_prepare(const prj_eos_gr_geom *geom, double g[3][3],
+    double gu[3][3], double *det, double *sqrt_det)
+{
+    double scale = 0.0;
+    double sym_tol;
+    double minor2;
+    int a;
+    int b;
+
+    if (geom == 0 || det == 0 || sqrt_det == 0) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            g[a][b] = geom->gamma[a][b];
+            if (!isfinite(g[a][b])) {
+                return 0;
+            }
+            if (fabs(g[a][b]) > scale) {
+                scale = fabs(g[a][b]);
+            }
+        }
+    }
+    if (scale <= 0.0) {
+        return 0;
+    }
+    sym_tol = 1.0e-12 * scale;
+    for (a = 0; a < 3; ++a) {
+        for (b = a + 1; b < 3; ++b) {
+            if (fabs(g[a][b] - g[b][a]) > sym_tol) {
+                return 0;
+            }
+        }
+    }
+    minor2 = g[0][0] * g[1][1] - g[0][1] * g[1][0];
+    *det = prj_eos_gr_det3(g);
+    if (g[0][0] <= 0.0 || minor2 <= 0.0 || *det <= 0.0 || !isfinite(*det)) {
+        return 0;
+    }
+    prj_eos_gr_inv3(g, gu, *det);
+    *sqrt_det = sqrt(*det);
+    return isfinite(*sqrt_det) && *sqrt_det > 0.0;
+}
+
+static void prj_eos_gr_lower(const double g[3][3], const double vcon[3], double vcov[3])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        vcov[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            vcov[a] += g[a][b] * vcon[b];
+        }
+    }
+}
+
+static void prj_eos_gr_raise(const double gu[3][3], const double vcov[3], double vcon[3])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        vcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            vcon[a] += gu[a][b] * vcov[b];
+        }
+    }
+}
+
+static double prj_eos_gr_dot_cov_con(const double vcov[3], const double wcon[3])
+{
+    return vcov[0] * wcon[0] + vcov[1] * wcon[1] + vcov[2] * wcon[2];
+}
+
+static int prj_eos_gr_valid_array(const double *a, int n)
+{
+    int i;
+
+    if (a == 0) {
+        return 0;
+    }
+    for (i = 0; i < n; ++i) {
+        if (!isfinite(a[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static double prj_eos_gr_lorentz_minus_one(double beta2, double sqrt_one_minus_beta2)
+{
+    return beta2 / (sqrt_one_minus_beta2 * (1.0 + sqrt_one_minus_beta2));
+}
+
+static int prj_eos_gr_recovery_residual(const prj_eos_gr_recovery *rec, double x,
+    double *residual, double *rho_out, double *eint_out, double beta_con_out[3])
+{
+    double z;
+    double denom;
+    double sb_over_z;
+    double beta2;
+    double sqrt_one_minus_beta2;
+    double wlor;
+    double wlor2;
+    double wlor_m1;
+    double rho;
+    double p;
+    double eps;
+    double eint;
+    double pressure;
+
+    if (rec == 0 || !isfinite(x) || x < 0.0 || rec->D <= 0.0) {
+        return 0;
+    }
+    z = rec->D + x;
+    denom = z + rec->Bsq;
+    if (!isfinite(z) || !isfinite(denom) || z <= 0.0 || denom <= 0.0) {
+        return 0;
+    }
+    sb_over_z = rec->SB / z;
+    beta2 = (rec->Ssq + rec->SB * rec->SB * (2.0 * z + rec->Bsq) / (z * z)) /
+        (denom * denom);
+    if (!isfinite(beta2) || beta2 < 0.0 || beta2 >= 1.0) {
+        return 0;
+    }
+    sqrt_one_minus_beta2 = sqrt(1.0 - beta2);
+    wlor = 1.0 / sqrt_one_minus_beta2;
+    wlor2 = wlor * wlor;
+    wlor_m1 = prj_eos_gr_lorentz_minus_one(beta2, sqrt_one_minus_beta2);
+    rho = rec->D / wlor;
+    p = x + rec->Bsq - rec->tau -
+        0.5 * (rec->Bsq / wlor2 + sb_over_z * sb_over_z);
+    if (!isfinite(rho) || !isfinite(p) || rho <= 0.0 || p <= 0.0) {
+        return 0;
+    }
+    eps = x / (rec->D * wlor) - wlor_m1 / wlor - p / rho;
+    if (!isfinite(eps) || eps < 0.0) {
+        return 0;
+    }
+    eint = eps * rec->c2;
+    if (!isfinite(eint) ||
+        !prj_eos_pressure_try(rec->eos, rho, eint, rec->ye, &pressure)) {
+        return 0;
+    }
+    if (residual != 0) {
+        *residual = pressure / rec->c2 - p;
+    }
+    if (rho_out != 0) {
+        *rho_out = rho;
+    }
+    if (eint_out != 0) {
+        *eint_out = eint;
+    }
+    if (beta_con_out != 0) {
+        double beta_cov[3];
+
+        beta_cov[0] = (rec->Scov[0] + sb_over_z * rec->Bcov[0]) / denom;
+        beta_cov[1] = (rec->Scov[1] + sb_over_z * rec->Bcov[1]) / denom;
+        beta_cov[2] = (rec->Scov[2] + sb_over_z * rec->Bcov[2]) / denom;
+        prj_eos_gr_raise(rec->gu, beta_cov, beta_con_out);
+    }
+    return residual == 0 || isfinite(*residual);
+}
+
+static int prj_eos_gr_recovery_residual_ye(const prj_eos_gr_recovery *rec, double ye,
+    double x, double *residual, double *rho_out, double *eint_out, double beta_con_out[3])
+{
+    prj_eos_gr_recovery trial = *rec;
+
+    if (!isfinite(ye)) {
+        return 0;
+    }
+    trial.ye = ye;
+    if (!prj_eos_gr_recovery_residual(&trial, x, residual, rho_out, eint_out,
+            beta_con_out)) {
+        return 0;
+    }
+    return 1;
+}
+
+static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec, double ye,
+    double xlo, double flo, double xhi, double fhi, double *xroot)
+{
+    double scale;
+    int iter;
+
+    if (xroot == 0) {
+        return 0;
+    }
+    scale = fmax(fmax(fabs(rec->tau), rec->Bsq), fmax(fabs(xlo), fabs(xhi)));
+    if (scale <= 0.0) {
+        scale = 1.0;
+    }
+    for (iter = 0; iter < 120; ++iter) {
+        double xm = 0.5 * (xlo + xhi);
+        double fm;
+
+        if (!prj_eos_gr_recovery_residual_ye(rec, ye, xm, &fm, 0, 0, 0)) {
+            xlo = xm;
+            flo = 0.0;
+            continue;
+        }
+        if (fabs(fm) <= 1.0e-14 * scale ||
+            fabs(xhi - xlo) <= 1.0e-14 * (1.0 + fabs(xm))) {
+            *xroot = xm;
+            return 1;
+        }
+        if ((flo <= 0.0 && fm >= 0.0) || (flo >= 0.0 && fm <= 0.0)) {
+            xhi = xm;
+            fhi = fm;
+        } else {
+            xlo = xm;
+            flo = fm;
+        }
+        (void)fhi;
+    }
+    *xroot = 0.5 * (xlo + xhi);
+    return 1;
+}
+
+static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
+    double *xroot)
+{
+    double x_scale;
+    double x;
+    double prev_x = 0.0;
+    double prev_f = 0.0;
+    int have_prev = 0;
+    int saw_valid = 0;
+    int scan;
+
+    if (rec == 0 || xroot == 0 || rec->D <= 0.0 || !isfinite(ye)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    x_scale = fabs(rec->tau) + sqrt(fmax(0.0, rec->Ssq)) + rec->Bsq;
+    if (rec->Bsq > 0.0) {
+        x_scale += fabs(rec->SB) / sqrt(rec->Bsq);
+    }
+    if (!isfinite(x_scale) || x_scale <= 0.0) {
+        x_scale = rec->D * DBL_EPSILON;
+    }
+    if (x_scale <= 0.0) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    x = x_scale * 1.0e-14;
+    if (x < DBL_MIN) {
+        x = DBL_MIN;
+    }
+    for (scan = 0; scan < 420; ++scan) {
+        double f;
+        double xtest = scan == 0 ? 0.0 : x;
+
+        if (prj_eos_gr_recovery_residual_ye(rec, ye, xtest, &f, 0, 0, 0)) {
+            double tol = 1.0e-14 * fmax(1.0, x_scale);
+
+            saw_valid = 1;
+            if (fabs(f) <= tol) {
+                *xroot = xtest;
+                return PRJ_EOS_GR_OK;
+            }
+            if (have_prev &&
+                ((prev_f <= 0.0 && f >= 0.0) || (prev_f >= 0.0 && f <= 0.0))) {
+                return prj_eos_gr_bisect_recovery(rec, ye, prev_x, prev_f, xtest, f,
+                    xroot) ? PRJ_EOS_GR_OK : PRJ_EOS_GR_NO_CONVERGE;
+            }
+            prev_x = xtest;
+            prev_f = f;
+            have_prev = 1;
+        }
+        if (scan > 0) {
+            if (x > DBL_MAX / 1.35) {
+                break;
+            }
+            x *= 1.35;
+        }
+    }
+    return saw_valid ? PRJ_EOS_GR_NO_CONVERGE : PRJ_EOS_GR_BAD_STATE;
+}
+
+int prj_eos_gr_prim2cons(prj_eos *eos, const prj_eos_gr_geom *geom,
+    const double *W, double *U, enum prj_eos_call_ctx ctx)
+{
+    double g[3][3];
+    double gu[3][3];
+    double det;
+    double sqrt_det;
+    double Utmp[PRJ_NVAR_CONS];
+    double rho;
+    double vcon[3];
+    double beta_con[3];
+    double beta_cov[3];
+    double beta2;
+    double sqrt_one_minus_beta2;
+    double wlor;
+    double wlor2;
+    double wlor_m1;
+    double eint;
+    double ye;
+    double pressure;
+    double c = PRJ_CLIGHT;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    double Bcon[3] = {0.0, 0.0, 0.0};
+    double Bcov[3] = {0.0, 0.0, 0.0};
+    double Bsq = 0.0;
+    double Bbeta = 0.0;
+    double w;
+    int v;
+    int d;
+
+    (void)ctx;
+    (void)gu;
+    if (W == 0 || U == 0 || geom == 0) {
+        return PRJ_EOS_GR_NULL_ARG;
+    }
+    if (!prj_eos_gr_metric_prepare(geom, g, gu, &det, &sqrt_det)) {
+        return PRJ_EOS_GR_BAD_METRIC;
+    }
+    if (!prj_eos_gr_valid_array(W, PRJ_NVAR_PRIM)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    rho = W[PRJ_PRIM_RHO];
+    vcon[0] = W[PRJ_PRIM_V1];
+    vcon[1] = W[PRJ_PRIM_V2];
+    vcon[2] = W[PRJ_PRIM_V3];
+    eint = W[PRJ_PRIM_EINT];
+    ye = W[PRJ_PRIM_YE];
+    if (rho <= 0.0 || eint < 0.0 ||
+        !prj_eos_pressure_try(eos, rho, eint, ye, &pressure)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    for (d = 0; d < 3; ++d) {
+        beta_con[d] = vcon[d] / c;
+    }
+    prj_eos_gr_lower(g, beta_con, beta_cov);
+    beta2 = prj_eos_gr_dot_cov_con(beta_cov, beta_con);
+    if (!isfinite(beta2) || beta2 < 0.0 || beta2 >= 1.0) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    sqrt_one_minus_beta2 = sqrt(1.0 - beta2);
+    wlor = 1.0 / sqrt_one_minus_beta2;
+    wlor2 = wlor * wlor;
+    wlor_m1 = prj_eos_gr_lorentz_minus_one(beta2, sqrt_one_minus_beta2);
+#if PRJ_MHD
+    Bcon[0] = W[PRJ_PRIM_B1];
+    Bcon[1] = W[PRJ_PRIM_B2];
+    Bcon[2] = W[PRJ_PRIM_B3];
+#endif
+    prj_eos_gr_lower(g, Bcon, Bcov);
+    Bsq = prj_eos_gr_dot_cov_con(Bcov, Bcon);
+    Bbeta = prj_eos_gr_dot_cov_con(Bcov, beta_con);
+    if (!isfinite(Bsq) || !isfinite(Bbeta) || Bsq < 0.0) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        Utmp[v] = 0.0;
+    }
+    w = rho * c2 + rho * eint + pressure;
+    Utmp[PRJ_CONS_RHO] = rho * wlor;
+    for (d = 0; d < 3; ++d) {
+        Utmp[PRJ_CONS_MOM1 + d] =
+            ((w + Bsq) * wlor2 * beta_cov[d] - Bbeta * Bcov[d]) / c;
+    }
+    Utmp[PRJ_CONS_ETOT] = (rho * eint + pressure) * wlor2 +
+        rho * c2 * wlor * wlor_m1 - pressure + Bsq -
+        0.5 * (Bbeta * Bbeta + Bsq / wlor2);
+    Utmp[PRJ_CONS_YE] = Utmp[PRJ_CONS_RHO] * ye;
+#if PRJ_MHD
+    Utmp[PRJ_CONS_B1] = Bcon[0];
+    Utmp[PRJ_CONS_B2] = Bcon[1];
+    Utmp[PRJ_CONS_B3] = Bcon[2];
+#endif
+    prj_rad_prim2cons(W, Utmp);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        if (!isfinite(Utmp[v])) {
+            return PRJ_EOS_GR_BAD_STATE;
+        }
+        U[v] = sqrt_det * Utmp[v];
+    }
+    return PRJ_EOS_GR_OK;
+}
+
+int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
+    const double *U, double *W, enum prj_eos_call_ctx ctx)
+{
+    double g[3][3];
+    double gu[3][3];
+    double det;
+    double sqrt_det;
+    double Uloc[PRJ_NVAR_CONS];
+    double Wtmp[PRJ_NVAR_PRIM];
+    double c = PRJ_CLIGHT;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    double ye;
+    double xroot;
+    double rho;
+    double eint;
+    double beta_con[3];
+    prj_eos_gr_recovery rec;
+    double Scon[3];
+    int status;
+    int v;
+    int d;
+
+    (void)ctx;
+    if (U == 0 || W == 0 || geom == 0) {
+        return PRJ_EOS_GR_NULL_ARG;
+    }
+    if (!prj_eos_gr_metric_prepare(geom, g, gu, &det, &sqrt_det)) {
+        return PRJ_EOS_GR_BAD_METRIC;
+    }
+    if (!prj_eos_gr_valid_array(U, PRJ_NVAR_CONS)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        Uloc[v] = U[v] / sqrt_det;
+    }
+    memset(&rec, 0, sizeof(rec));
+    rec.eos = eos;
+    rec.c2 = c2;
+    rec.D = Uloc[PRJ_CONS_RHO];
+    rec.tau = Uloc[PRJ_CONS_ETOT] / c2;
+    if (!isfinite(rec.D) || !isfinite(rec.tau) || rec.D <= 0.0) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    ye = Uloc[PRJ_CONS_YE] / rec.D;
+    if (!isfinite(ye)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    rec.ye = ye;
+    for (d = 0; d < 3; ++d) {
+        int mom = PRJ_CONS_MOM1 + d;
+
+        rec.Scov[d] = Uloc[mom] / c;
+        rec.Bcon[d] = 0.0;
+        rec.gu[d][0] = gu[d][0];
+        rec.gu[d][1] = gu[d][1];
+        rec.gu[d][2] = gu[d][2];
+    }
+#if PRJ_MHD
+    rec.Bcon[0] = Uloc[PRJ_CONS_B1] / c;
+    rec.Bcon[1] = Uloc[PRJ_CONS_B2] / c;
+    rec.Bcon[2] = Uloc[PRJ_CONS_B3] / c;
+#endif
+    prj_eos_gr_lower(g, rec.Bcon, rec.Bcov);
+    prj_eos_gr_raise(gu, rec.Scov, Scon);
+    rec.Bsq = prj_eos_gr_dot_cov_con(rec.Bcov, rec.Bcon);
+    rec.Ssq = prj_eos_gr_dot_cov_con(rec.Scov, Scon);
+    rec.SB = prj_eos_gr_dot_cov_con(rec.Scov, rec.Bcon);
+    if (!isfinite(rec.Bsq) || !isfinite(rec.Ssq) || !isfinite(rec.SB) ||
+        rec.Bsq < 0.0 || rec.Ssq < 0.0) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    status = prj_eos_gr_solve_recovery(&rec, ye, &xroot);
+    if (status != PRJ_EOS_GR_OK) {
+        return status;
+    }
+    if (!prj_eos_gr_recovery_residual_ye(&rec, ye, xroot, 0, &rho, &eint, beta_con)) {
+        return PRJ_EOS_GR_NO_CONVERGE;
+    }
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        Wtmp[v] = 0.0;
+    }
+    Wtmp[PRJ_PRIM_RHO] = rho;
+    Wtmp[PRJ_PRIM_V1] = c * beta_con[0];
+    Wtmp[PRJ_PRIM_V2] = c * beta_con[1];
+    Wtmp[PRJ_PRIM_V3] = c * beta_con[2];
+    Wtmp[PRJ_PRIM_EINT] = eint;
+    Wtmp[PRJ_PRIM_YE] = ye;
+#if PRJ_MHD
+    Wtmp[PRJ_PRIM_B1] = Uloc[PRJ_CONS_B1];
+    Wtmp[PRJ_PRIM_B2] = Uloc[PRJ_CONS_B2];
+    Wtmp[PRJ_PRIM_B3] = Uloc[PRJ_CONS_B3];
+#endif
+    prj_rad_cons2prim(Uloc, Wtmp);
+    if (!prj_eos_gr_valid_array(Wtmp, PRJ_NVAR_PRIM)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        W[v] = Wtmp[v];
+    }
+    return PRJ_EOS_GR_OK;
 }
 
 void prj_eos_prim2cons(prj_eos *eos, double *W, double *U)

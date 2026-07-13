@@ -23,6 +23,18 @@ enum prj_eos_call_ctx {
     PRJ_EOS_CTX_AMR = 1
 };
 
+typedef struct prj_eos_gr_geom {
+    double gamma[3][3];
+} prj_eos_gr_geom;
+
+enum prj_eos_gr_status {
+    PRJ_EOS_GR_OK = 0,
+    PRJ_EOS_GR_NULL_ARG = 1,
+    PRJ_EOS_GR_BAD_METRIC = 2,
+    PRJ_EOS_GR_BAD_STATE = 3,
+    PRJ_EOS_GR_NO_CONVERGE = 4
+};
+
 void prj_eos_init(prj_eos *eos, const prj_mpi *mpi);
 void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quantities,
     enum prj_eos_call_ctx ctx);
@@ -42,5 +54,9 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
     enum prj_eos_call_ctx ctx);
 void prj_eos_prim2cons(prj_eos *eos, double *W, double *U);
 void prj_eos_cons2prim(prj_eos *eos, double *U, double *W);
+int prj_eos_gr_prim2cons(prj_eos *eos, const prj_eos_gr_geom *geom,
+    const double *W, double *U, enum prj_eos_call_ctx ctx);
+int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
+    const double *U, double *W, enum prj_eos_call_ctx ctx);
 
 #endif
