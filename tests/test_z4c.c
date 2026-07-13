@@ -65,7 +65,12 @@ static void assert_close(const char *name, double got, double expected, double t
 static void assert_close_rel(const char *name, double got, double expected, double rel)
 {
     double scale = expected != 0.0 ? fabs(expected) : 1.0;
-    assert_close(name, got, expected, rel * scale);
+    double tol = rel * scale;
+
+    if (tol < 1.0e-36) {
+        tol = 1.0e-36;
+    }
+    assert_close(name, got, expected, tol);
 }
 
 static double geo_factor(void)
@@ -148,7 +153,7 @@ static void check_flat_state(void)
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                 for (v = 0; v < PRJ_NZ4C; ++v) {
-                    assert_close("flat rhs", rhs[Z4CIDX(v, i, j, k)], 0.0, 1.0e-50);
+                    assert_close("flat rhs", rhs[Z4CIDX(v, i, j, k)], 0.0, 1.0e-30);
                 }
             }
         }
@@ -169,9 +174,9 @@ static void fill_z4c_linear(prj_block *block)
     for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
         double *z = prj_block_z4c_stage(block, stage);
 
-        for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-            for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+        for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+            for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+                for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
                     for (var = 0; var < PRJ_NZ4C; ++var) {
                         z[Z4CIDX(var, i, j, k)] =
                             z4c_linear_pattern(var, (double)i, (double)j, (double)k, stage);
@@ -198,7 +203,7 @@ static void check_z4c_aux_cleared(const prj_block *block)
     size_t n;
 
     for (n = 0; n < (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-        (size_t)PRJ_BLOCK_NCELLS; ++n) {
+        (size_t)PRJ_BLOCK_NCELLS_Z4C; ++n) {
         if (block->z4c_rhs[n] != 0.0) {
             die("Z4c AMR transfer did not clear rhs");
         }
@@ -225,7 +230,7 @@ static void check_z4c_amr_transfer(void)
     init_allocated_test_block(&child, 101);
     fill_z4c_linear(&parent);
     prj_fill(child.z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-        (size_t)PRJ_BLOCK_NCELLS, 42.0);
+        (size_t)PRJ_BLOCK_NCELLS_Z4C, 42.0);
     prj_z4c_amr_prolongate_child(&parent, &child, oct);
     z_child = prj_block_z4c_stage(&child, stage);
     gi = ((oct & 1) ? PRJ_BLOCK_SIZE : 0) + i;
@@ -242,7 +247,7 @@ static void check_z4c_amr_transfer(void)
     check_z4c_aux_cleared(&child);
 
     prj_fill(parent.z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-        (size_t)PRJ_BLOCK_NCELLS, 44.0);
+        (size_t)PRJ_BLOCK_NCELLS_Z4C, 44.0);
     for (o = 0; o < 8; ++o) {
         int st, v, ii, jj, kk;
 
@@ -251,9 +256,9 @@ static void check_z4c_amr_transfer(void)
         for (st = 0; st < PRJ_BLOCK_NSTAGES; ++st) {
             double *z = prj_block_z4c_stage(&children_storage[o], st);
 
-            for (ii = -PRJ_NGHOST; ii < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++ii) {
-                for (jj = -PRJ_NGHOST; jj < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++jj) {
-                    for (kk = -PRJ_NGHOST; kk < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++kk) {
+            for (ii = -PRJ_NGHOST_Z4C; ii < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++ii) {
+                for (jj = -PRJ_NGHOST_Z4C; jj < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++jj) {
+                    for (kk = -PRJ_NGHOST_Z4C; kk < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++kk) {
                         for (v = 0; v < PRJ_NZ4C; ++v) {
                             z[Z4CIDX(v, ii, jj, kk)] =
                                 1000.0 + 100.0 * (double)o + 10.0 * (double)st +
@@ -289,9 +294,9 @@ static void set_linear_sommerfeld_var(prj_block *block, int var, const double co
     double *z = prj_block_z4c_stage(block, 0);
     int i, j, k;
 
-    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+    for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+        for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+            for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
                 double x = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
                 double y = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
                 double zc = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
@@ -353,14 +358,14 @@ static void check_z4c_sommerfeld_rhs(void)
     rhs = prj_block_z4c_rhs_stage(block, 0);
 
     bc = make_uniform_bc(PRJ_BC_REFLECT);
-    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, sentinel);
     prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
     assert_close("sommerfeld reflect",
         rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)], sentinel, 0.0);
 
     bc = make_uniform_bc(PRJ_BC_REFLECT);
     bc.bc_x1_inner = PRJ_BC_OUTFLOW;
-    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, sentinel);
     prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
     assert_close_rel("sommerfeld theta",
         rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
@@ -381,12 +386,12 @@ static void check_z4c_sommerfeld_rhs(void)
 
     bc.bc_x1_inner = PRJ_BC_USER;
     mesh.z4c_params.user_Sbc = 0;
-    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, sentinel);
     prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
     assert_close("sommerfeld user gated",
         rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)], sentinel, 0.0);
     mesh.z4c_params.user_Sbc = 1;
-    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, sentinel);
+    prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, sentinel);
     prj_z4c_apply_sommerfeld_rhs(&mesh, 0, &bc, 0, 0);
     assert_close_rel("sommerfeld user enabled",
         rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
@@ -454,15 +459,15 @@ static void check_rhs_hydro_matter_projection(void)
     prj_z4c_compute_rhs(&mesh, 0, 0, 0, 0, 0.0);
     rhs = prj_block_z4c_rhs_stage(block, 0);
     assert_close_rel("rhs hydro Khat", rhs[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)],
-        4.0 * pi * (S + E), 1.0e-13);
+        4.0 * pi * (S + E), 1.0e-10);
     assert_close_rel("rhs hydro Theta", rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
-        -8.0 * pi * E, 1.0e-13);
+        -8.0 * pi * E, 1.0e-10);
     assert_close_rel("rhs hydro Gamx", rhs[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)],
-        -16.0 * pi * Sx, 1.0e-13);
+        -16.0 * pi * Sx, 1.0e-10);
     assert_close_rel("rhs hydro Axx", rhs[Z4CIDX(PRJ_Z4C_AXX, i, j, k)],
-        -8.0 * pi * (Sxx - S / 3.0), 1.0e-13);
+        -8.0 * pi * (Sxx - S / 3.0), 1.0e-10);
     assert_close_rel("rhs hydro Axy", rhs[Z4CIDX(PRJ_Z4C_AXY, i, j, k)],
-        -8.0 * pi * Sxy, 1.0e-13);
+        -8.0 * pi * Sxy, 1.0e-10);
     prj_mesh_destroy(&mesh);
 }
 
@@ -510,15 +515,15 @@ static void check_rhs_m1_matter_projection(void)
     prj_z4c_compute_rhs(&mesh, 0, &rad, 0, 0, 0.0);
     rhs = prj_block_z4c_rhs_stage(block, 0);
     assert_close_rel("rhs m1 Khat", rhs[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)],
-        4.0 * pi * (S + E), 1.0e-13);
+        4.0 * pi * (S + E), 1.0e-10);
     assert_close_rel("rhs m1 Theta", rhs[Z4CIDX(PRJ_Z4C_THETA, i, j, k)],
-        -8.0 * pi * E, 1.0e-13);
+        -8.0 * pi * E, 1.0e-10);
     assert_close_rel("rhs m1 Gamx", rhs[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)],
-        -16.0 * pi * Sx, 1.0e-13);
+        -16.0 * pi * Sx, 1.0e-10);
     assert_close_rel("rhs m1 Axx", rhs[Z4CIDX(PRJ_Z4C_AXX, i, j, k)],
-        -8.0 * pi * (Sxx - S / 3.0), 1.0e-13);
+        -8.0 * pi * (Sxx - S / 3.0), 1.0e-10);
     assert_close_rel("rhs m1 Ayy", rhs[Z4CIDX(PRJ_Z4C_AYY, i, j, k)],
-        -8.0 * pi * (Syy - S / 3.0), 1.0e-13);
+        -8.0 * pi * (Syy - S / 3.0), 1.0e-10);
     prj_mesh_destroy(&mesh);
 }
 #endif

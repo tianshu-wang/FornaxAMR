@@ -1130,19 +1130,16 @@ static void prj_timeint_imex_save_base_cons(prj_mesh *mesh, prj_eos *eos, const 
         int j;
         int k;
 
-        if (!prj_timeint_local_block(mpi, block) || block->U == 0) {
+        if (!prj_timeint_local_block(mpi, block) || !prj_block_has_cons_storage(block)) {
             continue;
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                     double u[PRJ_NVAR_CONS];
-                    int v;
 
                     prj_timeint_imex_cons_from_stage(eos, block, 0, i, j, k, u);
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        block->U[VIDX(v, i, j, k)] = u[v];
-                    }
+                    prj_block_store_cons_cell(block, i, j, k, u);
                 }
             }
         }
@@ -1289,9 +1286,7 @@ static void prj_timeint_imex_assemble_stage(prj_mesh *mesh, prj_eos *eos,
                     int v;
                     int s;
 
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        u[v] = block->U[VIDX(v, i, j, k)];
-                    }
+                    prj_block_load_cons_cell_const(block, i, j, k, u);
                     for (s = 0; s < nterms; ++s) {
                         double coeff_ex = final_stage != 0 ? tableau->b_ex[s] :
                             prj_timeint_imex_a_ex(tableau, coeff_row, s);

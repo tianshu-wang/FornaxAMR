@@ -226,11 +226,21 @@ typedef double prj_table_real;
 #ifndef PRJ_RECON_RADIATION
 #define PRJ_RECON_RADIATION PRJ_RECON_MC
 #endif
+/* Z4c reconstruction/finite-difference order is intentionally owned by this
+ * header.  A command-line -DPRJ_RECON_Z4C_ORDER is discarded so Makefile flags
+ * cannot silently change the Z4c stencil width. */
+#ifdef PRJ_RECON_Z4C_ORDER
+#undef PRJ_RECON_Z4C_ORDER
+#endif
+#define PRJ_RECON_Z4C_ORDER 4
 #if PRJ_RECON_HYDRO != PRJ_RECON_MC && PRJ_RECON_HYDRO != PRJ_RECON_WENO3 && PRJ_RECON_HYDRO != PRJ_RECON_WENO7
 #error "Unsupported PRJ_RECON_HYDRO value"
 #endif
 #if PRJ_RECON_RADIATION != PRJ_RECON_MC && PRJ_RECON_RADIATION != PRJ_RECON_WENO3 && PRJ_RECON_RADIATION != PRJ_RECON_WENO7
 #error "Unsupported PRJ_RECON_RADIATION value"
+#endif
+#if PRJ_RECON_Z4C_ORDER != 2 && PRJ_RECON_Z4C_ORDER != 4
+#error "Unsupported PRJ_RECON_Z4C_ORDER value"
 #endif
 #if PRJ_RECON_HYDRO == PRJ_RECON_WENO7
 #define PRJ_RECON_HYDRO_NCELLS 7
@@ -276,6 +286,13 @@ typedef double prj_table_real;
 #if ((PRJ_NGHOST - PRJ_NGHOST_RAD) & 1) != 0
 #error "PRJ_NGHOST - PRJ_NGHOST_RAD must be even for AMR prolongation alignment"
 #endif
+#define PRJ_NGHOST_Z4C PRJ_RECON_Z4C_ORDER
+#if PRJ_NGHOST_Z4C < 2 || PRJ_NGHOST_Z4C > 4
+#error "PRJ_NGHOST_Z4C must be in [2, 4]"
+#endif
+#if (PRJ_NGHOST_Z4C & 1) != 0
+#error "PRJ_NGHOST_Z4C must be even for AMR prolongation alignment"
+#endif
 #ifndef PRJ_AMR_BUFFER_ZONE
 #define PRJ_AMR_BUFFER_ZONE 2
 #endif
@@ -288,6 +305,8 @@ typedef double prj_table_real;
 #define PRJ_BLOCK_NCELLS (PRJ_BS * PRJ_BS * PRJ_BS)
 #define PRJ_BLOCK_NFACES ((PRJ_BS + 1) * PRJ_BS * PRJ_BS)
 #define PRJ_BLOCK_NEDGES ((PRJ_BS + 1) * (PRJ_BS + 1) * PRJ_BS)
+#define PRJ_BS_Z4C (PRJ_BLOCK_SIZE + 2 * PRJ_NGHOST_Z4C)
+#define PRJ_BLOCK_NCELLS_Z4C (PRJ_BS_Z4C * PRJ_BS_Z4C * PRJ_BS_Z4C)
 
 /* Untiled linear cell index within a block (k fastest).  Used for face/edge
  * fields and any per-cell SoA scratch that is swept with constant strides. */
@@ -341,7 +360,10 @@ typedef double prj_table_real;
 #define RADVIDX(v, i, j, k) BIDX(PRJ_NVAR_RAD_CONS, v, i, j, k)
 #define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
 #define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
-#define Z4CIDX(v, i, j, k) BIDX(PRJ_NZ4C, v, i, j, k)
+#define Z4CLIDX(i, j, k) \
+    (((i) + PRJ_NGHOST_Z4C) * PRJ_BS_Z4C * PRJ_BS_Z4C + \
+     ((j) + PRJ_NGHOST_Z4C) * PRJ_BS_Z4C + ((k) + PRJ_NGHOST_Z4C))
+#define Z4CIDX(v, i, j, k) ((v) * PRJ_BLOCK_NCELLS_Z4C + Z4CLIDX(i, j, k))
 #if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
 #define PRJ_FSA_ROT_IDX(row, col, i, j, k) BIDX(9, 3 * (row) + (col), i, j, k)
 #define PRJ_FSA_ANG_GEOM_IDX(arc, d, i, j, k) \
@@ -355,7 +377,7 @@ typedef double prj_table_real;
 #define PRJ_BLOCK_STAGE_BF(BF, stage) \
     (&(BF)[(size_t)(stage) * (size_t)PRJ_BLOCK_NFACES])
 #define PRJ_BLOCK_STAGE_Z4C(Z, stage) \
-    (&(Z)[(size_t)(stage) * (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS])
+    (&(Z)[(size_t)(stage) * (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C])
 
 /* Legacy SoA per-variable plane base (valid only at PRJ_AOSOA_W==1).  Still used
  * by the pencil-reconstruction scratch; removed from block-array access in the

@@ -149,6 +149,73 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
         }
     }
 
+    for (d = 0; d < 3; ++d) {
+        if (slot->rel_level == 0) {
+            if (axisrel[d] == 1) {
+                slot->recv_loc_start_z4c[d] = -PRJ_NGHOST_Z4C;
+                slot->recv_loc_end_z4c[d] = 0;
+                slot->send_loc_start_z4c[d] = PRJ_BLOCK_SIZE - PRJ_NGHOST_Z4C;
+                slot->send_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+            } else if (axisrel[d] == -1) {
+                slot->recv_loc_start_z4c[d] = PRJ_BLOCK_SIZE;
+                slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C;
+                slot->send_loc_start_z4c[d] = 0;
+                slot->send_loc_end_z4c[d] = PRJ_NGHOST_Z4C;
+            } else {
+                slot->recv_loc_start_z4c[d] = 0;
+                slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+                slot->send_loc_start_z4c[d] = 0;
+                slot->send_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+            }
+        } else if (slot->rel_level == -1) {
+            if (axisrel[d] == 1) {
+                slot->recv_loc_start_z4c[d] = -PRJ_NGHOST_Z4C;
+                slot->recv_loc_end_z4c[d] = 0;
+                slot->send_loc_start_z4c[d] = PRJ_BLOCK_SIZE - 2 * PRJ_NGHOST_Z4C;
+                slot->send_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+            } else if (axisrel[d] == -1) {
+                slot->recv_loc_start_z4c[d] = PRJ_BLOCK_SIZE;
+                slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C;
+                slot->send_loc_start_z4c[d] = 0;
+                slot->send_loc_end_z4c[d] = 2 * PRJ_NGHOST_Z4C;
+            } else {
+                if ((b->xmin[d] + b->xmax[d]) > (a->xmin[d] + a->xmax[d])) {
+                    slot->recv_loc_start_z4c[d] = 0;
+                    slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE / 2;
+                } else {
+                    slot->recv_loc_start_z4c[d] = PRJ_BLOCK_SIZE / 2;
+                    slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+                }
+                slot->send_loc_start_z4c[d] = 0;
+                slot->send_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+            }
+        } else if (slot->rel_level == 1) {
+            if (axisrel[d] == 1) {
+                slot->recv_loc_start_z4c[d] = -PRJ_NGHOST_Z4C;
+                slot->recv_loc_end_z4c[d] = 0;
+                slot->send_loc_start_z4c[d] = PRJ_BLOCK_SIZE - PRJ_NGHOST_Z4C / 2;
+                slot->send_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+            } else if (axisrel[d] == -1) {
+                slot->recv_loc_start_z4c[d] = PRJ_BLOCK_SIZE;
+                slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C;
+                slot->send_loc_start_z4c[d] = 0;
+                slot->send_loc_end_z4c[d] = PRJ_NGHOST_Z4C / 2;
+            } else {
+                if ((b->xmin[d] + b->xmax[d]) > (a->xmin[d] + a->xmax[d])) {
+                    slot->recv_loc_start_z4c[d] = -PRJ_NGHOST_Z4C;
+                    slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+                    slot->send_loc_start_z4c[d] = PRJ_BLOCK_SIZE / 2 - PRJ_NGHOST_Z4C / 2;
+                    slot->send_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
+                } else {
+                    slot->recv_loc_start_z4c[d] = 0;
+                    slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C;
+                    slot->send_loc_start_z4c[d] = 0;
+                    slot->send_loc_end_z4c[d] = PRJ_BLOCK_SIZE / 2 + PRJ_NGHOST_Z4C / 2;
+                }
+            }
+        }
+    }
+
     /* Radiation uses a narrower ghost band (PRJ_NGHOST_RAD <= PRJ_NGHOST).
      * Clip the recv box to the rad zone and map the result back to a send box
      * using the same rel_level mapping the send_loc_* assignments above use. */
@@ -198,6 +265,10 @@ static void prj_neighbor_clear_derived(prj_neighbor *slot)
         slot->send_loc_end_rad[d] = 0;
         slot->recv_loc_start_rad[d] = 0;
         slot->recv_loc_end_rad[d] = 0;
+        slot->send_loc_start_z4c[d] = 0;
+        slot->send_loc_end_z4c[d] = 0;
+        slot->recv_loc_start_z4c[d] = 0;
+        slot->recv_loc_end_z4c[d] = 0;
     }
 }
 
@@ -219,7 +290,8 @@ static void prj_block_init_empty(prj_block *b)
 #endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
-    b->U = 0;
+    b->U_mhd = 0;
+    b->U_rad = 0;
     b->mhd_rhs = 0;
     b->rad_rhs = 0;
     b->deriv_ex = 0;
@@ -293,16 +365,19 @@ size_t prj_block_data_count(void)
     size_t rad_prim_count = (size_t)PRJ_NVAR_RAD_PRIM * (size_t)PRJ_BLOCK_NSTAGES *
         (size_t)PRJ_BLOCK_NCELLS;
     size_t eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
+    size_t mhd_cons_count = (size_t)PRJ_NVAR_MHD_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    size_t rad_cons_count = (size_t)PRJ_NVAR_RAD_CONS * (size_t)PRJ_BLOCK_NCELLS;
     size_t cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     size_t mhd_rhs_count = (size_t)PRJ_NVAR_MHD_CONS * (size_t)PRJ_BLOCK_NCELLS;
     size_t rad_rhs_count = (size_t)PRJ_NVAR_RAD_CONS * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_DYNAMIC_GR
     size_t z4c_count = (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-        (size_t)PRJ_BLOCK_NCELLS;
+        (size_t)PRJ_BLOCK_NCELLS_Z4C;
 #endif
     size_t total_count;
 
-    total_count = mhd_prim_count + rad_prim_count + eosvar_count + cons_count +
+    total_count = mhd_prim_count + rad_prim_count + eosvar_count +
+        mhd_cons_count + rad_cons_count +
         mhd_rhs_count + rad_rhs_count + 3U * cons_count + 9U * (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_DYNAMIC_GR
     total_count += 2U * z4c_count;
@@ -334,6 +409,8 @@ int prj_block_alloc_data(prj_block *b)
     size_t z4c_count;
 #endif
     size_t eosvar_count;
+    size_t mhd_cons_count;
+    size_t rad_cons_count;
     size_t cons_count;
     size_t mhd_rhs_count;
     size_t rad_rhs_count;
@@ -363,9 +440,11 @@ int prj_block_alloc_data(prj_block *b)
         (size_t)PRJ_BLOCK_NCELLS;
 #if PRJ_DYNAMIC_GR
     z4c_count = (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-        (size_t)PRJ_BLOCK_NCELLS;
+        (size_t)PRJ_BLOCK_NCELLS_Z4C;
 #endif
     eosvar_count = (size_t)PRJ_NVAR_EOSVAR * (size_t)PRJ_BLOCK_NCELLS;
+    mhd_cons_count = (size_t)PRJ_NVAR_MHD_CONS * (size_t)PRJ_BLOCK_NCELLS;
+    rad_cons_count = (size_t)PRJ_NVAR_RAD_CONS * (size_t)PRJ_BLOCK_NCELLS;
     cons_count = (size_t)PRJ_NVAR_CONS * (size_t)PRJ_BLOCK_NCELLS;
     mhd_rhs_count = (size_t)PRJ_NVAR_MHD_CONS * (size_t)PRJ_BLOCK_NCELLS;
     rad_rhs_count = (size_t)PRJ_NVAR_RAD_CONS * (size_t)PRJ_BLOCK_NCELLS;
@@ -422,8 +501,10 @@ int prj_block_alloc_data(prj_block *b)
     b->eosvar = base;
     base += eosvar_count;
     b->cell_derived_done = cell_derived_done;
-    b->U = base;
-    base += cons_count;
+    b->U_mhd = base;
+    base += mhd_cons_count;
+    b->U_rad = PRJ_NVAR_RAD_CONS > 0 ? base : 0;
+    base += rad_cons_count;
     b->mhd_rhs = base;
     base += mhd_rhs_count;
     b->rad_rhs = PRJ_NVAR_RAD_CONS > 0 ? base : 0;
@@ -536,7 +617,8 @@ void prj_block_free_data(prj_block *b)
 #endif
     b->eosvar = 0;
     b->cell_derived_done = 0;
-    b->U = 0;
+    b->U_mhd = 0;
+    b->U_rad = 0;
     b->mhd_rhs = 0;
     b->rad_rhs = 0;
     b->deriv_ex = 0;

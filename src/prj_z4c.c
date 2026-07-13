@@ -191,6 +191,13 @@ static void prj_z4c_set(double *z, int v, int i, int j, int k, double value)
     z[Z4CIDX(v, i, j, k)] = value;
 }
 
+static int prj_z4c_cell_in_storage(int i, int j, int k)
+{
+    return i >= -PRJ_NGHOST_Z4C && i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C &&
+        j >= -PRJ_NGHOST_Z4C && j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C &&
+        k >= -PRJ_NGHOST_Z4C && k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C;
+}
+
 static void prj_z4c_shift_index(int dir, int offset, int *i, int *j, int *k)
 {
     if (dir == X1DIR) {
@@ -204,17 +211,17 @@ static void prj_z4c_shift_index(int dir, int offset, int *i, int *j, int *k)
 
 static void prj_z4c_fd1_coeff(int *n, int off[6], double c[6])
 {
-#if PRJ_NGHOST == 2
+#if PRJ_NGHOST_Z4C == 2
     *n = 2;
     off[0] = -1; c[0] = -0.5;
     off[1] =  1; c[1] =  0.5;
-#elif PRJ_NGHOST == 3
+#elif PRJ_NGHOST_Z4C == 3
     *n = 4;
     off[0] = -2; c[0] =  1.0 / 12.0;
     off[1] = -1; c[1] = -2.0 / 3.0;
     off[2] =  1; c[2] =  2.0 / 3.0;
     off[3] =  2; c[3] = -1.0 / 12.0;
-#elif PRJ_NGHOST == 4
+#elif PRJ_NGHOST_Z4C == 4
     *n = 6;
     off[0] = -3; c[0] = -1.0 / 60.0;
     off[1] = -2; c[1] =  3.0 / 20.0;
@@ -223,25 +230,25 @@ static void prj_z4c_fd1_coeff(int *n, int off[6], double c[6])
     off[4] =  2; c[4] = -3.0 / 20.0;
     off[5] =  3; c[5] =  1.0 / 60.0;
 #else
-#error "Z4c finite differences support PRJ_NGHOST == 2, 3, or 4"
+#error "Z4c finite differences support PRJ_NGHOST_Z4C == 2, 3, or 4"
 #endif
 }
 
 static void prj_z4c_fd2_coeff(int *n, int off[7], double c[7])
 {
-#if PRJ_NGHOST == 2
+#if PRJ_NGHOST_Z4C == 2
     *n = 3;
     off[0] = -1; c[0] =  1.0;
     off[1] =  0; c[1] = -2.0;
     off[2] =  1; c[2] =  1.0;
-#elif PRJ_NGHOST == 3
+#elif PRJ_NGHOST_Z4C == 3
     *n = 5;
     off[0] = -2; c[0] = -1.0 / 12.0;
     off[1] = -1; c[1] =  4.0 / 3.0;
     off[2] =  0; c[2] = -5.0 / 2.0;
     off[3] =  1; c[3] =  4.0 / 3.0;
     off[4] =  2; c[4] = -1.0 / 12.0;
-#elif PRJ_NGHOST == 4
+#elif PRJ_NGHOST_Z4C == 4
     *n = 7;
     off[0] = -3; c[0] =  1.0 / 90.0;
     off[1] = -2; c[1] = -3.0 / 20.0;
@@ -251,7 +258,7 @@ static void prj_z4c_fd2_coeff(int *n, int off[7], double c[7])
     off[5] =  2; c[5] = -3.0 / 20.0;
     off[6] =  3; c[6] =  1.0 / 90.0;
 #else
-#error "Z4c finite differences support PRJ_NGHOST == 2, 3, or 4"
+#error "Z4c finite differences support PRJ_NGHOST_Z4C == 2, 3, or 4"
 #endif
 }
 
@@ -333,7 +340,7 @@ static double prj_z4c_Lx(const double *z, int beta_var, int q_var, int dir,
     double dl;
     double dr;
 
-#if PRJ_NGHOST == 2
+#if PRJ_NGHOST_Z4C == 2
     {
         int im2 = i, jm2 = j, km2 = k, im1 = i, jm1 = j, km1 = k;
         int ip1 = i, jp1 = j, kp1 = k, ip2 = i, jp2 = j, kp2 = k;
@@ -346,7 +353,7 @@ static double prj_z4c_Lx(const double *z, int beta_var, int q_var, int dir,
         dr = -0.5 * prj_z4c_get(z, q_var, ip2, jp2, kp2) +
             2.0 * prj_z4c_get(z, q_var, ip1, jp1, kp1) - 1.5 * q0;
     }
-#elif PRJ_NGHOST == 3
+#elif PRJ_NGHOST_Z4C == 3
     {
         int im3 = i, jm3 = j, km3 = k, im2 = i, jm2 = j, km2 = k;
         int im1 = i, jm1 = j, km1 = k, ip1 = i, jp1 = j, kp1 = k;
@@ -400,11 +407,11 @@ static double prj_z4c_Lx(const double *z, int beta_var, int q_var, int dir,
 static double prj_z4c_Diss(const double *z, int v, int dir, const double idx[3],
     int i, int j, int k)
 {
-#if PRJ_NGHOST == 2
+#if PRJ_NGHOST_Z4C == 2
     const int n = 5;
     int offs[5] = {-2, -1, 0, 1, 2};
     double coef[5] = {1.0, -4.0, 6.0, -4.0, 1.0};
-#elif PRJ_NGHOST == 3
+#elif PRJ_NGHOST_Z4C == 3
     const int n = 7;
     int offs[7] = {-3, -2, -1, 0, 1, 2, 3};
     double coef[7] = {1.0, -6.0, 15.0, -20.0, 15.0, -6.0, 1.0};
@@ -431,8 +438,8 @@ static double prj_z4c_diss_coeff(const prj_z4c_params *params)
     if (params == 0 || params->diss == 0.0) {
         return 0.0;
     }
-    coeff = params->diss * pow(2.0, -2.0 * (double)PRJ_NGHOST);
-#if (PRJ_NGHOST % 2) == 0
+    coeff = params->diss * pow(2.0, -2.0 * (double)PRJ_NGHOST_Z4C);
+#if (PRJ_NGHOST_Z4C % 2) == 0
     coeff = -coeff;
 #endif
     return coeff;
@@ -609,16 +616,16 @@ void prj_z4c_init_mesh_flat(prj_mesh *mesh, const prj_mpi *mpi)
             continue;
         }
         prj_fill(block->z4c, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+            (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
         prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+            (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
         for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
             double *z = prj_block_z4c_stage(block, stage);
             int i, j, k;
 
-            for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-                for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                    for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+            for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+                for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+                    for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
                         z[Z4CIDX(PRJ_Z4C_CHI, i, j, k)] = 1.0;
                         z[Z4CIDX(PRJ_Z4C_GXX, i, j, k)] = 1.0;
                         z[Z4CIDX(PRJ_Z4C_GYY, i, j, k)] = 1.0;
@@ -655,16 +662,16 @@ void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
             continue;
         }
         prj_fill(block->z4c, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+            (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
         prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+            (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
         for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
             double *z = prj_block_z4c_stage(block, stage);
             int i, j, k;
 
-            for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-                for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                    for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+            for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+                for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+                    for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
                         double x[3];
                         double psi = 1.0;
                         double Aconf[3][3] = {{0.0, 0.0, 0.0},
@@ -834,16 +841,16 @@ static void prj_z4c_apply_physical_axis(const prj_mesh *mesh, const prj_bc *bc,
     }
     bc_type = prj_z4c_axis_bc_type(bc, axis, outer);
     order = mesh->z4c_extrap_order;
-    for (p = 0; p < PRJ_NGHOST; ++p) {
+    for (p = 0; p < PRJ_NGHOST_Z4C; ++p) {
         int ghost = outer ? PRJ_BLOCK_SIZE + p : -p - 1;
         int mirror = outer ? PRJ_BLOCK_SIZE - p - 1 : p;
         int base = outer ? PRJ_BLOCK_SIZE - 1 : 0;
         int off = outer ? -1 : 1;
         int i, j, k;
 
-        for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
-            for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
-                for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+        for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+            for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+                for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
                     int dst_idx[3] = {i, j, k};
                     int src_idx[3] = {i, j, k};
                     int var;
@@ -934,14 +941,14 @@ static void prj_z4c_clear_block_aux(prj_block *block)
     }
     if (block->z4c_rhs != 0) {
         prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
-            (size_t)PRJ_BLOCK_NCELLS, 0.0);
+            (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
     }
 }
 
 static void prj_z4c_amr_prolong_axis_weights(int parent_index, int fine_odd,
     int *base, int *n, double w[5])
 {
-#if PRJ_NGHOST == 2
+#if PRJ_NGHOST_Z4C == 2
     static const double pro[3] = {0.15625, 0.9375, -0.09375};
     int q;
 
@@ -950,7 +957,7 @@ static void prj_z4c_amr_prolong_axis_weights(int parent_index, int fine_odd,
     for (q = 0; q < *n; ++q) {
         w[q] = fine_odd ? pro[*n - 1 - q] : pro[q];
     }
-#elif PRJ_NGHOST == 4
+#elif PRJ_NGHOST_Z4C == 4
     static const double pro[5] = {
         -0.02197265625, 0.205078125, 0.9228515625, -0.123046875, 0.01708984375
     };
@@ -973,7 +980,7 @@ static void prj_z4c_amr_prolong_axis_weights(int parent_index, int fine_odd,
 static double prj_z4c_amr_prolong_value(const double *src, int var,
     int i, int j, int k, int child_oct)
 {
-#if PRJ_NGHOST == 2 || PRJ_NGHOST == 4
+#if PRJ_NGHOST_Z4C == 2 || PRJ_NGHOST_Z4C == 4
     int gi = ((child_oct & 1) ? PRJ_BLOCK_SIZE : 0) + i;
     int gj = ((child_oct & 2) ? PRJ_BLOCK_SIZE : 0) + j;
     int gk = ((child_oct & 4) ? PRJ_BLOCK_SIZE : 0) + k;
@@ -1015,7 +1022,7 @@ static double prj_z4c_amr_prolong_value(const double *src, int var,
 static void prj_z4c_amr_restrict_axis_weights(int fine_even, int *base,
     int *n, double w[5])
 {
-#if PRJ_NGHOST == 2
+#if PRJ_NGHOST_Z4C == 2
     static const double res[3] = {0.375, 0.75, -0.125};
     int left = fine_even < PRJ_BLOCK_SIZE / 2;
     int q;
@@ -1025,7 +1032,7 @@ static void prj_z4c_amr_restrict_axis_weights(int fine_even, int *base,
     for (q = 0; q < *n; ++q) {
         w[q] = left ? res[q] : res[*n - 1 - q];
     }
-#elif PRJ_NGHOST == 4
+#elif PRJ_NGHOST_Z4C == 4
     static const double res[5] = {
         -0.0390625, 0.46875, 0.703125, -0.15625, 0.0234375
     };
@@ -1057,7 +1064,7 @@ static void prj_z4c_amr_restrict_axis_weights(int fine_even, int *base,
 
 static double prj_z4c_amr_restrict_value(const double *src, int var, int i, int j, int k)
 {
-#if PRJ_NGHOST == 2 || PRJ_NGHOST == 4
+#if PRJ_NGHOST_Z4C == 2 || PRJ_NGHOST_Z4C == 4
     int fi = 2 * i;
     int fj = 2 * j;
     int fk = 2 * k;
@@ -1098,28 +1105,28 @@ static double prj_z4c_sample_slot_value(const double *src, const prj_neighbor *s
 {
     if (slot->rel_level == 0) {
         return prj_z4c_get(src, var,
-            i + slot->send_loc_start[0],
-            j + slot->send_loc_start[1],
-            k + slot->send_loc_start[2]);
+            i + slot->send_loc_start_z4c[0],
+            j + slot->send_loc_start_z4c[1],
+            k + slot->send_loc_start_z4c[2]);
     }
     if (slot->rel_level < 0) {
         return prj_z4c_restrict_value(src, var,
-            i + slot->send_loc_start[0] / 2,
-            j + slot->send_loc_start[1] / 2,
-            k + slot->send_loc_start[2] / 2);
+            i + slot->send_loc_start_z4c[0] / 2,
+            j + slot->send_loc_start_z4c[1] / 2,
+            k + slot->send_loc_start_z4c[2] / 2);
     } else {
         double target[3];
-        int ai = i + slot->recv_loc_start[0];
-        int aj = j + slot->recv_loc_start[1];
-        int ak = k + slot->recv_loc_start[2];
+        int ai = i + slot->recv_loc_start_z4c[0];
+        int aj = j + slot->recv_loc_start_z4c[1];
+        int ak = k + slot->recv_loc_start_z4c[2];
 
         target[0] = (ai % 2 == 0) ? -0.25 : 0.25;
         target[1] = (aj % 2 == 0) ? -0.25 : 0.25;
         target[2] = (ak % 2 == 0) ? -0.25 : 0.25;
         return prj_z4c_prolong_value(src, var,
-            i / 2 + slot->send_loc_start[0],
-            j / 2 + slot->send_loc_start[1],
-            k / 2 + slot->send_loc_start[2], target);
+            i / 2 + slot->send_loc_start_z4c[0],
+            j / 2 + slot->send_loc_start_z4c[1],
+            k / 2 + slot->send_loc_start_z4c[2], target);
     }
 }
 
@@ -1152,16 +1159,19 @@ static void prj_z4c_local_send(prj_mesh *mesh, const prj_mpi *mpi, int stage, in
                 continue;
             }
             dst = prj_block_z4c_stage(neighbor, stage);
-            for (i = 0; i < slot->recv_loc_end[0] - slot->recv_loc_start[0]; ++i) {
-                for (j = 0; j < slot->recv_loc_end[1] - slot->recv_loc_start[1]; ++j) {
-                    for (k = 0; k < slot->recv_loc_end[2] - slot->recv_loc_start[2]; ++k) {
+            for (i = 0; i < slot->recv_loc_end_z4c[0] - slot->recv_loc_start_z4c[0]; ++i) {
+                for (j = 0; j < slot->recv_loc_end_z4c[1] - slot->recv_loc_start_z4c[1]; ++j) {
+                    for (k = 0; k < slot->recv_loc_end_z4c[2] - slot->recv_loc_start_z4c[2]; ++k) {
+                        int di = i + slot->recv_loc_start_z4c[0];
+                        int dj = j + slot->recv_loc_start_z4c[1];
+                        int dk = k + slot->recv_loc_start_z4c[2];
                         int var;
 
+                        if (!prj_z4c_cell_in_storage(di, dj, dk)) {
+                            continue;
+                        }
                         for (var = 0; var < PRJ_NZ4C; ++var) {
-                            prj_z4c_set(dst, var,
-                                i + slot->recv_loc_start[0],
-                                j + slot->recv_loc_start[1],
-                                k + slot->recv_loc_start[2],
+                            prj_z4c_set(dst, var, di, dj, dk,
                                 prj_z4c_sample_slot_value(src, slot, var, i, j, k));
                         }
                     }
@@ -1173,11 +1183,11 @@ static void prj_z4c_local_send(prj_mesh *mesh, const prj_mpi *mpi, int stage, in
 
 static int prj_z4c_decode_cell_index(int code, int *i, int *j, int *k)
 {
-    *k = code % PRJ_BS - PRJ_NGHOST;
-    code /= PRJ_BS;
-    *j = code % PRJ_BS - PRJ_NGHOST;
-    code /= PRJ_BS;
-    *i = code - PRJ_NGHOST;
+    *k = code % PRJ_BS_Z4C - PRJ_NGHOST_Z4C;
+    code /= PRJ_BS_Z4C;
+    *j = code % PRJ_BS_Z4C - PRJ_NGHOST_Z4C;
+    code /= PRJ_BS_Z4C;
+    *i = code - PRJ_NGHOST_Z4C;
     return 0;
 }
 
@@ -1230,8 +1240,8 @@ static void prj_z4c_mpi_exchange(prj_mesh *mesh, prj_mpi *mpi, int stage, int fi
 
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int send_records = buffer->cell_send_count_by_kind[fill_kind];
-        int recv_records = buffer->cell_recv_count_by_kind[fill_kind];
+        int send_records = buffer->cell_send_count_z4c_by_kind[fill_kind];
+        int recv_records = buffer->cell_recv_count_z4c_by_kind[fill_kind];
         int pos = 0;
         int bidx;
 
@@ -1262,9 +1272,9 @@ static void prj_z4c_mpi_exchange(prj_mesh *mesh, prj_mpi *mpi, int stage, int fi
                     prj_z4c_fill_kind_from_rel_level(slot->rel_level) != fill_kind) {
                     continue;
                 }
-                for (i = 0; i < slot->recv_loc_end[0] - slot->recv_loc_start[0]; ++i) {
-                    for (j = 0; j < slot->recv_loc_end[1] - slot->recv_loc_start[1]; ++j) {
-                        for (k = 0; k < slot->recv_loc_end[2] - slot->recv_loc_start[2]; ++k) {
+                for (i = 0; i < slot->recv_loc_end_z4c[0] - slot->recv_loc_start_z4c[0]; ++i) {
+                    for (j = 0; j < slot->recv_loc_end_z4c[1] - slot->recv_loc_start_z4c[1]; ++j) {
+                        for (k = 0; k < slot->recv_loc_end_z4c[2] - slot->recv_loc_start_z4c[2]; ++k) {
                             int var;
 
                             for (var = 0; var < PRJ_NZ4C; ++var) {
@@ -1294,14 +1304,14 @@ static void prj_z4c_mpi_exchange(prj_mesh *mesh, prj_mpi *mpi, int stage, int fi
     }
     for (nb = 0; nb < mpi->neighbor_number; ++nb) {
         prj_mpi_buffer *buffer = &mpi->neighbor_buffer[nb];
-        int total = prj_z4c_buffer_record_total(buffer->cell_data_size_recv);
+        int total = prj_z4c_buffer_record_total(buffer->cell_data_size_recv_z4c);
         int pos = 0;
         int r;
 
         for (r = 0; r < total; ++r) {
-            int block_id = buffer->cell_data_idx_recv[0][r];
-            int code = buffer->cell_data_idx_recv[1][r];
-            int sample_kind = buffer->cell_data_idx_recv[2][r];
+            int block_id = buffer->cell_data_idx_recv_z4c[0][r];
+            int code = buffer->cell_data_idx_recv_z4c[1][r];
+            int sample_kind = buffer->cell_data_idx_recv_z4c[2][r];
             int i, j, k, var;
             prj_block *block;
             double *dst;
@@ -1310,6 +1320,10 @@ static void prj_z4c_mpi_exchange(prj_mesh *mesh, prj_mpi *mpi, int stage, int fi
                 continue;
             }
             prj_z4c_decode_cell_index(code, &i, &j, &k);
+            if (!prj_z4c_cell_in_storage(i, j, k)) {
+                pos += PRJ_NZ4C;
+                continue;
+            }
             if (block_id < 0 || block_id >= mesh->nblocks) {
                 pos += PRJ_NZ4C;
                 continue;
@@ -1889,7 +1903,7 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
         if (z == 0 || rhs == 0) {
             prj_z4c_fail("prj_z4c_compute_rhs: missing stage storage");
         }
-        prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+        prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -2095,9 +2109,9 @@ void prj_z4c_finalize_stage(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int 
     prj_z4c_enforce_range(mesh, mpi, stage, 0, PRJ_BLOCK_SIZE, 0, PRJ_BLOCK_SIZE,
         0, PRJ_BLOCK_SIZE);
     prj_z4c_fill_ghosts(mesh, mpi, bc, stage);
-    prj_z4c_enforce_range(mesh, mpi, stage, -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST,
-        -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST,
-        -PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST);
+    prj_z4c_enforce_range(mesh, mpi, stage, -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C,
+        -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C,
+        -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C);
 }
 
 void prj_z4c_save_stage(prj_mesh *mesh, const prj_mpi *mpi, int dst_stage, int src_stage)
@@ -2117,7 +2131,7 @@ void prj_z4c_save_stage(prj_mesh *mesh, const prj_mpi *mpi, int dst_stage, int s
         }
         dst = prj_block_z4c_stage(block, dst_stage);
         src = prj_block_z4c_stage_const(block, src_stage);
-        memcpy(dst, src, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS * sizeof(*dst));
+        memcpy(dst, src, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C * sizeof(*dst));
     }
 }
 

@@ -52,16 +52,13 @@ static void prj_problem_z4c_fill_ambient(prj_sim *sim, const prj_mpi *mpi)
                     double W[PRJ_NVAR_PRIM] = {0.0};
                     double U[PRJ_NVAR_CONS] = {0.0};
                     int stage;
-                    int v;
 
                     prj_problem_initial_condition(x1, x2, x3, W);
                     prj_eos_prim2cons(&sim->eos, W, U);
                     for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
                         prj_block_store_prim_cell(block, stage, i, j, k, W);
                     }
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        block->U[VIDX(v, i, j, k)] = U[v];
-                    }
+                    prj_block_store_cons_cell(block, i, j, k, U);
                 }
             }
         }

@@ -10,13 +10,9 @@ static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)
 {
-    int v;
-
     prj_block_store_prim_cell(block, 0, i, j, k, W);
     prj_block_store_prim_cell(block, 1, i, j, k, W);
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        block->U[VIDX(v, i, j, k)] = U[v];
-    }
+    prj_block_store_cons_cell(block, i, j, k, U);
 }
 
 void prj_problem_shock1d(prj_sim *sim, prj_mpi *mpi)

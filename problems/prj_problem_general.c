@@ -53,13 +53,9 @@ void prj_problem_initial_condition(double x1, double x2, double x3, double *data
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)
 {
-    int v;
-
     prj_block_store_prim_cell(block, 0, i, j, k, W);
     prj_block_store_prim_cell(block, 1, i, j, k, W);
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        block->U[VIDX(v, i, j, k)] = U[v];
-    }
+    prj_block_store_cons_cell(block, i, j, k, U);
 }
 
 static void prj_problem_fill_mesh(prj_sim *sim, prj_mpi *mpi,

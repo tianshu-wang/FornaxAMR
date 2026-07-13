@@ -890,7 +890,8 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
         int j;
         int k;
 
-        if (block->id < 0 || block->active != 1 || W == 0 || block->U == 0) {
+        if (block->id < 0 || block->active != 1 || W == 0 ||
+            !prj_block_has_cons_storage(block)) {
             continue;
         }
         if (mpi != 0 && block->rank != mpi->rank) {
@@ -930,12 +931,12 @@ void prj_eos_fill_ghost_cons(prj_mesh *mesh, prj_eos *eos, const prj_mpi *mpi, i
 #endif
                     prj_eos_prim2cons(eos, Wc, Uc);
                     for (v = 0; v < PRJ_NHYDRO; ++v) {
-                        block->U[VIDX(v, i, j, k)] = Uc[v];
+                        prj_block_set_cons_value(block, v, i, j, k, Uc[v]);
                     }
 #if PRJ_NRAD > 0
                     if (in_rad_zone) {
                         for (v = PRJ_NHYDRO; v < PRJ_NVAR_CONS; ++v) {
-                            block->U[VIDX(v, i, j, k)] = Uc[v];
+                            prj_block_set_cons_value(block, v, i, j, k, Uc[v]);
                         }
                     }
 #endif

@@ -73,8 +73,8 @@ struct prj_neighbor {
     int rank;
     int rel_level;
     int type;
-    /* In-block cell-index ranges for ghost exchange; values lie in
-     * [-PRJ_NGHOST, PRJ_BLOCK_SIZE + PRJ_NGHOST] (~[-2, 10]), so int8_t is
+    /* In-block cell-index ranges for ghost exchange; values lie within the
+     * widest configured halo (~[-4, 12] by default), so int8_t is
      * ample and shrinks these fields 4x.  mesh->blocks is preallocated at
      * max_blocks, and each block holds slot[56], so trimming prj_neighbor
      * scales across the whole (GB-scale) struct array.  Read-only in
@@ -87,6 +87,10 @@ struct prj_neighbor {
     int8_t send_loc_end_rad[3];
     int8_t recv_loc_start_rad[3];
     int8_t recv_loc_end_rad[3];
+    int8_t send_loc_start_z4c[3];
+    int8_t send_loc_end_z4c[3];
+    int8_t recv_loc_start_z4c[3];
+    int8_t recv_loc_end_z4c[3];
     double xmin[3];
     double xmax[3];
     double dx[3];
@@ -160,7 +164,8 @@ struct prj_block {
 #endif
     double *eosvar;
     int *cell_derived_done;
-    double *U;
+    double *U_mhd;
+    double *U_rad;
     double *mhd_rhs;
     double *rad_rhs;
     double *deriv_ex;
@@ -278,6 +283,63 @@ static inline void prj_block_store_prim_cell(prj_block *block, int stage,
     int v;
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
         prj_block_set_prim_value(block, stage, v, i, j, k, w[v]);
+    }
+}
+
+static inline int prj_block_has_cons_storage(const prj_block *block)
+{
+    return block != 0 && block->U_mhd != 0
+#if PRJ_NVAR_RAD_CONS > 0
+        && block->U_rad != 0
+#endif
+        ;
+}
+
+static inline double prj_block_cons_value_const(const prj_block *block, int v,
+    int i, int j, int k)
+{
+    if (v < PRJ_NVAR_MHD_CONS) {
+        const double *U_mhd = block != 0 ? block->U_mhd : 0;
+        return U_mhd != 0 ? U_mhd[MHDVIDX(v, i, j, k)] : 0.0;
+    } else {
+        const double *U_rad = block != 0 ? block->U_rad : 0;
+        const int rv = v - PRJ_NVAR_MHD_CONS;
+        return U_rad != 0 ? U_rad[RADVIDX(rv, i, j, k)] : 0.0;
+    }
+}
+
+static inline void prj_block_set_cons_value(prj_block *block, int v,
+    int i, int j, int k, double value)
+{
+    if (v < PRJ_NVAR_MHD_CONS) {
+        double *U_mhd = block != 0 ? block->U_mhd : 0;
+        if (U_mhd != 0) {
+            U_mhd[MHDVIDX(v, i, j, k)] = value;
+        }
+    } else {
+        double *U_rad = block != 0 ? block->U_rad : 0;
+        const int rv = v - PRJ_NVAR_MHD_CONS;
+        if (U_rad != 0) {
+            U_rad[RADVIDX(rv, i, j, k)] = value;
+        }
+    }
+}
+
+static inline void prj_block_load_cons_cell_const(const prj_block *block,
+    int i, int j, int k, double *u)
+{
+    int v;
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u[v] = prj_block_cons_value_const(block, v, i, j, k);
+    }
+}
+
+static inline void prj_block_store_cons_cell(prj_block *block,
+    int i, int j, int k, const double *u)
+{
+    int v;
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        prj_block_set_cons_value(block, v, i, j, k, u[v]);
     }
 }
 
@@ -605,6 +667,7 @@ struct prj_mpi_buffer {
     double *cell_buffer_send;
     int cell_send_count_by_kind[6];
     int cell_send_count_rad_by_kind[6];
+    int cell_send_count_z4c_by_kind[6];
     double *cell_buffer_send_by_kind[6];
 #if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     float *cell_buffer_send_rad_by_kind[6];
@@ -617,6 +680,7 @@ struct prj_mpi_buffer {
     double *cell_buffer_recv;
     int cell_recv_count_by_kind[6];
     int cell_recv_count_rad_by_kind[6];
+    int cell_recv_count_z4c_by_kind[6];
     double *cell_buffer_recv_by_kind[6];
 #if PRJ_NRAD > 0 && PRJ_MIXED_PRECISION_FLUX
     float *cell_buffer_recv_rad_by_kind[6];
@@ -629,6 +693,10 @@ struct prj_mpi_buffer {
     int *cell_data_idx_send_rad[3];
     int *cell_data_size_recv_rad;
     int *cell_data_idx_recv_rad[3];
+    int *cell_data_size_send_z4c;
+    int *cell_data_idx_send_z4c[3];
+    int *cell_data_size_recv_z4c;
+    int *cell_data_idx_recv_z4c[3];
     int flux_send_count;
     int flux_recv_count;
     int *flux_idx_send;

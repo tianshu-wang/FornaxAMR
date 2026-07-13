@@ -11,13 +11,9 @@ static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)
 {
-    int v;
-
     prj_block_store_prim_cell(block, 0, i, j, k, W);
     prj_block_store_prim_cell(block, 1, i, j, k, W);
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-        block->U[VIDX(v, i, j, k)] = U[v];
-    }
+    prj_block_store_cons_cell(block, i, j, k, U);
 }
 
 static double prj_problem_ball_overlap_fraction(const prj_block *block, int i, int j, int k,
@@ -171,7 +167,10 @@ static void prj_problem_inject_energy(prj_sim *sim, const prj_mpi *mpi, double c
             if (best_block[n] != 0) {
                 double cell_energy_density = (weights[n] / weight_sum) / best_block[n]->vol;
 
-                best_block[n]->U[VIDX(PRJ_CONS_ETOT, best_i[n], best_j[n], best_k[n])] += cell_energy_density;
+                prj_block_set_cons_value(best_block[n], PRJ_CONS_ETOT,
+                    best_i[n], best_j[n], best_k[n],
+                    prj_block_cons_value_const(best_block[n], PRJ_CONS_ETOT,
+                        best_i[n], best_j[n], best_k[n]) + cell_energy_density);
             }
         }
     } else {
@@ -195,7 +194,9 @@ static void prj_problem_inject_energy(prj_sim *sim, const prj_mpi *mpi, double c
                         if (r < 0.2) {
                             double cell_energy_density = (1.0 / (double)selected) / block->vol;
 
-                            block->U[VIDX(PRJ_CONS_ETOT, i, j, k)] += cell_energy_density;
+                            prj_block_set_cons_value(block, PRJ_CONS_ETOT, i, j, k,
+                                prj_block_cons_value_const(block, PRJ_CONS_ETOT, i, j, k) +
+                                cell_energy_density);
                         }
                     }
                 }
@@ -217,11 +218,8 @@ static void prj_problem_inject_energy(prj_sim *sim, const prj_mpi *mpi, double c
                 for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
                     double U[PRJ_NVAR_CONS] = {0.0};
                     double W[PRJ_NVAR_PRIM] = {0.0};
-                    int v;
 
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        U[v] = block->U[VIDX(v, i, j, k)];
-                    }
+                    prj_block_load_cons_cell_const(block, i, j, k, U);
                     prj_eos_cons2prim(&sim->eos, U, W);
                     prj_block_store_prim_cell(block, 0, i, j, k, W);
                     prj_block_store_prim_cell(block, 1, i, j, k, W);

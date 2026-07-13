@@ -77,6 +77,8 @@ static void prj_mpi_buffer_free(prj_mpi_buffer *buffer)
     free(buffer->face_buffer_recv);
     free(buffer->cell_data_size_send_rad);
     free(buffer->cell_data_size_recv_rad);
+    free(buffer->cell_data_size_send_z4c);
+    free(buffer->cell_data_size_recv_z4c);
     free(buffer->flux_idx_send);
     free(buffer->flux_value_send);
     free(buffer->flux_idx_recv);
@@ -88,6 +90,8 @@ static void prj_mpi_buffer_free(prj_mpi_buffer *buffer)
         free(buffer->face_data_idx_recv[axis]);
         free(buffer->cell_data_idx_send_rad[axis]);
         free(buffer->cell_data_idx_recv_rad[axis]);
+        free(buffer->cell_data_idx_send_z4c[axis]);
+        free(buffer->cell_data_idx_recv_z4c[axis]);
     }
 #if PRJ_MHD
     free(buffer->bf_headers_send);
@@ -261,6 +265,12 @@ static int prj_mpi_order_sort(prj_mpi_order_item *items, int count)
 static int prj_mpi_encode_cell_index(int i, int j, int k)
 {
     return ((i + PRJ_NGHOST) * PRJ_BS + (j + PRJ_NGHOST)) * PRJ_BS + (k + PRJ_NGHOST);
+}
+
+static int prj_mpi_encode_cell_index_z4c(int i, int j, int k)
+{
+    return ((i + PRJ_NGHOST_Z4C) * PRJ_BS_Z4C + (j + PRJ_NGHOST_Z4C)) *
+        PRJ_BS_Z4C + (k + PRJ_NGHOST_Z4C);
 }
 
 static void prj_mpi_decode_cell_index(int code, int *i, int *j, int *k)
@@ -759,7 +769,7 @@ static int prj_mpi_alloc_ghost_rad_value_buffer(float **buffer,
 #endif
 
 static void prj_mpi_count_recv_ghosts_by_kind(prj_mpi_buffer *buffer,
-    int cell_count, int cell_count_rad)
+    int cell_count, int cell_count_rad, int cell_count_z4c)
 {
     int i;
 
@@ -770,6 +780,8 @@ static void prj_mpi_count_recv_ghosts_by_kind(prj_mpi_buffer *buffer,
         sizeof(buffer->cell_recv_count_by_kind));
     memset(buffer->cell_recv_count_rad_by_kind, 0,
         sizeof(buffer->cell_recv_count_rad_by_kind));
+    memset(buffer->cell_recv_count_z4c_by_kind, 0,
+        sizeof(buffer->cell_recv_count_z4c_by_kind));
     for (i = 0; i < cell_count; ++i) {
         int fill_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv[2][i]);
 
@@ -784,6 +796,13 @@ static void prj_mpi_count_recv_ghosts_by_kind(prj_mpi_buffer *buffer,
             buffer->cell_recv_count_rad_by_kind[fill_kind] += 1;
         }
     }
+    for (i = 0; i < cell_count_z4c; ++i) {
+        int fill_kind = prj_mpi_sample_kind_from_code(buffer->cell_data_idx_recv_z4c[2][i]);
+
+        if (prj_mpi_ghost_fill_kind_ok(fill_kind)) {
+            buffer->cell_recv_count_z4c_by_kind[fill_kind] += 1;
+        }
+    }
 }
 
 static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, prj_mpi_buffer *buffer)
@@ -791,31 +810,41 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 #if defined(PRJ_ENABLE_MPI)
     int *send_sizes;
     int *send_sizes_rad;
+    int *send_sizes_z4c;
     int send_entries;
     int cell_size_total;
     int cell_size_total_rad;
+    int cell_size_total_z4c;
     int axis;
     int fill_kind;
     int bidx;
     int occ;
     int *idx_send[3];
     int *idx_send_rad[3];
+    int *idx_send_z4c[3];
     int record_count;
     int record_count_rad;
+    int record_count_z4c;
     int record_count_by_kind[PRJ_MPI_GHOST_FILL_KIND_N];
     int record_count_rad_by_kind[PRJ_MPI_GHOST_FILL_KIND_N];
+    int record_count_z4c_by_kind[PRJ_MPI_GHOST_FILL_KIND_N];
     int pos;
     int pos_rad;
-    MPI_Request requests[12];
+    int pos_z4c;
+    MPI_Request requests[18];
     int req_n = 0;
 
     send_sizes = buffer->number > 0 ?
         (int *)prj_calloc((size_t)buffer->number, sizeof(*send_sizes)) : 0;
     send_sizes_rad = buffer->number > 0 ?
         (int *)prj_calloc((size_t)buffer->number, sizeof(*send_sizes_rad)) : 0;
-    if (buffer->number > 0 && (send_sizes == 0 || send_sizes_rad == 0)) {
+    send_sizes_z4c = buffer->number > 0 ?
+        (int *)prj_calloc((size_t)buffer->number, sizeof(*send_sizes_z4c)) : 0;
+    if (buffer->number > 0 &&
+        (send_sizes == 0 || send_sizes_rad == 0 || send_sizes_z4c == 0)) {
         free(send_sizes);
         free(send_sizes_rad);
+        free(send_sizes_z4c);
         return 1;
     }
     idx_send[0] = 0;
@@ -824,10 +853,15 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     idx_send_rad[0] = 0;
     idx_send_rad[1] = 0;
     idx_send_rad[2] = 0;
+    idx_send_z4c[0] = 0;
+    idx_send_z4c[1] = 0;
+    idx_send_z4c[2] = 0;
     record_count = 0;
     record_count_rad = 0;
+    record_count_z4c = 0;
     memset(record_count_by_kind, 0, sizeof(record_count_by_kind));
     memset(record_count_rad_by_kind, 0, sizeof(record_count_rad_by_kind));
+    memset(record_count_z4c_by_kind, 0, sizeof(record_count_z4c_by_kind));
     occ = 0;
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -844,6 +878,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             int k;
             int before;
             int before_rad;
+            int before_z4c;
             int sample_kind;
 
             if (nid < 0 || nid >= mesh->nblocks || mesh->blocks[nid].rank != buffer->receiver_rank) {
@@ -852,6 +887,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             sample_kind = prj_mpi_ghost_fill_kind_from_rel_level(slot->rel_level);
             before = record_count;
             before_rad = record_count_rad;
+            before_z4c = record_count_z4c;
 
             for (i = slot->recv_loc_start[0]; i < slot->recv_loc_end[0]; ++i) {
                 for (j = slot->recv_loc_start[1]; j < slot->recv_loc_end[1]; ++j) {
@@ -869,19 +905,30 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                     }
                 }
             }
+            for (i = slot->recv_loc_start_z4c[0]; i < slot->recv_loc_end_z4c[0]; ++i) {
+                for (j = slot->recv_loc_start_z4c[1]; j < slot->recv_loc_end_z4c[1]; ++j) {
+                    for (k = slot->recv_loc_start_z4c[2]; k < slot->recv_loc_end_z4c[2]; ++k) {
+                        record_count_z4c += 1;
+                        record_count_z4c_by_kind[sample_kind] += 1;
+                    }
+                }
+            }
             if (occ >= buffer->number) {
                 free(send_sizes);
                 free(send_sizes_rad);
+                free(send_sizes_z4c);
                 return 1;
             }
             send_sizes[occ] = record_count - before;
             send_sizes_rad[occ] = record_count_rad - before_rad;
+            send_sizes_z4c[occ] = record_count_z4c - before_z4c;
             occ += 1;
         }
     }
     if (occ != buffer->number) {
         free(send_sizes);
         free(send_sizes_rad);
+        free(send_sizes_z4c);
         return 1;
     }
 
@@ -893,6 +940,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
         if (idx_send[0] == 0 || idx_send[1] == 0 || idx_send[2] == 0) {
             free(send_sizes);
             free(send_sizes_rad);
+            free(send_sizes_z4c);
             for (axis = 0; axis < 3; ++axis) {
                 free(idx_send[axis]);
             }
@@ -907,6 +955,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
         if (idx_send_rad[0] == 0 || idx_send_rad[1] == 0 || idx_send_rad[2] == 0) {
             free(send_sizes);
             free(send_sizes_rad);
+            free(send_sizes_z4c);
             for (axis = 0; axis < 3; ++axis) {
                 free(idx_send[axis]);
                 free(idx_send_rad[axis]);
@@ -914,18 +963,38 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             return 1;
         }
     }
+    if (record_count_z4c > 0) {
+        for (axis = 0; axis < 3; ++axis) {
+            idx_send_z4c[axis] = (int *)prj_calloc((size_t)record_count_z4c,
+                sizeof(*idx_send_z4c[axis]));
+        }
+        if (idx_send_z4c[0] == 0 || idx_send_z4c[1] == 0 || idx_send_z4c[2] == 0) {
+            free(send_sizes);
+            free(send_sizes_rad);
+            free(send_sizes_z4c);
+            for (axis = 0; axis < 3; ++axis) {
+                free(idx_send[axis]);
+                free(idx_send_rad[axis]);
+                free(idx_send_z4c[axis]);
+            }
+            return 1;
+        }
+    }
     for (fill_kind = 0; fill_kind < PRJ_MPI_GHOST_FILL_KIND_N; ++fill_kind) {
         buffer->cell_send_count_by_kind[fill_kind] = record_count_by_kind[fill_kind];
         buffer->cell_send_count_rad_by_kind[fill_kind] = record_count_rad_by_kind[fill_kind];
+        buffer->cell_send_count_z4c_by_kind[fill_kind] = record_count_z4c_by_kind[fill_kind];
         if (prj_mpi_alloc_ghost_value_buffer(
                 &buffer->cell_buffer_send_by_kind[fill_kind],
                 record_count_by_kind[fill_kind],
                 record_count_rad_by_kind[fill_kind]) != 0) {
             free(send_sizes);
             free(send_sizes_rad);
+            free(send_sizes_z4c);
             for (axis = 0; axis < 3; ++axis) {
                 free(idx_send[axis]);
                 free(idx_send_rad[axis]);
+                free(idx_send_z4c[axis]);
             }
             return 1;
         }
@@ -935,9 +1004,11 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                 record_count_rad_by_kind[fill_kind]) != 0) {
             free(send_sizes);
             free(send_sizes_rad);
+            free(send_sizes_z4c);
             for (axis = 0; axis < 3; ++axis) {
                 free(idx_send[axis]);
                 free(idx_send_rad[axis]);
+                free(idx_send_z4c[axis]);
             }
             return 1;
         }
@@ -946,6 +1017,7 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
 
     pos = 0;
     pos_rad = 0;
+    pos_z4c = 0;
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
         int n;
@@ -980,11 +1052,13 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                         if (pos >= record_count) {
                             free(send_sizes);
                             free(send_sizes_rad);
+                            free(send_sizes_z4c);
                             free(buffer->cell_buffer_send);
                             buffer->cell_buffer_send = 0;
                             for (axis = 0; axis < 3; ++axis) {
                                 free(idx_send[axis]);
                                 free(idx_send_rad[axis]);
+                                free(idx_send_z4c[axis]);
                             }
                             return 1;
                         }
@@ -1001,11 +1075,13 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                         if (pos_rad >= record_count_rad) {
                             free(send_sizes);
                             free(send_sizes_rad);
+                            free(send_sizes_z4c);
                             free(buffer->cell_buffer_send);
                             buffer->cell_buffer_send = 0;
                             for (axis = 0; axis < 3; ++axis) {
                                 free(idx_send[axis]);
                                 free(idx_send_rad[axis]);
+                                free(idx_send_z4c[axis]);
                             }
                             return 1;
                         }
@@ -1016,25 +1092,52 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
                     }
                 }
             }
+            for (i = slot->recv_loc_start_z4c[0]; i < slot->recv_loc_end_z4c[0]; ++i) {
+                for (j = slot->recv_loc_start_z4c[1]; j < slot->recv_loc_end_z4c[1]; ++j) {
+                    for (k = slot->recv_loc_start_z4c[2]; k < slot->recv_loc_end_z4c[2]; ++k) {
+                        if (pos_z4c >= record_count_z4c) {
+                            free(send_sizes);
+                            free(send_sizes_rad);
+                            free(send_sizes_z4c);
+                            free(buffer->cell_buffer_send);
+                            buffer->cell_buffer_send = 0;
+                            for (axis = 0; axis < 3; ++axis) {
+                                free(idx_send[axis]);
+                                free(idx_send_rad[axis]);
+                                free(idx_send_z4c[axis]);
+                            }
+                            return 1;
+                        }
+                        idx_send_z4c[0][pos_z4c] = nid;
+                        idx_send_z4c[1][pos_z4c] = prj_mpi_encode_cell_index_z4c(i, j, k);
+                        idx_send_z4c[2][pos_z4c] = sample_code;
+                        pos_z4c += 1;
+                    }
+                }
+            }
         }
     }
-    if (pos != record_count || pos_rad != record_count_rad) {
+    if (pos != record_count || pos_rad != record_count_rad || pos_z4c != record_count_z4c) {
         free(send_sizes);
         free(send_sizes_rad);
+        free(send_sizes_z4c);
         free(buffer->cell_buffer_send);
         buffer->cell_buffer_send = 0;
         for (axis = 0; axis < 3; ++axis) {
             free(idx_send[axis]);
             free(idx_send_rad[axis]);
+            free(idx_send_z4c[axis]);
         }
         return 1;
     }
 
     buffer->cell_data_size_send = send_sizes;
     buffer->cell_data_size_send_rad = send_sizes_rad;
+    buffer->cell_data_size_send_z4c = send_sizes_z4c;
     for (axis = 0; axis < 3; ++axis) {
         buffer->cell_data_idx_send[axis] = idx_send[axis];
         buffer->cell_data_idx_send_rad[axis] = idx_send_rad[axis];
+        buffer->cell_data_idx_send_z4c[axis] = idx_send_z4c[axis];
     }
 
     MPI_Sendrecv(&buffer->number, 1, MPI_INT, buffer->receiver_rank, 100,
@@ -1043,7 +1146,10 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
         sizeof(*buffer->cell_data_size_recv));
     buffer->cell_data_size_recv_rad = (int *)prj_calloc((size_t)send_entries + 1U,
         sizeof(*buffer->cell_data_size_recv_rad));
-    if (buffer->cell_data_size_recv == 0 || buffer->cell_data_size_recv_rad == 0) {
+    buffer->cell_data_size_recv_z4c = (int *)prj_calloc((size_t)send_entries + 1U,
+        sizeof(*buffer->cell_data_size_recv_z4c));
+    if (buffer->cell_data_size_recv == 0 || buffer->cell_data_size_recv_rad == 0 ||
+        buffer->cell_data_size_recv_z4c == 0) {
         return 1;
     }
     MPI_Sendrecv(buffer->cell_data_size_send, buffer->number, MPI_INT, buffer->receiver_rank, 101,
@@ -1052,8 +1158,13 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
     MPI_Sendrecv(buffer->cell_data_size_send_rad, buffer->number, MPI_INT, buffer->receiver_rank, 102,
         buffer->cell_data_size_recv_rad, send_entries, MPI_INT, buffer->receiver_rank, 102, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     buffer->cell_data_size_recv_rad[send_entries] = -1;
+    MPI_Sendrecv(buffer->cell_data_size_send_z4c, buffer->number, MPI_INT, buffer->receiver_rank, 103,
+        buffer->cell_data_size_recv_z4c, send_entries, MPI_INT, buffer->receiver_rank, 103, MPI_COMM_WORLD,
+        MPI_STATUS_IGNORE);
+    buffer->cell_data_size_recv_z4c[send_entries] = -1;
     cell_size_total = prj_mpi_buffer_record_total(buffer->cell_data_size_recv, send_entries);
     cell_size_total_rad = prj_mpi_buffer_record_total(buffer->cell_data_size_recv_rad, send_entries);
+    cell_size_total_z4c = prj_mpi_buffer_record_total(buffer->cell_data_size_recv_z4c, send_entries);
     if (cell_size_total > 0) {
         for (axis = 0; axis < 3; ++axis) {
             buffer->cell_data_idx_recv[axis] = (int *)prj_calloc(
@@ -1074,6 +1185,16 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             }
         }
     }
+    if (cell_size_total_z4c > 0) {
+        for (axis = 0; axis < 3; ++axis) {
+            buffer->cell_data_idx_recv_z4c[axis] = (int *)prj_calloc(
+                (size_t)cell_size_total_z4c,
+                sizeof(*buffer->cell_data_idx_recv_z4c[axis]));
+            if (buffer->cell_data_idx_recv_z4c[axis] == 0) {
+                return 1;
+            }
+        }
+    }
     for (axis = 0; axis < 3; ++axis) {
         MPI_Irecv(buffer->cell_data_idx_recv[axis], cell_size_total, MPI_INT, buffer->receiver_rank, 110 + axis,
             MPI_COMM_WORLD, &requests[req_n++]);
@@ -1083,10 +1204,14 @@ static int prj_mpi_build_ghost_plan_for_neighbor(prj_mesh *mesh, prj_mpi *mpi, p
             MPI_COMM_WORLD, &requests[req_n++]);
         MPI_Isend(buffer->cell_data_idx_send_rad[axis], record_count_rad, MPI_INT, buffer->receiver_rank, 113 + axis,
             MPI_COMM_WORLD, &requests[req_n++]);
+        MPI_Irecv(buffer->cell_data_idx_recv_z4c[axis], cell_size_total_z4c, MPI_INT, buffer->receiver_rank, 116 + axis,
+            MPI_COMM_WORLD, &requests[req_n++]);
+        MPI_Isend(buffer->cell_data_idx_send_z4c[axis], record_count_z4c, MPI_INT, buffer->receiver_rank, 116 + axis,
+            MPI_COMM_WORLD, &requests[req_n++]);
     }
     MPI_Waitall(req_n, requests, MPI_STATUSES_IGNORE);
     prj_mpi_count_recv_ghosts_by_kind(buffer, cell_size_total,
-        cell_size_total_rad);
+        cell_size_total_rad, cell_size_total_z4c);
     for (fill_kind = 0; fill_kind < PRJ_MPI_GHOST_FILL_KIND_N; ++fill_kind) {
         if (prj_mpi_alloc_ghost_value_buffer(
                 &buffer->cell_buffer_recv_by_kind[fill_kind],

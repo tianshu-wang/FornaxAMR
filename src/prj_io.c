@@ -200,7 +200,7 @@ static void prj_io_finalize_dynamic_gr_params(prj_sim *sim)
     if (sim == 0) {
         return;
     }
-    max_order = PRJ_NGHOST < 4 ? PRJ_NGHOST : 4;
+    max_order = PRJ_RECON_Z4C_ORDER < 4 ? PRJ_RECON_Z4C_ORDER : 4;
     if (max_order < 2) {
         max_order = 2;
     }
@@ -1208,6 +1208,8 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
 #if PRJ_DYNAMIC_GR
     prj_io_write_attr_int(file, "use_dynamic_gr", mesh->use_dynamic_gr != 0);
     prj_io_write_attr_int(file, "nvar_z4c", PRJ_NZ4C);
+    prj_io_write_attr_int(file, "nghost_z4c", PRJ_NGHOST_Z4C);
+    prj_io_write_attr_int(file, "recon_z4c_order", PRJ_RECON_Z4C_ORDER);
 #else
     prj_io_write_attr_int(file, "use_dynamic_gr", 0);
     prj_io_write_attr_int(file, "nvar_z4c", 0);
@@ -1588,9 +1590,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
 #if PRJ_DYNAMIC_GR
     if (mesh->use_dynamic_gr != 0) {
         int nvar_z4c = prj_io_read_attr_int_optional(file, "nvar_z4c", 0);
+        int nghost_z4c = prj_io_read_attr_int_optional(file, "nghost_z4c", PRJ_NGHOST_Z4C);
 
         if (restart_format_version < PRJ_IO_RESTART_FORMAT_VERSION ||
-            nvar_z4c != PRJ_NZ4C || H5Lexists(file, "Z4c", H5P_DEFAULT) <= 0) {
+            nvar_z4c != PRJ_NZ4C || nghost_z4c != PRJ_NGHOST_Z4C ||
+            H5Lexists(file, "Z4c", H5P_DEFAULT) <= 0) {
             prj_io_fail("prj_io_read_restart: dynamic GR restart is missing compatible Z4c data");
         }
         dset_z4c = H5Dopen2(file, "Z4c", H5P_DEFAULT);
@@ -1733,10 +1737,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                 for (stage = 1; stage < PRJ_BLOCK_NSTAGES; ++stage) {
                     double *zs = prj_block_z4c_stage(block, stage);
 
-                    memcpy(zs, z0, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS * sizeof(*zs));
+                    memcpy(zs, z0, (size_t)PRJ_NZ4C *
+                        (size_t)PRJ_BLOCK_NCELLS_Z4C * sizeof(*zs));
                 }
                 prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES *
-                    (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+                    (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
             }
             free(z4c_buffer);
         }
@@ -1754,8 +1759,8 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
                             Wcell[v] = prj_block_prim_value_const(block, 0, v, i, j, k);
                         }
                         prj_eos_prim2cons((prj_eos *)eos, Wcell, Ucell);
+                        prj_block_store_cons_cell(block, i, j, k, Ucell);
                         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                            block->U[VIDX(v, i, j, k)] = Ucell[v];
                             block->flux[0][VIDX(v, i, j, k)] = 0.0;
                             block->flux[1][VIDX(v, i, j, k)] = 0.0;
                             block->flux[2][VIDX(v, i, j, k)] = 0.0;
@@ -1884,6 +1889,8 @@ void prj_io_write_dump(const prj_mesh *mesh, const prj_grav *grav, const prj_mpi
 #if PRJ_DYNAMIC_GR
     prj_io_write_attr_int(file, "use_dynamic_gr", mesh->use_dynamic_gr != 0);
     prj_io_write_attr_int(file, "nvar_z4c", PRJ_NZ4C);
+    prj_io_write_attr_int(file, "nghost_z4c", PRJ_NGHOST_Z4C);
+    prj_io_write_attr_int(file, "recon_z4c_order", PRJ_RECON_Z4C_ORDER);
 #else
     prj_io_write_attr_int(file, "use_dynamic_gr", 0);
     prj_io_write_attr_int(file, "nvar_z4c", 0);

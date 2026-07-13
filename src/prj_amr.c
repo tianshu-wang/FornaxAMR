@@ -671,7 +671,7 @@ static double prj_block_conserved_at(const prj_block *b, int v, int i, int j, in
     i = prj_clamp_storage_index(i);
     j = prj_clamp_storage_index(j);
     k = prj_clamp_storage_index(k);
-    return b->U[VIDX(v, i, j, k)];
+    return prj_block_cons_value_const(b, v, i, j, k);
 }
 
 static void prj_apply_eint_floor(prj_eos *eos, double E_floor, double cell_vol,
@@ -1158,16 +1158,11 @@ static void prj_sync_primitive_from_conserved(prj_mesh *mesh, prj_eos *eos,
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                     double Uc[PRJ_NVAR_CONS];
                     double Wc[PRJ_NVAR_PRIM];
-                    int v;
 
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        Uc[v] = b->U[VIDX(v, i, j, k)];
-                    }
+                    prj_block_load_cons_cell_const(b, i, j, k, Uc);
                     prj_eos_cons2prim(eos, Uc, Wc);
                     prj_apply_eint_floor(eos, mesh->E_floor, b->vol, Uc, Wc, e_injected);
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        b->U[VIDX(v, i, j, k)] = Uc[v];
-                    }
+                    prj_block_store_cons_cell(b, i, j, k, Uc);
                     prj_block_store_prim_cell(b, 0, i, j, k, Wc);
                 }
             }
@@ -1189,7 +1184,8 @@ static void prj_sync_conserved_from_primitive(prj_mesh *mesh, prj_eos *eos,
         int j;
         int k;
 
-        if (!prj_is_local_active_block(mpi, block) || block->W_mhd == 0 || block->U == 0) {
+        if (!prj_is_local_active_block(mpi, block) || block->W_mhd == 0 ||
+            !prj_block_has_cons_storage(block)) {
             continue;
         }
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -1197,13 +1193,10 @@ static void prj_sync_conserved_from_primitive(prj_mesh *mesh, prj_eos *eos,
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                     double Wc[PRJ_NVAR_PRIM];
                     double Uc[PRJ_NVAR_CONS];
-                    int v;
 
                     prj_block_load_prim_cell_const(block, 0, i, j, k, Wc);
                     prj_eos_prim2cons(eos, Wc, Uc);
-                    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
-                        block->U[VIDX(v, i, j, k)] = Uc[v];
-                    }
+                    prj_block_store_cons_cell(block, i, j, k, Uc);
                 }
             }
         }
@@ -1527,7 +1520,7 @@ static void prj_amr_mhd_check_block(const prj_block *block, const char *caller)
 {
     int d;
 
-    if (block == 0 || block->U == 0 || block->W_mhd == 0) {
+    if (block == 0 || !prj_block_has_cons_storage(block) || block->W_mhd == 0) {
         prj_amr_mhd_fail(caller);
     }
     for (d = 0; d < 3; ++d) {
@@ -1602,9 +1595,9 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
                 if (!isfinite(b1) || !isfinite(b2) || !isfinite(b3)) {
                     prj_amr_mhd_fail("prj_amr_mhd_set_cons_b_from_bf: non-finite magnetic field");
                 }
-                block->U[VIDX(PRJ_CONS_B1, i, j, k)] = b1;
-                block->U[VIDX(PRJ_CONS_B2, i, j, k)] = b2;
-                block->U[VIDX(PRJ_CONS_B3, i, j, k)] = b3;
+                prj_block_set_cons_value(block, PRJ_CONS_B1, i, j, k, b1);
+                prj_block_set_cons_value(block, PRJ_CONS_B2, i, j, k, b2);
+                prj_block_set_cons_value(block, PRJ_CONS_B3, i, j, k, b3);
                 block->W_mhd[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
                 block->W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
                 block->W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
@@ -1983,8 +1976,8 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_mpi *mpi, const prj_bloc
                     target[0] = ((gi % 2) == 0) ? -0.25 : 0.25;
                     target[1] = ((gj % 2) == 0) ? -0.25 : 0.25;
                     target[2] = ((gk % 2) == 0) ? -0.25 : 0.25;
-                    child->U[VIDX(v, i, j, k)] =
-                        prj_reconstruct_cell_for_prolongate(stencil, target, use_BJ);
+                    prj_block_set_cons_value(child, v, i, j, k,
+                        prj_reconstruct_cell_for_prolongate(stencil, target, use_BJ));
                 }
             }
         }
@@ -1994,8 +1987,8 @@ void prj_amr_prolongate(const prj_mesh *mesh, const prj_mpi *mpi, const prj_bloc
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                if (child->U[VIDX(PRJ_CONS_RHO, i, j, k)] <= 0.0) {
-                    child->U[VIDX(PRJ_CONS_RHO, i, j, k)] = 1.0e-10;
+                if (prj_block_cons_value_const(child, PRJ_CONS_RHO, i, j, k) <= 0.0) {
+                    prj_block_set_cons_value(child, PRJ_CONS_RHO, i, j, k, 1.0e-10);
                 }
             }
         }
@@ -2067,13 +2060,14 @@ void prj_amr_restrict(const prj_mesh *mesh, const prj_block *children[8], prj_bl
                                     if (zover > 0.0) {
                                         double overlap_vol = xover * yover * zover;
 
-                                        sum += child->U[VIDX(v, fi, fj, fk)] * overlap_vol;
+                                        sum += prj_block_cons_value_const(child, v, fi, fj, fk) *
+                                            overlap_vol;
                                     }
                                 }
                             }
                         }
                     }
-                    parent->U[VIDX(v, i, j, k)] = sum / parent_cell_vol;
+                    prj_block_set_cons_value(parent, v, i, j, k, sum / parent_cell_vol);
                 }
             }
         }
@@ -2163,7 +2157,8 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
         } else {
             child->W_mhd = 0;
             child->eosvar = 0;
-            child->U = 0;
+            child->U_mhd = 0;
+            child->U_rad = 0;
             child->mhd_rhs = 0;
             child->rad_rhs = 0;
             child->deriv_ex = 0;
