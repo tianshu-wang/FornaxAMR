@@ -1839,6 +1839,13 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_mhd_update_bf");
 #endif
 
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+
+        prj_z4c_compute_rhs(mesh, mpi, rad, 0, 0, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
+    }
+
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_src_cell_update");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -1867,12 +1874,8 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {
-        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
         double dtau_cm = PRJ_CLIGHT * dt;
 
-        prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, 0);
-        prj_z4c_compute_rhs(mesh, mpi, 0, 0, tau_cm);
-        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
         prj_z4c_update_linear(mesh, mpi, 0, 0, 1.0, 0, 0.0, 0, dtau_cm);
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
     }
@@ -2027,6 +2030,13 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_mhd_update_bf");
 #endif
 
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+
+        prj_z4c_compute_rhs(mesh, mpi, rad, 0, 0, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
+    }
+
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_src_cell_update");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -2056,12 +2066,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {
-        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
         double dtau_cm = PRJ_CLIGHT * dt;
 
-        prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, 0);
-        prj_z4c_compute_rhs(mesh, mpi, 0, 0, tau_cm);
-        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
         prj_z4c_update_linear(mesh, mpi, 1, 0, 1.0, 0, 0.0, 0, dtau_cm);
         prj_z4c_finalize_stage(mesh, mpi, bc, 1);
     }
@@ -2144,6 +2150,13 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_mhd_update_bf");
 #endif
 
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+
+        prj_z4c_compute_rhs(mesh, mpi, rad, 1, 0, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 1, 0);
+    }
+
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_src_cell_update");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -2172,12 +2185,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {
-        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
         double dtau_cm = PRJ_CLIGHT * dt;
 
-        prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, 1);
-        prj_z4c_compute_rhs(mesh, mpi, 1, 0, tau_cm);
-        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 1, 0);
         prj_z4c_update_linear(mesh, mpi, 0, 0, 0.5, 1, 0.5, 0, 0.5 * dtau_cm);
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
     }
@@ -2276,6 +2285,13 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_step_ex_bf_deriv");
 #endif
 
+    if (prj_z4c_runtime_enabled(mesh)) {
+        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
+
+        prj_z4c_compute_rhs(mesh, mpi, rad, stage, stage, tau_cm);
+        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, stage, stage);
+    }
+
     PRJ_TIMER_BARRIER_START(timer, mpi, "imex_step_ex_src_deriv");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -2328,14 +2344,6 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
         PRJ_SUBTIMER_STOP("sub_cell_ex_deriv");
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_step_ex_src_deriv");
-
-    if (prj_z4c_runtime_enabled(mesh)) {
-        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
-
-        prj_z4c_build_tmunu_from_matter(mesh, mpi, rad, stage);
-        prj_z4c_compute_rhs(mesh, mpi, stage, stage, tau_cm);
-        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, stage, stage);
-    }
 #else
     (void)mesh;
     (void)coord;

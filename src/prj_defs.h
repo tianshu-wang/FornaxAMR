@@ -342,7 +342,6 @@ typedef double prj_table_real;
 #define EIDX(v, i, j, k) BIDX(PRJ_NVAR_EOSVAR, v, i, j, k)
 #define VRIDX(v, i, j, k) BIDX(PRJ_NDIM, v, i, j, k)
 #define Z4CIDX(v, i, j, k) BIDX(PRJ_NZ4C, v, i, j, k)
-#define TMUNUIDX(v, i, j, k) BIDX(PRJ_NTMUNU, v, i, j, k)
 #if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
 #define PRJ_FSA_ROT_IDX(row, col, i, j, k) BIDX(9, 3 * (row) + (col), i, j, k)
 #define PRJ_FSA_ANG_GEOM_IDX(arc, d, i, j, k) \
@@ -357,8 +356,6 @@ typedef double prj_table_real;
     (&(BF)[(size_t)(stage) * (size_t)PRJ_BLOCK_NFACES])
 #define PRJ_BLOCK_STAGE_Z4C(Z, stage) \
     (&(Z)[(size_t)(stage) * (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS])
-#define PRJ_BLOCK_STAGE_TMUNU(T, stage) \
-    (&(T)[(size_t)(stage) * (size_t)PRJ_NTMUNU * (size_t)PRJ_BLOCK_NCELLS])
 
 /* Legacy SoA per-variable plane base (valid only at PRJ_AOSOA_W==1).  Still used
  * by the pencil-reconstruction scratch; removed from block-array access in the

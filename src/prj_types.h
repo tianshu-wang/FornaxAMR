@@ -157,7 +157,6 @@ struct prj_block {
 #if PRJ_DYNAMIC_GR
     double *z4c;
     double *z4c_rhs;
-    double *z4c_tmunu;
 #endif
     double *eosvar;
     int *cell_derived_done;
@@ -332,17 +331,6 @@ static inline const double *prj_block_z4c_rhs_stage_const(const prj_block *block
         PRJ_BLOCK_STAGE_Z4C(block->z4c_rhs, stage) : 0;
 }
 
-static inline double *prj_block_z4c_tmunu_stage(prj_block *block, int stage)
-{
-    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->z4c_tmunu != 0 ?
-        PRJ_BLOCK_STAGE_TMUNU(block->z4c_tmunu, stage) : 0;
-}
-
-static inline const double *prj_block_z4c_tmunu_stage_const(const prj_block *block, int stage)
-{
-    return block != 0 && stage >= 0 && stage < PRJ_BLOCK_NSTAGES && block->z4c_tmunu != 0 ?
-        PRJ_BLOCK_STAGE_TMUNU(block->z4c_tmunu, stage) : 0;
-}
 #else
 static inline double *prj_block_z4c_stage(prj_block *block, int stage)
 {
@@ -372,19 +360,6 @@ static inline const double *prj_block_z4c_rhs_stage_const(const prj_block *block
     return 0;
 }
 
-static inline double *prj_block_z4c_tmunu_stage(prj_block *block, int stage)
-{
-    (void)block;
-    (void)stage;
-    return 0;
-}
-
-static inline const double *prj_block_z4c_tmunu_stage_const(const prj_block *block, int stage)
-{
-    (void)block;
-    (void)stage;
-    return 0;
-}
 #endif
 
 #if PRJ_MHD
