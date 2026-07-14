@@ -1433,6 +1433,7 @@ static int prj_gravity_monopole_reduce_stage_slot_active(prj_mesh *mesh, prj_eos
         if (W == 0) {
             continue;
         }
+        W_rad = prj_block_rad_stage_const(block, stage_slot);
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
