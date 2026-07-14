@@ -1707,6 +1707,21 @@ void prj_eos_cell_cons2prim(prj_eos *eos, const prj_mesh *mesh,
     prj_eos_gr_load_cell_geom(mesh, block, z4c_stage, i, j, k, &geom, ctx);
     status = prj_eos_gr_cons2prim(eos, &geom, U, Wgr, ctx);
     if (status != PRJ_EOS_GR_OK) {
+        static const char *const cons_name[6] = {
+            "RHO", "MOM1", "MOM2", "MOM3", "ETOT", "YE"
+        };
+        int vv;
+
+        fprintf(stderr, "cons2prim fail: block id=%d level=%d cell=(%d,%d,%d) "
+            "status=%s ctx=%d  (nvar_cons=%d)\n",
+            block != 0 ? block->id : -1, block != 0 ? block->level : -1,
+            i, j, k, prj_eos_gr_status_name(status), (int)ctx, PRJ_NVAR_CONS);
+        fprintf(stderr, "  conserved U (densitized, as evolved):\n");
+        for (vv = 0; vv < PRJ_NVAR_CONS; ++vv) {
+            fprintf(stderr, "    U[%2d] %-5s = %.17e\n", vv,
+                vv < 6 ? cons_name[vv] : "RAD", U[vv]);
+        }
+        fflush(stderr);
         prj_eos_gr_cell_fail("cons2prim", status, i, j, k, ctx);
     }
     for (v = 0; v < PRJ_NHYDRO; ++v) {
