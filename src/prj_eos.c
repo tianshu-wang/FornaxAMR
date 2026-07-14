@@ -1721,6 +1721,32 @@ void prj_eos_cell_cons2prim(prj_eos *eos, const prj_mesh *mesh,
             fprintf(stderr, "    U[%2d] %-5s = %.17e\n", vv,
                 vv < 6 ? cons_name[vv] : "RAD", U[vv]);
         }
+        {
+            double detg = prj_eos_gr_det3(geom.gamma);
+
+            fprintf(stderr, "  physical 3-metric gamma_ij (used by recovery), "
+                "det=%.17e sqrt_det=%.17e:\n", detg, detg > 0.0 ? sqrt(detg) : -1.0);
+            for (vv = 0; vv < 3; ++vv) {
+                fprintf(stderr, "    [%.17e, %.17e, %.17e]\n",
+                    geom.gamma[vv][0], geom.gamma[vv][1], geom.gamma[vv][2]);
+            }
+        }
+#if PRJ_DYNAMIC_GR
+        {
+            const double *z = prj_block_z4c_stage_const(block, z4c_stage);
+
+            if (z != 0) {
+                fprintf(stderr, "  Z4c variables (stage %d) at cell (%d,%d,%d):\n",
+                    z4c_stage, i, j, k);
+                for (vv = 0; vv < PRJ_NZ4C; ++vv) {
+                    fprintf(stderr, "    z4c[%2d] %-16s = %.17e\n", vv,
+                        prj_z4c_var_name(vv), z[Z4CIDX(vv, i, j, k)]);
+                }
+            } else {
+                fprintf(stderr, "  Z4c array is NULL for this block\n");
+            }
+        }
+#endif
         fflush(stderr);
         prj_eos_gr_cell_fail("cons2prim", status, i, j, k, ctx);
     }
