@@ -16,6 +16,15 @@ typedef struct prj_cc_profile {
     double *vr;
 } prj_cc_profile;
 
+/* Static TOV (Kij=0) conformally-flat metric sampled on the progenitor's
+   radial grid: chi and alpha as functions of the (areal) grid radius. */
+typedef struct prj_tov_profile {
+    int npts;
+    double *r;
+    double *chi;
+    double *alpha;
+} prj_tov_profile;
+
 typedef struct prj_cc_init_amr_ctx {
     int npts;
     const double *radius;
@@ -497,6 +506,207 @@ static void prj_cc_profile_sample(const prj_cc_profile *profile, double r,
     }
 }
 
+static void prj_cc_tov_free(prj_tov_profile *tov)
+{
+    if (tov == 0) {
+        return;
+    }
+    free(tov->r);
+    free(tov->chi);
+    free(tov->alpha);
+    tov->r = 0;
+    tov->chi = 0;
+    tov->alpha = 0;
+    tov->npts = 0;
+}
+
+/* Solve the static (Kij=0) TOV structure equations on the progenitor's radial
+   grid and build the conformally-flat metric (chi, alpha) versus grid radius.
+   Metric is written so that gamma_ij = psi^4 delta_ij with chi = psi^(power),
+   matching prj_z4c_load_hydro_geom (power = z4c_params.chi_psi_power, e.g. -4).
+   Returns 0 on success, nonzero on failure (caller falls back to flat). */
+static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
+    double chi_psi_power, double r_max, prj_tov_profile *out)
+{
+    const double G = PRJ_GNEWT;
+    const double c = PRJ_CLIGHT;
+    const double c2 = c * c;
+    const double four_pi = 4.0 * M_PI;
+    int n = 0;
+    double *edens = 0;   /* total energy density e = rho*(c^2 + eint)   [erg/cm^3] */
+    double *pres = 0;    /* pressure                                     [dyne/cm^2] */
+    double *mass = 0;    /* enclosed gravitational mass                  [g] */
+    double *rbar = 0;    /* isotropic radius                             [cm] */
+    int i;
+
+    if (out == 0) {
+        return 1;
+    }
+    out->npts = 0;
+    out->r = 0;
+    out->chi = 0;
+    out->alpha = 0;
+    if (prof == 0 || prof->npts < 2 || prof->radius == 0) {
+        return 1;
+    }
+
+    /* Only solve out to the simulation domain (with a small margin): the metric
+       is used inside the domain only, and this keeps every EOS call within the
+       tabulated range. The progenitor envelope beyond the domain has Ye and
+       temperature outside the nuclear table, and is dynamically irrelevant on
+       the collapse timescale. Radii are monotonically increasing. */
+    while (n < prof->npts && prof->radius[n] <= r_max) {
+        ++n;
+    }
+    if (n < 2) {
+        fprintf(stderr, "prj_cc_tov_solve: fewer than 2 progenitor points inside "
+            "r_max=%.6e cm; cannot build TOV metric\n", r_max);
+        return 1;
+    }
+
+    out->r = (double *)malloc((size_t)n * sizeof(double));
+    out->chi = (double *)malloc((size_t)n * sizeof(double));
+    out->alpha = (double *)malloc((size_t)n * sizeof(double));
+    edens = (double *)malloc((size_t)n * sizeof(double));
+    pres = (double *)malloc((size_t)n * sizeof(double));
+    mass = (double *)malloc((size_t)n * sizeof(double));
+    rbar = (double *)malloc((size_t)n * sizeof(double));
+    if (out->r == 0 || out->chi == 0 || out->alpha == 0 ||
+        edens == 0 || pres == 0 || mass == 0 || rbar == 0) {
+        free(edens); free(pres); free(mass); free(rbar);
+        prj_cc_tov_free(out);
+        return 1;
+    }
+
+    /* Energy density and pressure from the EOS at each radial point. */
+    for (i = 0; i < n; ++i) {
+        double eos_q[PRJ_EOS_NQUANT];
+        double rho = prof->rho[i];
+
+        if (!(rho > 0.0) || !(prof->radius[i] > 0.0)) {
+            fprintf(stderr, "prj_cc_tov_solve: nonpositive rho or radius at i=%d "
+                "(rho=%.6e r=%.6e)\n", i, rho, prof->radius[i]);
+            free(edens); free(pres); free(mass); free(rbar);
+            prj_cc_tov_free(out);
+            return 1;
+        }
+        prj_eos_rty(eos, rho, prj_cc_kelvin_to_mev(prof->temp[i]), prof->ye[i],
+            eos_q, PRJ_EOS_CTX_MAIN);
+        out->r[i] = prof->radius[i];
+        edens[i] = rho * (c2 + eos_q[PRJ_EOS_EINT]);
+        pres[i] = eos_q[PRJ_EOS_PRESSURE];
+    }
+
+    /* Enclosed mass: inner sphere below radius[0] at constant density, then
+       trapezoidal integration of dm/dr = 4*pi*r^2*(e/c^2). */
+    mass[0] = (four_pi / 3.0) * out->r[0] * out->r[0] * out->r[0] * (edens[0] / c2);
+    for (i = 1; i < n; ++i) {
+        double f0 = four_pi * out->r[i - 1] * out->r[i - 1] * (edens[i - 1] / c2);
+        double f1 = four_pi * out->r[i] * out->r[i] * (edens[i] / c2);
+
+        mass[i] = mass[i - 1] + 0.5 * (f0 + f1) * (out->r[i] - out->r[i - 1]);
+    }
+
+    /* Compactness must stay below 1 (2Gm/(c^2 r) < 1) for a regular metric. */
+    for (i = 0; i < n; ++i) {
+        double comp = 2.0 * G * mass[i] / (c2 * out->r[i]);
+
+        if (!(comp < 1.0)) {
+            fprintf(stderr, "prj_cc_tov_solve: compactness 2Gm/(c^2 r)=%.6e >= 1 "
+                "at i=%d r=%.6e m=%.6e; TOV metric undefined\n", comp, i,
+                out->r[i], mass[i]);
+            free(edens); free(pres); free(mass); free(rbar);
+            prj_cc_tov_free(out);
+            return 1;
+        }
+    }
+
+    /* Potential Phi (alpha = exp(Phi)), integrated inward from the surface
+       matched to Schwarzschild: Phi(R) = 0.5*ln(1 - 2GM/(c^2 R)). */
+    {
+        double R = out->r[n - 1];
+        double M = mass[n - 1];
+        double phi_next = 0.5 * log(1.0 - 2.0 * G * M / (c2 * R));
+
+        out->alpha[n - 1] = exp(phi_next);
+        for (i = n - 2; i >= 0; --i) {
+            double rp = out->r[i + 1];
+            double ri = out->r[i];
+            double gp = G * (mass[i + 1] + four_pi * rp * rp * rp * pres[i + 1] / c2) /
+                (c2 * rp * rp * (1.0 - 2.0 * G * mass[i + 1] / (c2 * rp)));
+            double gi = G * (mass[i] + four_pi * ri * ri * ri * pres[i] / c2) /
+                (c2 * ri * ri * (1.0 - 2.0 * G * mass[i] / (c2 * ri)));
+            double phi = phi_next - 0.5 * (gi + gp) * (rp - ri);
+
+            out->alpha[i] = exp(phi);
+            phi_next = phi;
+        }
+    }
+
+    /* Isotropic radius, integrated inward from the surface where
+       rbar(R) = 0.5*(sqrt(R^2 - 2GM R/c^2) + R - GM/c^2), using
+       d(ln rbar)/dr = 1 / (r*sqrt(1 - 2Gm/(c^2 r))). */
+    {
+        double R = out->r[n - 1];
+        double M = mass[n - 1];
+        double rs = G * M / c2;
+        double lnrbar_next;
+
+        rbar[n - 1] = 0.5 * (sqrt(R * R - 2.0 * rs * R) + R - rs);
+        lnrbar_next = log(rbar[n - 1]);
+        for (i = n - 2; i >= 0; --i) {
+            double rp = out->r[i + 1];
+            double ri = out->r[i];
+            double hp = 1.0 / (rp * sqrt(1.0 - 2.0 * G * mass[i + 1] / (c2 * rp)));
+            double hi = 1.0 / (ri * sqrt(1.0 - 2.0 * G * mass[i] / (c2 * ri)));
+            double lnrbar = lnrbar_next - 0.5 * (hi + hp) * (rp - ri);
+
+            rbar[i] = exp(lnrbar);
+            lnrbar_next = lnrbar;
+        }
+    }
+
+    /* Conformal factor psi = sqrt(r/rbar); chi = psi^power. */
+    for (i = 0; i < n; ++i) {
+        double psi = sqrt(out->r[i] / rbar[i]);
+
+        out->chi[i] = pow(psi, chi_psi_power);
+    }
+
+    if (getenv("PRJ_TOV_DEBUG") != 0) {
+        double R = out->r[n - 1];
+        double M = mass[n - 1];
+        double alpha_schw = sqrt(1.0 - 2.0 * G * M / (c2 * R));
+        int idx[5];
+        int s;
+
+        idx[0] = 0;
+        idx[1] = n / 4;
+        idx[2] = n / 2;
+        idx[3] = (3 * n) / 4;
+        idx[4] = n - 1;
+        fprintf(stderr, "[TOV] npts=%d  M_enc=%.6e g (%.4f Msun)  R=%.6e cm\n",
+            n, M, M / 1.98892e33, R);
+        fprintf(stderr, "[TOV] surface alpha=%.8f  sqrt(1-2GM/c2R)=%.8f\n",
+            out->alpha[n - 1], alpha_schw);
+        for (s = 0; s < 5; ++s) {
+            int q = idx[s];
+
+            fprintf(stderr, "[TOV] r=%.4e  chi=%.8f  alpha=%.8f  psi=%.8f\n",
+                out->r[q], out->chi[q], out->alpha[q],
+                pow(out->chi[q], 1.0 / chi_psi_power));
+        }
+        fflush(stderr);
+    }
+
+    out->npts = n;
+    free(edens);
+    free(pres);
+    free(mass);
+    free(rbar);
+    return 0;
+}
+
 /* Volume-average the primitive state over a cell using the same 3x3x3
    Gauss-Legendre quadrature (about the mesh center of mass) that
    prj_mesh_update_block_r_com uses for r_com. At every quadrature node we
@@ -617,7 +827,21 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_cc_prof
     }
 }
 
-static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profile *profile)
+/* Overwrite the Z4c metric with the analytic TOV/CFC data on all current
+   blocks. Must run before each prj_cc_fill_mesh so that GR prim->cons (invoked
+   inside fill_mesh) sees the constraint-consistent metric at every AMR level. */
+static void prj_cc_fill_metric(prj_sim *sim, const prj_mpi *mpi,
+    const prj_tov_profile *tov)
+{
+    if (tov == 0 || tov->npts <= 0) {
+        return;
+    }
+    prj_z4c_init_mesh_spherical(&sim->mesh, mpi, sim->mesh.x_com,
+        tov->r, tov->chi, tov->alpha, tov->npts);
+}
+
+static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi,
+    const prj_cc_profile *profile, const prj_tov_profile *tov)
 {
     unsigned long long prev_sig;
     unsigned long long next_sig;
@@ -649,6 +873,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
             r_min_domain, r_max_domain) == 0);
     }
 
+    prj_cc_fill_metric(sim, mpi, tov);
     prj_cc_fill_mesh(sim, mpi, profile);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
@@ -687,6 +912,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
             prj_gravity_rebuild_grid(sim, mpi);
         }
     #endif
+        prj_cc_fill_metric(sim, mpi, tov);
         prj_cc_fill_mesh(sim, mpi, profile);
 
         prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
@@ -713,6 +939,13 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_cc_profi
 void prj_problem_cc(prj_sim *sim, prj_mpi *mpi)
 {
     prj_cc_profile profile;
+    prj_tov_profile tov;
+    const prj_tov_profile *tov_ptr = 0;
+
+    tov.npts = 0;
+    tov.r = 0;
+    tov.chi = 0;
+    tov.alpha = 0;
 
     if (sim->progenitor_file[0] == '\0') {
         return;
@@ -731,7 +964,33 @@ void prj_problem_cc(prj_sim *sim, prj_mpi *mpi)
     if (prj_cc_profile_load(&profile, sim->progenitor_file) != 0) {
         return;
     }
-    prj_cc_initialize_amr(sim, mpi, &profile);
+
+    /* Constraint-consistent metric for the fully coupled Z4c+GRHD collapse:
+       solve the static TOV structure and build conformally-flat (CFC) data.
+       Falls back to the flat metric if the solve fails. */
+    if (prj_z4c_runtime_enabled(&sim->mesh) &&
+        prj_eos_full_dynamic_gr_enabled(&sim->mesh)) {
+        /* Farthest corner of the domain, plus margin for ghost zones; the TOV
+           metric is only sampled inside the domain. */
+        double ax = fabs(sim->coord.x1min) > fabs(sim->coord.x1max) ?
+            fabs(sim->coord.x1min) : fabs(sim->coord.x1max);
+        double ay = fabs(sim->coord.x2min) > fabs(sim->coord.x2max) ?
+            fabs(sim->coord.x2min) : fabs(sim->coord.x2max);
+        double az = fabs(sim->coord.x3min) > fabs(sim->coord.x3max) ?
+            fabs(sim->coord.x3min) : fabs(sim->coord.x3max);
+        double r_max = 1.25 * sqrt(ax * ax + ay * ay + az * az);
+
+        if (prj_cc_tov_solve(&profile, &sim->eos,
+                sim->mesh.z4c_params.chi_psi_power, r_max, &tov) == 0) {
+            tov_ptr = &tov;
+        } else {
+            fprintf(stderr, "prj_problem_cc: TOV solve failed; "
+                "falling back to flat initial metric\n");
+        }
+    }
+
+    prj_cc_initialize_amr(sim, mpi, &profile, tov_ptr);
     prj_mhd_init(sim, mpi);
+    prj_cc_tov_free(&tov);
     prj_cc_profile_free(&profile);
 }

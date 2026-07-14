@@ -1,0 +1,74 @@
+# Core-collapse with full dynamic GR (Z4c + GRHD).
+# Build with the cc_z4c setup: `make setup=cc_z4c` (GRAVITY=1, DYNAMIC_GR=1).
+# The initial metric is constraint-consistent: a static TOV solution of the
+# progenitor written as conformally-flat (CFC) Z4c data. Monopole gravity is
+# automatically disabled when use_full_dynamic_gr=1.
+
+problem = cc
+restart_from_file = 0
+restart_file_name = output/final.h5
+
+x1min = -9.375e7
+x1max = 9.375e7
+x2min = -9.375e7
+x2max = 9.375e7
+x3min = -9.375e7
+x3max = 9.375e7
+
+root_nx = 4
+max_level = -1
+min_dx = 5e4
+
+cfl = 0.95
+x_com_err_tol = 0.5
+t_end = 0.03
+max_steps = 100000
+output_interval = -1
+restart_interval = -1
+output_dt = 1e-3
+restart_dt = 1e-2
+
+amr_interval = 1
+
+amr_estimator = pressure_scale_height
+amr_refine_thresh = 0.25
+amr_derefine_thresh = 0.0
+
+use_amr_angular_resolution_limit = 1
+
+eos_type = table
+eos_file = ../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat
+progenitor_file = ../s9.0.swbj15.fornax
+
+bc_x1_inner = outflow
+bc_x1_outer = outflow
+bc_x2_inner = outflow
+bc_x2_outer = outflow
+bc_x3_inner = outflow
+bc_x3_outer = outflow
+
+use_multipole_gravity = 0
+
+# --- Full dynamic GR ---
+use_full_dynamic_gr = 1
+
+# Z4c conformal factor convention: chi = psi^(chi_psi_power). Must match the
+# TOV/CFC initializer and prj_z4c_load_hydro_geom (gamma_ij = psi^4 delta_ij).
+z4c_chi_psi_power = -4
+z4c_floor_chi = 1
+z4c_chi_min_floor = 1.0e-8
+
+# Kreiss-Oliger dissipation on the Z4c fields.
+z4c_diss = 0.5
+
+# Moving-puncture gauge (1+log lapse + Gamma-driver shift). Dimensional damping
+# parameters are in geometric cm and likely need tuning for the collapse scale.
+z4c_lapse_oplog = 2.0
+z4c_lapse_advect = 1.0
+z4c_shift_Gamma = 1.0
+z4c_shift_advect = 1.0
+z4c_shift_eta_inv_cm = 0.0
+
+# Constraint damping (Z4c kappa1/kappa2); start disabled and tune upward.
+z4c_damp_kappa1_inv_cm = 0.0
+z4c_damp_kappa2 = 0.0

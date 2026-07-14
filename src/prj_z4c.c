@@ -807,6 +807,113 @@ void prj_z4c_init_mesh_flat(prj_mesh *mesh, const prj_mpi *mpi)
     mesh->z4c_initialized = 1;
 }
 
+/* Linear interpolation of a monotonically-increasing radial table. Clamps to
+   the endpoints outside [r[0], r[npts-1]]. */
+static double prj_z4c_interp_radial(const double *r_grid, const double *val,
+    int npts, double r)
+{
+    int lo;
+    int hi;
+
+    if (npts <= 0) {
+        return 0.0;
+    }
+    if (r <= r_grid[0]) {
+        return val[0];
+    }
+    if (r >= r_grid[npts - 1]) {
+        return val[npts - 1];
+    }
+    lo = 0;
+    hi = npts - 1;
+    while (hi - lo > 1) {
+        int mid = (lo + hi) / 2;
+
+        if (r_grid[mid] > r) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    {
+        double denom = r_grid[hi] - r_grid[lo];
+        double w = denom > 0.0 ? (r - r_grid[lo]) / denom : 0.0;
+
+        return (1.0 - w) * val[lo] + w * val[hi];
+    }
+}
+
+/* Conformally-flat spherical initial data: fill chi and alpha from a 1D radial
+   table (indexed by grid radius measured from x_com), keeping the conformal
+   metric flat and the extrinsic curvature, shift, and Theta zero. Mirrors the
+   structure of prj_z4c_init_mesh_flat. */
+void prj_z4c_init_mesh_spherical(prj_mesh *mesh, const prj_mpi *mpi,
+    const double x_com[3], const double *r_grid, const double *chi_grid,
+    const double *alpha_grid, int npts)
+{
+    int bidx;
+
+    if (!prj_z4c_runtime_enabled(mesh)) {
+        return;
+    }
+    if (r_grid == 0 || chi_grid == 0 || alpha_grid == 0 || npts <= 0) {
+        prj_z4c_fail("prj_z4c_init_mesh_spherical: missing radial table");
+    }
+    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
+        prj_block *block = &mesh->blocks[bidx];
+        int stage;
+
+        if (!prj_z4c_local_block(mpi, block)) {
+            continue;
+        }
+        prj_fill(block->z4c, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+            (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
+        prj_fill(block->z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
+            (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
+        for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
+            double *z = prj_block_z4c_stage(block, stage);
+            int i, j, k;
+
+            for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+                for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+                    for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
+                        double dx1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0] - x_com[0];
+                        double dx2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1] - x_com[1];
+                        double dx3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2] - x_com[2];
+                        double r = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+                        double chi = prj_z4c_interp_radial(r_grid, chi_grid, npts, r);
+                        double alpha = prj_z4c_interp_radial(r_grid, alpha_grid, npts, r);
+
+                        z[Z4CIDX(PRJ_Z4C_CHI, i, j, k)] = chi;
+                        z[Z4CIDX(PRJ_Z4C_GXX, i, j, k)] = 1.0;
+                        z[Z4CIDX(PRJ_Z4C_GXY, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_GXZ, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_GYY, i, j, k)] = 1.0;
+                        z[Z4CIDX(PRJ_Z4C_GYZ, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_GZZ, i, j, k)] = 1.0;
+                        z[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_AXX, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_AXY, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_AXZ, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_AYY, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_AYZ, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_AZZ, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_GAMY, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_GAMZ, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_THETA, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_ALPHA, i, j, k)] = alpha;
+                        z[Z4CIDX(PRJ_Z4C_BETAX, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_BETAY, i, j, k)] = 0.0;
+                        z[Z4CIDX(PRJ_Z4C_BETAZ, i, j, k)] = 0.0;
+                    }
+                }
+            }
+        }
+    }
+    mesh->z4c_initialized = 1;
+}
+
 void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
     const double centers_cm[][3], const double masses_cm[],
     const double momenta_cm[][3], double floor_radius_cm)
@@ -2536,6 +2643,19 @@ void prj_z4c_init_mesh_flat(prj_mesh *mesh, const prj_mpi *mpi)
 {
     (void)mesh;
     (void)mpi;
+}
+
+void prj_z4c_init_mesh_spherical(prj_mesh *mesh, const prj_mpi *mpi,
+    const double x_com[3], const double *r_grid, const double *chi_grid,
+    const double *alpha_grid, int npts)
+{
+    (void)mesh;
+    (void)mpi;
+    (void)x_com;
+    (void)r_grid;
+    (void)chi_grid;
+    (void)alpha_grid;
+    (void)npts;
 }
 
 void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,

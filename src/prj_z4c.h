@@ -25,6 +25,9 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
 
 double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double cfl);
 void prj_z4c_init_mesh_flat(prj_mesh *mesh, const prj_mpi *mpi);
+void prj_z4c_init_mesh_spherical(prj_mesh *mesh, const prj_mpi *mpi,
+    const double x_com[3], const double *r_grid, const double *chi_grid,
+    const double *alpha_grid, int npts);
 void prj_z4c_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int stage);
 void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
     const double centers_cm[][3], const double masses_cm[],

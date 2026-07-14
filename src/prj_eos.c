@@ -1289,8 +1289,15 @@ static int prj_eos_gr_recovery_residual_ye(const prj_eos_gr_recovery *rec, doubl
     return 1;
 }
 
+/* Bisect for the recovery root on [xlo, xhi], assuming the residual is
+   monotonically decreasing (positive below the root, negative above it) on the
+   valid interval. xhi must be a valid sample with residual <= 0. xlo may lie in
+   the invalid region below the validity boundary (e.g. where p <= 0): such a
+   point sits below the root, so an invalid midpoint simply raises the lower
+   bound. This brackets roots that fall in the first valid geometric bin, where
+   the sign change straddles the invalid->valid boundary. */
 static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec, double ye,
-    double xlo, double flo, double xhi, double fhi, double *xroot)
+    double xlo, double xhi, double *xroot)
 {
     double scale;
     int iter;
@@ -1302,13 +1309,12 @@ static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec, double ye,
     if (scale <= 0.0) {
         scale = 1.0;
     }
-    for (iter = 0; iter < 120; ++iter) {
+    for (iter = 0; iter < 200; ++iter) {
         double xm = 0.5 * (xlo + xhi);
         double fm;
 
         if (!prj_eos_gr_recovery_residual_ye(rec, ye, xm, &fm, 0, 0, 0)) {
             xlo = xm;
-            flo = 0.0;
             continue;
         }
         if (fabs(fm) <= 1.0e-14 * scale ||
@@ -1316,14 +1322,11 @@ static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec, double ye,
             *xroot = xm;
             return 1;
         }
-        if ((flo <= 0.0 && fm >= 0.0) || (flo >= 0.0 && fm <= 0.0)) {
-            xhi = xm;
-            fhi = fm;
-        } else {
+        if (fm > 0.0) {
             xlo = xm;
-            flo = fm;
+        } else {
+            xhi = xm;
         }
-        (void)fhi;
     }
     *xroot = 0.5 * (xlo + xhi);
     return 1;
@@ -1336,6 +1339,7 @@ static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
     double x;
     double prev_x = 0.0;
     double prev_f = 0.0;
+    double last_x = 0.0;
     int have_prev = 0;
     int saw_valid = 0;
     int scan;
@@ -1371,13 +1375,22 @@ static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
             }
             if (have_prev &&
                 ((prev_f <= 0.0 && f >= 0.0) || (prev_f >= 0.0 && f <= 0.0))) {
-                return prj_eos_gr_bisect_recovery(rec, ye, prev_x, prev_f, xtest, f,
+                /* Sign change between two valid samples. */
+                return prj_eos_gr_bisect_recovery(rec, ye, prev_x, xtest,
+                    xroot) ? PRJ_EOS_GR_OK : PRJ_EOS_GR_NO_CONVERGE;
+            }
+            if (!have_prev && f < 0.0) {
+                /* First valid sample already overshot the (decreasing) root:
+                   the root sits in the first valid geometric bin, so bracket
+                   against the previous, still-invalid lower point. */
+                return prj_eos_gr_bisect_recovery(rec, ye, last_x, xtest,
                     xroot) ? PRJ_EOS_GR_OK : PRJ_EOS_GR_NO_CONVERGE;
             }
             prev_x = xtest;
             prev_f = f;
             have_prev = 1;
         }
+        last_x = xtest;
         if (scan > 0) {
             if (x > DBL_MAX / 1.35) {
                 break;
