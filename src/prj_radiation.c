@@ -5,10 +5,6 @@
 
 #include "prj.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 static double prj_rad_m1_chi_exact(double f)
 {
     if (f <= 0.0) {

@@ -6,10 +6,6 @@
 #include "prj.h"
 #include "prj_rad3_opac.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 #if PRJ_NRAD > 0
 
 #if defined(PRJ_ENABLE_MPI)

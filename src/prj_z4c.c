@@ -9,10 +9,6 @@
 
 #include "prj.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 #define PRJ_Z4C_MPI_TAG 122
 
 static const char *const prj_z4c_names[PRJ_NZ4C] = {

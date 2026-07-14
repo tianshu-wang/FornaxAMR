@@ -3,6 +3,12 @@
 
 #include <stddef.h>
 
+/* Some strict C99 compilers do not expose M_PI from <math.h>. Define it once
+   here so every translation unit that includes prj_defs.h (via prj.h) sees it. */
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 #define PRJ_NDIM 3
 #ifndef PRJ_USE_GRAVITY
 #define PRJ_USE_GRAVITY 1

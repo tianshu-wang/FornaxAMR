@@ -4,10 +4,6 @@
 
 #include "prj.h"
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
 #if PRJ_MHD
 static inline void prj_mhd_fail(const char *message)
 {
