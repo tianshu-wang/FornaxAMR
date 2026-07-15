@@ -16,11 +16,13 @@ typedef struct prj_cc_profile {
     double *vr;
 } prj_cc_profile;
 
-/* Static TOV (Kij=0) conformally-flat metric sampled on the progenitor's
-   radial grid: chi and alpha as functions of the (areal) grid radius. */
+/* Static TOV (Kij=0) conformally-flat metric. The TOV/progenitor profile is
+   tabulated in areal radius, while the Cartesian conformally-flat Z4c grid uses
+   isotropic radius. */
 typedef struct prj_tov_profile {
     int npts;
-    double *r;
+    double *r_areal;
+    double *r_grid;
     double *chi;
     double *alpha;
 } prj_tov_profile;
@@ -33,8 +35,12 @@ typedef struct prj_cc_init_amr_ctx {
 } prj_cc_init_amr_ctx;
 
 static int prj_cc_init_amr_ctx_build(prj_cc_init_amr_ctx *ctx, const prj_cc_profile *profile,
-    double scale_factor, prj_eos *eos, double r_min_domain, double r_max_domain)
+    const prj_tov_profile *tov, double scale_factor, prj_eos *eos,
+    double r_min_domain, double r_max_domain)
 {
+    int use_tov_radius;
+    int npts;
+    const double *coord_radius;
     double *pressure;
     int i;
     int i_first;
@@ -45,41 +51,45 @@ static int prj_cc_init_amr_ctx_build(prj_cc_init_amr_ctx *ctx, const prj_cc_prof
     if (ctx == 0 || profile == 0 || profile->npts < 2 || eos == 0) {
         return 1;
     }
-    ctx->npts = profile->npts;
-    ctx->radius = profile->radius;
+    use_tov_radius = tov != 0 && tov->npts > 1 &&
+        tov->r_grid != 0 && tov->r_areal != 0 && tov->npts <= profile->npts;
+    npts = use_tov_radius ? tov->npts : profile->npts;
+    coord_radius = use_tov_radius ? tov->r_grid : profile->radius;
+    ctx->npts = npts;
+    ctx->radius = coord_radius;
     ctx->scale_factor = scale_factor;
-    ctx->LP = (double *)prj_malloc((size_t)profile->npts * sizeof(*ctx->LP));
+    ctx->LP = (double *)prj_malloc((size_t)npts * sizeof(*ctx->LP));
     if (ctx->LP == 0) {
         return 1;
     }
-    for (i = 0; i < profile->npts; ++i) {
+    for (i = 0; i < npts; ++i) {
         ctx->LP[i] = HUGE_VAL;
     }
 
     i_first = 0;
-    while (i_first < profile->npts && profile->radius[i_first] < r_min_domain) {
+    while (i_first < npts && coord_radius[i_first] < r_min_domain) {
         i_first += 1;
     }
-    i_last = profile->npts - 1;
-    while (i_last >= 0 && profile->radius[i_last] > r_max_domain) {
+    i_last = npts - 1;
+    while (i_last >= 0 && coord_radius[i_last] > r_max_domain) {
         i_last -= 1;
     }
     if (i_first > i_last) {
         return 0;
     }
     i_lo = i_first > 0 ? i_first - 1 : 0;
-    i_hi = i_last < profile->npts - 1 ? i_last + 1 : profile->npts - 1;
+    i_hi = i_last < npts - 1 ? i_last + 1 : npts - 1;
     if (i_hi <= i_lo) {
         return 0;
     }
 
-    pressure = (double *)prj_malloc((size_t)profile->npts * sizeof(*pressure));
+    pressure = (double *)prj_malloc((size_t)npts * sizeof(*pressure));
     if (pressure == 0) {
         free(ctx->LP);
         ctx->LP = 0;
         return 1;
     }
-    for (i = 0; i < profile->npts; ++i) {
+    for (i = 0; i < npts; ++i) {
         pressure[i] = 0.0;
     }
     for (i = i_lo; i <= i_hi; ++i) {
@@ -101,15 +111,15 @@ static int prj_cc_init_amr_ctx_build(prj_cc_init_amr_ctx *ctx, const prj_cc_prof
         if (i == i_lo) {
             P0 = pressure[i];
             P1 = pressure[i + 1];
-            dr = profile->radius[i + 1] - profile->radius[i];
+            dr = coord_radius[i + 1] - coord_radius[i];
         } else if (i == i_hi) {
             P0 = pressure[i - 1];
             P1 = pressure[i];
-            dr = profile->radius[i] - profile->radius[i - 1];
+            dr = coord_radius[i] - coord_radius[i - 1];
         } else {
             P0 = pressure[i - 1];
             P1 = pressure[i + 1];
-            dr = profile->radius[i + 1] - profile->radius[i - 1];
+            dr = coord_radius[i + 1] - coord_radius[i - 1];
         }
         if (P0 <= 0.0 || P1 <= 0.0 || dr <= 0.0) {
             ctx->LP[i] = HUGE_VAL;
@@ -511,13 +521,49 @@ static void prj_cc_tov_free(prj_tov_profile *tov)
     if (tov == 0) {
         return;
     }
-    free(tov->r);
+    free(tov->r_areal);
+    free(tov->r_grid);
     free(tov->chi);
     free(tov->alpha);
-    tov->r = 0;
+    tov->r_areal = 0;
+    tov->r_grid = 0;
     tov->chi = 0;
     tov->alpha = 0;
     tov->npts = 0;
+}
+
+static double prj_cc_tov_areal_radius_at_grid_radius(const prj_tov_profile *tov,
+    double r_grid)
+{
+    int lo;
+    int hi;
+
+    if (tov == 0 || tov->npts <= 0 || tov->r_grid == 0 || tov->r_areal == 0) {
+        return r_grid;
+    }
+    if (r_grid <= tov->r_grid[0]) {
+        return tov->r_areal[0];
+    }
+    if (r_grid >= tov->r_grid[tov->npts - 1]) {
+        return tov->r_areal[tov->npts - 1];
+    }
+    lo = 0;
+    hi = tov->npts - 1;
+    while (hi - lo > 1) {
+        int mid = lo + (hi - lo) / 2;
+
+        if (tov->r_grid[mid] <= r_grid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    {
+        double denom = tov->r_grid[hi] - tov->r_grid[lo];
+        double w = denom > 0.0 ? (r_grid - tov->r_grid[lo]) / denom : 0.0;
+
+        return (1.0 - w) * tov->r_areal[lo] + w * tov->r_areal[hi];
+    }
 }
 
 /* Solve the static (Kij=0) TOV structure equations on the progenitor's radial
@@ -543,7 +589,8 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
         return 1;
     }
     out->npts = 0;
-    out->r = 0;
+    out->r_areal = 0;
+    out->r_grid = 0;
     out->chi = 0;
     out->alpha = 0;
     if (prof == 0 || prof->npts < 2 || prof->radius == 0) {
@@ -564,14 +611,16 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
         return 1;
     }
 
-    out->r = (double *)malloc((size_t)n * sizeof(double));
+    out->r_areal = (double *)malloc((size_t)n * sizeof(double));
+    out->r_grid = (double *)malloc((size_t)n * sizeof(double));
     out->chi = (double *)malloc((size_t)n * sizeof(double));
     out->alpha = (double *)malloc((size_t)n * sizeof(double));
     edens = (double *)malloc((size_t)n * sizeof(double));
     pres = (double *)malloc((size_t)n * sizeof(double));
     mass = (double *)malloc((size_t)n * sizeof(double));
     rbar = (double *)malloc((size_t)n * sizeof(double));
-    if (out->r == 0 || out->chi == 0 || out->alpha == 0 ||
+    if (out->r_areal == 0 || out->r_grid == 0 ||
+        out->chi == 0 || out->alpha == 0 ||
         edens == 0 || pres == 0 || mass == 0 || rbar == 0) {
         free(edens); free(pres); free(mass); free(rbar);
         prj_cc_tov_free(out);
@@ -592,29 +641,33 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
         }
         prj_eos_rty(eos, rho, prj_cc_kelvin_to_mev(prof->temp[i]), prof->ye[i],
             eos_q, PRJ_EOS_CTX_MAIN);
-        out->r[i] = prof->radius[i];
+        out->r_areal[i] = prof->radius[i];
         edens[i] = rho * (c2 + eos_q[PRJ_EOS_EINT]);
         pres[i] = eos_q[PRJ_EOS_PRESSURE];
     }
 
     /* Enclosed mass: inner sphere below radius[0] at constant density, then
        trapezoidal integration of dm/dr = 4*pi*r^2*(e/c^2). */
-    mass[0] = (four_pi / 3.0) * out->r[0] * out->r[0] * out->r[0] * (edens[0] / c2);
+    mass[0] = (four_pi / 3.0) * out->r_areal[0] *
+        out->r_areal[0] * out->r_areal[0] * (edens[0] / c2);
     for (i = 1; i < n; ++i) {
-        double f0 = four_pi * out->r[i - 1] * out->r[i - 1] * (edens[i - 1] / c2);
-        double f1 = four_pi * out->r[i] * out->r[i] * (edens[i] / c2);
+        double f0 = four_pi * out->r_areal[i - 1] *
+            out->r_areal[i - 1] * (edens[i - 1] / c2);
+        double f1 = four_pi * out->r_areal[i] *
+            out->r_areal[i] * (edens[i] / c2);
 
-        mass[i] = mass[i - 1] + 0.5 * (f0 + f1) * (out->r[i] - out->r[i - 1]);
+        mass[i] = mass[i - 1] + 0.5 * (f0 + f1) *
+            (out->r_areal[i] - out->r_areal[i - 1]);
     }
 
     /* Compactness must stay below 1 (2Gm/(c^2 r) < 1) for a regular metric. */
     for (i = 0; i < n; ++i) {
-        double comp = 2.0 * G * mass[i] / (c2 * out->r[i]);
+        double comp = 2.0 * G * mass[i] / (c2 * out->r_areal[i]);
 
         if (!(comp < 1.0)) {
             fprintf(stderr, "prj_cc_tov_solve: compactness 2Gm/(c^2 r)=%.6e >= 1 "
                 "at i=%d r=%.6e m=%.6e; TOV metric undefined\n", comp, i,
-                out->r[i], mass[i]);
+                out->r_areal[i], mass[i]);
             free(edens); free(pres); free(mass); free(rbar);
             prj_cc_tov_free(out);
             return 1;
@@ -624,14 +677,14 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
     /* Potential Phi (alpha = exp(Phi)), integrated inward from the surface
        matched to Schwarzschild: Phi(R) = 0.5*ln(1 - 2GM/(c^2 R)). */
     {
-        double R = out->r[n - 1];
+        double R = out->r_areal[n - 1];
         double M = mass[n - 1];
         double phi_next = 0.5 * log(1.0 - 2.0 * G * M / (c2 * R));
 
         out->alpha[n - 1] = exp(phi_next);
         for (i = n - 2; i >= 0; --i) {
-            double rp = out->r[i + 1];
-            double ri = out->r[i];
+            double rp = out->r_areal[i + 1];
+            double ri = out->r_areal[i];
             double gp = G * (mass[i + 1] + four_pi * rp * rp * rp * pres[i + 1] / c2) /
                 (c2 * rp * rp * (1.0 - 2.0 * G * mass[i + 1] / (c2 * rp)));
             double gi = G * (mass[i] + four_pi * ri * ri * ri * pres[i] / c2) /
@@ -647,7 +700,7 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
        rbar(R) = 0.5*(sqrt(R^2 - 2GM R/c^2) + R - GM/c^2), using
        d(ln rbar)/dr = 1 / (r*sqrt(1 - 2Gm/(c^2 r))). */
     {
-        double R = out->r[n - 1];
+        double R = out->r_areal[n - 1];
         double M = mass[n - 1];
         double rs = G * M / c2;
         double lnrbar_next;
@@ -655,8 +708,8 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
         rbar[n - 1] = 0.5 * (sqrt(R * R - 2.0 * rs * R) + R - rs);
         lnrbar_next = log(rbar[n - 1]);
         for (i = n - 2; i >= 0; --i) {
-            double rp = out->r[i + 1];
-            double ri = out->r[i];
+            double rp = out->r_areal[i + 1];
+            double ri = out->r_areal[i];
             double hp = 1.0 / (rp * sqrt(1.0 - 2.0 * G * mass[i + 1] / (c2 * rp)));
             double hi = 1.0 / (ri * sqrt(1.0 - 2.0 * G * mass[i] / (c2 * ri)));
             double lnrbar = lnrbar_next - 0.5 * (hi + hp) * (rp - ri);
@@ -666,15 +719,25 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
         }
     }
 
-    /* Conformal factor psi = sqrt(r/rbar); chi = psi^power. */
+    /* Conformal factor psi = sqrt(r_areal/r_grid); chi = psi^power. */
     for (i = 0; i < n; ++i) {
-        double psi = sqrt(out->r[i] / rbar[i]);
+        double psi;
+
+        if (!(rbar[i] > 0.0) || (i > 0 && !(rbar[i] > rbar[i - 1]))) {
+            fprintf(stderr, "prj_cc_tov_solve: nonmonotonic isotropic radius "
+                "at i=%d rbar=%.6e\n", i, rbar[i]);
+            free(edens); free(pres); free(mass); free(rbar);
+            prj_cc_tov_free(out);
+            return 1;
+        }
+        out->r_grid[i] = rbar[i];
+        psi = sqrt(out->r_areal[i] / out->r_grid[i]);
 
         out->chi[i] = pow(psi, chi_psi_power);
     }
 
     if (getenv("PRJ_TOV_DEBUG") != 0) {
-        double R = out->r[n - 1];
+        double R = out->r_areal[n - 1];
         double M = mass[n - 1];
         double alpha_schw = sqrt(1.0 - 2.0 * G * M / (c2 * R));
         int idx[5];
@@ -685,15 +748,17 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
         idx[2] = n / 2;
         idx[3] = (3 * n) / 4;
         idx[4] = n - 1;
-        fprintf(stderr, "[TOV] npts=%d  M_enc=%.6e g (%.4f Msun)  R=%.6e cm\n",
-            n, M, M / 1.98892e33, R);
+        fprintf(stderr, "[TOV] npts=%d  M_enc=%.6e g (%.4f Msun)  "
+            "R_areal=%.6e cm  R_grid=%.6e cm\n",
+            n, M, M / 1.98892e33, R, out->r_grid[n - 1]);
         fprintf(stderr, "[TOV] surface alpha=%.8f  sqrt(1-2GM/c2R)=%.8f\n",
             out->alpha[n - 1], alpha_schw);
         for (s = 0; s < 5; ++s) {
             int q = idx[s];
 
-            fprintf(stderr, "[TOV] r=%.4e  chi=%.8f  alpha=%.8f  psi=%.8f\n",
-                out->r[q], out->chi[q], out->alpha[q],
+            fprintf(stderr, "[TOV] r_areal=%.4e  r_grid=%.4e  "
+                "chi=%.8f  alpha=%.8f  psi=%.8f\n",
+                out->r_areal[q], out->r_grid[q], out->chi[q], out->alpha[q],
                 pow(out->chi[q], 1.0 / chi_psi_power));
         }
         fflush(stderr);
@@ -715,7 +780,8 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
    then accumulate the volume average. This is more accurate than evaluating
    the primitives once at the cell-averaged radius r_com. */
 static void prj_cc_quadrature_primitives(prj_sim *sim, const prj_cc_profile *profile,
-    const prj_block *block, int i, int j, int k, double *W)
+    const prj_tov_profile *tov, const prj_block *block, int i, int j, int k,
+    double *W)
 {
     static const double gq_node[3] = {
         -0.77459666924148337704, 0.0, 0.77459666924148337704
@@ -758,20 +824,22 @@ static void prj_cc_quadrature_primitives(prj_sim *sim, const prj_cc_profile *pro
             for (c = 0; c < 3; ++c) {
                 double dx3 = zc + hz * gq_node[c];
                 double w = wab * gq_wnorm[c];
-                double r = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+                double r_grid = sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+                double r_sample = prj_cc_tov_areal_radius_at_grid_radius(tov, r_grid);
                 double rho;
                 double temp;
                 double ye;
                 double vr;
                 double eos_q[PRJ_EOS_NQUANT];
 
-                prj_cc_profile_sample(profile, r, &rho, &temp, &ye, &vr);
+                prj_cc_profile_sample(profile, r_sample, &rho, &temp, &ye, &vr);
                 if (rho == 0.0) {
                     fprintf(stderr,
                         "prj_cc_quadrature_primitives: rho=0 before prj_eos_rty for current_block id=%d current_rank=%d level=%d "
-                        "cell=(%d,%d,%d) node=(%d,%d,%d) x=(%.17e, %.17e, %.17e) r=%.17e temp=%.17e ye=%.17e\n",
+                        "cell=(%d,%d,%d) node=(%d,%d,%d) x=(%.17e, %.17e, %.17e) r_grid=%.17e r_sample=%.17e temp=%.17e ye=%.17e\n",
                         block->id, block->rank, block->level, i, j, k, a, b, c,
-                        dx1 + x_com[0], dx2 + x_com[1], dx3 + x_com[2], r, temp, ye);
+                        dx1 + x_com[0], dx2 + x_com[1], dx3 + x_com[2],
+                        r_grid, r_sample, temp, ye);
                     fprintf(stderr,
                         "  block xmin=(%.17e, %.17e, %.17e) xmax=(%.17e, %.17e, %.17e) "
                         "dx=(%.17e, %.17e, %.17e)\n",
@@ -784,10 +852,10 @@ static void prj_cc_quadrature_primitives(prj_sim *sim, const prj_cc_profile *pro
                 prj_eos_rty(&sim->eos, rho, prj_cc_kelvin_to_mev(temp), ye, eos_q, PRJ_EOS_CTX_MAIN);
 
                 W[PRJ_PRIM_RHO] += w * rho;
-                if (r > 0.0) {
-                    W[PRJ_PRIM_V1] += w * vr * dx1 / r;
-                    W[PRJ_PRIM_V2] += w * vr * dx2 / r;
-                    W[PRJ_PRIM_V3] += w * vr * dx3 / r;
+                if (r_grid > 0.0) {
+                    W[PRJ_PRIM_V1] += w * vr * dx1 / r_grid;
+                    W[PRJ_PRIM_V2] += w * vr * dx2 / r_grid;
+                    W[PRJ_PRIM_V3] += w * vr * dx3 / r_grid;
                 }
                 W[PRJ_PRIM_EINT] += w * eos_q[PRJ_EOS_EINT];
                 W[PRJ_PRIM_YE] += w * ye;
@@ -796,7 +864,8 @@ static void prj_cc_quadrature_primitives(prj_sim *sim, const prj_cc_profile *pro
     }
 }
 
-static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_cc_profile *profile)
+static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi,
+    const prj_cc_profile *profile, const prj_tov_profile *tov)
 {
     int bidx;
 
@@ -817,7 +886,7 @@ static void prj_cc_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_cc_prof
 
                     /* Volume-averaged primitives over the cell, using the same
                        quadrature as the r_com calculation. */
-                    prj_cc_quadrature_primitives(sim, profile, block, i, j, k, W);
+                    prj_cc_quadrature_primitives(sim, profile, tov, block, i, j, k, W);
                     prj_eos_cell_prim2cons(&sim->eos, &sim->mesh, block, 0,
                         i, j, k, W, U, PRJ_EOS_CTX_MAIN);
                     prj_problem_store_cell(block, i, j, k, W, U);
@@ -837,7 +906,7 @@ static void prj_cc_fill_metric(prj_sim *sim, const prj_mpi *mpi,
         return;
     }
     prj_z4c_init_mesh_spherical(&sim->mesh, mpi, sim->mesh.x_com,
-        tov->r, tov->chi, tov->alpha, tov->npts);
+        tov->r_grid, tov->chi, tov->alpha, tov->npts);
 }
 
 static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi,
@@ -869,12 +938,12 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi,
         double r_min_domain = sqrt(cx * cx + cy * cy + cz * cz);
 
         init_ctx_ok = (prj_cc_init_amr_ctx_build(&init_ctx, profile,
-            sim->mesh.amr_init_scale_factor, &sim->eos,
+            tov, sim->mesh.amr_init_scale_factor, &sim->eos,
             r_min_domain, r_max_domain) == 0);
     }
 
     prj_cc_fill_metric(sim, mpi, tov);
-    prj_cc_fill_mesh(sim, mpi, profile);
+    prj_cc_fill_mesh(sim, mpi, profile, tov);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
     prj_gravity_init(sim, mpi);
@@ -913,7 +982,7 @@ static void prj_cc_initialize_amr(prj_sim *sim, prj_mpi *mpi,
         }
     #endif
         prj_cc_fill_metric(sim, mpi, tov);
-        prj_cc_fill_mesh(sim, mpi, profile);
+        prj_cc_fill_mesh(sim, mpi, profile, tov);
 
         prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
         prj_boundary_fill_ghosts(&sim->mesh, mpi, &sim->bc, 1);
@@ -943,7 +1012,8 @@ void prj_problem_cc(prj_sim *sim, prj_mpi *mpi)
     const prj_tov_profile *tov_ptr = 0;
 
     tov.npts = 0;
-    tov.r = 0;
+    tov.r_areal = 0;
+    tov.r_grid = 0;
     tov.chi = 0;
     tov.alpha = 0;
 
