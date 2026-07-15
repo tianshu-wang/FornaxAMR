@@ -645,14 +645,66 @@ static void prj_flux_store_local_flux(double *dst, int dir, int i, int j, int k,
 }
 
 #if PRJ_DYNAMIC_GR && !PRJ_MHD
-static void prj_flux_gr_fail(const char *op, int status, int dir, int i, int j, int k)
+static const char *prj_flux_gr_status_name(int status)
 {
-    fprintf(stderr, "dynamic GR flux %s failed at dir=%d face (%d,%d,%d): status=%d\n",
-        op, dir, i, j, k, status);
+    switch (status) {
+    case PRJ_EOS_GR_OK:
+        return "ok";
+    case PRJ_EOS_GR_NULL_ARG:
+        return "null_arg";
+    case PRJ_EOS_GR_BAD_METRIC:
+        return "bad_metric";
+    case PRJ_EOS_GR_BAD_STATE:
+        return "bad_state";
+    case PRJ_EOS_GR_NO_CONVERGE:
+        return "no_converge";
+    default:
+        return "missing_geometry";
+    }
+}
+
+static const char *prj_flux_prim_name(int var)
+{
+    static const char *const names[6] = {
+        "RHO", "V1", "V2", "V3", "EINT", "YE"
+    };
+
+    return var >= 0 && var < 6 ? names[var] : "RAD";
+}
+
+static const char *prj_flux_cons_name(int var)
+{
+    static const char *const names[6] = {
+        "RHO", "MOM1", "MOM2", "MOM3", "ETOT", "YE"
+    };
+
+    return var >= 0 && var < 6 ? names[var] : "RAD";
+}
+
+static const char *prj_flux_eosvar_name(int var)
+{
+    static const char *const names[3] = {
+        "pressure", "temperature", "gamma"
+    };
+
+    return var >= 0 && var < 3 ? names[var] : "unknown";
+}
+
+static void prj_flux_gr_abort(void)
+{
 #if defined(PRJ_ENABLE_MPI)
     MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
 #endif
     exit(EXIT_FAILURE);
+}
+
+static void prj_flux_gr_fail(const char *op, int status, int dir, int i, int j, int k)
+{
+    fprintf(stderr,
+        "dynamic GR flux %s failed at dir=%d face (%d,%d,%d): status=%d (%s)\n",
+        op, dir, i, j, k, status, prj_flux_gr_status_name(status));
+    fflush(stderr);
+    prj_flux_gr_abort();
 }
 
 static void prj_flux_local_axes(int dir, int axis[3])
@@ -677,6 +729,213 @@ static double prj_flux_det3(const double g[3][3])
     return g[0][0] * (g[1][1] * g[2][2] - g[1][2] * g[2][1])
         - g[0][1] * (g[1][0] * g[2][2] - g[1][2] * g[2][0])
         + g[0][2] * (g[1][0] * g[2][1] - g[1][1] * g[2][0]);
+}
+
+static void prj_flux_gr_print_face_location(const prj_block *block,
+    int dir, int i, int j, int k)
+{
+    double x[3];
+
+    if (block == 0) {
+        return;
+    }
+    x[0] = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+    x[1] = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+    x[2] = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+    x[dir] = block->xmin[dir] + (double)(dir == X1DIR ? i : dir == X2DIR ? j : k) *
+        block->dx[dir];
+    fprintf(stderr, "  face x=(%.17e, %.17e, %.17e) face_index=%zu\n",
+        x[0], x[1], x[2], (size_t)FACE_IDX(dir, i, j, k));
+}
+
+static void prj_flux_gr_print_face_geom(const prj_z4c_hydro_geom *geom)
+{
+    double det;
+    int a;
+
+    if (geom == 0) {
+        fprintf(stderr, "  face geometry is NULL\n");
+        return;
+    }
+    det = prj_flux_det3(geom->gamma);
+    fprintf(stderr,
+        "  face geometry: alpha=%.17e beta=(%.17e, %.17e, %.17e) "
+        "sqrt_gamma=%.17e det(gamma)=%.17e\n",
+        geom->alpha, geom->beta[0], geom->beta[1], geom->beta[2],
+        geom->sqrt_gamma, det);
+    fprintf(stderr, "  face gamma_ij in local flux axes:\n");
+    for (a = 0; a < 3; ++a) {
+        fprintf(stderr, "    [%.17e, %.17e, %.17e]\n",
+            geom->gamma[a][0], geom->gamma[a][1], geom->gamma[a][2]);
+    }
+    fprintf(stderr, "  face gamma^ij in local flux axes:\n");
+    for (a = 0; a < 3; ++a) {
+        fprintf(stderr, "    [%.17e, %.17e, %.17e]\n",
+            geom->gamma_inv[a][0], geom->gamma_inv[a][1], geom->gamma_inv[a][2]);
+    }
+}
+
+static void prj_flux_gr_print_prim_vector(const char *title, const double *W)
+{
+    int v;
+
+    if (W == 0) {
+        fprintf(stderr, "  %s is NULL\n", title);
+        return;
+    }
+    fprintf(stderr, "  %s:\n", title);
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        fprintf(stderr, "    W[%2d] %-5s = %.17e\n", v,
+            prj_flux_prim_name(v), W[v]);
+    }
+}
+
+static void prj_flux_gr_print_cons_vector(const char *title, const double *U)
+{
+    int v;
+
+    if (U == 0) {
+        fprintf(stderr, "  %s is NULL\n", title);
+        return;
+    }
+    fprintf(stderr, "  %s:\n", title);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        fprintf(stderr, "    U[%2d] %-5s = %.17e\n", v,
+            prj_flux_cons_name(v), U[v]);
+    }
+}
+
+static void prj_flux_gr_print_velocity_diag(const prj_z4c_hydro_geom *geom,
+    const double *W)
+{
+    double beta[3];
+    double beta2 = 0.0;
+    int a;
+    int b;
+
+    if (geom == 0 || W == 0) {
+        fprintf(stderr, "  face velocity diagnostics are unavailable\n");
+        return;
+    }
+    beta[0] = W[PRJ_PRIM_V1] / PRJ_CLIGHT;
+    beta[1] = W[PRJ_PRIM_V2] / PRJ_CLIGHT;
+    beta[2] = W[PRJ_PRIM_V3] / PRJ_CLIGHT;
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            beta2 += geom->gamma[a][b] * beta[a] * beta[b];
+        }
+    }
+    fprintf(stderr,
+        "  face velocity diagnostics: beta=(%.17e, %.17e, %.17e) "
+        "gamma_ij beta^i beta^j=%.17e lorentz=% .17e\n",
+        beta[0], beta[1], beta[2], beta2,
+        beta2 >= 0.0 && beta2 < 1.0 ? 1.0 / sqrt(1.0 - beta2) : NAN);
+}
+
+static void prj_flux_gr_print_source_cell(const char *side, const prj_block *block,
+    const double *W_block, const double *eosvar, int z4c_stage,
+    int i, int j, int k)
+{
+    double x[3];
+    int v;
+
+    if (block == 0) {
+        fprintf(stderr, "  %s source cell: block is NULL\n", side);
+        return;
+    }
+
+    x[0] = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+    x[1] = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+    x[2] = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+    fprintf(stderr,
+        "  %s source cell: cell=(%d,%d,%d) cell_lidx=%zu storage_idx=%zu "
+        "z4c_lidx=%zu x=(%.17e, %.17e, %.17e)\n",
+        side, i, j, k, (size_t)LIDX(i, j, k), (size_t)IDX(i, j, k),
+        (size_t)Z4CLIDX(i, j, k), x[0], x[1], x[2]);
+
+    if (W_block != 0) {
+        fprintf(stderr, "  %s stored primitive cell state:\n", side);
+        for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+            fprintf(stderr, "    Wcell[%2d] %-5s = %.17e\n", v,
+                prj_flux_prim_name(v), W_block[WIDX(v, i, j, k)]);
+        }
+    } else {
+        fprintf(stderr, "  %s stored primitive cell state is unavailable\n", side);
+    }
+
+    if (eosvar != 0) {
+        fprintf(stderr, "  %s stored EOS cell variables:\n", side);
+        for (v = 0; v < PRJ_NVAR_EOSVAR; ++v) {
+            fprintf(stderr, "    eosvar[%d] %-11s = %.17e\n", v,
+                prj_flux_eosvar_name(v), eosvar[EIDX(v, i, j, k)]);
+        }
+    } else {
+        fprintf(stderr, "  %s stored EOS cell variables are unavailable\n", side);
+    }
+
+    if (prj_block_has_cons_storage(block)) {
+        fprintf(stderr, "  %s stored conserved cell state:\n", side);
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            fprintf(stderr, "    Ucell[%2d] %-5s = %.17e\n", v,
+                prj_flux_cons_name(v), prj_block_cons_value_const(block, v, i, j, k));
+        }
+    } else {
+        fprintf(stderr, "  %s stored conserved cell state is unavailable\n", side);
+    }
+
+    {
+        const double *z = prj_block_z4c_stage_const(block, z4c_stage);
+
+        if (z != 0) {
+            fprintf(stderr, "  %s Z4c variables (stage %d) at cell (%d,%d,%d):\n",
+                side, z4c_stage, i, j, k);
+            for (v = 0; v < PRJ_NZ4C; ++v) {
+                fprintf(stderr, "    z4c[%2d] %-16s = %.17e\n", v,
+                    prj_z4c_var_name(v), z[Z4CIDX(v, i, j, k)]);
+            }
+        } else {
+            fprintf(stderr, "  %s Z4c array is unavailable for stage %d\n",
+                side, z4c_stage);
+        }
+    }
+}
+
+static void prj_flux_gr_state_fail(const char *op, int status,
+    const prj_block *block, const double *W_block, const double *eosvar,
+    int z4c_stage, const prj_z4c_hydro_geom *geom, const double *W_face,
+    double pressure, double gas_gamma, const double *U_face, int dir,
+    int face_i, int face_j, int face_k, const char *side,
+    int cell_i, int cell_j, int cell_k)
+{
+    fprintf(stderr,
+        "dynamic GR flux %s failed at dir=%d face (%d,%d,%d): "
+        "status=%d (%s) side=%s source_cell=(%d,%d,%d)\n",
+        op, dir, face_i, face_j, face_k, status,
+        prj_flux_gr_status_name(status), side, cell_i, cell_j, cell_k);
+    fprintf(stderr,
+        "  block id=%d rank=%d level=%d active=%d parent=%d z4c_stage=%d "
+        "xmin=(%.17e, %.17e, %.17e) xmax=(%.17e, %.17e, %.17e) "
+        "dx=(%.17e, %.17e, %.17e)\n",
+        block != 0 ? block->id : -1, block != 0 ? block->rank : -1,
+        block != 0 ? block->level : -1, block != 0 ? block->active : -1,
+        block != 0 ? block->parent : -1, z4c_stage,
+        block != 0 ? block->xmin[0] : 0.0, block != 0 ? block->xmin[1] : 0.0,
+        block != 0 ? block->xmin[2] : 0.0, block != 0 ? block->xmax[0] : 0.0,
+        block != 0 ? block->xmax[1] : 0.0, block != 0 ? block->xmax[2] : 0.0,
+        block != 0 ? block->dx[0] : 0.0, block != 0 ? block->dx[1] : 0.0,
+        block != 0 ? block->dx[2] : 0.0);
+    prj_flux_gr_print_face_location(block, dir, face_i, face_j, face_k);
+    fprintf(stderr, "  reconstructed face EOS: pressure=%.17e gamma=%.17e\n",
+        pressure, gas_gamma);
+    prj_flux_gr_print_prim_vector("reconstructed face primitive state", W_face);
+    prj_flux_gr_print_velocity_diag(geom, W_face);
+    prj_flux_gr_print_cons_vector("prim2cons output U (partial/invalid on failure)",
+        U_face);
+    prj_flux_gr_print_face_geom(geom);
+    prj_flux_gr_print_source_cell(side, block, W_block, eosvar, z4c_stage,
+        cell_i, cell_j, cell_k);
+    fflush(stderr);
+    prj_flux_gr_abort();
 }
 
 static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
@@ -713,9 +972,11 @@ static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
     return 1;
 }
 
-static void prj_flux_gr_hydro_state_flux(prj_eos *eos,
+static void prj_flux_gr_hydro_state_flux(prj_eos *eos, const prj_block *block,
+    const double *W_block, const double *eosvar, int z4c_stage,
     const prj_z4c_hydro_geom *geom, const double *W, double pressure,
-    double gas_gamma, double *U, double *F, double *speed, int dir, int i, int j, int k)
+    double gas_gamma, double *U, double *F, double *speed, int dir, int i, int j, int k,
+    const char *side, int cell_i, int cell_j, int cell_k)
 {
     prj_eos_gr_geom egeom;
     double Uloc[PRJ_NVAR_CONS];
@@ -730,6 +991,9 @@ static void prj_flux_gr_hydro_state_flux(prj_eos *eos,
     int b;
     int v;
 
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        U[v] = NAN;
+    }
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             egeom.gamma[a][b] = geom->gamma[a][b];
@@ -737,11 +1001,15 @@ static void prj_flux_gr_hydro_state_flux(prj_eos *eos,
     }
     status = prj_eos_gr_prim2cons(eos, &egeom, W, U, PRJ_EOS_CTX_MAIN);
     if (status != PRJ_EOS_GR_OK) {
-        prj_flux_gr_fail("prim2cons", status, dir, i, j, k);
+        prj_flux_gr_state_fail("prim2cons", status, block, W_block, eosvar,
+            z4c_stage, geom, W, pressure, gas_gamma, U, dir, i, j, k, side,
+            cell_i, cell_j, cell_k);
     }
     det = prj_flux_det3(geom->gamma);
     if (!isfinite(det) || det <= 0.0) {
-        prj_flux_gr_fail("metric", PRJ_EOS_GR_BAD_METRIC, dir, i, j, k);
+        prj_flux_gr_state_fail("metric", PRJ_EOS_GR_BAD_METRIC, block, W_block,
+            eosvar, z4c_stage, geom, W, pressure, gas_gamma, U, dir, i, j, k,
+            side, cell_i, cell_j, cell_k);
     }
     sqrtg = sqrt(det);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -773,10 +1041,11 @@ static void prj_flux_gr_hydro_state_flux(prj_eos *eos,
 }
 
 static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
-    const prj_block *block, int z4c_stage, int dir, int i, int j, int k,
-    int il, int jl, int kl, int ir, int jr, int kr, const double *WL,
-    const double *WR, double pL, double pR, double gL, double gR,
-    double *Fl, double v_face_loc[3])
+    const prj_block *block, const double *W_block, const double *eosvar,
+    int z4c_stage, int dir, int i, int j, int k, int il, int jl, int kl,
+    int ir, int jr, int kr, const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR, double *Fl,
+    double v_face_loc[3])
 {
     prj_z4c_hydro_geom geom;
     double UL[PRJ_NVAR_CONS];
@@ -792,8 +1061,10 @@ static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
             il, jl, kl, ir, jr, kr, &geom)) {
         prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
     }
-    prj_flux_gr_hydro_state_flux(eos, &geom, WL, pL, gL, UL, FL, &sL, dir, i, j, k);
-    prj_flux_gr_hydro_state_flux(eos, &geom, WR, pR, gR, UR, FR, &sR, dir, i, j, k);
+    prj_flux_gr_hydro_state_flux(eos, block, W_block, eosvar, z4c_stage,
+        &geom, WL, pL, gL, UL, FL, &sL, dir, i, j, k, "left", il, jl, kl);
+    prj_flux_gr_hydro_state_flux(eos, block, W_block, eosvar, z4c_stage,
+        &geom, WR, pR, gR, UR, FR, &sR, dir, i, j, k, "right", ir, jr, kr);
     smax = fmax(sL, sR);
     if (!isfinite(smax)) {
         prj_flux_gr_fail("wavespeed", PRJ_EOS_GR_BAD_STATE, dir, i, j, k);
@@ -1165,9 +1436,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
 #if PRJ_DYNAMIC_GR
                     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
                         prj_flux_gr_hydro_hll(eos, mesh, block,
-                            prj_stage_slot_from_bf_arg(use_bf1), dir, i, j, k,
-                            il, jl, kl, ir, jr, kr, WL, WR, pL, pR, gL, gR,
-                            Fl, v_face_loc);
+                            W, eosvar, prj_stage_slot_from_bf_arg(use_bf1),
+                            dir, i, j, k, il, jl, kl, ir, jr, kr, WL, WR,
+                            pL, pR, gL, gR, Fl, v_face_loc);
                     } else
 #endif
                     prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl,
