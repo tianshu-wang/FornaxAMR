@@ -697,25 +697,28 @@ static int prj_cc_tov_solve(const prj_cc_profile *prof, prj_eos *eos,
     }
 
     /* Isotropic radius, integrated inward from the surface where
-       rbar(R) = 0.5*(sqrt(R^2 - 2GM R/c^2) + R - GM/c^2), using
-       d(ln rbar)/dr = 1 / (r*sqrt(1 - 2Gm/(c^2 r))). */
+       rbar(R) = 0.5*(sqrt(R^2 - 2GM R/c^2) + R - GM/c^2).  Integrate
+       ln(rbar/r), not ln(rbar), so the flat-space 1/r singularity is removed
+       analytically and the central conformal factor remains smooth. */
     {
         double R = out->r_areal[n - 1];
         double M = mass[n - 1];
         double rs = G * M / c2;
-        double lnrbar_next;
+        double lnq_next;
 
         rbar[n - 1] = 0.5 * (sqrt(R * R - 2.0 * rs * R) + R - rs);
-        lnrbar_next = log(rbar[n - 1]);
+        lnq_next = log(rbar[n - 1] / R);
         for (i = n - 2; i >= 0; --i) {
             double rp = out->r_areal[i + 1];
             double ri = out->r_areal[i];
-            double hp = 1.0 / (rp * sqrt(1.0 - 2.0 * G * mass[i + 1] / (c2 * rp)));
-            double hi = 1.0 / (ri * sqrt(1.0 - 2.0 * G * mass[i] / (c2 * ri)));
-            double lnrbar = lnrbar_next - 0.5 * (hi + hp) * (rp - ri);
+            double cp = 2.0 * G * mass[i + 1] / (c2 * rp);
+            double ci = 2.0 * G * mass[i] / (c2 * ri);
+            double hp = (1.0 / sqrt(1.0 - cp) - 1.0) / rp;
+            double hi = (1.0 / sqrt(1.0 - ci) - 1.0) / ri;
+            double lnq = lnq_next - 0.5 * (hi + hp) * (rp - ri);
 
-            rbar[i] = exp(lnrbar);
-            lnrbar_next = lnrbar;
+            rbar[i] = ri * exp(lnq);
+            lnq_next = lnq;
         }
     }
 
