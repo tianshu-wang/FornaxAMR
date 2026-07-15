@@ -630,9 +630,10 @@ static void prj_timeint_store_mhd_rad_cell(double *W_mhd, double *W_rad,
 static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad *rad, prj_eos *eos,
     prj_block *block, int i, int j, int k,
     double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src, double *Wdst,
-    double *Wdst_rad, int use_bf1)
+    double *Wdst_rad, int use_bf1, double dtau_cm)
 {
     (void)Wdst_rad;
+    (void)dtau_cm;
 #if PRJ_MHD && PRJ_NRAD > 0
     double *bf_dst[3];
     double u[PRJ_NVAR_CONS];
@@ -797,6 +798,15 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #else
     (void)rad;
 #endif
+    /* Fuse the stage geometry advance into the per-cell update: densitization
+     * (prim2cons above) used slot 0 = g^n; recover against the advanced metric
+     * g_new = g^n + dtau*rhs0 written in place to the recovery slot. The Z4c
+     * point-update is pointwise, so mutating this cell's slot never disturbs
+     * another cell's still-g^n densitization. See prj_z4c_update_linear_cell. */
+    if (prj_z4c_runtime_enabled(mesh)) {
+        prj_z4c_update_linear_cell(block, prj_stage_slot_from_bf_arg(use_bf1),
+            0, 1.0, 0, 0.0, 0, dtau_cm, i, j, k);
+    }
     prj_eos_cell_cons2prim(eos, mesh, block,
         prj_stage_slot_from_bf_arg(use_bf1), i, j, k, u1, w, PRJ_EOS_CTX_MAIN);
     prj_timeint_cell_prim_store(Wdst, i, j, k, w);
@@ -807,7 +817,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #if TIME_INTEGRATION == RK2
 static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad *rad, prj_eos *eos,
     prj_block *block, int i, int j, int k,
-    double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src)
+    double dt, const prj_grav *grav, const prj_mpi *mpi, double *dt_src, double dtau_cm)
 {
 #if PRJ_MHD && PRJ_NRAD > 0
     double u[PRJ_NVAR_CONS];
@@ -834,6 +844,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
     int field;
     int group;
 
+    (void)dtau_cm;
     PRJ_SUBTIMER_START("sub_cell_cons_from_prim");
     prj_timeint_mhd_hydro_cons_from_prim(block->W_mhd, i, j, k,
         &rho0, &mom10, &mom20, &mom30, &etot0, &ye0, &b10, &b20, &b30);
@@ -999,7 +1010,15 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #else
     (void)rad;
 #endif
-    prj_eos_cell_cons2prim(eos, mesh, block, 1, i, j, k, u, w, PRJ_EOS_CTX_MAIN);
+    /* Fuse the final geometry advance: the two prim2cons above densitized with
+     * slot 0 = g^n (u0) and slot 1 = g1 (u1). Recover the RK2-combined state
+     * against the final metric g^{n+1} = 1/2 g^n + 1/2 g1 + 1/2 dtau*rhs1
+     * (rhs1 lives in rhs slot 0 here), written in place to slot 0. Pointwise, so
+     * later cells still read their own g^n/g1 for their prim2cons. */
+    if (prj_z4c_runtime_enabled(mesh)) {
+        prj_z4c_update_linear_cell(block, 0, 0, 0.5, 1, 0.5, 0, 0.5 * dtau_cm, i, j, k);
+    }
+    prj_eos_cell_cons2prim(eos, mesh, block, 0, i, j, k, u, w, PRJ_EOS_CTX_MAIN);
     prj_timeint_cell_prim_store(block->W_mhd, i, j, k, w);
 #endif
 }
@@ -1260,16 +1279,6 @@ static void prj_timeint_imex_assemble_stage(prj_mesh *mesh, prj_eos *eos,
     int dst_stage, int coeff_row, int final_stage, int nterms, double dt)
 {
     int bidx;
-    double z4c_coeff[PRJ_BLOCK_NSTAGES];
-    int s;
-
-    for (s = 0; s < PRJ_BLOCK_NSTAGES; ++s) {
-        z4c_coeff[s] = 0.0;
-    }
-    for (s = 0; s < nterms; ++s) {
-        z4c_coeff[s] = final_stage != 0 ? tableau->b_ex[s] :
-            prj_timeint_imex_a_ex(tableau, coeff_row, s);
-    }
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
@@ -1313,8 +1322,6 @@ static void prj_timeint_imex_assemble_stage(prj_mesh *mesh, prj_eos *eos,
             }
         }
     }
-    prj_z4c_imex_assemble_stage(mesh, mpi, dst_stage, z4c_coeff, nterms,
-        PRJ_CLIGHT * dt);
 }
 
 #if PRJ_NRAD > 0
@@ -1397,8 +1404,6 @@ static void prj_timeint_imex_fill_updated_stage(prj_mesh *mesh, const prj_bc *bc
     PRJ_TIMER_BARRIER_START(timer, mpi, "imex_eos_fill_mesh");
     prj_eos_fill_mesh(mesh, eos, mpi, stage + 1, PRJ_EOS_CTX_MAIN);
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_eos_fill_mesh");
-
-    prj_z4c_finalize_stage(mesh, mpi, bc, stage);
 
     if (fill_opacity_halo) {
         prj_flux_fill_transport_opacity_halo(mesh, rad, mpi, stage + 1);
@@ -1867,7 +1872,8 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                         prj_timeint_update_cell_stage1_mhd_rad(mesh, rad, eos, block,
-                            i, j, k, dt, grav, mpi, dt_src, block->W_mhd, block->W_rad, 0);
+                            i, j, k, dt, grav, mpi, dt_src, block->W_mhd, block->W_rad, 0,
+                            PRJ_CLIGHT * dt);
                     }
                 }
             }
@@ -1877,9 +1883,9 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {
-        double dtau_cm = PRJ_CLIGHT * dt;
-
-        prj_z4c_update_linear(mesh, mpi, 0, 0, 1.0, 0, 0.0, 0, dtau_cm);
+        /* Geometry slot 0 was advanced in place, per cell, inside the update
+         * loop above (fused with the hydro recovery); only enforce + fill
+         * ghosts here for the downstream flux/reconstruction. */
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
     }
 
@@ -2060,7 +2066,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                         prj_timeint_update_cell_stage1_mhd_rad(mesh, rad, eos, block,
                             i, j, k, dt, grav, mpi, dt_src,
-                            prj_block_mhd_stage(block, 1), prj_block_rad_stage(block, 1), 1);
+                            prj_block_mhd_stage(block, 1), prj_block_rad_stage(block, 1), 1,
+                            PRJ_CLIGHT * dt);
                     }
                 }
             }
@@ -2070,9 +2077,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {
-        double dtau_cm = PRJ_CLIGHT * dt;
-
-        prj_z4c_update_linear(mesh, mpi, 1, 0, 1.0, 0, 0.0, 0, dtau_cm);
+        /* Z4c slot 1 was advanced in place, per cell, inside the update loop
+         * above (fused with the hydro recovery); only enforce + fill ghosts. */
         prj_z4c_finalize_stage(mesh, mpi, bc, 1);
     }
 
@@ -2179,7 +2185,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                         prj_timeint_update_cell_stage2_mhd_rad(mesh, rad, eos, block,
-                            i, j, k, dt, grav, mpi, dt_src);
+                            i, j, k, dt, grav, mpi, dt_src, PRJ_CLIGHT * dt);
                     }
                 }
             }
@@ -2189,9 +2195,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {
-        double dtau_cm = PRJ_CLIGHT * dt;
-
-        prj_z4c_update_linear(mesh, mpi, 0, 0, 0.5, 1, 0.5, 0, 0.5 * dtau_cm);
+        /* Final geometry slot 0 (g^{n+1}) was advanced in place, per cell,
+         * inside the update loop above; only enforce + fill ghosts here. */
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
     }
 
@@ -2288,13 +2293,6 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_step_ex_bf_deriv");
 #endif
-
-    if (prj_z4c_runtime_enabled(mesh)) {
-        double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
-
-        prj_z4c_compute_rhs(mesh, mpi, rad, stage, stage, tau_cm);
-        prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, stage, stage);
-    }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "imex_step_ex_src_deriv");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {

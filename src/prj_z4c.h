@@ -40,13 +40,18 @@ void prj_z4c_apply_sommerfeld_rhs(prj_mesh *mesh, const prj_mpi *mpi,
 void prj_z4c_update_linear(prj_mesh *mesh, const prj_mpi *mpi,
     int dst_stage, int a_stage, double a_w, int b_stage, double b_w,
     int rhs_stage, double dtau_cm);
+/* Pointwise single-cell analog of prj_z4c_update_linear: advances one cell's
+ * Z4c state in place (used to fuse the stage geometry advance into the per-cell
+ * hydro update, between densitization and cons2prim recovery). Callers guard on
+ * the dynamic-GR predicate. */
+void prj_z4c_update_linear_cell(prj_block *block,
+    int dst_stage, int a_stage, double a_w, int b_stage, double b_w,
+    int rhs_stage, double dtau_cm, int i, int j, int k);
 void prj_z4c_finalize_stage(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int stage);
 
 void prj_z4c_save_stage(prj_mesh *mesh, const prj_mpi *mpi, int dst_stage, int src_stage);
 void prj_z4c_blend_with_saved(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc,
     int saved_stage, double saved_weight);
-void prj_z4c_imex_assemble_stage(prj_mesh *mesh, const prj_mpi *mpi,
-    int dst_stage, const double *coeff_ex, int nterms, double dtau_cm);
 
 void prj_z4c_amr_prolongate_child(const prj_block *parent, prj_block *child, int child_oct);
 void prj_z4c_amr_restrict_parent(const prj_block *children[8], prj_block *parent);

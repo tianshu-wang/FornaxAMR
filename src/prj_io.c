@@ -215,6 +215,11 @@ static void prj_io_finalize_z4c_params(prj_sim *sim)
         prj_io_fail("use_full_dynamic_gr=1 is not supported in PRJ_MHD builds");
     }
 #endif
+#if PRJ_DYNAMIC_GR && (TIME_INTEGRATION == PRJ_TIMEINT_IMEX)
+    if (sim->mesh.use_full_dynamic_gr != 0) {
+        prj_io_fail("use_full_dynamic_gr=1 is not supported with IMEX time integration");
+    }
+#endif
 }
 
 static void prj_io_set_default_runtime(prj_sim *sim)
@@ -1499,6 +1504,11 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
 #if PRJ_MHD
         if (restart_use_full_dynamic_gr != 0) {
             prj_io_fail("prj_io_read_restart: use_full_dynamic_gr=1 is not supported in PRJ_MHD builds");
+        }
+#endif
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
+        if (restart_use_full_dynamic_gr != 0) {
+            prj_io_fail("prj_io_read_restart: use_full_dynamic_gr=1 is not supported with IMEX time integration");
         }
 #endif
         mesh->use_full_dynamic_gr = restart_use_full_dynamic_gr != 0;

@@ -2435,6 +2435,24 @@ void prj_z4c_update_linear(prj_mesh *mesh, const prj_mpi *mpi,
     }
 }
 
+void prj_z4c_update_linear_cell(prj_block *block,
+    int dst_stage, int a_stage, double a_w, int b_stage, double b_w,
+    int rhs_stage, double dtau_cm, int i, int j, int k)
+{
+    double *dst = prj_block_z4c_stage(block, dst_stage);
+    const double *a_src = prj_block_z4c_stage_const(block, a_stage);
+    const double *b_src = prj_block_z4c_stage_const(block, b_stage);
+    const double *rhs = prj_block_z4c_rhs_stage_const(block, rhs_stage);
+    int var;
+
+    for (var = 0; var < PRJ_NZ4C; ++var) {
+        dst[Z4CIDX(var, i, j, k)] =
+            a_w * a_src[Z4CIDX(var, i, j, k)] +
+            b_w * b_src[Z4CIDX(var, i, j, k)] +
+            dtau_cm * rhs[Z4CIDX(var, i, j, k)];
+    }
+}
+
 void prj_z4c_finalize_stage(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int stage)
 {
     if (!prj_z4c_runtime_enabled(mesh)) {
@@ -2502,46 +2520,6 @@ void prj_z4c_blend_with_saved(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc,
         }
     }
     prj_z4c_finalize_stage(mesh, mpi, bc, 0);
-}
-
-void prj_z4c_imex_assemble_stage(prj_mesh *mesh, const prj_mpi *mpi,
-    int dst_stage, const double *coeff_ex, int nterms, double dtau_cm)
-{
-    int bidx;
-
-    if (!prj_z4c_runtime_enabled(mesh)) {
-        return;
-    }
-    for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
-        prj_block *block = &mesh->blocks[bidx];
-        double *dst;
-        const double *base;
-        int i, j, k, var;
-
-        if (!prj_z4c_local_block(mpi, block)) {
-            continue;
-        }
-        dst = prj_block_z4c_stage(block, dst_stage);
-        base = prj_block_z4c_stage_const(block, 0);
-        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                    for (var = 0; var < PRJ_NZ4C; ++var) {
-                        double value = base[Z4CIDX(var, i, j, k)];
-                        int s;
-
-                        for (s = 0; s < nterms; ++s) {
-                            const double *rhs = prj_block_z4c_rhs_stage_const(block, s);
-                            if (coeff_ex[s] != 0.0) {
-                                value += dtau_cm * coeff_ex[s] * rhs[Z4CIDX(var, i, j, k)];
-                            }
-                        }
-                        dst[Z4CIDX(var, i, j, k)] = value;
-                    }
-                }
-            }
-        }
-    }
 }
 
 void prj_z4c_amr_prolongate_child(const prj_block *parent, prj_block *child, int child_oct)
@@ -2711,6 +2689,23 @@ void prj_z4c_update_linear(prj_mesh *mesh, const prj_mpi *mpi,
     (void)dtau_cm;
 }
 
+void prj_z4c_update_linear_cell(prj_block *block,
+    int dst_stage, int a_stage, double a_w, int b_stage, double b_w,
+    int rhs_stage, double dtau_cm, int i, int j, int k)
+{
+    (void)block;
+    (void)dst_stage;
+    (void)a_stage;
+    (void)a_w;
+    (void)b_stage;
+    (void)b_w;
+    (void)rhs_stage;
+    (void)dtau_cm;
+    (void)i;
+    (void)j;
+    (void)k;
+}
+
 void prj_z4c_finalize_stage(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int stage)
 {
     (void)mesh;
@@ -2735,17 +2730,6 @@ void prj_z4c_blend_with_saved(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc,
     (void)bc;
     (void)saved_stage;
     (void)saved_weight;
-}
-
-void prj_z4c_imex_assemble_stage(prj_mesh *mesh, const prj_mpi *mpi,
-    int dst_stage, const double *coeff_ex, int nterms, double dtau_cm)
-{
-    (void)mesh;
-    (void)mpi;
-    (void)dst_stage;
-    (void)coeff_ex;
-    (void)nterms;
-    (void)dtau_cm;
 }
 
 void prj_z4c_amr_prolongate_child(const prj_block *parent, prj_block *child, int child_oct)

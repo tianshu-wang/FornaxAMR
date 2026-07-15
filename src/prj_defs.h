@@ -110,7 +110,7 @@ typedef double prj_table_real;
  *        PRJ_TIMEINT_TABLEAU_NSTAGES=3
  */
 #ifndef TIME_INTEGRATION
-#define TIME_INTEGRATION eSSPRK9_2
+#define TIME_INTEGRATION RK2
 #endif
 #ifndef PRJ_TIMEINT_ESSPRK_N
 #define PRJ_TIMEINT_ESSPRK_N 9
