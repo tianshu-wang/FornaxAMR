@@ -750,16 +750,56 @@ double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double 
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
-        double dx_min;
-        double dt_cell;
+        const prj_z4c_params *opt = &mesh->z4c_params;
+        const double *z;
+        int i, j, k;
 
         if (!prj_z4c_local_block(mpi, block)) {
             continue;
         }
-        dx_min = PRJ_MIN(block->dx[0], PRJ_MIN(block->dx[1], block->dx[2]));
-        dt_cell = cfl * dx_min / PRJ_CLIGHT;
-        if (dt_cell < dt_min) {
-            dt_min = dt_cell;
+        z = prj_block_z4c_stage_const(block, 0);
+        if (z == 0) {
+            continue;
+        }
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    double beta[3];
+                    double alpha;
+                    double lapse_f;
+                    double gauge_speed;
+                    double denom;
+                    double dt_cell;
+                    int a;
+
+                    alpha = prj_z4c_get(z, PRJ_Z4C_ALPHA, i, j, k);
+                    lapse_f = opt->lapse_oplog * opt->lapse_harmonicf +
+                        opt->lapse_harmonic * alpha;
+                    if (!isfinite(alpha) || alpha <= 0.0 ||
+                        !isfinite(lapse_f) || lapse_f < 0.0) {
+                        denom = 1.0e300;
+                    } else {
+                        gauge_speed = sqrt(alpha * lapse_f);
+                        denom = 0.0;
+                        for (a = 0; a < 3; ++a) {
+                            beta[a] = prj_z4c_get(z, prj_z4c_beta_var(a), i, j, k);
+                            if (!isfinite(beta[a])) {
+                                denom = 1.0e300;
+                                break;
+                            }
+                            denom += (gauge_speed + fabs(beta[a])) / block->dx[a];
+                        }
+                    }
+                    if (!isfinite(denom) || denom <= 0.0) {
+                        dt_cell = HUGE_VAL;
+                    } else {
+                        dt_cell = cfl / (PRJ_CLIGHT * denom);
+                    }
+                    if (dt_cell < dt_min) {
+                        dt_min = dt_cell;
+                    }
+                }
+            }
         }
     }
     return prj_mpi_min_dt(mpi, dt_min);
