@@ -22,6 +22,8 @@ typedef struct prj_z4c_hydro_geom {
 
 int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
     int stage, int i, int j, int k, prj_z4c_hydro_geom *geom);
+int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, prj_z4c_hydro_geom *geom);
 
 double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double cfl);
 void prj_z4c_init_mesh_flat(prj_mesh *mesh, const prj_mpi *mpi);

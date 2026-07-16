@@ -938,37 +938,62 @@ static void prj_flux_gr_state_fail(const char *op, int status,
     prj_flux_gr_abort();
 }
 
-static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
-    int stage, int dir, int il, int jl, int kl, int ir, int jr, int kr,
-    prj_z4c_hydro_geom *geom)
+static void prj_flux_gr_face_geom_from_cells(const prj_z4c_hydro_geom *gl,
+    const prj_z4c_hydro_geom *gr, int dir, prj_z4c_hydro_geom *geom)
 {
-    prj_z4c_hydro_geom gl;
-    prj_z4c_hydro_geom gr;
     int axis[3];
     int a;
     int b;
 
-    if (!prj_z4c_load_hydro_geom(mesh, block, stage, il, jl, kl, &gl) ||
-        !prj_z4c_load_hydro_geom(mesh, block, stage, ir, jr, kr, &gr)) {
-        return 0;
-    }
     prj_flux_local_axes(dir, axis);
-    geom->alpha = 0.5 * (gl.alpha + gr.alpha);
-    geom->sqrt_gamma = 0.5 * (gl.sqrt_gamma + gr.sqrt_gamma);
+    geom->alpha = 0.5 * (gl->alpha + gr->alpha);
+    geom->sqrt_gamma = 0.5 * (gl->sqrt_gamma + gr->sqrt_gamma);
     for (a = 0; a < 3; ++a) {
-        geom->beta[a] = 0.5 * (gl.beta[axis[a]] + gr.beta[axis[a]]);
+        geom->beta[a] = 0.5 * (gl->beta[axis[a]] + gr->beta[axis[a]]);
         geom->dalpha[a] = 0.0;
         for (b = 0; b < 3; ++b) {
             geom->gamma[a][b] =
-                0.5 * (gl.gamma[axis[a]][axis[b]] + gr.gamma[axis[a]][axis[b]]);
+                0.5 * (gl->gamma[axis[a]][axis[b]] + gr->gamma[axis[a]][axis[b]]);
             geom->gamma_inv[a][b] =
-                0.5 * (gl.gamma_inv[axis[a]][axis[b]] + gr.gamma_inv[axis[a]][axis[b]]);
+                0.5 * (gl->gamma_inv[axis[a]][axis[b]] + gr->gamma_inv[axis[a]][axis[b]]);
             geom->dgamma[a][b][0] = 0.0;
             geom->dgamma[a][b][1] = 0.0;
             geom->dgamma[a][b][2] = 0.0;
             geom->dbeta[a][b] = 0.0;
         }
     }
+}
+
+static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
+    int stage, int dir, int il, int jl, int kl, int ir, int jr, int kr,
+    prj_z4c_hydro_geom *geom)
+{
+    prj_z4c_hydro_geom gl;
+    prj_z4c_hydro_geom gr;
+
+    if (!prj_z4c_load_hydro_metric_geom(mesh, block, stage, il, jl, kl, &gl) ||
+        !prj_z4c_load_hydro_metric_geom(mesh, block, stage, ir, jr, kr, &gr)) {
+        return 0;
+    }
+    prj_flux_gr_face_geom_from_cells(&gl, &gr, dir, geom);
+    return 1;
+}
+
+static int prj_flux_gr_face_geom_cached(const prj_z4c_hydro_geom *cell_geom,
+    int dir, int il, int jl, int kl, int ir, int jr, int kr,
+    prj_z4c_hydro_geom *geom)
+{
+    if (cell_geom == 0 || geom == 0 ||
+        il < -PRJ_NGHOST || il >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        jl < -PRJ_NGHOST || jl >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        kl < -PRJ_NGHOST || kl >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        ir < -PRJ_NGHOST || ir >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        jr < -PRJ_NGHOST || jr >= PRJ_BLOCK_SIZE + PRJ_NGHOST ||
+        kr < -PRJ_NGHOST || kr >= PRJ_BLOCK_SIZE + PRJ_NGHOST) {
+        return 0;
+    }
+    prj_flux_gr_face_geom_from_cells(
+        &cell_geom[LIDX(il, jl, kl)], &cell_geom[LIDX(ir, jr, kr)], dir, geom);
     return 1;
 }
 
@@ -1084,6 +1109,7 @@ static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
 }
 #endif
 
+#if !PRJ_MHD
 static void prj_flux_velocity_deltas(double *W, int dir,
     int il, int jl, int kl, int ir, int jr, int kr,
     double *deltau, double *deltav, double *deltaw)
@@ -1153,6 +1179,7 @@ static void prj_flux_velocity_deltas(double *W, int dir,
                     W[WIDX(PRJ_PRIM_V2, ir, jr, kr)]));
     }
 }
+#endif
 
 #if PRJ_NRAD > 0
 /* Transport absorption/scattering opacity for one cell, stored per group in
@@ -1288,6 +1315,12 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
     static double pRp[PRJ_BS];
     static double gLp[PRJ_BS];
     static double gRp[PRJ_BS];
+#if PRJ_DYNAMIC_GR && PRJ_MHD
+    static prj_z4c_hydro_geom gr_cell_geom[PRJ_BLOCK_NCELLS];
+    int full_dynamic_gr = prj_eos_full_dynamic_gr_enabled(mesh);
+    int z4c_stage = prj_stage_slot_from_bf_arg(use_bf1);
+    int gr_cell_geom_ready = 0;
+#endif
     int dir;
 #if PRJ_NRAD == 0
     (void)rad;
@@ -1302,6 +1335,26 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
     /* Transport opacity (kappa_cell/sigma_cell) is now filled ahead of the flux:
      * active cells in the same-level ghost shadow and the 1-ghost halo after
      * eos_fill_mesh. See prj_flux_fill_transport_opacity_active/halo. */
+
+#if PRJ_DYNAMIC_GR && PRJ_MHD
+    if (full_dynamic_gr) {
+        int gi;
+        int gj;
+        int gk;
+
+        for (gi = -PRJ_NGHOST; gi < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gi) {
+            for (gj = -PRJ_NGHOST; gj < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gj) {
+                for (gk = -PRJ_NGHOST; gk < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gk) {
+                    if (!prj_z4c_load_hydro_metric_geom(mesh, block, z4c_stage,
+                            gi, gj, gk, &gr_cell_geom[LIDX(gi, gj, gk)])) {
+                        prj_flux_gr_fail("geometry cache load", -1, 0, gi, gj, gk);
+                    }
+                }
+            }
+        }
+        gr_cell_geom_ready = 1;
+    }
+#endif
 
     for (dir = 0; dir < 3; ++dir) {
         int i;
@@ -1402,10 +1455,16 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
 
                     prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
 
+#if PRJ_MHD
+                    deltau = 0.0;
+                    deltav = 0.0;
+                    deltaw = 0.0;
+#else
                     PRJ_SUBTIMER_START("sub_flux_veldelta");
                     prj_flux_velocity_deltas(W, dir, il, jl, kl, ir, jr, kr,
                         &deltau, &deltav, &deltaw);
                     PRJ_SUBTIMER_STOP("sub_flux_veldelta");
+#endif
                     PRJ_SUBTIMER_START("sub_flux_riemann");
 #if PRJ_MHD
                     {
@@ -1417,11 +1476,11 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
 
                         bn = bf_dir[FACE_IDX(dir, i, j, k)];
 #if PRJ_DYNAMIC_GR
-                        if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+                        if (full_dynamic_gr) {
                             prj_z4c_hydro_geom geom;
 
-                            if (!prj_flux_gr_face_geom(mesh, block,
-                                    prj_stage_slot_from_bf_arg(use_bf1), dir,
+                            if (!gr_cell_geom_ready ||
+                                !prj_flux_gr_face_geom_cached(gr_cell_geom, dir,
                                     il, jl, kl, ir, jr, kr, &geom)) {
                                 prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
                             }
