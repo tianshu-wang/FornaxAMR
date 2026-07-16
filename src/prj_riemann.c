@@ -131,59 +131,6 @@ static double prj_hlld_fast_speed(const prj_hlld_state *s)
     return sqrt(cf2);
 }
 
-static double prj_hlld_modified_speed(const prj_hlld_state *s)
-{
-    double u2;
-    double bx2_rho;
-    double b2_rho;
-    double disc;
-    double cu2;
-
-    /* Minoshima & Miyoshi (2021), Eq. 14:
-     * modified fast speed c_u for the low-Mach pressure correction.  This is
-     * the same quadratic structure as the fast magnetosonic speed in Eq. 8,
-     * but |u|^2 replaces the sound-speed term a^2 so the correction scales
-     * with flow speed in nearly incompressible motion. */
-    u2 = s->vx * s->vx + s->vy * s->vy + s->vz * s->vz;
-    bx2_rho = s->bx * s->bx / s->rho;
-    b2_rho = (s->bx * s->bx + s->by * s->by + s->bz * s->bz) / s->rho;
-    disc = (b2_rho + u2) * (b2_rho + u2) - 4.0 * u2 * bx2_rho;
-    if (disc < 0.0) {
-        if (disc < -1.0e-12 * (b2_rho + u2) * (b2_rho + u2)) {
-            prj_riemann_hlld_fail("negative modified-speed discriminant");
-        }
-        disc = 0.0;
-    }
-    cu2 = 0.5 * (b2_rho + u2 + sqrt(disc));
-    if (cu2 < 0.0 || !isfinite(cu2)) {
-        prj_riemann_hlld_fail("invalid modified speed");
-    }
-    return sqrt(cu2);
-}
-
-static double prj_lhlld_pressure_phi(const prj_hlld_state *L,
-    const prj_hlld_state *R, double cfmax)
-{
-    double cuL;
-    double cuR;
-    double chi;
-
-    if (cfmax <= 0.0 || !isfinite(cfmax)) {
-        prj_riemann_hlld_fail("invalid maximum fast speed");
-    }
-
-    /* Minoshima & Miyoshi (2021), Eq. 14: compute c_u on both sides. */
-    cuL = prj_hlld_modified_speed(L);
-    cuR = prj_hlld_modified_speed(R);
-
-    /* Minoshima & Miyoshi (2021), Eq. 16:
-     * chi = min(1, max(cu_L, cu_R) / cfmax) and phi = chi (2 - chi).
-     * phi is in [0,1], approaches c_u/c_f at low Mach number, and becomes
-     * unity for high-speed flows so LHLLD reduces to the HLLD pressure. */
-    chi = PRJ_MIN(1.0, PRJ_MAX(cuL, cuR) / cfmax);
-    return chi * (2.0 - chi);
-}
-
 static void prj_hlld_state_from_prim(const double *W, double p, double gamma,
     double bn, prj_hlld_state *s)
 {
@@ -363,168 +310,6 @@ static void prj_hlld_face_outputs(double vx, double vy, double vz,
     }
 }
 
-void prj_riemann_lhlld(const double *WL, const double *WR,
-    double pL, double pR, double gL, double gR,
-    const prj_eos *eos, double bn, double *flux, double v_face[3],
-    double *Bv1, double *Bv2, double deltau, double deltav, double deltaw)
-{
-    prj_hlld_state L;
-    prj_hlld_state R;
-    prj_hlld_star Ls;
-    prj_hlld_star Rs;
-    prj_hlld_star ss;
-    double cfL;
-    double cfR;
-    double cfmax;
-    double SL;
-    double SR;
-    double SM;
-    double SLs;
-    double SRs;
-    double denom;
-    double theta;
-    double phi;
-    double pt_star;
-    int v;
-    int bn_small;
-
-    /* LHLLD = current HLLD fan plus Minoshima & Miyoshi (2021) Eq. 9
-     * shock-stable contact speed and Eq. 15 low-Mach pressure correction.
-     * Radiation fluxes are built separately, as in the legacy HLLD path. */
-    (void)eos;
-
-    if (WL == 0 || WR == 0 || flux == 0) {
-        prj_riemann_hlld_fail("null input");
-    }
-
-    prj_hlld_state_from_prim(WL, pL, gL, bn, &L);
-    prj_hlld_state_from_prim(WR, pR, gR, bn, &R);
-
-    /* Minoshima & Miyoshi (2021), Eq. 8:
-     * fast magnetosonic speeds c_f,L and c_f,R.  Eq. 8 uses the local sound
-     * speed a^2 = gamma P / rho and magnetic speeds c_a^2, c_ax^2. */
-    cfL = prj_hlld_fast_speed(&L);
-    cfR = prj_hlld_fast_speed(&R);
-    cfmax = PRJ_MAX(cfL, cfR);
-
-    /* Paper HLLD/LHLLD outer signal speeds below Eq. 7:
-     * S_L = min(0, min(u_L,u_R)-cfmax),
-     * S_R = max(0, max(u_L,u_R)+cfmax). */
-    SL = PRJ_MIN(0.0, PRJ_MIN(L.vx, R.vx) - cfmax);
-    SR = PRJ_MAX(0.0, PRJ_MAX(L.vx, R.vx) + cfmax);
-    if (!(SL < SR)) {
-        prj_riemann_hlld_fail("invalid fast-wave ordering");
-    }
-
-    if (0.0 <= SL) {
-        for (v = 0; v < PRJ_NHYDRO; ++v) {
-            flux[v] = L.F[v];
-        }
-        prj_hlld_face_outputs(L.vx, L.vy, L.vz, L.bx, L.by, L.bz, v_face, Bv1, Bv2);
-        return;
-    }
-    if (SR <= 0.0) {
-        for (v = 0; v < PRJ_NHYDRO; ++v) {
-            flux[v] = R.F[v];
-        }
-        prj_hlld_face_outputs(R.vx, R.vy, R.vz, R.bx, R.by, R.bz, v_face, Bv1, Bv2);
-        return;
-    }
-
-    denom = R.rho * (SR - R.vx) - L.rho * (SL - L.vx);
-    if (fabs(denom) <= 1.0e-14 *
-        (fabs(R.rho * (SR - R.vx)) + fabs(L.rho * (SL - L.vx)) + 1.0)) {
-        prj_riemann_hlld_fail("degenerate contact-speed denominator");
-    }
-
-    /* Left-right symmetry guardrail: LHLLD-only scalars below are built from
-     * paired L/R terms, min/max reductions, or products.  Swapping L/R while
-     * reversing the face-normal direction therefore mirrors the flux instead
-     * of selecting an asymmetric correction. */
-
-    /* Minoshima & Miyoshi (2021), Eq. 10-13:
-     * shock detector theta.  deltau is the normal velocity jump across the
-     * face (Eq. 11); deltav and deltaw are the transverse compression
-     * stencils from Eq. 12-13, generalized by prj_flux_velocity_deltas() for
-     * x/y/z faces.  The paper recommends a=4, implemented by squaring the
-     * ratio twice in prj_riemann_theta_limiter(). */
-    theta = prj_riemann_theta_limiter(cfmax, deltau, deltav, deltaw);
-
-    /* Minoshima & Miyoshi (2021), Eq. 9:
-     * contact speed S_M with theta multiplying only the total-pressure jump.
-     * The form +theta*(P_t,L-P_t,R) is algebraically -theta*(P_t,R-P_t,L). */
-    SM = (R.rho * R.vx * (SR - R.vx) -
-        L.rho * L.vx * (SL - L.vx) + theta * (L.pt - R.pt)) / denom;
-    prj_hlld_require_finite(SM, "contact speed");
-
-    /* Minoshima & Miyoshi (2021), Eq. 14 and Eq. 16:
-     * compute c_u and phi for the low-Mach pressure correction. */
-    phi = prj_lhlld_pressure_phi(&L, &R, cfmax);
-
-    /* Minoshima & Miyoshi (2021), Eq. 22 is deliberately not used.  The
-     * paper notes that its 1/phi pressure jump requires a cutoff and can
-     * severely restrict the explicit CFL condition; LHLLD instead keeps Eq. 9
-     * for S_M and applies phi only in the pressure Eq. 15 below. */
-
-    /* Minoshima & Miyoshi (2021), Eq. 15:
-     * corrected total pressure P_t^*.  This differs from the legacy HLLD
-     * averaged pressure by multiplying the velocity-jump term with phi, which
-     * removes excessive fast-magnetosonic diffusion in low-Mach rotational
-     * flows while returning to HLLD as phi -> 1. */
-    pt_star = ((SR - R.vx) * R.rho * L.pt -
-        (SL - L.vx) * L.rho * R.pt +
-        phi * L.rho * R.rho * (SR - R.vx) * (SL - L.vx) * (R.vx - L.vx)) /
-        denom;
-    if (pt_star <= 0.0 || !isfinite(pt_star)) {
-        /* Unphysical star pressure (strong rarefaction): fall back to the
-         * positivity-robust HLL flux over SL..SR instead of aborting.  Only
-         * reached with SL < 0 < SR, so SR - SL > 0 and the HLL density > 0;
-         * face velocity/EMF come from the HLL average state. */
-        double inv = 1.0 / (SR - SL);
-        double Uhll[PRJ_NHYDRO];
-        double rho;
-
-        for (v = 0; v < PRJ_NHYDRO; ++v) {
-            flux[v] = (SR * L.F[v] - SL * R.F[v] + SL * SR * (R.U[v] - L.U[v])) * inv;
-            Uhll[v] = (SR * R.U[v] - SL * L.U[v] + L.F[v] - R.F[v]) * inv;
-        }
-        rho = Uhll[PRJ_CONS_RHO];
-        prj_hlld_face_outputs(Uhll[PRJ_CONS_MOM1] / rho, Uhll[PRJ_CONS_MOM2] / rho,
-            Uhll[PRJ_CONS_MOM3] / rho, Uhll[PRJ_CONS_B1], Uhll[PRJ_CONS_B2],
-            Uhll[PRJ_CONS_B3], v_face, Bv1, Bv2);
-        return;
-    }
-    bn_small = (0.5 * bn * bn < PRJ_HLLD_SMALL_NUMBER * pt_star);
-
-    if (0.0 <= SM) {
-        prj_hlld_outer_star(&L, SL, SM, pt_star, &Ls);
-        SLs = SM - fabs(bn) / sqrt(Ls.rho);
-        prj_hlld_require_finite(SLs, "left Alfven speed");
-        if (0.0 <= SLs || bn_small) {
-            prj_hlld_flux_from_jump(L.F, SL, Ls.U, L.U, flux);
-            prj_hlld_face_outputs(Ls.vx, Ls.vy, Ls.vz, Ls.bx, Ls.by, Ls.bz, v_face, Bv1, Bv2);
-        } else {
-            prj_hlld_outer_star(&R, SR, SM, pt_star, &Rs);
-            prj_hlld_double_star_one(&Ls, &Rs, bn, 0, &ss);
-            prj_hlld_flux_from_double_jump(L.F, SL, Ls.U, L.U, SLs, ss.U, flux);
-            prj_hlld_face_outputs(ss.vx, ss.vy, ss.vz, ss.bx, ss.by, ss.bz, v_face, Bv1, Bv2);
-        }
-    } else {
-        prj_hlld_outer_star(&R, SR, SM, pt_star, &Rs);
-        SRs = SM + fabs(bn) / sqrt(Rs.rho);
-        prj_hlld_require_finite(SRs, "right Alfven speed");
-        if (SRs <= 0.0 || bn_small) {
-            prj_hlld_flux_from_jump(R.F, SR, Rs.U, R.U, flux);
-            prj_hlld_face_outputs(Rs.vx, Rs.vy, Rs.vz, Rs.bx, Rs.by, Rs.bz, v_face, Bv1, Bv2);
-        } else {
-            prj_hlld_outer_star(&L, SL, SM, pt_star, &Ls);
-            prj_hlld_double_star_one(&Ls, &Rs, bn, 1, &ss);
-            prj_hlld_flux_from_double_jump(R.F, SR, Rs.U, R.U, SRs, ss.U, flux);
-            prj_hlld_face_outputs(ss.vx, ss.vy, ss.vz, ss.bx, ss.by, ss.bz, v_face, Bv1, Bv2);
-        }
-    }
-}
-
 void prj_riemann_hlld(const double *WL, const double *WR,
     double pL, double pR, double gL, double gR,
     const prj_eos *eos, double bn, double *flux, double v_face[3],
@@ -551,6 +336,9 @@ void prj_riemann_hlld(const double *WL, const double *WR,
 
     /* HLLD owns only hydro/MHD fluxes; radiation fluxes are built separately. */
     (void)eos;
+    (void)deltau;
+    (void)deltav;
+    (void)deltaw;
 
     if (WL == 0 || WR == 0 || flux == 0) {
         prj_riemann_hlld_fail("null input");
@@ -586,10 +374,8 @@ void prj_riemann_hlld(const double *WL, const double *WR,
         (fabs(R.rho * (SR - R.vx)) + fabs(L.rho * (SL - L.vx)) + 1.0)) {
         prj_riemann_hlld_fail("degenerate contact-speed denominator");
     }
-    double cfmax = PRJ_MAX(cfL,cfR);
-    double theta = prj_riemann_theta_limiter(cfmax, deltau, deltav, deltaw);
     SM = (R.rho * R.vx * (SR - R.vx) -
-        L.rho * L.vx * (SL - L.vx) + theta*(L.pt - R.pt)) / denom;
+        L.rho * L.vx * (SL - L.vx) + (L.pt - R.pt)) / denom;
     prj_hlld_require_finite(SM, "contact speed");
 
     pt_star_l = L.pt + L.rho * (SL - L.vx) * (SM - L.vx);
@@ -1244,62 +1030,11 @@ static int prj_gr_hlld_build_fan(const prj_gr_hlld_state *L0,
         prj_gr_hlld_finite_array(fan->f_cR, PRJ_GRQ_N);
 }
 
-static double prj_gr_hlld_modified_speed(const prj_gr_hlld_state *s)
-{
-    double u2 = s->v2;
-    double va2 = s->b2 / (s->rhoh + s->b2);
-    double zeta = va2 + u2 - va2 * u2;
-    double disc;
-    double den;
-
-    if (!isfinite(zeta) || zeta < 0.0) {
-        zeta = 0.0;
-    }
-    if (zeta > 1.0) {
-        zeta = 1.0;
-    }
-    den = 1.0 - s->v2 * zeta;
-    disc = (1.0 - s->v2) *
-        (1.0 - s->v2 * zeta - (1.0 - zeta) * s->v[0] * s->v[0]);
-    if (den <= 0.0 || disc < 0.0 || !isfinite(disc)) {
-        return 0.0;
-    }
-    return sqrt(zeta) * sqrt(disc) / den;
-}
-
 static double prj_gr_hlld_pressure_guess(const prj_gr_hlld_state *L,
-    const prj_gr_hlld_state *R, double lambda_l, double lambda_r,
-    int low_diss, double deltau, double deltav, double deltaw)
+    const prj_gr_hlld_state *R)
 {
     double guess = 0.5 * (L->ptot + R->ptot);
 
-    if (low_diss) {
-        double cfmax = PRJ_MAX(fabs(L->lam_p - L->lam_m),
-            fabs(R->lam_p - R->lam_m));
-        double cu = PRJ_MAX(prj_gr_hlld_modified_speed(L),
-            prj_gr_hlld_modified_speed(R));
-        double chi = cfmax > 0.0 ? PRJ_MIN(1.0, cu / cfmax) : 1.0;
-        double phi = chi * (2.0 - chi);
-        double theta = prj_riemann_theta_limiter(
-            PRJ_MAX(fabs(lambda_l), fabs(lambda_r)) * PRJ_CLIGHT,
-            deltau, deltav, deltaw);
-        double denom = R->D * (lambda_r - R->v[0]) -
-            L->D * (lambda_l - L->v[0]);
-
-        if (fabs(denom) > PRJ_GR_HLLD_EPS *
-            (fabs(R->D * (lambda_r - R->v[0])) +
-                fabs(L->D * (lambda_l - L->v[0])) + 1.0)) {
-            double corrected = ((lambda_r - R->v[0]) * R->D * L->ptot -
-                (lambda_l - L->v[0]) * L->D * R->ptot +
-                phi * theta * L->D * R->D *
-                (lambda_r - R->v[0]) * (lambda_l - L->v[0]) *
-                (R->v[0] - L->v[0])) / denom;
-
-            if (corrected > 0.0 && isfinite(corrected)) {
-                guess = corrected;
-            }
-        }
-    }
     if (!(guess > 0.0) || !isfinite(guess)) {
         guess = PRJ_MAX(L->ptot, R->ptot);
     }
@@ -1308,15 +1043,13 @@ static double prj_gr_hlld_pressure_guess(const prj_gr_hlld_state *L,
 
 static int prj_gr_hlld_solve_pressure(const prj_gr_hlld_state *L,
     const prj_gr_hlld_state *R, double lambda_l, double lambda_r,
-    int low_diss, double deltau, double deltav, double deltaw,
     prj_gr_hlld_fan *fan)
 {
     const double scale = PRJ_MAX(PRJ_MAX(L->ptot, R->ptot), 1.0);
     double guesses[6];
     int ig;
 
-    guesses[0] = prj_gr_hlld_pressure_guess(L, R, lambda_l, lambda_r,
-        low_diss, deltau, deltav, deltaw);
+    guesses[0] = prj_gr_hlld_pressure_guess(L, R);
     guesses[1] = 0.5 * (L->ptot + R->ptot);
     guesses[2] = L->ptot;
     guesses[3] = R->ptot;
@@ -1499,8 +1232,7 @@ static void prj_riemann_gr_hlld_impl(const double *WL, const double *WR,
     double pL, double pR, double gL, double gR,
     prj_eos *eos, const double gamma[3][3], double sqrt_gamma,
     double alpha, const double beta[3], double bn_tilde, double *flux,
-    double v_face[3], double *Bv1, double *Bv2,
-    double deltau, double deltav, double deltaw, int low_diss)
+    double v_face[3], double *Bv1, double *Bv2)
 {
     prj_gr_hlld_tetrad tet;
     prj_gr_hlld_state L;
@@ -1544,8 +1276,7 @@ static void prj_riemann_gr_hlld_impl(const double *WL, const double *WR,
             lambda_l, lambda_r, s_interface, flux, v_face, Bv1, Bv2);
         return;
     }
-    if (!prj_gr_hlld_solve_pressure(&L, &R, lambda_l, lambda_r, low_diss,
-            deltau, deltav, deltaw, &fan)) {
+    if (!prj_gr_hlld_solve_pressure(&L, &R, lambda_l, lambda_r, &fan)) {
         prj_gr_hlld_hlle_fallback(&L, &R, &tet, sqrt_gamma, alpha, beta,
             lambda_l, lambda_r, s_interface, flux, v_face, Bv1, Bv2);
         return;
@@ -1592,21 +1323,11 @@ void prj_riemann_gr_hlld(const double *WL, const double *WR,
     double v_face[3], double *Bv1, double *Bv2,
     double deltau, double deltav, double deltaw)
 {
+    (void)deltau;
+    (void)deltav;
+    (void)deltaw;
     prj_riemann_gr_hlld_impl(WL, WR, pL, pR, gL, gR, eos, gamma,
-        sqrt_gamma, alpha, beta, bn_tilde, flux, v_face, Bv1, Bv2,
-        deltau, deltav, deltaw, 0);
-}
-
-void prj_riemann_gr_lhlld(const double *WL, const double *WR,
-    double pL, double pR, double gL, double gR,
-    prj_eos *eos, const double gamma[3][3], double sqrt_gamma,
-    double alpha, const double beta[3], double bn_tilde, double *flux,
-    double v_face[3], double *Bv1, double *Bv2,
-    double deltau, double deltav, double deltaw)
-{
-    prj_riemann_gr_hlld_impl(WL, WR, pL, pR, gL, gR, eos, gamma,
-        sqrt_gamma, alpha, beta, bn_tilde, flux, v_face, Bv1, Bv2,
-        deltau, deltav, deltaw, 1);
+        sqrt_gamma, alpha, beta, bn_tilde, flux, v_face, Bv1, Bv2);
 }
 #endif
 #endif

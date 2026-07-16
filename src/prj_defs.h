@@ -69,13 +69,6 @@ typedef double prj_table_real;
 #define PRJ_DYNAMIC_GR 0
 #endif
 
-/* PRJ_LHLLD_RIEMANN=1 selects the default Minoshima & Miyoshi LHLLD
- * MHD solver.  Set PRJ_LHLLD_RIEMANN=0 for the legacy current-HLLD
- * comparison path. */
-#ifndef PRJ_LHLLD_RIEMANN
-#define PRJ_LHLLD_RIEMANN 1
-#endif
-
 #define PRJ_TIMEINT_RK2 1
 #define PRJ_TIMEINT_ESSPRK 2
 #define PRJ_TIMEINT_ESSPRK9_3 3

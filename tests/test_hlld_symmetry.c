@@ -12,7 +12,7 @@
 #if PRJ_MHD
 static void die(const char *msg)
 {
-    fprintf(stderr, "test_lhlld_symmetry: %s\n", msg);
+    fprintf(stderr, "test_hlld_symmetry: %s\n", msg);
     exit(1);
 }
 
@@ -57,7 +57,7 @@ static void test_assert_close(const char *label, double a, double b)
     double tol = 1.0e-10 * scale;
 
     if (!isfinite(a) || !isfinite(b) || fabs(a - b) > tol) {
-        fprintf(stderr, "test_lhlld_symmetry: %s mismatch: %.17e vs %.17e (tol %.3e)\n",
+        fprintf(stderr, "test_hlld_symmetry: %s mismatch: %.17e vs %.17e (tol %.3e)\n",
             label, a, b, tol);
         exit(1);
     }
@@ -105,14 +105,14 @@ static void test_direct_case(const char *name, const double *WL, const double *W
     test_mirror_state(WR, WML);
     test_mirror_state(WL, WMR);
 
-    prj_riemann_lhlld(WL, WR, pL, pR, gamma, gamma, 0, bn, F,
+    prj_riemann_hlld(WL, WR, pL, pR, gamma, gamma, 0, bn, F,
         v_face, &bv1, &bv2, deltau, deltav, deltaw);
-    prj_riemann_lhlld(WML, WMR, pR, pL, gamma, gamma, 0, -bn, FM,
+    prj_riemann_hlld(WML, WMR, pR, pL, gamma, gamma, 0, -bn, FM,
         v_face_m, &bv1_m, &bv2_m, deltau, deltav, deltaw);
 
     test_assert_flux_parity(F, FM);
     test_assert_face_parity(v_face, v_face_m, bv1, bv2, bv1_m, bv2_m);
-    printf("test_lhlld_symmetry: direct %s ok\n", name);
+    printf("test_hlld_symmetry: direct %s ok\n", name);
 }
 
 static void test_direct_solver_symmetry(void)
@@ -172,7 +172,7 @@ static void test_mirror_gr_geom(const double gamma_metric[3][3],
     }
 }
 
-static void test_gr_direct_case(const char *name, int use_lhlld,
+static void test_gr_direct_case(const char *name,
     const double *WL, const double *WR, double gamma_gas,
     const double gamma_metric[3][3], double alpha, const double beta[3],
     double bn_tilde, double deltau, double deltav, double deltaw)
@@ -206,26 +206,16 @@ static void test_gr_direct_case(const char *name, int use_lhlld,
     test_mirror_state(WL, WMR);
     test_mirror_gr_geom(gamma_metric, beta, gamma_m, beta_m);
 
-    if (use_lhlld) {
-        prj_riemann_gr_lhlld(WL, WR, pL, pR, gamma_gas, gamma_gas,
-            &eos, gamma_metric, sqrt_gamma, alpha, beta, bn_tilde, F,
-            v_face, &bv1, &bv2, deltau, deltav, deltaw);
-        prj_riemann_gr_lhlld(WML, WMR, pR, pL, gamma_gas, gamma_gas,
-            &eos, gamma_m, sqrt_gamma, alpha, beta_m, -bn_tilde, FM,
-            v_face_m, &bv1_m, &bv2_m, deltau, deltav, deltaw);
-    } else {
-        prj_riemann_gr_hlld(WL, WR, pL, pR, gamma_gas, gamma_gas,
-            &eos, gamma_metric, sqrt_gamma, alpha, beta, bn_tilde, F,
-            v_face, &bv1, &bv2, deltau, deltav, deltaw);
-        prj_riemann_gr_hlld(WML, WMR, pR, pL, gamma_gas, gamma_gas,
-            &eos, gamma_m, sqrt_gamma, alpha, beta_m, -bn_tilde, FM,
-            v_face_m, &bv1_m, &bv2_m, deltau, deltav, deltaw);
-    }
+    prj_riemann_gr_hlld(WL, WR, pL, pR, gamma_gas, gamma_gas,
+        &eos, gamma_metric, sqrt_gamma, alpha, beta, bn_tilde, F,
+        v_face, &bv1, &bv2, deltau, deltav, deltaw);
+    prj_riemann_gr_hlld(WML, WMR, pR, pL, gamma_gas, gamma_gas,
+        &eos, gamma_m, sqrt_gamma, alpha, beta_m, -bn_tilde, FM,
+        v_face_m, &bv1_m, &bv2_m, deltau, deltav, deltaw);
 
     test_assert_flux_parity(F, FM);
     test_assert_face_parity(v_face, v_face_m, bv1, bv2, bv1_m, bv2_m);
-    printf("test_lhlld_symmetry: GR direct %s %s ok\n",
-        use_lhlld ? "LHLLD" : "HLLD", name);
+    printf("test_hlld_symmetry: GR direct HLLD %s ok\n", name);
 }
 
 static void test_gr_direct_solver_symmetry(void)
@@ -250,19 +240,13 @@ static void test_gr_direct_solver_symmetry(void)
         3.0e9, 2.0e9, -1.0e9, gamma_gas);
     test_set_state(WR, 0.9, -1.5e7, 0.8e7, -0.4e7, 2.0e20, 0.19,
         3.0e9, -1.5e9, 0.7e9, gamma_gas);
-    test_gr_direct_case("flat-metric", 0, WL, WR, gamma_gas,
+    test_gr_direct_case("flat-metric", WL, WR, gamma_gas,
         flat_metric, 1.0, beta0, 3.0e9,
         -3.5e7, -1.0e7, 0.5e7);
-    test_gr_direct_case("flat-metric", 1, WL, WR, gamma_gas,
-        flat_metric, 1.0, beta0, 3.0e9,
-        -3.5e7, -1.0e7, 0.5e7);
-    test_gr_direct_case("curved-shifted", 0, WL, WR, gamma_gas,
+    test_gr_direct_case("curved-shifted", WL, WR, gamma_gas,
         curved_metric, 0.82, beta_shift, 3.0e9,
         -3.5e7, -1.0e7, 0.5e7);
-    test_gr_direct_case("curved-shifted", 1, WL, WR, gamma_gas,
-        curved_metric, 0.82, beta_shift, 3.0e9,
-        -3.5e7, -1.0e7, 0.5e7);
-    test_gr_direct_case("small-normal-field-fallback", 0, WL, WR, gamma_gas,
+    test_gr_direct_case("small-normal-field-fallback", WL, WR, gamma_gas,
         flat_metric, 1.0, beta0, 0.0,
         -3.5e7, -1.0e7, 0.5e7);
 }
@@ -417,7 +401,7 @@ static void test_flux_update_symmetry(void)
 
     prj_block_free_data(&mirror);
     prj_block_free_data(&block);
-    printf("test_lhlld_symmetry: flux update ok\n");
+    printf("test_hlld_symmetry: flux update ok\n");
 }
 
 #if PRJ_DYNAMIC_GR
@@ -488,7 +472,7 @@ static void test_gr_flux_update_symmetry(void)
 
     prj_mesh_destroy(&mirror_mesh);
     prj_mesh_destroy(&mesh);
-    printf("test_lhlld_symmetry: GR flux update ok\n");
+    printf("test_hlld_symmetry: GR flux update ok\n");
 }
 #endif
 #endif
@@ -512,7 +496,7 @@ int main(int argc, char *argv[])
     test_gr_flux_update_symmetry();
 #endif
 #else
-    fprintf(stderr, "test_lhlld_symmetry: built without MHD (PRJ_MHD=0)\n");
+    fprintf(stderr, "test_hlld_symmetry: built without MHD (PRJ_MHD=0)\n");
 #endif
 
 #if defined(PRJ_ENABLE_MPI)
