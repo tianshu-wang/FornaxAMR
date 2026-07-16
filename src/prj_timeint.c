@@ -63,8 +63,13 @@ static int prj_timeint_mhd_edge_axis_max(int dir, int axis)
     return dir == axis ? PRJ_BLOCK_SIZE - 1 : PRJ_BLOCK_SIZE;
 }
 
-static double prj_timeint_mhd_cell_emf(const prj_mesh *mesh, const prj_block *block,
-    int stage, const double *W, int dir, int i, int j, int k)
+/* All three cell-centered EMF components at one cell from a single geometry
+ * load. The metric (sqrt_gamma, alpha, beta) is independent of the EMF
+ * direction, so the densitized B and transported v are shared across all three
+ * components -- computing them together avoids reloading the GR geometry per
+ * component (and, once cached per cell, per incident edge). */
+static void prj_timeint_mhd_cell_emf_all(const prj_mesh *mesh, const prj_block *block,
+    int stage, const double *W, int i, int j, int k, double emf[3])
 {
     double b1;
     double b2;
@@ -72,10 +77,9 @@ static double prj_timeint_mhd_cell_emf(const prj_mesh *mesh, const prj_block *bl
     double v1;
     double v2;
     double v3;
-    double emf;
 
-    if (W == 0 || dir < 0 || dir >= 3) {
-        prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf: invalid input");
+    if (W == 0) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf_all: invalid input");
     }
     b1 = W[WIDX(PRJ_PRIM_B1, i, j, k)];
     b2 = W[WIDX(PRJ_PRIM_B2, i, j, k)];
@@ -88,7 +92,7 @@ static double prj_timeint_mhd_cell_emf(const prj_mesh *mesh, const prj_block *bl
         prj_z4c_hydro_geom geom;
 
         if (!prj_z4c_load_hydro_geom(mesh, block, stage, i, j, k, &geom)) {
-            prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf: failed to load full-GR geometry");
+            prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf_all: failed to load full-GR geometry");
         }
         b1 *= geom.sqrt_gamma;
         b2 *= geom.sqrt_gamma;
@@ -102,17 +106,12 @@ static double prj_timeint_mhd_cell_emf(const prj_mesh *mesh, const prj_block *bl
     (void)block;
     (void)stage;
 #endif
-    if (dir == X1DIR) {
-        emf = b2 * v3 - b3 * v2;
-    } else if (dir == X2DIR) {
-        emf = b3 * v1 - b1 * v3;
-    } else {
-        emf = b1 * v2 - b2 * v1;
+    emf[X1DIR] = b2 * v3 - b3 * v2;
+    emf[X2DIR] = b3 * v1 - b1 * v3;
+    emf[X3DIR] = b1 * v2 - b2 * v1;
+    if (!isfinite(emf[X1DIR]) || !isfinite(emf[X2DIR]) || !isfinite(emf[X3DIR])) {
+        prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf_all: non-finite cell emf");
     }
-    if (!isfinite(emf)) {
-        prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf: non-finite cell emf");
-    }
-    return emf;
 }
 
 static double prj_timeint_mhd_face_emf(const prj_block *block, int face_dir, int emf_dir,
@@ -234,6 +233,7 @@ static void prj_timeint_mhd_update_emf(const prj_mesh *mesh, prj_block *block,
     double *W;
     const double *bf[3];
     int dir;
+    double cell_emf_grid[3][PRJ_BLOCK_NCELLS];
 
     if (block == 0) {
         prj_timeint_mhd_fail("prj_timeint_mhd_update_emf: invalid input");
@@ -249,7 +249,34 @@ static void prj_timeint_mhd_update_emf(const prj_mesh *mesh, prj_block *block,
         }
     }
     prj_timeint_mhd_fill_eta_mask(block, W);
+
+    /* Precompute the three cell-centered EMF components for every cell the edge
+     * loop reads (active region plus one ghost layer, matching the eta mask).
+     * Each cell's GR geometry is loaded exactly once here instead of once per
+     * incident edge and per component (~12x) inside the edge sweep. Transient
+     * stack scratch, so no per-block memory cost. */
+    {
+        int ci;
+        int cj;
+        int ck;
+
+        for (ci = -1; ci <= PRJ_BLOCK_SIZE; ++ci) {
+            for (cj = -1; cj <= PRJ_BLOCK_SIZE; ++cj) {
+                for (ck = -1; ck <= PRJ_BLOCK_SIZE; ++ck) {
+                    double e3[3];
+                    size_t idx = (size_t)IDX(ci, cj, ck);
+
+                    prj_timeint_mhd_cell_emf_all(mesh, block, stage, W, ci, cj, ck, e3);
+                    cell_emf_grid[0][idx] = e3[0];
+                    cell_emf_grid[1][idx] = e3[1];
+                    cell_emf_grid[2][idx] = e3[2];
+                }
+            }
+        }
+    }
+
     for (dir = 0; dir < 3; ++dir) {
+        const double *emf_cell_dir = cell_emf_grid[dir];
         int up = (dir + 1) % 3;
         int right = (dir + 2) % 3;
         int e[3];
@@ -300,14 +327,10 @@ static void prj_timeint_mhd_update_emf(const prj_mesh *mesh, prj_block *block,
                         face2[0], face2[1], face2[2]);
                     emf_face[3] = prj_timeint_mhd_face_emf(block, up, dir,
                         face3[0], face3[1], face3[2]);
-                    emf_cell[0] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
-                        cell0[0], cell0[1], cell0[2]);
-                    emf_cell[1] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
-                        cell1[0], cell1[1], cell1[2]);
-                    emf_cell[2] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
-                        cell2[0], cell2[1], cell2[2]);
-                    emf_cell[3] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
-                        cell3[0], cell3[1], cell3[2]);
+                    emf_cell[0] = emf_cell_dir[IDX(cell0[0], cell0[1], cell0[2])];
+                    emf_cell[1] = emf_cell_dir[IDX(cell1[0], cell1[1], cell1[2])];
+                    emf_cell[2] = emf_cell_dir[IDX(cell2[0], cell2[1], cell2[2])];
+                    emf_cell[3] = emf_cell_dir[IDX(cell3[0], cell3[1], cell3[2])];
                     v_norm[0] = prj_timeint_mhd_face_vnorm(block, right,
                         face0[0], face0[1], face0[2]);
                     v_norm[1] = prj_timeint_mhd_face_vnorm(block, up,
