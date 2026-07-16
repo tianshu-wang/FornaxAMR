@@ -533,13 +533,13 @@ static double prj_mhd_cell_sqrt_gamma(const prj_mesh *mesh, const prj_block *blo
 {
 #if PRJ_DYNAMIC_GR
     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-        prj_z4c_hydro_geom geom;
+        double sqrt_gamma;
 
-        if (!prj_z4c_load_hydro_geom(mesh, block,
-                prj_stage_slot_from_bf_arg(use_bf1), i, j, k, &geom)) {
+        if (!prj_z4c_cell_sqrt_gamma(mesh, block,
+                prj_stage_slot_from_bf_arg(use_bf1), i, j, k, &sqrt_gamma)) {
             prj_mhd_fail("prj_mhd_bf2bc: failed to load full-GR cell geometry");
         }
-        return geom.sqrt_gamma;
+        return sqrt_gamma;
     }
 #else
     (void)mesh;

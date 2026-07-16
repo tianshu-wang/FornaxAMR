@@ -598,6 +598,59 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
     return 1;
 }
 
+int prj_z4c_cell_sqrt_gamma(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, double *sqrt_gamma_out)
+{
+    const prj_z4c_params *opt;
+    const double *z;
+    double g[3][3];
+    double det_g;
+    double chi;
+    double chi_guarded;
+    double chi_power;
+    double inv_factor;
+    double factor;
+    double sg;
+
+    if (!prj_z4c_runtime_enabled(mesh) || block == 0 || sqrt_gamma_out == 0 ||
+        !prj_z4c_cell_in_storage(i, j, k)) {
+        return 0;
+    }
+    z = prj_block_z4c_stage_const(block, prj_stage_slot_from_bf_arg(stage));
+    if (z == 0) {
+        return 0;
+    }
+    opt = &mesh->z4c_params;
+
+    /* Reproduce load_hydro_geom's sqrt_gamma exactly: inv3 computes det via
+     * det3 then clamps it, and we need the same clamped value. */
+    prj_z4c_load_metric(z, i, j, k, g);
+    det_g = prj_z4c_det3(g);
+    if (!isfinite(det_g) || fabs(det_g) < 1.0e-300) {
+        det_g = det_g < 0.0 ? -1.0e-300 : 1.0e-300;
+    }
+    if (!isfinite(det_g) || det_g <= 0.0) {
+        return 0;
+    }
+    chi = prj_z4c_get(z, PRJ_Z4C_CHI, i, j, k);
+    chi_guarded = prj_z4c_guarded_chi(opt, chi);
+    chi_power = opt->chi_psi_power;
+    if (!isfinite(chi_power) || fabs(chi_power) < 1.0e-300) {
+        chi_power = -4.0;
+    }
+    inv_factor = pow(chi_guarded, -4.0 / chi_power);
+    if (!isfinite(inv_factor) || inv_factor <= 0.0) {
+        return 0;
+    }
+    factor = 1.0 / inv_factor;
+    sg = sqrt(det_g * factor * factor * factor);
+    if (!isfinite(sg) || sg <= 0.0) {
+        return 0;
+    }
+    *sqrt_gamma_out = sg;
+    return 1;
+}
+
 int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
     int stage, int i, int j, int k, prj_z4c_hydro_geom *geom)
 {
@@ -1967,10 +2020,15 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
                 a, idx, i, j, k);
         }
     }
+    /* g_var(a,b) is symmetric, so dg over transposed (a,b) is the same
+     * derivative: compute the six unique components and mirror. */
     for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
+        for (b = a; b < 3; ++b) {
             for (c = 0; c < 3; ++c) {
-                dg[c][a][b] = prj_z4c_Dx(z, prj_z4c_g_var(a, b), c, idx, i, j, k);
+                double dgc = prj_z4c_Dx(z, prj_z4c_g_var(a, b), c, idx, i, j, k);
+
+                dg[c][a][b] = dgc;
+                dg[c][b][a] = dgc;
             }
         }
     }
@@ -1993,13 +2051,20 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
             }
         }
     }
+    /* g_var(c,d) is symmetric: compute the six unique metric components and
+     * mirror across (c,d) (as well as the usual (a,b) second-derivative mirror). */
     for (c = 0; c < 3; ++c) {
-        for (d = 0; d < 3; ++d) {
+        for (d = c; d < 3; ++d) {
             for (a = 0; a < 3; ++a) {
-                ddg[a][a][c][d] = prj_z4c_Dxx(z, prj_z4c_g_var(c, d), a, idx, i, j, k);
+                double dxx = prj_z4c_Dxx(z, prj_z4c_g_var(c, d), a, idx, i, j, k);
+
+                ddg[a][a][c][d] = dxx;
+                ddg[a][a][d][c] = dxx;
                 for (b = a + 1; b < 3; ++b) {
-                    ddg[a][b][c][d] = ddg[b][a][c][d] =
-                        prj_z4c_Dxy(z, prj_z4c_g_var(c, d), a, b, idx, i, j, k);
+                    double dxy = prj_z4c_Dxy(z, prj_z4c_g_var(c, d), a, b, idx, i, j, k);
+
+                    ddg[a][b][c][d] = ddg[b][a][c][d] = dxy;
+                    ddg[a][b][d][c] = ddg[b][a][d][c] = dxy;
                 }
             }
         }
@@ -2240,13 +2305,12 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
     {
         double diss_coeff = prj_z4c_diss_coeff(opt);
 
-        if (diss_coeff == 0.0) {
-            return;
-        }
-        for (var = 0; var < PRJ_NZ4C; ++var) {
-            for (a = 0; a < 3; ++a) {
-                rhs[Z4CIDX(var, i, j, k)] += diss_coeff *
-                    prj_z4c_Diss(z, var, a, idx, i, j, k);
+        if (diss_coeff != 0.0) {
+            for (var = 0; var < PRJ_NZ4C; ++var) {
+                for (a = 0; a < 3; ++a) {
+                    rhs[Z4CIDX(var, i, j, k)] += diss_coeff *
+                        prj_z4c_Diss(z, var, a, idx, i, j, k);
+                }
             }
         }
     }
@@ -2677,6 +2741,19 @@ int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
     (void)j;
     (void)k;
     (void)geom;
+    return 0;
+}
+
+int prj_z4c_cell_sqrt_gamma(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, double *sqrt_gamma_out)
+{
+    (void)mesh;
+    (void)block;
+    (void)stage;
+    (void)i;
+    (void)j;
+    (void)k;
+    (void)sqrt_gamma_out;
     return 0;
 }
 
