@@ -768,10 +768,16 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     double fluxdiv[PRJ_NVAR_CONS];
     int v;
 
+    PRJ_SUBTIMER_START("sub_cu_fluxdiv");
     prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
+    PRJ_SUBTIMER_STOP("sub_cu_fluxdiv");
     prj_timeint_cell_prim(block->W_mhd, i, j, k, w);
+    PRJ_SUBTIMER_START("sub_cu_prim2cons");
     prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, w, u, PRJ_EOS_CTX_MAIN);
+    PRJ_SUBTIMER_STOP("sub_cu_prim2cons");
+    PRJ_SUBTIMER_START("sub_cu_dt_src");
     prj_timeint_update_dt_src(mesh, grav, block, u, i, j, k, mpi, dt_src);
+    PRJ_SUBTIMER_STOP("sub_cu_dt_src");
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u1[v] = u[v] + dt * (prj_block_rhs_value_const(block, v, i, j, k) + fluxdiv[v]);
     }
@@ -825,11 +831,15 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
      * point-update is pointwise, so mutating this cell's slot never disturbs
      * another cell's still-g^n densitization. See prj_z4c_update_linear_cell. */
     if (prj_z4c_runtime_enabled(mesh)) {
+        PRJ_SUBTIMER_START("sub_cu_z4c_linear");
         prj_z4c_update_linear_cell(block, prj_stage_slot_from_bf_arg(use_bf1),
             0, 1.0, 0, 0.0, 0, dtau_cm, i, j, k);
+        PRJ_SUBTIMER_STOP("sub_cu_z4c_linear");
     }
+    PRJ_SUBTIMER_START("sub_cu_cons2prim");
     prj_eos_cell_cons2prim(eos, mesh, block,
         prj_stage_slot_from_bf_arg(use_bf1), i, j, k, u1, w, PRJ_EOS_CTX_MAIN);
+    PRJ_SUBTIMER_STOP("sub_cu_cons2prim");
     prj_timeint_cell_prim_store(Wdst, i, j, k, w);
 #endif
 }

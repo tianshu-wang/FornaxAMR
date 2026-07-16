@@ -1414,22 +1414,6 @@ static int prj_eos_gr_recovery_residual(const prj_eos_gr_recovery *rec, double x
     return residual == 0 || isfinite(*residual);
 }
 
-static int prj_eos_gr_recovery_residual_ye(const prj_eos_gr_recovery *rec, double ye,
-    double x, double *residual, double *rho_out, double *eint_out, double beta_con_out[3])
-{
-    prj_eos_gr_recovery trial = *rec;
-
-    if (!isfinite(ye)) {
-        return 0;
-    }
-    trial.ye = ye;
-    if (!prj_eos_gr_recovery_residual(&trial, x, residual, rho_out, eint_out,
-            beta_con_out)) {
-        return 0;
-    }
-    return 1;
-}
-
 /* Bisect for the recovery root on [xlo, xhi], assuming the residual is
    monotonically decreasing (positive below the root, negative above it) on the
    valid interval. xhi must be a valid sample with residual <= 0. xlo may lie in
@@ -1437,7 +1421,7 @@ static int prj_eos_gr_recovery_residual_ye(const prj_eos_gr_recovery *rec, doubl
    point sits below the root, so an invalid midpoint simply raises the lower
    bound. This brackets roots that fall in the first valid geometric bin, where
    the sign change straddles the invalid->valid boundary. */
-static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec, double ye,
+static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec,
     double xlo, double xhi, double *xroot)
 {
     double scale;
@@ -1454,7 +1438,7 @@ static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec, double ye,
         double xm = 0.5 * (xlo + xhi);
         double fm;
 
-        if (!prj_eos_gr_recovery_residual_ye(rec, ye, xm, &fm, 0, 0, 0)) {
+        if (!prj_eos_gr_recovery_residual(rec, xm, &fm, 0, 0, 0)) {
             xlo = xm;
             continue;
         }
@@ -1473,7 +1457,7 @@ static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec, double ye,
     return 1;
 }
 
-static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
+static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec,
     double *xroot)
 {
     double x_scale;
@@ -1485,7 +1469,7 @@ static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
     int saw_valid = 0;
     int scan;
 
-    if (rec == 0 || xroot == 0 || rec->D <= 0.0 || !isfinite(ye)) {
+    if (rec == 0 || xroot == 0 || rec->D <= 0.0 || !isfinite(rec->ye)) {
         return PRJ_EOS_GR_BAD_STATE;
     }
     x_scale = fabs(rec->tau) + sqrt(fmax(0.0, rec->Ssq)) + rec->Bsq;
@@ -1506,7 +1490,7 @@ static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
         double f;
         double xtest = scan == 0 ? 0.0 : x;
 
-        if (prj_eos_gr_recovery_residual_ye(rec, ye, xtest, &f, 0, 0, 0)) {
+        if (prj_eos_gr_recovery_residual(rec, xtest, &f, 0, 0, 0)) {
             double tol = 1.0e-14 * fmax(1.0, x_scale);
 
             saw_valid = 1;
@@ -1517,14 +1501,14 @@ static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
             if (have_prev &&
                 ((prev_f <= 0.0 && f >= 0.0) || (prev_f >= 0.0 && f <= 0.0))) {
                 /* Sign change between two valid samples. */
-                return prj_eos_gr_bisect_recovery(rec, ye, prev_x, xtest,
+                return prj_eos_gr_bisect_recovery(rec, prev_x, xtest,
                     xroot) ? PRJ_EOS_GR_OK : PRJ_EOS_GR_NO_CONVERGE;
             }
             if (!have_prev && f < 0.0) {
                 /* First valid sample already overshot the (decreasing) root:
                    the root sits in the first valid geometric bin, so bracket
                    against the previous, still-invalid lower point. */
-                return prj_eos_gr_bisect_recovery(rec, ye, last_x, xtest,
+                return prj_eos_gr_bisect_recovery(rec, last_x, xtest,
                     xroot) ? PRJ_EOS_GR_OK : PRJ_EOS_GR_NO_CONVERGE;
             }
             prev_x = xtest;
@@ -1533,10 +1517,10 @@ static int prj_eos_gr_solve_recovery(const prj_eos_gr_recovery *rec, double ye,
         }
         last_x = xtest;
         if (scan > 0) {
-            if (x > DBL_MAX / 1.35) {
+            if (x > DBL_MAX / 4.0) {
                 break;
             }
-            x *= 1.35;
+            x *= 4.0;
         }
     }
     return saw_valid ? PRJ_EOS_GR_NO_CONVERGE : PRJ_EOS_GR_BAD_STATE;
@@ -1715,11 +1699,11 @@ int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
         rec.Bsq < 0.0 || rec.Ssq < 0.0) {
         return PRJ_EOS_GR_BAD_STATE;
     }
-    status = prj_eos_gr_solve_recovery(&rec, ye, &xroot);
+    status = prj_eos_gr_solve_recovery(&rec, &xroot);
     if (status != PRJ_EOS_GR_OK) {
         return status;
     }
-    if (!prj_eos_gr_recovery_residual_ye(&rec, ye, xroot, 0, &rho, &eint, beta_con)) {
+    if (!prj_eos_gr_recovery_residual(&rec, xroot, 0, &rho, &eint, beta_con)) {
         return PRJ_EOS_GR_NO_CONVERGE;
     }
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
