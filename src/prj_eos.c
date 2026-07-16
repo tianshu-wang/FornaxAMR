@@ -1414,17 +1414,28 @@ static int prj_eos_gr_recovery_residual(const prj_eos_gr_recovery *rec, double x
     return residual == 0 || isfinite(*residual);
 }
 
-/* Bisect for the recovery root on [xlo, xhi], assuming the residual is
-   monotonically decreasing (positive below the root, negative above it) on the
-   valid interval. xhi must be a valid sample with residual <= 0. xlo may lie in
-   the invalid region below the validity boundary (e.g. where p <= 0): such a
-   point sits below the root, so an invalid midpoint simply raises the lower
-   bound. This brackets roots that fall in the first valid geometric bin, where
-   the sign change straddles the invalid->valid boundary. */
+/* Find the recovery root on [xlo, xhi], with the residual monotonically
+   decreasing (positive below the root, negative above it) on the valid interval.
+   xhi enters as a valid sample with residual <= 0. xlo may lie in the invalid
+   region below the validity boundary (e.g. where p <= 0): such a point sits
+   below the root, so an invalid midpoint simply raises the lower bound. This
+   brackets roots that fall in the first valid geometric bin, where the sign
+   change straddles the invalid->valid boundary.
+
+   Two-phase: bisection while the lower bound is still invalid (no residual
+   there), then Illinois (down-weighted false position) once both ends bracket
+   the root with valid residuals. Illinois converges superlinearly, replacing
+   the ~50 EOS lookups pure bisection spent crawling to tolerance with a handful,
+   while staying strictly bracketed (so it can never leave the valid interval). */
 static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec,
     double xlo, double xhi, double *xroot)
 {
     double scale;
+    double f_lo = 0.0;
+    double f_hi = 0.0;
+    int have_lo = 0;
+    int have_hi = 0;
+    int last_retained = 0;  /* 1 = lower endpoint retained, 2 = upper */
     int iter;
 
     if (xroot == 0) {
@@ -1434,23 +1445,72 @@ static int prj_eos_gr_bisect_recovery(const prj_eos_gr_recovery *rec,
     if (scale <= 0.0) {
         scale = 1.0;
     }
+
+    /* Seed residuals at the ends. xhi is valid by contract; xlo is valid in the
+       sign-change case (f_lo > 0 below the root) and invalid in the first-valid-
+       bin case, in which case the loop below bisects up to a valid lower bound. */
+    if (prj_eos_gr_recovery_residual(rec, xhi, &f_hi, 0, 0, 0)) {
+        have_hi = 1;
+        if (fabs(f_hi) <= 1.0e-14 * scale) {
+            *xroot = xhi;
+            return 1;
+        }
+    }
+    if (prj_eos_gr_recovery_residual(rec, xlo, &f_lo, 0, 0, 0) && f_lo > 0.0) {
+        have_lo = 1;
+    }
+
     for (iter = 0; iter < 200; ++iter) {
-        double xm = 0.5 * (xlo + xhi);
+        int fp_step = have_lo && have_hi && f_lo > 0.0 && f_hi < 0.0;
+        double xm;
         double fm;
+
+        if (fabs(xhi - xlo) <= 1.0e-14 * (1.0 + 0.5 * fabs(xlo + xhi))) {
+            *xroot = 0.5 * (xlo + xhi);
+            return 1;
+        }
+        if (fp_step) {
+            xm = (xlo * f_hi - xhi * f_lo) / (f_hi - f_lo);
+            if (!isfinite(xm) || !(xm > xlo && xm < xhi)) {
+                xm = 0.5 * (xlo + xhi);
+            }
+        } else {
+            xm = 0.5 * (xlo + xhi);
+        }
 
         if (!prj_eos_gr_recovery_residual(rec, xm, &fm, 0, 0, 0)) {
             xlo = xm;
+            have_lo = 0;
+            last_retained = 0;
             continue;
         }
-        if (fabs(fm) <= 1.0e-14 * scale ||
-            fabs(xhi - xlo) <= 1.0e-14 * (1.0 + fabs(xm))) {
+        /* The recovery tolerance is deliberately tight (1e-14) rather than
+           loosened to the EOS table's ~1e-3-1e-6 accuracy: x also fixes the
+           prim<->cons round trip (this step densitizes with the recovered
+           state; the next step recovers from it), so a slack root accumulates
+           as a prim<->cons inconsistency, not just an EOS-lookup error. The
+           Illinois step keeps reaching 1e-14 cheap, so there is no reason to
+           relax it. */
+        if (fabs(fm) <= 1.0e-14 * scale) {
             *xroot = xm;
             return 1;
         }
         if (fm > 0.0) {
             xlo = xm;
+            f_lo = fm;
+            have_lo = 1;
+            if (fp_step && last_retained == 2) {
+                f_hi *= 0.5;
+            }
+            last_retained = 2;
         } else {
             xhi = xm;
+            f_hi = fm;
+            have_hi = 1;
+            if (fp_step && last_retained == 1) {
+                f_lo *= 0.5;
+            }
+            last_retained = 1;
         }
     }
     *xroot = 0.5 * (xlo + xhi);
