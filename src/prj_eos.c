@@ -1183,6 +1183,147 @@ static double prj_eos_gr_dot_cov_con(const double vcov[3], const double wcon[3])
     return vcov[0] * wcon[0] + vcov[1] * wcon[1] + vcov[2] * wcon[2];
 }
 
+static int prj_eos_gr_valid_array(const double *a, int n);
+static double prj_eos_gr_lorentz_minus_one(double beta2,
+    double sqrt_one_minus_beta2);
+
+int prj_eos_grmhd_state_from_prim(prj_eos *eos, const prj_eos_gr_geom *geom,
+    const double *W, double pressure_override, prj_eos_grmhd_state *state,
+    enum prj_eos_call_ctx ctx)
+{
+    double g[3][3];
+    double gu[3][3];
+    double det;
+    double sqrt_det;
+    double sqrt_one_minus_beta2;
+    double wlor_m1;
+    double mag_pressure;
+    double c = PRJ_CLIGHT;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    int a;
+    int b;
+    int d;
+    int v;
+
+    (void)ctx;
+    if (geom == 0 || W == 0 || state == 0) {
+        return PRJ_EOS_GR_NULL_ARG;
+    }
+    if (!prj_eos_gr_metric_prepare(geom, g, gu, &det, &sqrt_det)) {
+        return PRJ_EOS_GR_BAD_METRIC;
+    }
+    if (!prj_eos_gr_valid_array(W, PRJ_NVAR_PRIM)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    memset(state, 0, sizeof(*state));
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            state->gamma[a][b] = g[a][b];
+            state->gamma_inv[a][b] = gu[a][b];
+        }
+    }
+    state->det_gamma = det;
+    state->sqrt_gamma = sqrt_det;
+    state->rho = W[PRJ_PRIM_RHO];
+    state->eint = W[PRJ_PRIM_EINT];
+    state->ye = W[PRJ_PRIM_YE];
+    if (state->rho <= 0.0 || state->eint < 0.0 ||
+        !isfinite(state->rho) || !isfinite(state->eint) ||
+        !isfinite(state->ye)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    if (isfinite(pressure_override) && pressure_override > 0.0) {
+        state->pressure = pressure_override;
+    } else if (eos == 0 || !prj_eos_pressure_try(eos, state->rho, state->eint,
+            state->ye, &state->pressure)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    for (d = 0; d < 3; ++d) {
+        state->beta_con[d] = W[PRJ_PRIM_V1 + d] / c;
+    }
+    prj_eos_gr_lower(g, state->beta_con, state->beta_cov);
+    state->beta2 = prj_eos_gr_dot_cov_con(state->beta_cov, state->beta_con);
+    if (!isfinite(state->beta2) || state->beta2 < 0.0 || state->beta2 >= 1.0) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    sqrt_one_minus_beta2 = sqrt(1.0 - state->beta2);
+    state->wlor = 1.0 / sqrt_one_minus_beta2;
+    state->wlor2 = state->wlor * state->wlor;
+    wlor_m1 = prj_eos_gr_lorentz_minus_one(state->beta2, sqrt_one_minus_beta2);
+#if PRJ_MHD
+    state->Bcon[0] = W[PRJ_PRIM_B1];
+    state->Bcon[1] = W[PRJ_PRIM_B2];
+    state->Bcon[2] = W[PRJ_PRIM_B3];
+#endif
+    prj_eos_gr_lower(g, state->Bcon, state->Bcov);
+    state->Bsq = prj_eos_gr_dot_cov_con(state->Bcov, state->Bcon);
+    state->Bbeta = prj_eos_gr_dot_cov_con(state->Bcov, state->beta_con);
+    if (!isfinite(state->Bsq) || !isfinite(state->Bbeta) || state->Bsq < 0.0) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    mag_pressure = 0.5 * (state->Bsq / state->wlor2 +
+        state->Bbeta * state->Bbeta);
+    state->ptot = state->pressure + mag_pressure;
+    state->enthalpy = state->rho * c2 + state->rho * state->eint +
+        state->pressure;
+    state->E = state->enthalpy * state->wlor2 - state->pressure +
+        state->Bsq - mag_pressure;
+    state->tau = (state->rho * state->eint + state->pressure) *
+        state->wlor2 + state->rho * c2 * state->wlor * wlor_m1 -
+        state->pressure + state->Bsq - mag_pressure;
+    if (!isfinite(state->E) || !isfinite(state->tau)) {
+        return PRJ_EOS_GR_BAD_STATE;
+    }
+    for (d = 0; d < 3; ++d) {
+        state->S_cov[d] = (state->enthalpy + state->Bsq) *
+            state->wlor2 * state->beta_cov[d] -
+            state->Bbeta * state->Bcov[d];
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            state->S_con[a] += gu[a][b] * state->S_cov[b];
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            state->stress_cov[a][b] =
+                (state->enthalpy + state->Bsq) * state->wlor2 *
+                state->beta_cov[a] * state->beta_cov[b] +
+                state->ptot * g[a][b] -
+                state->Bcov[a] * state->Bcov[b] / state->wlor2 -
+                state->Bbeta * (state->Bcov[a] * state->beta_cov[b] +
+                    state->Bcov[b] * state->beta_cov[a]);
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            for (d = 0; d < 3; ++d) {
+                state->stress_mixed[a][b] += gu[a][d] * state->stress_cov[d][b];
+            }
+        }
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        state->Uloc[v] = 0.0;
+    }
+    state->Uloc[PRJ_CONS_RHO] = state->rho * state->wlor;
+    state->Uloc[PRJ_CONS_MOM1] = state->S_cov[0] / c;
+    state->Uloc[PRJ_CONS_MOM2] = state->S_cov[1] / c;
+    state->Uloc[PRJ_CONS_MOM3] = state->S_cov[2] / c;
+    state->Uloc[PRJ_CONS_ETOT] = state->tau;
+    state->Uloc[PRJ_CONS_YE] = state->Uloc[PRJ_CONS_RHO] * state->ye;
+#if PRJ_MHD
+    state->Uloc[PRJ_CONS_B1] = state->Bcon[0];
+    state->Uloc[PRJ_CONS_B2] = state->Bcon[1];
+    state->Uloc[PRJ_CONS_B3] = state->Bcon[2];
+#endif
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        if (!isfinite(state->Uloc[v])) {
+            return PRJ_EOS_GR_BAD_STATE;
+        }
+    }
+    return PRJ_EOS_GR_OK;
+}
+
 static int prj_eos_gr_valid_array(const double *a, int n)
 {
     int i;
@@ -1607,7 +1748,7 @@ int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
 
 int prj_eos_full_dynamic_gr_enabled(const prj_mesh *mesh)
 {
-#if PRJ_DYNAMIC_GR && !PRJ_MHD
+#if PRJ_DYNAMIC_GR
     return mesh != 0 && mesh->use_full_dynamic_gr != 0;
 #else
     (void)mesh;

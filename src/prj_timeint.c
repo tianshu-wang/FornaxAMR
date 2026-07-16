@@ -63,7 +63,8 @@ static int prj_timeint_mhd_edge_axis_max(int dir, int axis)
     return dir == axis ? PRJ_BLOCK_SIZE - 1 : PRJ_BLOCK_SIZE;
 }
 
-static double prj_timeint_mhd_cell_emf(const double *W, int dir, int i, int j, int k)
+static double prj_timeint_mhd_cell_emf(const prj_mesh *mesh, const prj_block *block,
+    int stage, const double *W, int dir, int i, int j, int k)
 {
     double b1;
     double b2;
@@ -82,6 +83,25 @@ static double prj_timeint_mhd_cell_emf(const double *W, int dir, int i, int j, i
     v1 = W[WIDX(PRJ_PRIM_V1, i, j, k)];
     v2 = W[WIDX(PRJ_PRIM_V2, i, j, k)];
     v3 = W[WIDX(PRJ_PRIM_V3, i, j, k)];
+#if PRJ_DYNAMIC_GR
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        prj_z4c_hydro_geom geom;
+
+        if (!prj_z4c_load_hydro_geom(mesh, block, stage, i, j, k, &geom)) {
+            prj_timeint_mhd_fail("prj_timeint_mhd_cell_emf: failed to load full-GR geometry");
+        }
+        b1 *= geom.sqrt_gamma;
+        b2 *= geom.sqrt_gamma;
+        b3 *= geom.sqrt_gamma;
+        v1 = geom.alpha * v1 - PRJ_CLIGHT * geom.beta[0];
+        v2 = geom.alpha * v2 - PRJ_CLIGHT * geom.beta[1];
+        v3 = geom.alpha * v3 - PRJ_CLIGHT * geom.beta[2];
+    }
+#else
+    (void)mesh;
+    (void)block;
+    (void)stage;
+#endif
     if (dir == X1DIR) {
         emf = b2 * v3 - b3 * v2;
     } else if (dir == X2DIR) {
@@ -208,7 +228,8 @@ static double prj_timeint_mhd_edge_eta_mask(const prj_block *block,
     return eta;
 }
 
-static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
+static void prj_timeint_mhd_update_emf(const prj_mesh *mesh, prj_block *block,
+    int stage, double eta)
 {
     double *W;
     const double *bf[3];
@@ -279,13 +300,13 @@ static void prj_timeint_mhd_update_emf(prj_block *block, int stage, double eta)
                         face2[0], face2[1], face2[2]);
                     emf_face[3] = prj_timeint_mhd_face_emf(block, up, dir,
                         face3[0], face3[1], face3[2]);
-                    emf_cell[0] = prj_timeint_mhd_cell_emf(W, dir,
+                    emf_cell[0] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
                         cell0[0], cell0[1], cell0[2]);
-                    emf_cell[1] = prj_timeint_mhd_cell_emf(W, dir,
+                    emf_cell[1] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
                         cell1[0], cell1[1], cell1[2]);
-                    emf_cell[2] = prj_timeint_mhd_cell_emf(W, dir,
+                    emf_cell[2] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
                         cell2[0], cell2[1], cell2[2]);
-                    emf_cell[3] = prj_timeint_mhd_cell_emf(W, dir,
+                    emf_cell[3] = prj_timeint_mhd_cell_emf(mesh, block, stage, W, dir,
                         cell3[0], cell3[1], cell3[2]);
                     v_norm[0] = prj_timeint_mhd_face_vnorm(block, right,
                         face0[0], face0[1], face0[2]);
@@ -413,7 +434,7 @@ static void prj_timeint_mhd_update_mesh_emf(prj_mesh *mesh, const prj_mpi *mpi,
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(mpi, block)) {
-            prj_timeint_mhd_update_emf(block, stage, mesh->mhd_eta);
+            prj_timeint_mhd_update_emf(mesh, block, stage, mesh->mhd_eta);
         }
     }
     prj_mhd_emf_send(mesh, mpi);
@@ -1181,7 +1202,7 @@ static void prj_timeint_mhd_update_mesh_emf_stage(prj_mesh *mesh, const prj_mpi 
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(mpi, block)) {
-            prj_timeint_mhd_update_emf(block, stage, mesh->mhd_eta);
+            prj_timeint_mhd_update_emf(mesh, block, stage, mesh->mhd_eta);
         }
     }
     prj_mhd_emf_send(mesh, mpi);

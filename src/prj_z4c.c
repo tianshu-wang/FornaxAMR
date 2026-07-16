@@ -1689,6 +1689,7 @@ void prj_z4c_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int sta
     }
 }
 
+#if PRJ_USE_RADIATION_M1
 static void prj_z4c_lower_vec(const double g[3][3], const double v_con[3],
     double v_cov[3])
 {
@@ -1701,24 +1702,14 @@ static void prj_z4c_lower_vec(const double g[3][3], const double v_con[3],
         }
     }
 }
-
-static double prj_z4c_dot_cov_con(const double v_cov[3], const double v_con[3])
-{
-    return v_cov[0] * v_con[0] + v_cov[1] * v_con[1] + v_cov[2] * v_con[2];
-}
+#endif
 
 static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *block,
     const prj_z4c_hydro_geom *geom, const double *W_mhd, const double *W_rad,
     int i, int j, int k, double t_cgs[PRJ_NTMUNU])
 {
-    double v[3] = {0.0, 0.0, 0.0};
-    double beta_con[3] = {0.0, 0.0, 0.0};
-    double beta_cov[3] = {0.0, 0.0, 0.0};
     double stress[3][3];
     double mom[3] = {0.0, 0.0, 0.0};
-    double rho = 0.0;
-    double eint = 0.0;
-    double pressure = 0.0;
     int a, b;
 
     (void)rad;
@@ -1729,62 +1720,37 @@ static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *bl
     memset(stress, 0, sizeof(stress));
 
     if (W_mhd != 0) {
-        double beta2;
-        double wlor2;
-        double rhoh;
+        prj_eos_gr_geom egeom;
+        prj_eos_grmhd_state state;
+        double Wc[PRJ_NVAR_PRIM];
+        double pressure;
+        int status;
+        int v;
 
-        rho = W_mhd[WIDX(PRJ_PRIM_RHO, i, j, k)];
-        v[0] = W_mhd[WIDX(PRJ_PRIM_V1, i, j, k)];
-        v[1] = W_mhd[WIDX(PRJ_PRIM_V2, i, j, k)];
-        v[2] = W_mhd[WIDX(PRJ_PRIM_V3, i, j, k)];
-        eint = W_mhd[WIDX(PRJ_PRIM_EINT, i, j, k)];
-        pressure = block->eosvar != 0 ?
+        pressure = block != 0 && block->eosvar != 0 ?
             block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] : 0.0;
-
         for (a = 0; a < 3; ++a) {
-            beta_con[a] = v[a] / PRJ_CLIGHT;
-        }
-        prj_z4c_lower_vec(geom->gamma, beta_con, beta_cov);
-        beta2 = prj_z4c_dot_cov_con(beta_cov, beta_con);
-        if (!isfinite(beta2) || beta2 < 0.0 || beta2 >= 1.0 ||
-            rho < 0.0 || !isfinite(rho) || !isfinite(eint) ||
-            !isfinite(pressure)) {
-            prj_z4c_fail("prj_z4c_build_tmunu_cell_cgs: invalid hydro state");
-        }
-        wlor2 = 1.0 / (1.0 - beta2);
-        rhoh = rho * PRJ_CLIGHT * PRJ_CLIGHT + rho * eint + pressure;
-        t_cgs[PRJ_TMUNU_E] += rhoh * wlor2 - pressure;
-        for (a = 0; a < 3; ++a) {
-            mom[a] += rhoh * wlor2 * beta_cov[a];
             for (b = 0; b < 3; ++b) {
-                stress[a][b] += rhoh * wlor2 * beta_cov[a] * beta_cov[b] +
-                    pressure * geom->gamma[a][b];
+                egeom.gamma[a][b] = geom->gamma[a][b];
             }
         }
-#if PRJ_MHD
-        {
-            double B[3] = {
-                W_mhd[WIDX(PRJ_PRIM_B1, i, j, k)],
-                W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)],
-                W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)]
-            };
-            double Bcov[3];
-            double B2 = 0.0;
-
-            prj_z4c_lower_vec(geom->gamma, B, Bcov);
-            B2 = prj_z4c_dot_cov_con(Bcov, B);
-            if (!isfinite(B2) || B2 < 0.0) {
-                prj_z4c_fail("prj_z4c_build_tmunu_cell_cgs: invalid magnetic field");
+        for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+            Wc[v] = W_mhd[WIDX(v, i, j, k)];
+        }
+        if (Wc[PRJ_PRIM_RHO] != 0.0 || pressure != 0.0) {
+            status = prj_eos_grmhd_state_from_prim(0, &egeom, Wc, pressure,
+                &state, PRJ_EOS_CTX_MAIN);
+            if (status != PRJ_EOS_GR_OK) {
+                prj_z4c_fail("prj_z4c_build_tmunu_cell_cgs: invalid GRMHD state");
             }
-            t_cgs[PRJ_TMUNU_E] += 0.5 * B2;
+            t_cgs[PRJ_TMUNU_E] += state.E;
             for (a = 0; a < 3; ++a) {
+                mom[a] += state.S_cov[a];
                 for (b = 0; b < 3; ++b) {
-                    stress[a][b] += 0.5 * B2 * geom->gamma[a][b] -
-                        Bcov[a] * Bcov[b];
+                    stress[a][b] += state.stress_cov[a][b];
                 }
             }
         }
-#endif
     }
 
 #if PRJ_USE_RADIATION_M1

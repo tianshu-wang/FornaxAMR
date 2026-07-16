@@ -528,8 +528,32 @@ static inline void prj_mhd_check_edge_storage_index(const char *label, int dir, 
     }
 }
 
-static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
-    int use_cell_derived_mask)
+static double prj_mhd_cell_sqrt_gamma(const prj_mesh *mesh, const prj_block *block,
+    int use_bf1, int i, int j, int k)
+{
+#if PRJ_DYNAMIC_GR
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        prj_z4c_hydro_geom geom;
+
+        if (!prj_z4c_load_hydro_geom(mesh, block,
+                prj_stage_slot_from_bf_arg(use_bf1), i, j, k, &geom)) {
+            prj_mhd_fail("prj_mhd_bf2bc: failed to load full-GR cell geometry");
+        }
+        return geom.sqrt_gamma;
+    }
+#else
+    (void)mesh;
+    (void)block;
+    (void)use_bf1;
+    (void)i;
+    (void)j;
+    (void)k;
+#endif
+    return 1.0;
+}
+
+static void prj_mhd_bf2bc_impl(prj_eos *eos, const prj_mesh *mesh,
+    prj_block *block, int use_bf1, int use_cell_derived_mask)
 {
     double *W;
     double *src[3];
@@ -552,6 +576,7 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
                 double b1;
                 double b2;
                 double b3;
+                double sqrt_gamma;
 
                 if (use_cell_derived_mask != 0 &&
                     block->cell_derived_done != 0 &&
@@ -561,6 +586,10 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
                 b1 = 0.5 * (src[X1DIR][FACE_IDX(X1DIR, i, j, k)] + src[X1DIR][FACE_IDX(X1DIR, i + 1, j, k)]);
                 b2 = 0.5 * (src[X2DIR][FACE_IDX(X2DIR, i, j, k)] + src[X2DIR][FACE_IDX(X2DIR, i, j + 1, k)]);
                 b3 = 0.5 * (src[X3DIR][FACE_IDX(X3DIR, i, j, k)] + src[X3DIR][FACE_IDX(X3DIR, i, j, k + 1)]);
+                sqrt_gamma = prj_mhd_cell_sqrt_gamma(mesh, block, use_bf1, i, j, k);
+                b1 /= sqrt_gamma;
+                b2 /= sqrt_gamma;
+                b3 /= sqrt_gamma;
                 if (!isfinite(b1) || !isfinite(b2) || !isfinite(b3)) {
                     prj_mhd_fail("prj_mhd_bf2bc: non-finite cell-centered magnetic field");
                 }
@@ -575,12 +604,24 @@ static void prj_mhd_bf2bc_impl(prj_eos *eos, prj_block *block, int use_bf1,
 
 void prj_mhd_bf2bc(prj_eos *eos, prj_block *block, int use_bf1)
 {
-    prj_mhd_bf2bc_impl(eos, block, use_bf1, 1);
+    prj_mhd_bf2bc_impl(eos, 0, block, use_bf1, 1);
 }
 
 void prj_mhd_bf2bc_all(prj_eos *eos, prj_block *block, int use_bf1)
 {
-    prj_mhd_bf2bc_impl(eos, block, use_bf1, 0);
+    prj_mhd_bf2bc_impl(eos, 0, block, use_bf1, 0);
+}
+
+void prj_mhd_bf2bc_mesh(prj_eos *eos, const prj_mesh *mesh, prj_block *block,
+    int use_bf1)
+{
+    prj_mhd_bf2bc_impl(eos, mesh, block, use_bf1, 1);
+}
+
+void prj_mhd_bf2bc_all_mesh(prj_eos *eos, const prj_mesh *mesh, prj_block *block,
+    int use_bf1)
+{
+    prj_mhd_bf2bc_impl(eos, mesh, block, use_bf1, 0);
 }
 
 double prj_mhd_emf_upwind(prj_block *block, int dir, int i, int j, int k,
@@ -1181,8 +1222,8 @@ void prj_mhd_init(prj_sim *sim, prj_mpi *mpi)
         for (d = 0; d < 3; ++d) {
             prj_fill(block->emf[d], (size_t)PRJ_BLOCK_NEDGES, 0.0);
         }
-        prj_mhd_bf2bc_all(&sim->eos, block, 0);
-        prj_mhd_bf2bc_all(&sim->eos, block, 1);
+        prj_mhd_bf2bc_all_mesh(&sim->eos, &sim->mesh, block, 0);
+        prj_mhd_bf2bc_all_mesh(&sim->eos, &sim->mesh, block, 1);
     }
 #if PRJ_MHD_DEBUG
     prj_mhd_debug_check_divb(&sim->mesh, mpi, 0);

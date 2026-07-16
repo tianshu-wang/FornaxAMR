@@ -27,6 +27,35 @@ typedef struct prj_eos_gr_geom {
     double gamma[3][3];
 } prj_eos_gr_geom;
 
+typedef struct prj_eos_grmhd_state {
+    double gamma[3][3];
+    double gamma_inv[3][3];
+    double det_gamma;
+    double sqrt_gamma;
+    double rho;
+    double eint;
+    double pressure;
+    double ye;
+    double beta_con[3];
+    double beta_cov[3];
+    double beta2;
+    double wlor;
+    double wlor2;
+    double Bcon[3];
+    double Bcov[3];
+    double Bsq;
+    double Bbeta;
+    double ptot;
+    double enthalpy;
+    double E;
+    double tau;
+    double S_cov[3];
+    double S_con[3];
+    double stress_cov[3][3];
+    double stress_mixed[3][3];
+    double Uloc[PRJ_NVAR_CONS];
+} prj_eos_grmhd_state;
+
 enum prj_eos_gr_status {
     PRJ_EOS_GR_OK = 0,
     PRJ_EOS_GR_NULL_ARG = 1,
@@ -58,6 +87,9 @@ int prj_eos_gr_prim2cons(prj_eos *eos, const prj_eos_gr_geom *geom,
     const double *W, double *U, enum prj_eos_call_ctx ctx);
 int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     const double *U, double *W, enum prj_eos_call_ctx ctx);
+int prj_eos_grmhd_state_from_prim(prj_eos *eos, const prj_eos_gr_geom *geom,
+    const double *W, double pressure_override, prj_eos_grmhd_state *state,
+    enum prj_eos_call_ctx ctx);
 int prj_eos_full_dynamic_gr_enabled(const prj_mesh *mesh);
 void prj_eos_cell_prim2cons(prj_eos *eos, const prj_mesh *mesh,
     const prj_block *block, int z4c_stage, int i, int j, int k,

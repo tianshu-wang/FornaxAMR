@@ -1079,7 +1079,7 @@ void prj_boundary_fill_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int us
     }
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
-            prj_mhd_bf2bc_all(eos, &mesh->blocks[i], use_bf1);
+            prj_mhd_bf2bc_all_mesh(eos, mesh, &mesh->blocks[i], use_bf1);
         }
     }
 }
@@ -1231,7 +1231,7 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
     }
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
-            prj_mhd_bf2bc_all(eos, &mesh->blocks[i], use_bf1);
+            prj_mhd_bf2bc_all_mesh(eos, mesh, &mesh->blocks[i], use_bf1);
         }
     }
     PRJ_SUBTIMER_STOP("sub_ghost_mhd_post");

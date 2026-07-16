@@ -17,6 +17,20 @@ void prj_riemann_lhlld(const double *WL, const double *WR,
     double pL, double pR, double gL, double gR,
     const prj_eos *eos, double bn, double *flux, double v_face[3],
     double *Bv1, double *Bv2, double deltau, double deltav, double deltaw);
+#if PRJ_DYNAMIC_GR
+void prj_riemann_gr_hlld(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    prj_eos *eos, const double gamma[3][3], double sqrt_gamma,
+    double alpha, const double beta[3], double bn_tilde, double *flux,
+    double v_face[3], double *Bv1, double *Bv2,
+    double deltau, double deltav, double deltaw);
+void prj_riemann_gr_lhlld(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    prj_eos *eos, const double gamma[3][3], double sqrt_gamma,
+    double alpha, const double beta[3], double bn_tilde, double *flux,
+    double v_face[3], double *Bv1, double *Bv2,
+    double deltau, double deltav, double deltaw);
+#endif
 #endif
 void prj_riemann_flux_send(prj_mesh *mesh, const prj_mpi *mpi);
 int prj_blocks_overlap_open(double amin, double amax, double bmin, double bmax);

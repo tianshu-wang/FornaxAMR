@@ -176,6 +176,55 @@ static void assert_radiation_roundtrip(const double *W, const double *Wout)
 #endif
 }
 
+static void assert_mhd_densitized(const double *W, const double *U, double sqrt_det)
+{
+#if PRJ_MHD
+    assert_close("B1 densitized", U[PRJ_CONS_B1],
+        sqrt_det * W[PRJ_PRIM_B1], 1.0e-13, 0.0);
+    assert_close("B2 densitized", U[PRJ_CONS_B2],
+        sqrt_det * W[PRJ_PRIM_B2], 1.0e-13, 0.0);
+    assert_close("B3 densitized", U[PRJ_CONS_B3],
+        sqrt_det * W[PRJ_PRIM_B3], 1.0e-13, 0.0);
+#else
+    (void)W;
+    (void)U;
+    (void)sqrt_det;
+#endif
+}
+
+static void assert_grmhd_state_helper(prj_eos *eos, const prj_eos_gr_geom *geom,
+    const double *W, double sqrt_det)
+{
+#if PRJ_MHD
+    prj_eos_grmhd_state state;
+    int status = prj_eos_grmhd_state_from_prim(eos, geom, W, NAN, &state,
+        PRJ_EOS_CTX_MAIN);
+
+    if (status != PRJ_EOS_GR_OK) {
+        die("GRMHD state helper failed");
+    }
+    assert_close("state sqrt_gamma", state.sqrt_gamma, sqrt_det, 1.0e-13, 0.0);
+    assert_close("state B1", state.Bcon[0], W[PRJ_PRIM_B1], 1.0e-13, 0.0);
+    assert_close("state B2", state.Bcon[1], W[PRJ_PRIM_B2], 1.0e-13, 0.0);
+    assert_close("state B3", state.Bcon[2], W[PRJ_PRIM_B3], 1.0e-13, 0.0);
+    assert_close("state Uloc B1", state.Uloc[PRJ_CONS_B1],
+        W[PRJ_PRIM_B1], 1.0e-13, 0.0);
+    assert_close("state Uloc B2", state.Uloc[PRJ_CONS_B2],
+        W[PRJ_PRIM_B2], 1.0e-13, 0.0);
+    assert_close("state Uloc B3", state.Uloc[PRJ_CONS_B3],
+        W[PRJ_PRIM_B3], 1.0e-13, 0.0);
+    if (!(state.Bsq > 0.0) || !(state.ptot > state.pressure) ||
+        !isfinite(state.E) || !isfinite(state.S_cov[0])) {
+        die("GRMHD state helper missing magnetic contribution");
+    }
+#else
+    (void)eos;
+    (void)geom;
+    (void)W;
+    (void)sqrt_det;
+#endif
+}
+
 static void assert_hydro_roundtrip(const double *W, const double *Wout)
 {
     assert_close("rho roundtrip", Wout[PRJ_PRIM_RHO], W[PRJ_PRIM_RHO], 1.0e-8, 0.0);
@@ -247,6 +296,8 @@ static void test_roundtrip(prj_eos *eos, const char *name, const prj_eos_gr_geom
         fprintf(stderr, "test_gr_prim_cons: %s prim2cons status %d\n", name, status);
         exit(1);
     }
+    assert_mhd_densitized(W, U, sqrt_det);
+    assert_grmhd_state_helper(eos, geom, W, sqrt_det);
     assert_radiation_densitized(W, U, sqrt_det);
     status = prj_eos_gr_cons2prim(eos, geom, U, Wout, PRJ_EOS_CTX_MAIN);
     if (status != PRJ_EOS_GR_OK) {

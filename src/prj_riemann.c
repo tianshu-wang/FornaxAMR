@@ -644,6 +644,971 @@ void prj_riemann_hlld(const double *WL, const double *WR,
         }
     }
 }
+
+#if PRJ_DYNAMIC_GR
+#define PRJ_GR_HLLD_MAX_ITER 32
+#define PRJ_GR_HLLD_EPS 1.0e-12
+
+enum prj_gr_hlld_q {
+    PRJ_GRQ_D = 0,
+    PRJ_GRQ_J1 = 1,
+    PRJ_GRQ_J2 = 2,
+    PRJ_GRQ_J3 = 3,
+    PRJ_GRQ_H = 4,
+    PRJ_GRQ_YE = 5,
+    PRJ_GRQ_B2 = 6,
+    PRJ_GRQ_B3 = 7,
+    PRJ_GRQ_N = 8
+};
+
+typedef struct prj_gr_hlld_tetrad {
+    double lower[3][3];
+    double upper[3][3];
+    double etx;
+    double eup_t[3];
+    double exx;
+} prj_gr_hlld_tetrad;
+
+typedef struct prj_gr_hlld_state {
+    double rho;
+    double eint_m;
+    double p;
+    double gamma;
+    double ye;
+    double v[3];
+    double B[3];
+    double v2;
+    double wlor;
+    double wlor2;
+    double B2;
+    double Bv;
+    double b2;
+    double rhoh;
+    double ptot;
+    double D;
+    double H;
+    double J[3];
+    double q[PRJ_GRQ_N];
+    double f[PRJ_GRQ_N];
+    double lam_m;
+    double lam_p;
+} prj_gr_hlld_state;
+
+typedef struct prj_gr_hlld_side {
+    const prj_gr_hlld_state *base;
+    double lambda;
+    double RD;
+    double RJ[3];
+    double RH;
+    double RB[3];
+} prj_gr_hlld_side;
+
+typedef struct prj_gr_hlld_fan_state {
+    double v[3];
+    double B[3];
+    double D;
+    double H;
+    double J[3];
+    double rhohtot;
+    double eta;
+    double K[3];
+    double lambda_a;
+    double ye;
+    double q[PRJ_GRQ_N];
+} prj_gr_hlld_fan_state;
+
+typedef struct prj_gr_hlld_fan {
+    double lambda_l;
+    double lambda_r;
+    double lambda_al;
+    double lambda_ar;
+    double lambda_c;
+    double ptot;
+    prj_gr_hlld_fan_state aL;
+    prj_gr_hlld_fan_state aR;
+    prj_gr_hlld_fan_state cL;
+    prj_gr_hlld_fan_state cR;
+    double f_aL[PRJ_GRQ_N];
+    double f_aR[PRJ_GRQ_N];
+    double f_cL[PRJ_GRQ_N];
+    double f_cR[PRJ_GRQ_N];
+} prj_gr_hlld_fan;
+
+static double prj_gr_hlld_dot3(const double a[3], const double b[3])
+{
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+}
+
+static int prj_gr_hlld_finite_array(const double *a, int n)
+{
+    int i;
+
+    for (i = 0; i < n; ++i) {
+        if (!isfinite(a[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void prj_gr_hlld_apply_lower(const prj_gr_hlld_tetrad *tet,
+    const double vcoord[3], double vhat[3])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        vhat[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            vhat[a] += tet->lower[a][b] * vcoord[b];
+        }
+    }
+}
+
+static void prj_gr_hlld_apply_upper(const prj_gr_hlld_tetrad *tet,
+    const double vhat[3], double vcoord[3])
+{
+    int a;
+    int b;
+
+    for (b = 0; b < 3; ++b) {
+        vcoord[b] = 0.0;
+        for (a = 0; a < 3; ++a) {
+            vcoord[b] += tet->upper[a][b] * vhat[a];
+        }
+    }
+}
+
+static int prj_gr_hlld_build_tetrad(const double gamma[3][3],
+    double alpha, const double beta[3], prj_gr_hlld_tetrad *tet)
+{
+    double gu[3][3];
+    double det;
+    double minor_yz;
+    double bhat;
+    double chat;
+    double dhat;
+    int a;
+    int b;
+
+    if (gamma == 0 || beta == 0 || tet == 0 || alpha <= 0.0 ||
+        !isfinite(alpha)) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            if (!isfinite(gamma[a][b])) {
+                return 0;
+            }
+        }
+    }
+    det = gamma[0][0] * (gamma[1][1] * gamma[2][2] -
+            gamma[1][2] * gamma[2][1]) -
+        gamma[0][1] * (gamma[1][0] * gamma[2][2] -
+            gamma[1][2] * gamma[2][0]) +
+        gamma[0][2] * (gamma[1][0] * gamma[2][1] -
+            gamma[1][1] * gamma[2][0]);
+    if (!isfinite(det) || det <= 0.0) {
+        return 0;
+    }
+    gu[0][0] = (gamma[1][1] * gamma[2][2] -
+        gamma[1][2] * gamma[2][1]) / det;
+    gu[0][1] = (gamma[0][2] * gamma[2][1] -
+        gamma[0][1] * gamma[2][2]) / det;
+    gu[0][2] = (gamma[0][1] * gamma[1][2] -
+        gamma[0][2] * gamma[1][1]) / det;
+    gu[1][0] = (gamma[1][2] * gamma[2][0] -
+        gamma[1][0] * gamma[2][2]) / det;
+    gu[1][1] = (gamma[0][0] * gamma[2][2] -
+        gamma[0][2] * gamma[2][0]) / det;
+    gu[1][2] = (gamma[0][2] * gamma[1][0] -
+        gamma[0][0] * gamma[1][2]) / det;
+    gu[2][0] = (gamma[1][0] * gamma[2][1] -
+        gamma[1][1] * gamma[2][0]) / det;
+    gu[2][1] = (gamma[0][1] * gamma[2][0] -
+        gamma[0][0] * gamma[2][1]) / det;
+    gu[2][2] = (gamma[0][0] * gamma[1][1] -
+        gamma[0][1] * gamma[1][0]) / det;
+
+    minor_yz = gamma[1][1] * gamma[2][2] - gamma[1][2] * gamma[1][2];
+    if (gu[0][0] <= 0.0 || gamma[2][2] <= 0.0 || minor_yz <= 0.0) {
+        return 0;
+    }
+    bhat = 1.0 / sqrt(gu[0][0]);
+    chat = 1.0 / sqrt(gamma[2][2]);
+    dhat = 1.0 / sqrt(gamma[2][2] * minor_yz);
+    memset(tet, 0, sizeof(*tet));
+
+    tet->upper[0][0] = bhat * gu[0][0];
+    tet->upper[0][1] = bhat * gu[0][1];
+    tet->upper[0][2] = bhat * gu[0][2];
+    tet->upper[1][1] = dhat * gamma[2][2];
+    tet->upper[1][2] = -dhat * gamma[1][2];
+    tet->upper[2][2] = chat;
+
+    tet->lower[0][0] = bhat;
+    tet->lower[1][0] = dhat *
+        (gamma[0][1] * gamma[2][2] - gamma[0][2] * gamma[1][2]);
+    tet->lower[1][1] = dhat * minor_yz;
+    tet->lower[2][0] = chat * gamma[0][2];
+    tet->lower[2][1] = chat * gamma[1][2];
+    tet->lower[2][2] = chat * gamma[2][2];
+
+    tet->eup_t[0] = -beta[0] / alpha;
+    tet->eup_t[1] = -beta[1] / alpha;
+    tet->eup_t[2] = -beta[2] / alpha;
+    tet->etx = tet->eup_t[0];
+    tet->exx = tet->upper[0][0];
+    return prj_gr_hlld_finite_array(&tet->lower[0][0], 9) &&
+        prj_gr_hlld_finite_array(&tet->upper[0][0], 9) &&
+        prj_gr_hlld_finite_array(tet->eup_t, 3) &&
+        isfinite(tet->etx) && isfinite(tet->exx);
+}
+
+static void prj_gr_hlld_fill_qf(prj_gr_hlld_state *s)
+{
+    double inv_w2 = 1.0 / s->wlor2;
+    double vB = s->Bv;
+    int d;
+
+    s->q[PRJ_GRQ_D] = s->D;
+    s->q[PRJ_GRQ_H] = s->H;
+    s->q[PRJ_GRQ_YE] = s->D * s->ye;
+    s->q[PRJ_GRQ_B2] = s->B[1];
+    s->q[PRJ_GRQ_B3] = s->B[2];
+    s->f[PRJ_GRQ_D] = s->D * s->v[0];
+    s->f[PRJ_GRQ_H] = (s->H + s->ptot) * s->v[0] - vB * s->B[0];
+    s->f[PRJ_GRQ_YE] = s->f[PRJ_GRQ_D] * s->ye;
+    s->f[PRJ_GRQ_B2] = s->v[0] * s->B[1] - s->v[1] * s->B[0];
+    s->f[PRJ_GRQ_B3] = s->v[0] * s->B[2] - s->v[2] * s->B[0];
+    for (d = 0; d < 3; ++d) {
+        s->q[PRJ_GRQ_J1 + d] = s->J[d];
+        s->f[PRJ_GRQ_J1 + d] = s->J[d] * s->v[0] +
+            (d == 0 ? s->ptot : 0.0) -
+            s->B[0] * (s->B[d] * inv_w2 + vB * s->v[d]);
+    }
+}
+
+static int prj_gr_hlld_state_from_prim(const double *W, double pressure,
+    double gas_gamma, const prj_gr_hlld_tetrad *tet, double bn_phys,
+    prj_gr_hlld_state *s)
+{
+    double beta_coord[3];
+    double B_coord_m[3];
+    double sqrt_one_minus_v2;
+    double cs2;
+    double va2;
+    double zeta;
+    double disc;
+    double den;
+    int d;
+
+    if (W == 0 || tet == 0 || s == 0 || pressure <= 0.0 ||
+        !isfinite(pressure)) {
+        return 0;
+    }
+    memset(s, 0, sizeof(*s));
+    s->rho = W[PRJ_PRIM_RHO];
+    s->eint_m = W[PRJ_PRIM_EINT] / (PRJ_CLIGHT * PRJ_CLIGHT);
+    s->p = pressure / (PRJ_CLIGHT * PRJ_CLIGHT);
+    s->gamma = isfinite(gas_gamma) && gas_gamma > 0.0 ? gas_gamma : 5.0 / 3.0;
+    s->ye = W[PRJ_PRIM_YE];
+    if (s->rho <= 0.0 || s->eint_m < 0.0 || s->p <= 0.0 ||
+        !isfinite(s->rho) || !isfinite(s->eint_m) || !isfinite(s->ye)) {
+        return 0;
+    }
+    beta_coord[0] = W[PRJ_PRIM_V1] / PRJ_CLIGHT;
+    beta_coord[1] = W[PRJ_PRIM_V2] / PRJ_CLIGHT;
+    beta_coord[2] = W[PRJ_PRIM_V3] / PRJ_CLIGHT;
+    B_coord_m[0] = bn_phys / PRJ_CLIGHT;
+    B_coord_m[1] = W[PRJ_PRIM_B2] / PRJ_CLIGHT;
+    B_coord_m[2] = W[PRJ_PRIM_B3] / PRJ_CLIGHT;
+    prj_gr_hlld_apply_lower(tet, beta_coord, s->v);
+    prj_gr_hlld_apply_lower(tet, B_coord_m, s->B);
+    s->v2 = prj_gr_hlld_dot3(s->v, s->v);
+    if (!isfinite(s->v2) || s->v2 < 0.0 || s->v2 >= 1.0) {
+        return 0;
+    }
+    sqrt_one_minus_v2 = sqrt(1.0 - s->v2);
+    s->wlor = 1.0 / sqrt_one_minus_v2;
+    s->wlor2 = s->wlor * s->wlor;
+    s->B2 = prj_gr_hlld_dot3(s->B, s->B);
+    s->Bv = prj_gr_hlld_dot3(s->B, s->v);
+    s->b2 = s->B2 / s->wlor2 + s->Bv * s->Bv;
+    s->rhoh = s->rho * (1.0 + s->eint_m) + s->p;
+    s->ptot = s->p + 0.5 * s->b2;
+    s->D = s->rho * s->wlor;
+    s->H = s->rhoh * s->wlor2 - s->p + s->B2 - 0.5 * s->b2;
+    for (d = 0; d < 3; ++d) {
+        s->J[d] = (s->rhoh + s->B2) * s->wlor2 * s->v[d] -
+            s->Bv * s->B[d];
+    }
+    if (s->rhoh <= 0.0 || s->ptot <= 0.0 || s->D <= 0.0 ||
+        !isfinite(s->b2) || !isfinite(s->H)) {
+        return 0;
+    }
+    prj_gr_hlld_fill_qf(s);
+
+    cs2 = s->gamma * s->p / s->rhoh;
+    if (!isfinite(cs2) || cs2 < 0.0) {
+        cs2 = 0.0;
+    }
+    if (cs2 > 1.0) {
+        cs2 = 1.0;
+    }
+    va2 = s->b2 / (s->rhoh + s->b2);
+    if (!isfinite(va2) || va2 < 0.0) {
+        va2 = 0.0;
+    }
+    if (va2 > 1.0) {
+        va2 = 1.0;
+    }
+    zeta = va2 + cs2 - va2 * cs2;
+    if (!isfinite(zeta) || zeta < 0.0) {
+        zeta = 0.0;
+    }
+    if (zeta > 1.0) {
+        zeta = 1.0;
+    }
+    den = 1.0 - s->v2 * zeta;
+    disc = (1.0 - s->v2) *
+        (1.0 - s->v2 * zeta - (1.0 - zeta) * s->v[0] * s->v[0]);
+    if (disc < 0.0 && disc > -1.0e-13) {
+        disc = 0.0;
+    }
+    if (den <= 0.0 || disc < 0.0 || !isfinite(disc)) {
+        return 0;
+    }
+    disc = sqrt(zeta) * sqrt(disc);
+    s->lam_m = (s->v[0] * (1.0 - zeta) - disc) / den;
+    s->lam_p = (s->v[0] * (1.0 - zeta) + disc) / den;
+    if (!isfinite(s->lam_m) || !isfinite(s->lam_p)) {
+        return 0;
+    }
+    if (s->lam_m < -1.0) s->lam_m = -1.0;
+    if (s->lam_p > 1.0) s->lam_p = 1.0;
+    return 1;
+}
+
+static void prj_gr_hlld_side_invariants(const prj_gr_hlld_state *s,
+    double lambda, prj_gr_hlld_side *side)
+{
+    int d;
+
+    side->base = s;
+    side->lambda = lambda;
+    side->RD = lambda * s->q[PRJ_GRQ_D] - s->f[PRJ_GRQ_D];
+    side->RH = lambda * s->q[PRJ_GRQ_H] - s->f[PRJ_GRQ_H];
+    for (d = 0; d < 3; ++d) {
+        side->RJ[d] = lambda * s->q[PRJ_GRQ_J1 + d] -
+            s->f[PRJ_GRQ_J1 + d];
+    }
+    side->RB[0] = lambda * s->B[0];
+    side->RB[1] = lambda * s->q[PRJ_GRQ_B2] - s->f[PRJ_GRQ_B2];
+    side->RB[2] = lambda * s->q[PRJ_GRQ_B3] - s->f[PRJ_GRQ_B3];
+}
+
+static void prj_gr_hlld_fill_fan_q(const prj_gr_hlld_fan_state *s,
+    double q[PRJ_GRQ_N])
+{
+    q[PRJ_GRQ_D] = s->D;
+    q[PRJ_GRQ_J1] = s->J[0];
+    q[PRJ_GRQ_J2] = s->J[1];
+    q[PRJ_GRQ_J3] = s->J[2];
+    q[PRJ_GRQ_H] = s->H;
+    q[PRJ_GRQ_YE] = s->D * s->ye;
+    q[PRJ_GRQ_B2] = s->B[1];
+    q[PRJ_GRQ_B3] = s->B[2];
+}
+
+static int prj_gr_hlld_build_outer_state(const prj_gr_hlld_side *side,
+    double Bx, double ptot, prj_gr_hlld_fan_state *a)
+{
+    double lambda = side->lambda;
+    double A;
+    double G;
+    double C;
+    double Q;
+    double X;
+    double den;
+    double vB;
+    int d;
+
+    memset(a, 0, sizeof(*a));
+    a->B[0] = Bx;
+    a->ye = side->base->ye;
+    A = side->RJ[0] - lambda * side->RH + ptot * (1.0 - lambda * lambda);
+    G = side->RB[1] * side->RB[1] + side->RB[2] * side->RB[2];
+    C = side->RJ[1] * side->RB[1] + side->RJ[2] * side->RB[2];
+    Q = -A - G + Bx * Bx * (1.0 - lambda * lambda);
+    X = Bx * (A * lambda * Bx + C) -
+        (A + G) * (lambda * ptot + side->RH);
+    if (fabs(X) <= PRJ_GR_HLLD_EPS *
+        (fabs(Bx * (A * lambda * Bx + C)) +
+            fabs((A + G) * (lambda * ptot + side->RH)) + 1.0)) {
+        return 0;
+    }
+    a->v[0] = (Bx * (A * Bx + lambda * C) -
+        (A + G) * (ptot + side->RJ[0])) / X;
+    a->v[1] = (Q * side->RJ[1] +
+        side->RB[1] * (C + Bx * (lambda * side->RJ[0] - side->RH))) / X;
+    a->v[2] = (Q * side->RJ[2] +
+        side->RB[2] * (C + Bx * (lambda * side->RJ[0] - side->RH))) / X;
+    if (!prj_gr_hlld_finite_array(a->v, 3) ||
+        prj_gr_hlld_dot3(a->v, a->v) >= 1.0) {
+        return 0;
+    }
+    den = lambda - a->v[0];
+    if (fabs(den) <= PRJ_GR_HLLD_EPS * (fabs(lambda) + fabs(a->v[0]) + 1.0)) {
+        return 0;
+    }
+    a->B[1] = (side->RB[1] - Bx * a->v[1]) / den;
+    a->B[2] = (side->RB[2] - Bx * a->v[2]) / den;
+    vB = prj_gr_hlld_dot3(a->v, a->B);
+    a->rhohtot = ptot + (side->RH -
+        prj_gr_hlld_dot3(a->v, side->RJ)) / den;
+    a->D = side->RD / den;
+    a->H = (side->RH + ptot * a->v[0] - vB * Bx) / den;
+    for (d = 0; d < 3; ++d) {
+        a->J[d] = (a->H + ptot) * a->v[d] - vB * a->B[d];
+    }
+    if (a->rhohtot <= 0.0 || a->D <= 0.0 || !isfinite(a->H) ||
+        !prj_gr_hlld_finite_array(a->B, 3) ||
+        !prj_gr_hlld_finite_array(a->J, 3)) {
+        return 0;
+    }
+    prj_gr_hlld_fill_fan_q(a, a->q);
+    return prj_gr_hlld_finite_array(a->q, PRJ_GRQ_N);
+}
+
+static int prj_gr_hlld_contact_one(const prj_gr_hlld_side *side,
+    const prj_gr_hlld_fan_state *a, const double Bc[3],
+    double ptot, int right_side, prj_gr_hlld_fan_state *c)
+{
+    double sign_bx = side->base->B[0] < 0.0 ? -1.0 : 1.0;
+    double den;
+    double K2;
+    double KB;
+    double fac;
+    double vB;
+    double wave_den;
+    int d;
+
+    memset(c, 0, sizeof(*c));
+    c->eta = (right_side ? 1.0 : -1.0) * sign_bx * sqrt(a->rhohtot);
+    den = side->lambda * ptot + side->RH + side->base->B[0] * c->eta;
+    if (fabs(den) <= PRJ_GR_HLLD_EPS *
+        (fabs(side->lambda * ptot) + fabs(side->RH) +
+            fabs(side->base->B[0] * c->eta) + 1.0)) {
+        return 0;
+    }
+    for (d = 0; d < 3; ++d) {
+        c->K[d] = (side->RJ[d] + (d == 0 ? ptot : 0.0) +
+            side->RB[d] * c->eta) / den;
+        c->B[d] = Bc[d];
+    }
+    c->lambda_a = c->K[0];
+    K2 = prj_gr_hlld_dot3(c->K, c->K);
+    KB = prj_gr_hlld_dot3(c->K, c->B);
+    den = c->eta - KB;
+    if (fabs(den) <= PRJ_GR_HLLD_EPS * (fabs(c->eta) + fabs(KB) + 1.0)) {
+        return 0;
+    }
+    fac = (1.0 - K2) / den;
+    for (d = 0; d < 3; ++d) {
+        c->v[d] = c->K[d] - c->B[d] * fac;
+    }
+    if (!prj_gr_hlld_finite_array(c->v, 3) ||
+        prj_gr_hlld_dot3(c->v, c->v) >= 1.0) {
+        return 0;
+    }
+    c->D = a->D * (c->lambda_a - a->v[0]) /
+        (c->lambda_a - c->v[0]);
+    vB = prj_gr_hlld_dot3(c->v, c->B);
+    wave_den = c->lambda_a - c->v[0];
+    if (fabs(wave_den) <= PRJ_GR_HLLD_EPS *
+        (fabs(c->lambda_a) + fabs(c->v[0]) + 1.0)) {
+        return 0;
+    }
+    c->H = (c->lambda_a * a->H - a->J[0] +
+        ptot * c->v[0] - vB * c->B[0]) / wave_den;
+    c->rhohtot = a->rhohtot;
+    c->ye = a->ye;
+    for (d = 0; d < 3; ++d) {
+        c->J[d] = (c->H + ptot) * c->v[d] - vB * c->B[d];
+    }
+    if (c->D <= 0.0 || c->H <= 0.0 ||
+        !prj_gr_hlld_finite_array(c->J, 3)) {
+        return 0;
+    }
+    prj_gr_hlld_fill_fan_q(c, c->q);
+    return prj_gr_hlld_finite_array(c->q, PRJ_GRQ_N);
+}
+
+static int prj_gr_hlld_build_contact_states(const prj_gr_hlld_side *L,
+    const prj_gr_hlld_side *R, const prj_gr_hlld_fan_state *aL,
+    const prj_gr_hlld_fan_state *aR, double ptot,
+    prj_gr_hlld_fan_state *cL, prj_gr_hlld_fan_state *cR,
+    double *residual)
+{
+    double Bc[3];
+    double lambda_al;
+    double lambda_ar;
+    double den;
+    int k;
+
+    if (!prj_gr_hlld_contact_one(L, aL, aL->B, ptot, 0, cL) ||
+        !prj_gr_hlld_contact_one(R, aR, aR->B, ptot, 1, cR)) {
+        return 0;
+    }
+    lambda_al = cL->lambda_a;
+    lambda_ar = cR->lambda_a;
+    den = lambda_ar - lambda_al;
+    if (fabs(den) <= PRJ_GR_HLLD_EPS *
+        (fabs(lambda_ar) + fabs(lambda_al) + 1.0)) {
+        return 0;
+    }
+    Bc[0] = L->base->B[0];
+    for (k = 1; k < 3; ++k) {
+        Bc[k] = (aR->B[k] * (R->lambda - aR->v[0]) +
+            Bc[0] * aR->v[k] -
+            aL->B[k] * (L->lambda - aL->v[0]) -
+            Bc[0] * aL->v[k]) / den;
+    }
+    if (!prj_gr_hlld_contact_one(L, aL, Bc, ptot, 0, cL) ||
+        !prj_gr_hlld_contact_one(R, aR, Bc, ptot, 1, cR)) {
+        return 0;
+    }
+    if (residual != 0) {
+        *residual = cL->v[0] - cR->v[0];
+    }
+    return 1;
+}
+
+static void prj_gr_hlld_flux_from_jump(const double f0[PRJ_GRQ_N],
+    double lambda, const double q1[PRJ_GRQ_N], const double q0[PRJ_GRQ_N],
+    double f[PRJ_GRQ_N])
+{
+    int q;
+
+    for (q = 0; q < PRJ_GRQ_N; ++q) {
+        f[q] = f0[q] + lambda * (q1[q] - q0[q]);
+    }
+}
+
+static int prj_gr_hlld_build_fan(const prj_gr_hlld_state *L0,
+    const prj_gr_hlld_state *R0, double lambda_l, double lambda_r,
+    double ptot, prj_gr_hlld_fan *fan, double *residual)
+{
+    prj_gr_hlld_side L;
+    prj_gr_hlld_side R;
+    int q;
+
+    memset(fan, 0, sizeof(*fan));
+    if (ptot <= 0.0 || !isfinite(ptot)) {
+        return 0;
+    }
+    prj_gr_hlld_side_invariants(L0, lambda_l, &L);
+    prj_gr_hlld_side_invariants(R0, lambda_r, &R);
+    if (!prj_gr_hlld_build_outer_state(&L, L0->B[0], ptot, &fan->aL) ||
+        !prj_gr_hlld_build_outer_state(&R, L0->B[0], ptot, &fan->aR) ||
+        !prj_gr_hlld_build_contact_states(&L, &R, &fan->aL, &fan->aR,
+            ptot, &fan->cL, &fan->cR, residual)) {
+        return 0;
+    }
+    fan->lambda_l = lambda_l;
+    fan->lambda_r = lambda_r;
+    fan->lambda_al = fan->cL.lambda_a;
+    fan->lambda_ar = fan->cR.lambda_a;
+    fan->lambda_c = 0.5 * (fan->cL.v[0] + fan->cR.v[0]);
+    fan->ptot = ptot;
+    if (!(fan->lambda_l < fan->lambda_r) ||
+        !(fan->lambda_l <= fan->lambda_al) ||
+        !(fan->lambda_al <= fan->lambda_ar) ||
+        !(fan->lambda_ar <= fan->lambda_r)) {
+        return 0;
+    }
+    prj_gr_hlld_flux_from_jump(L0->f, lambda_l, fan->aL.q, L0->q,
+        fan->f_aL);
+    prj_gr_hlld_flux_from_jump(R0->f, lambda_r, fan->aR.q, R0->q,
+        fan->f_aR);
+    for (q = 0; q < PRJ_GRQ_N; ++q) {
+        fan->f_cL[q] = fan->f_aL[q] +
+            fan->lambda_al * (fan->cL.q[q] - fan->aL.q[q]);
+        fan->f_cR[q] = fan->f_aR[q] +
+            fan->lambda_ar * (fan->cR.q[q] - fan->aR.q[q]);
+    }
+    return prj_gr_hlld_finite_array(fan->f_aL, PRJ_GRQ_N) &&
+        prj_gr_hlld_finite_array(fan->f_aR, PRJ_GRQ_N) &&
+        prj_gr_hlld_finite_array(fan->f_cL, PRJ_GRQ_N) &&
+        prj_gr_hlld_finite_array(fan->f_cR, PRJ_GRQ_N);
+}
+
+static double prj_gr_hlld_modified_speed(const prj_gr_hlld_state *s)
+{
+    double u2 = s->v2;
+    double va2 = s->b2 / (s->rhoh + s->b2);
+    double zeta = va2 + u2 - va2 * u2;
+    double disc;
+    double den;
+
+    if (!isfinite(zeta) || zeta < 0.0) {
+        zeta = 0.0;
+    }
+    if (zeta > 1.0) {
+        zeta = 1.0;
+    }
+    den = 1.0 - s->v2 * zeta;
+    disc = (1.0 - s->v2) *
+        (1.0 - s->v2 * zeta - (1.0 - zeta) * s->v[0] * s->v[0]);
+    if (den <= 0.0 || disc < 0.0 || !isfinite(disc)) {
+        return 0.0;
+    }
+    return sqrt(zeta) * sqrt(disc) / den;
+}
+
+static double prj_gr_hlld_pressure_guess(const prj_gr_hlld_state *L,
+    const prj_gr_hlld_state *R, double lambda_l, double lambda_r,
+    int low_diss, double deltau, double deltav, double deltaw)
+{
+    double guess = 0.5 * (L->ptot + R->ptot);
+
+    if (low_diss) {
+        double cfmax = PRJ_MAX(fabs(L->lam_p - L->lam_m),
+            fabs(R->lam_p - R->lam_m));
+        double cu = PRJ_MAX(prj_gr_hlld_modified_speed(L),
+            prj_gr_hlld_modified_speed(R));
+        double chi = cfmax > 0.0 ? PRJ_MIN(1.0, cu / cfmax) : 1.0;
+        double phi = chi * (2.0 - chi);
+        double theta = prj_riemann_theta_limiter(
+            PRJ_MAX(fabs(lambda_l), fabs(lambda_r)) * PRJ_CLIGHT,
+            deltau, deltav, deltaw);
+        double denom = R->D * (lambda_r - R->v[0]) -
+            L->D * (lambda_l - L->v[0]);
+
+        if (fabs(denom) > PRJ_GR_HLLD_EPS *
+            (fabs(R->D * (lambda_r - R->v[0])) +
+                fabs(L->D * (lambda_l - L->v[0])) + 1.0)) {
+            double corrected = ((lambda_r - R->v[0]) * R->D * L->ptot -
+                (lambda_l - L->v[0]) * L->D * R->ptot +
+                phi * theta * L->D * R->D *
+                (lambda_r - R->v[0]) * (lambda_l - L->v[0]) *
+                (R->v[0] - L->v[0])) / denom;
+
+            if (corrected > 0.0 && isfinite(corrected)) {
+                guess = corrected;
+            }
+        }
+    }
+    if (!(guess > 0.0) || !isfinite(guess)) {
+        guess = PRJ_MAX(L->ptot, R->ptot);
+    }
+    return guess;
+}
+
+static int prj_gr_hlld_solve_pressure(const prj_gr_hlld_state *L,
+    const prj_gr_hlld_state *R, double lambda_l, double lambda_r,
+    int low_diss, double deltau, double deltav, double deltaw,
+    prj_gr_hlld_fan *fan)
+{
+    const double scale = PRJ_MAX(PRJ_MAX(L->ptot, R->ptot), 1.0);
+    double guesses[6];
+    int ig;
+
+    guesses[0] = prj_gr_hlld_pressure_guess(L, R, lambda_l, lambda_r,
+        low_diss, deltau, deltav, deltaw);
+    guesses[1] = 0.5 * (L->ptot + R->ptot);
+    guesses[2] = L->ptot;
+    guesses[3] = R->ptot;
+    guesses[4] = 2.0 * guesses[0];
+    guesses[5] = 0.5 * guesses[0];
+    for (ig = 0; ig < 6; ++ig) {
+        double p = guesses[ig];
+        int iter;
+
+        if (!(p > 0.0) || !isfinite(p)) {
+            continue;
+        }
+        for (iter = 0; iter < PRJ_GR_HLLD_MAX_ITER; ++iter) {
+            prj_gr_hlld_fan trial;
+            double f;
+            double fp;
+            double dp;
+            double deriv;
+            double pnew;
+
+            if (!prj_gr_hlld_build_fan(L, R, lambda_l, lambda_r, p,
+                    &trial, &f)) {
+                p *= 1.25;
+                continue;
+            }
+            if (fabs(f) <= 1.0e-10 *
+                (fabs(trial.lambda_ar - trial.lambda_al) + 1.0)) {
+                *fan = trial;
+                return 1;
+            }
+            dp = 1.0e-6 * PRJ_MAX(fabs(p), scale);
+            if (!prj_gr_hlld_build_fan(L, R, lambda_l, lambda_r, p + dp,
+                    &trial, &fp)) {
+                dp = -0.5 * dp;
+                if (p + dp <= 0.0 ||
+                    !prj_gr_hlld_build_fan(L, R, lambda_l, lambda_r,
+                        p + dp, &trial, &fp)) {
+                    p *= 1.5;
+                    continue;
+                }
+            }
+            deriv = (fp - f) / dp;
+            if (fabs(deriv) <= 1.0e-14 || !isfinite(deriv)) {
+                p *= 1.25;
+                continue;
+            }
+            pnew = p - f / deriv;
+            if (!(pnew > 0.0) || !isfinite(pnew)) {
+                pnew = 0.5 * p;
+            }
+            if (pnew > 10.0 * p) {
+                pnew = 10.0 * p;
+            }
+            if (pnew < 0.1 * p) {
+                pnew = 0.1 * p;
+            }
+            p = pnew;
+        }
+    }
+    return 0;
+}
+
+static void prj_gr_hlld_emit_flux(const prj_gr_hlld_tetrad *tet,
+    double sqrt_gamma, double alpha, const double beta[3],
+    const double q[PRJ_GRQ_N], const double f[PRJ_GRQ_N],
+    const double Bhat[3], const double vhat[3],
+    double *flux, double v_face[3], double *Bv1, double *Bv2)
+{
+    double c = PRJ_CLIGHT;
+    double c2 = c * c;
+    double c3 = c2 * c;
+    double qB[3];
+    double fB[3];
+    int v;
+    int d;
+    int m;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        flux[v] = 0.0;
+    }
+    flux[PRJ_CONS_RHO] = sqrt_gamma * c * alpha *
+        (tet->etx * q[PRJ_GRQ_D] + tet->exx * f[PRJ_GRQ_D]);
+    flux[PRJ_CONS_YE] = sqrt_gamma * c * alpha *
+        (tet->etx * q[PRJ_GRQ_YE] + tet->exx * f[PRJ_GRQ_YE]);
+    for (d = 0; d < 3; ++d) {
+        double mom = 0.0;
+
+        for (m = 0; m < 3; ++m) {
+            mom += tet->upper[m][d] *
+                (tet->etx * q[PRJ_GRQ_J1 + m] +
+                    tet->exx * f[PRJ_GRQ_J1 + m]);
+        }
+        flux[PRJ_CONS_MOM1 + d] = sqrt_gamma * c2 * alpha * mom;
+    }
+    flux[PRJ_CONS_ETOT] = sqrt_gamma * c3 * alpha *
+        (tet->etx * (q[PRJ_GRQ_H] - q[PRJ_GRQ_D]) +
+            tet->exx * (f[PRJ_GRQ_H] - f[PRJ_GRQ_D]));
+
+    qB[0] = Bhat[0];
+    qB[1] = q[PRJ_GRQ_B2];
+    qB[2] = q[PRJ_GRQ_B3];
+    fB[0] = 0.0;
+    fB[1] = f[PRJ_GRQ_B2];
+    fB[2] = f[PRJ_GRQ_B3];
+    flux[PRJ_CONS_B1] = 0.0;
+    for (d = 1; d < 3; ++d) {
+        double fb = 0.0;
+
+        for (m = 0; m < 3; ++m) {
+            fb += tet->upper[m][d] * tet->etx * qB[m];
+        }
+        fb -= tet->eup_t[d] * tet->exx * qB[0];
+        for (m = 1; m < 3; ++m) {
+            fb += tet->upper[m][d] * tet->exx * fB[m];
+        }
+        flux[PRJ_CONS_B1 + d] = sqrt_gamma * c2 * alpha * fb;
+    }
+    if (v_face != 0) {
+        double beta_coord[3] = {0.0, 0.0, 0.0};
+
+        if (vhat != 0) {
+            prj_gr_hlld_apply_upper(tet, vhat, beta_coord);
+        } else if (fabs(q[PRJ_GRQ_D]) > 0.0) {
+            double approx[3] = {0.0, 0.0, 0.0};
+
+            approx[0] = f[PRJ_GRQ_D] / q[PRJ_GRQ_D];
+            if (approx[0] > 1.0) approx[0] = 1.0;
+            if (approx[0] < -1.0) approx[0] = -1.0;
+            prj_gr_hlld_apply_upper(tet, approx, beta_coord);
+        }
+        for (d = 0; d < 3; ++d) {
+            v_face[d] = c * (alpha * beta_coord[d] - beta[d]);
+        }
+    }
+    if (Bv1 != 0) {
+        *Bv1 = flux[PRJ_CONS_B3];
+    }
+    if (Bv2 != 0) {
+        *Bv2 = -flux[PRJ_CONS_B2];
+    }
+}
+
+static void prj_gr_hlld_hlle_fallback(const prj_gr_hlld_state *L,
+    const prj_gr_hlld_state *R, const prj_gr_hlld_tetrad *tet,
+    double sqrt_gamma, double alpha, const double beta[3],
+    double lambda_l, double lambda_r, double s_interface,
+    double *flux, double v_face[3], double *Bv1, double *Bv2)
+{
+    double qhll[PRJ_GRQ_N];
+    double fhll[PRJ_GRQ_N];
+    double Bhll[3];
+    double inv;
+    int q;
+
+    if (s_interface <= lambda_l) {
+        prj_gr_hlld_emit_flux(tet, sqrt_gamma, alpha, beta, L->q, L->f,
+            L->B, L->v, flux, v_face, Bv1, Bv2);
+        return;
+    }
+    if (s_interface >= lambda_r) {
+        prj_gr_hlld_emit_flux(tet, sqrt_gamma, alpha, beta, R->q, R->f,
+            R->B, R->v, flux, v_face, Bv1, Bv2);
+        return;
+    }
+    inv = 1.0 / (lambda_r - lambda_l);
+    for (q = 0; q < PRJ_GRQ_N; ++q) {
+        qhll[q] = (lambda_r * R->q[q] - lambda_l * L->q[q] +
+            L->f[q] - R->f[q]) * inv;
+        fhll[q] = (lambda_r * L->f[q] - lambda_l * R->f[q] +
+            lambda_l * lambda_r * (R->q[q] - L->q[q])) * inv;
+    }
+    Bhll[0] = L->B[0];
+    Bhll[1] = qhll[PRJ_GRQ_B2];
+    Bhll[2] = qhll[PRJ_GRQ_B3];
+    prj_gr_hlld_emit_flux(tet, sqrt_gamma, alpha, beta, qhll, fhll,
+        Bhll, 0, flux, v_face, Bv1, Bv2);
+}
+
+static void prj_riemann_gr_hlld_impl(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    prj_eos *eos, const double gamma[3][3], double sqrt_gamma,
+    double alpha, const double beta[3], double bn_tilde, double *flux,
+    double v_face[3], double *Bv1, double *Bv2,
+    double deltau, double deltav, double deltaw, int low_diss)
+{
+    prj_gr_hlld_tetrad tet;
+    prj_gr_hlld_state L;
+    prj_gr_hlld_state R;
+    prj_gr_hlld_fan fan;
+    const double *qsel = 0;
+    const double *fsel = 0;
+    const double *Bsel = 0;
+    const double *vsel = 0;
+    double bn_phys;
+    double lambda_l;
+    double lambda_r;
+    double s_interface;
+
+    (void)eos;
+    if (WL == 0 || WR == 0 || gamma == 0 || beta == 0 || flux == 0 ||
+        sqrt_gamma <= 0.0 || alpha <= 0.0 || !isfinite(sqrt_gamma) ||
+        !isfinite(alpha)) {
+        prj_riemann_hlld_fail("invalid GR HLLD input");
+    }
+    if (!prj_gr_hlld_build_tetrad(gamma, alpha, beta, &tet)) {
+        prj_riemann_hlld_fail("invalid GR HLLD tetrad");
+    }
+    bn_phys = bn_tilde / sqrt_gamma;
+    if (!prj_gr_hlld_state_from_prim(WL, pL, gL, &tet, bn_phys, &L) ||
+        !prj_gr_hlld_state_from_prim(WR, pR, gR, &tet, bn_phys, &R)) {
+        prj_riemann_hlld_fail("invalid GR HLLD primitive state");
+    }
+    lambda_l = PRJ_MIN(L.lam_m, R.lam_m);
+    lambda_r = PRJ_MAX(L.lam_p, R.lam_p);
+    if (!(lambda_l < lambda_r) || !isfinite(lambda_l) || !isfinite(lambda_r)) {
+        prj_riemann_hlld_fail("invalid GR HLLD wave ordering");
+    }
+    s_interface = beta[0] / (alpha * sqrt(gamma[0][0]));
+    if (!isfinite(s_interface)) {
+        s_interface = 0.0;
+    }
+    if (fabs(L.B[0]) <= PRJ_HLLD_SMALL_NUMBER *
+        sqrt(PRJ_MAX(L.ptot, R.ptot))) {
+        prj_gr_hlld_hlle_fallback(&L, &R, &tet, sqrt_gamma, alpha, beta,
+            lambda_l, lambda_r, s_interface, flux, v_face, Bv1, Bv2);
+        return;
+    }
+    if (!prj_gr_hlld_solve_pressure(&L, &R, lambda_l, lambda_r, low_diss,
+            deltau, deltav, deltaw, &fan)) {
+        prj_gr_hlld_hlle_fallback(&L, &R, &tet, sqrt_gamma, alpha, beta,
+            lambda_l, lambda_r, s_interface, flux, v_face, Bv1, Bv2);
+        return;
+    }
+    if (s_interface <= fan.lambda_l) {
+        qsel = L.q;
+        fsel = L.f;
+        Bsel = L.B;
+        vsel = L.v;
+    } else if (s_interface <= fan.lambda_al) {
+        qsel = fan.aL.q;
+        fsel = fan.f_aL;
+        Bsel = fan.aL.B;
+        vsel = fan.aL.v;
+    } else if (s_interface <= fan.lambda_c) {
+        qsel = fan.cL.q;
+        fsel = fan.f_cL;
+        Bsel = fan.cL.B;
+        vsel = fan.cL.v;
+    } else if (s_interface <= fan.lambda_ar) {
+        qsel = fan.cR.q;
+        fsel = fan.f_cR;
+        Bsel = fan.cR.B;
+        vsel = fan.cR.v;
+    } else if (s_interface <= fan.lambda_r) {
+        qsel = fan.aR.q;
+        fsel = fan.f_aR;
+        Bsel = fan.aR.B;
+        vsel = fan.aR.v;
+    } else {
+        qsel = R.q;
+        fsel = R.f;
+        Bsel = R.B;
+        vsel = R.v;
+    }
+    prj_gr_hlld_emit_flux(&tet, sqrt_gamma, alpha, beta, qsel, fsel,
+        Bsel, vsel, flux, v_face, Bv1, Bv2);
+}
+
+void prj_riemann_gr_hlld(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    prj_eos *eos, const double gamma[3][3], double sqrt_gamma,
+    double alpha, const double beta[3], double bn_tilde, double *flux,
+    double v_face[3], double *Bv1, double *Bv2,
+    double deltau, double deltav, double deltaw)
+{
+    prj_riemann_gr_hlld_impl(WL, WR, pL, pR, gL, gR, eos, gamma,
+        sqrt_gamma, alpha, beta, bn_tilde, flux, v_face, Bv1, Bv2,
+        deltau, deltav, deltaw, 0);
+}
+
+void prj_riemann_gr_lhlld(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR,
+    prj_eos *eos, const double gamma[3][3], double sqrt_gamma,
+    double alpha, const double beta[3], double bn_tilde, double *flux,
+    double v_face[3], double *Bv1, double *Bv2,
+    double deltau, double deltav, double deltaw)
+{
+    prj_riemann_gr_hlld_impl(WL, WR, pL, pR, gL, gR, eos, gamma,
+        sqrt_gamma, alpha, beta, bn_tilde, flux, v_face, Bv1, Bv2,
+        deltau, deltav, deltaw, 1);
+}
+#endif
 #endif
 
 static void prj_riemann_state(const double *W, double pressure, double gamma,

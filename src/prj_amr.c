@@ -1575,7 +1575,32 @@ static void prj_amr_mhd_mark_active_faces(prj_block *block, int fidelity)
     }
 }
 
-static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
+static double prj_amr_mhd_cell_sqrt_gamma(const prj_mesh *mesh,
+    const prj_block *block, int use_bf1, int i, int j, int k)
+{
+#if PRJ_DYNAMIC_GR
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        prj_z4c_hydro_geom geom;
+
+        if (!prj_z4c_load_hydro_geom(mesh, block,
+                prj_stage_slot_from_bf_arg(use_bf1), i, j, k, &geom)) {
+            prj_amr_mhd_fail("prj_amr_mhd_set_cons_b_from_bf: failed to load full-GR geometry");
+        }
+        return geom.sqrt_gamma;
+    }
+#else
+    (void)mesh;
+    (void)block;
+    (void)use_bf1;
+    (void)i;
+    (void)j;
+    (void)k;
+#endif
+    return 1.0;
+}
+
+static void prj_amr_mhd_set_cons_b_from_bf(const prj_mesh *mesh,
+    prj_block *block, int use_bf1)
 {
     double *bf[3];
     int d;
@@ -1593,19 +1618,26 @@ static void prj_amr_mhd_set_cons_b_from_bf(prj_block *block, int use_bf1)
                 double b1 = 0.5 * (bf[X1DIR][FACE_IDX(X1DIR, i, j, k)] + bf[X1DIR][FACE_IDX(X1DIR, i + 1, j, k)]);
                 double b2 = 0.5 * (bf[X2DIR][FACE_IDX(X2DIR, i, j, k)] + bf[X2DIR][FACE_IDX(X2DIR, i, j + 1, k)]);
                 double b3 = 0.5 * (bf[X3DIR][FACE_IDX(X3DIR, i, j, k)] + bf[X3DIR][FACE_IDX(X3DIR, i, j, k + 1)]);
+                double sqrt_gamma = prj_amr_mhd_cell_sqrt_gamma(mesh, block,
+                    use_bf1, i, j, k);
+                double b1_prim = b1 / sqrt_gamma;
+                double b2_prim = b2 / sqrt_gamma;
+                double b3_prim = b3 / sqrt_gamma;
 
-                if (!isfinite(b1) || !isfinite(b2) || !isfinite(b3)) {
+                if (!isfinite(b1) || !isfinite(b2) || !isfinite(b3) ||
+                    !isfinite(b1_prim) || !isfinite(b2_prim) ||
+                    !isfinite(b3_prim)) {
                     prj_amr_mhd_fail("prj_amr_mhd_set_cons_b_from_bf: non-finite magnetic field");
                 }
                 prj_block_set_cons_value(block, PRJ_CONS_B1, i, j, k, b1);
                 prj_block_set_cons_value(block, PRJ_CONS_B2, i, j, k, b2);
                 prj_block_set_cons_value(block, PRJ_CONS_B3, i, j, k, b3);
-                block->W_mhd[WIDX(PRJ_PRIM_B1, i, j, k)] = b1;
-                block->W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)] = b2;
-                block->W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)] = b3;
-                prj_block_set_prim_value(block, 1, PRJ_PRIM_B1, i, j, k, b1);
-                prj_block_set_prim_value(block, 1, PRJ_PRIM_B2, i, j, k, b2);
-                prj_block_set_prim_value(block, 1, PRJ_PRIM_B3, i, j, k, b3);
+                block->W_mhd[WIDX(PRJ_PRIM_B1, i, j, k)] = b1_prim;
+                block->W_mhd[WIDX(PRJ_PRIM_B2, i, j, k)] = b2_prim;
+                block->W_mhd[WIDX(PRJ_PRIM_B3, i, j, k)] = b3_prim;
+                prj_block_set_prim_value(block, 1, PRJ_PRIM_B1, i, j, k, b1_prim);
+                prj_block_set_prim_value(block, 1, PRJ_PRIM_B2, i, j, k, b2_prim);
+                prj_block_set_prim_value(block, 1, PRJ_PRIM_B3, i, j, k, b3_prim);
             }
         }
     }
@@ -1812,7 +1844,7 @@ static void prj_amr_mhd_prolongate_bf(const prj_mesh *mesh, const prj_mpi *mpi,
     prj_amr_mhd_prolongate_bf_one(mesh, mpi, parent, child, child_oct, 0);
     prj_amr_mhd_prolongate_bf_one(mesh, mpi, parent, child, child_oct, 1);
     prj_amr_mhd_mark_active_faces(child, PRJ_MHD_FIDELITY_COARSER);
-    prj_amr_mhd_set_cons_b_from_bf(child, 0);
+    prj_amr_mhd_set_cons_b_from_bf(mesh, child, 0);
 }
 
 static const prj_block *prj_amr_mhd_child_for_face(const prj_block *children[8],
@@ -1919,7 +1951,8 @@ static void prj_amr_mhd_restrict_bf_one(const prj_block *children[8],
     }
 }
 
-static void prj_amr_mhd_restrict_bf(const prj_block *children[8], prj_block *parent)
+static void prj_amr_mhd_restrict_bf(const prj_mesh *mesh,
+    const prj_block *children[8], prj_block *parent)
 {
     int oct;
 
@@ -1930,7 +1963,7 @@ static void prj_amr_mhd_restrict_bf(const prj_block *children[8], prj_block *par
     prj_amr_mhd_restrict_bf_one(children, parent, 0);
     prj_amr_mhd_restrict_bf_one(children, parent, 1);
     prj_amr_mhd_mark_active_faces(parent, PRJ_MHD_FIDELITY_FINER);
-    prj_amr_mhd_set_cons_b_from_bf(parent, 0);
+    prj_amr_mhd_set_cons_b_from_bf(mesh, parent, 0);
 }
 #endif
 
@@ -2075,7 +2108,7 @@ void prj_amr_restrict(const prj_mesh *mesh, const prj_block *children[8], prj_bl
         }
     }
 #if PRJ_MHD
-    prj_amr_mhd_restrict_bf(children, parent);
+    prj_amr_mhd_restrict_bf(mesh, children, parent);
 #endif
 #if PRJ_DYNAMIC_GR
     if (prj_z4c_runtime_enabled(mesh)) {
