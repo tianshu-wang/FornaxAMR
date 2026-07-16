@@ -176,6 +176,15 @@ static void prj_z4c_set(double *z, int v, int i, int j, int k, double value)
     z[Z4CIDX(v, i, j, k)] = value;
 }
 
+/* Linear-index stride for a one-cell step along each axis, matching Z4CLIDX:
+ * i (X1DIR) -> BS^2, j (X2DIR) -> BS, k (X3DIR) -> 1. Lets the FD stencils walk
+ * off a base pointer (base[off * stride]) instead of recomputing Z4CIDX and
+ * branching on direction for every stencil point. */
+static int prj_z4c_axis_stride(int dir)
+{
+    return dir == X1DIR ? PRJ_BS_Z4C * PRJ_BS_Z4C : (dir == X2DIR ? PRJ_BS_Z4C : 1);
+}
+
 static int prj_z4c_cell_in_storage(int i, int j, int k)
 {
     return i >= -PRJ_NGHOST_Z4C && i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C &&
@@ -256,11 +265,12 @@ static double prj_z4c_Dx(const double *z, int v, int dir, const double idx[3],
     double out = 0.0;
     int p;
 
+    const double *b = z + Z4CIDX(v, i, j, k);
+    int stride = prj_z4c_axis_stride(dir);
+
     prj_z4c_fd1_coeff(&n, off, c);
     for (p = 0; p < n; ++p) {
-        int ii = i, jj = j, kk = k;
-        prj_z4c_shift_index(dir, off[p], &ii, &jj, &kk);
-        out += c[p] * prj_z4c_get(z, v, ii, jj, kk);
+        out += c[p] * b[off[p] * stride];
     }
     return out * idx[dir];
 }
@@ -268,13 +278,10 @@ static double prj_z4c_Dx(const double *z, int v, int dir, const double idx[3],
 static double prj_z4c_Dx2nd(const double *z, int v, int dir, const double idx[3],
     int i, int j, int k)
 {
-    int im = i, jm = j, km = k;
-    int ip = i, jp = j, kp = k;
+    const double *b = z + Z4CIDX(v, i, j, k);
+    int stride = prj_z4c_axis_stride(dir);
 
-    prj_z4c_shift_index(dir, -1, &im, &jm, &km);
-    prj_z4c_shift_index(dir, 1, &ip, &jp, &kp);
-    return 0.5 * idx[dir] *
-        (prj_z4c_get(z, v, ip, jp, kp) - prj_z4c_get(z, v, im, jm, km));
+    return 0.5 * idx[dir] * (b[stride] - b[-stride]);
 }
 
 static double prj_z4c_Dxx(const double *z, int v, int dir, const double idx[3],
@@ -283,14 +290,14 @@ static double prj_z4c_Dxx(const double *z, int v, int dir, const double idx[3],
     int off[7];
     double c[7];
     int n;
+    const double *b = z + Z4CIDX(v, i, j, k);
+    int stride = prj_z4c_axis_stride(dir);
     double out = 0.0;
     int p;
 
     prj_z4c_fd2_coeff(&n, off, c);
     for (p = 0; p < n; ++p) {
-        int ii = i, jj = j, kk = k;
-        prj_z4c_shift_index(dir, off[p], &ii, &jj, &kk);
-        out += c[p] * prj_z4c_get(z, v, ii, jj, kk);
+        out += c[p] * b[off[p] * stride];
     }
     return out * idx[dir] * idx[dir];
 }
@@ -301,6 +308,9 @@ static double prj_z4c_Dxy(const double *z, int v, int dirx, int diry,
     int offx[6], offy[6];
     double cx[6], cy[6];
     int nx, ny;
+    const double *b = z + Z4CIDX(v, i, j, k);
+    int sx = prj_z4c_axis_stride(dirx);
+    int sy = prj_z4c_axis_stride(diry);
     double out = 0.0;
     int px, py;
 
@@ -308,10 +318,7 @@ static double prj_z4c_Dxy(const double *z, int v, int dirx, int diry,
     prj_z4c_fd1_coeff(&ny, offy, cy);
     for (px = 0; px < nx; ++px) {
         for (py = 0; py < ny; ++py) {
-            int ii = i, jj = j, kk = k;
-            prj_z4c_shift_index(dirx, offx[px], &ii, &jj, &kk);
-            prj_z4c_shift_index(diry, offy[py], &ii, &jj, &kk);
-            out += cx[px] * cy[py] * prj_z4c_get(z, v, ii, jj, kk);
+            out += cx[px] * cy[py] * b[offx[px] * sx + offy[py] * sy];
         }
     }
     return out * idx[dirx] * idx[diry];
@@ -321,70 +328,27 @@ static double prj_z4c_Lx(const double *z, int beta_var, int q_var, int dir,
     const double idx[3], int i, int j, int k)
 {
     double beta = prj_z4c_get(z, beta_var, i, j, k);
-    double q0 = prj_z4c_get(z, q_var, i, j, k);
+    const double *b = z + Z4CIDX(q_var, i, j, k);
+    int s = prj_z4c_axis_stride(dir);
+    double q0 = b[0];
     double dl;
     double dr;
 
 #if PRJ_NGHOST_Z4C == 2
-    {
-        int im2 = i, jm2 = j, km2 = k, im1 = i, jm1 = j, km1 = k;
-        int ip1 = i, jp1 = j, kp1 = k, ip2 = i, jp2 = j, kp2 = k;
-        prj_z4c_shift_index(dir, -2, &im2, &jm2, &km2);
-        prj_z4c_shift_index(dir, -1, &im1, &jm1, &km1);
-        prj_z4c_shift_index(dir, 1, &ip1, &jp1, &kp1);
-        prj_z4c_shift_index(dir, 2, &ip2, &jp2, &kp2);
-        dl = 0.5 * prj_z4c_get(z, q_var, im2, jm2, km2) -
-            2.0 * prj_z4c_get(z, q_var, im1, jm1, km1) + 1.5 * q0;
-        dr = -0.5 * prj_z4c_get(z, q_var, ip2, jp2, kp2) +
-            2.0 * prj_z4c_get(z, q_var, ip1, jp1, kp1) - 1.5 * q0;
-    }
+    dl = 0.5 * b[-2 * s] - 2.0 * b[-s] + 1.5 * q0;
+    dr = -0.5 * b[2 * s] + 2.0 * b[s] - 1.5 * q0;
 #elif PRJ_NGHOST_Z4C == 3
-    {
-        int im3 = i, jm3 = j, km3 = k, im2 = i, jm2 = j, km2 = k;
-        int im1 = i, jm1 = j, km1 = k, ip1 = i, jp1 = j, kp1 = k;
-        int ip2 = i, jp2 = j, kp2 = k, ip3 = i, jp3 = j, kp3 = k;
-        prj_z4c_shift_index(dir, -3, &im3, &jm3, &km3);
-        prj_z4c_shift_index(dir, -2, &im2, &jm2, &km2);
-        prj_z4c_shift_index(dir, -1, &im1, &jm1, &km1);
-        prj_z4c_shift_index(dir, 1, &ip1, &jp1, &kp1);
-        prj_z4c_shift_index(dir, 2, &ip2, &jp2, &kp2);
-        prj_z4c_shift_index(dir, 3, &ip3, &jp3, &kp3);
-        dl = (-prj_z4c_get(z, q_var, im3, jm3, km3) +
-            6.0 * prj_z4c_get(z, q_var, im2, jm2, km2) -
-            18.0 * prj_z4c_get(z, q_var, im1, jm1, km1) + 10.0 * q0 +
-            3.0 * prj_z4c_get(z, q_var, ip1, jp1, kp1)) / 12.0;
-        dr = (prj_z4c_get(z, q_var, ip3, jp3, kp3) -
-            6.0 * prj_z4c_get(z, q_var, ip2, jp2, kp2) +
-            18.0 * prj_z4c_get(z, q_var, ip1, jp1, kp1) - 10.0 * q0 -
-            3.0 * prj_z4c_get(z, q_var, im1, jm1, km1)) / 12.0;
-    }
+    dl = (-b[-3 * s] + 6.0 * b[-2 * s] - 18.0 * b[-s] + 10.0 * q0 +
+        3.0 * b[s]) / 12.0;
+    dr = (b[3 * s] - 6.0 * b[2 * s] + 18.0 * b[s] - 10.0 * q0 -
+        3.0 * b[-s]) / 12.0;
 #else
-    {
-        int im4 = i, jm4 = j, km4 = k, im3 = i, jm3 = j, km3 = k;
-        int im2 = i, jm2 = j, km2 = k, im1 = i, jm1 = j, km1 = k;
-        int ip1 = i, jp1 = j, kp1 = k, ip2 = i, jp2 = j, kp2 = k;
-        int ip3 = i, jp3 = j, kp3 = k, ip4 = i, jp4 = j, kp4 = k;
-        prj_z4c_shift_index(dir, -4, &im4, &jm4, &km4);
-        prj_z4c_shift_index(dir, -3, &im3, &jm3, &km3);
-        prj_z4c_shift_index(dir, -2, &im2, &jm2, &km2);
-        prj_z4c_shift_index(dir, -1, &im1, &jm1, &km1);
-        prj_z4c_shift_index(dir, 1, &ip1, &jp1, &kp1);
-        prj_z4c_shift_index(dir, 2, &ip2, &jp2, &kp2);
-        prj_z4c_shift_index(dir, 3, &ip3, &jp3, &kp3);
-        prj_z4c_shift_index(dir, 4, &ip4, &jp4, &kp4);
-        dl = prj_z4c_get(z, q_var, im4, jm4, km4) / 60.0 -
-            2.0 * prj_z4c_get(z, q_var, im3, jm3, km3) / 15.0 +
-            0.5 * prj_z4c_get(z, q_var, im2, jm2, km2) -
-            4.0 * prj_z4c_get(z, q_var, im1, jm1, km1) / 3.0 +
-            7.0 * q0 / 12.0 + 2.0 * prj_z4c_get(z, q_var, ip1, jp1, kp1) / 5.0 -
-            prj_z4c_get(z, q_var, ip2, jp2, kp2) / 30.0;
-        dr = -prj_z4c_get(z, q_var, ip4, jp4, kp4) / 60.0 +
-            2.0 * prj_z4c_get(z, q_var, ip3, jp3, kp3) / 15.0 -
-            0.5 * prj_z4c_get(z, q_var, ip2, jp2, kp2) +
-            4.0 * prj_z4c_get(z, q_var, ip1, jp1, kp1) / 3.0 -
-            7.0 * q0 / 12.0 - 2.0 * prj_z4c_get(z, q_var, im1, jm1, km1) / 5.0 +
-            prj_z4c_get(z, q_var, im2, jm2, km2) / 30.0;
-    }
+    dl = b[-4 * s] / 60.0 - 2.0 * b[-3 * s] / 15.0 + 0.5 * b[-2 * s] -
+        4.0 * b[-s] / 3.0 + 7.0 * q0 / 12.0 + 2.0 * b[s] / 5.0 -
+        b[2 * s] / 30.0;
+    dr = -b[4 * s] / 60.0 + 2.0 * b[3 * s] / 15.0 - 0.5 * b[2 * s] +
+        4.0 * b[s] / 3.0 - 7.0 * q0 / 12.0 - 2.0 * b[-s] / 5.0 +
+        b[-2 * s] / 30.0;
 #endif
     return (beta < 0.0 ? beta * dl : beta * dr) * idx[dir];
 }
@@ -405,13 +369,13 @@ static double prj_z4c_Diss(const double *z, int v, int dir, const double idx[3],
     int offs[9] = {-4, -3, -2, -1, 0, 1, 2, 3, 4};
     double coef[9] = {1.0, -8.0, 28.0, -56.0, 70.0, -56.0, 28.0, -8.0, 1.0};
 #endif
+    const double *b = z + Z4CIDX(v, i, j, k);
+    int stride = prj_z4c_axis_stride(dir);
     double out = 0.0;
     int p;
 
     for (p = 0; p < n; ++p) {
-        int ii = i, jj = j, kk = k;
-        prj_z4c_shift_index(dir, offs[p], &ii, &jj, &kk);
-        out += coef[p] * prj_z4c_get(z, v, ii, jj, kk);
+        out += coef[p] * b[offs[p] * stride];
     }
     return out * idx[dir];
 }
@@ -1224,35 +1188,46 @@ static void prj_z4c_apply_physical_axis(const prj_mesh *mesh, const prj_bc *bc,
         int mirror = outer ? PRJ_BLOCK_SIZE - p - 1 : p;
         int base = outer ? PRJ_BLOCK_SIZE - 1 : 0;
         int off = outer ? -1 : 1;
-        int i, j, k;
+        int a1 = (axis + 1) % 3;
+        int a2 = (axis + 2) % 3;
+        int u, v;
 
-        for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
-            for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
-                for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
-                    int dst_idx[3] = {i, j, k};
-                    int src_idx[3] = {i, j, k};
-                    int var;
+        /* Only the single ghost plane at index `ghost` along `axis` is written,
+         * from interior data on that same axis. Iterate just the two transverse
+         * directions (u, v); the axis-parallel index is pinned to ghost/mirror/
+         * base. (The original looped the axis direction too, rewriting this
+         * plane PRJ_BS_Z4C times with identical values.) */
+        for (u = -PRJ_NGHOST_Z4C; u < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++u) {
+            for (v = -PRJ_NGHOST_Z4C; v < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++v) {
+                int dst_idx[3];
+                int src_idx[3];
+                int var;
 
-                    dst_idx[axis] = ghost;
-                    src_idx[axis] = mirror;
-                    for (var = 0; var < PRJ_NZ4C; ++var) {
-                        double value;
+                dst_idx[axis] = ghost;
+                dst_idx[a1] = u;
+                dst_idx[a2] = v;
+                src_idx[axis] = mirror;
+                src_idx[a1] = u;
+                src_idx[a2] = v;
+                for (var = 0; var < PRJ_NZ4C; ++var) {
+                    double value;
 
-                        if (bc_type == PRJ_BC_REFLECT) {
-                            value = (double)prj_z4c_parity(var, axis) *
-                                prj_z4c_get(z, var, src_idx[0], src_idx[1], src_idx[2]);
-                        } else {
-                            int base_idx[3] = {i, j, k};
-                            int off_idx[3] = {0, 0, 0};
+                    if (bc_type == PRJ_BC_REFLECT) {
+                        value = (double)prj_z4c_parity(var, axis) *
+                            prj_z4c_get(z, var, src_idx[0], src_idx[1], src_idx[2]);
+                    } else {
+                        int base_idx[3];
+                        int off_idx[3] = {0, 0, 0};
 
-                            base_idx[axis] = base;
-                            off_idx[axis] = off;
-                            value = prj_z4c_extrapolate(z, var,
-                                base_idx[0], base_idx[1], base_idx[2],
-                                off_idx[0], off_idx[1], off_idx[2], p + 1, order);
-                        }
-                        prj_z4c_set(z, var, dst_idx[0], dst_idx[1], dst_idx[2], value);
+                        base_idx[axis] = base;
+                        base_idx[a1] = u;
+                        base_idx[a2] = v;
+                        off_idx[axis] = off;
+                        value = prj_z4c_extrapolate(z, var,
+                            base_idx[0], base_idx[1], base_idx[2],
+                            off_idx[0], off_idx[1], off_idx[2], p + 1, order);
                     }
+                    prj_z4c_set(z, var, dst_idx[0], dst_idx[1], dst_idx[2], value);
                 }
             }
         }
@@ -1745,14 +1720,22 @@ void prj_z4c_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int sta
         prj_z4c_fail("prj_z4c_fill_ghosts: invalid stage");
     }
     if (bc != 0) {
+        PRJ_SUBTIMER_START("sub_z4c_fg_bcs");
         prj_z4c_apply_physical_bcs(mesh, mpi, bc, stage);
+        PRJ_SUBTIMER_STOP("sub_z4c_fg_bcs");
     }
     for (pass = 0; pass < 3; ++pass) {
+        PRJ_SUBTIMER_START("sub_z4c_fg_local_send");
         prj_z4c_local_send(mesh, mpi, stage, fill_kinds[pass]);
+        PRJ_SUBTIMER_STOP("sub_z4c_fg_local_send");
+        PRJ_SUBTIMER_START("sub_z4c_fg_mpi_exchange");
         prj_z4c_mpi_exchange(mesh, mpi, stage, fill_kinds[pass]);
+        PRJ_SUBTIMER_STOP("sub_z4c_fg_mpi_exchange");
     }
     if (bc != 0) {
+        PRJ_SUBTIMER_START("sub_z4c_fg_bcs");
         prj_z4c_apply_physical_bcs(mesh, mpi, bc, stage);
+        PRJ_SUBTIMER_STOP("sub_z4c_fg_bcs");
     }
 }
 
