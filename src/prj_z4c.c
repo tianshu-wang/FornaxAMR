@@ -2531,12 +2531,18 @@ void prj_z4c_finalize_stage(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int 
     if (!prj_z4c_runtime_enabled(mesh)) {
         return;
     }
+    PRJ_SUBTIMER_START("sub_z4c_enforce_active");
     prj_z4c_enforce_range(mesh, mpi, stage, 0, PRJ_BLOCK_SIZE, 0, PRJ_BLOCK_SIZE,
         0, PRJ_BLOCK_SIZE);
+    PRJ_SUBTIMER_STOP("sub_z4c_enforce_active");
+    PRJ_SUBTIMER_START("sub_z4c_fill_ghosts");
     prj_z4c_fill_ghosts(mesh, mpi, bc, stage);
+    PRJ_SUBTIMER_STOP("sub_z4c_fill_ghosts");
+    PRJ_SUBTIMER_START("sub_z4c_enforce_ext");
     prj_z4c_enforce_range(mesh, mpi, stage, -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C,
         -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C,
         -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C);
+    PRJ_SUBTIMER_STOP("sub_z4c_enforce_ext");
 }
 
 void prj_z4c_save_stage(prj_mesh *mesh, const prj_mpi *mpi, int dst_stage, int src_stage)

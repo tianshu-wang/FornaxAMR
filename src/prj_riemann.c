@@ -22,6 +22,14 @@ static double prj_riemann_theta_limiter(double cfmax,
 #define PRJ_RIEMANN_DEBUG 0
 #endif
 
+/* Reciprocals of c as compile-time constants: the GR HLLD hot path divides
+ * primitives by c / c^2 on every face. Strict-IEEE builds (no -ffast-math)
+ * keep `x / c` as a division; multiplying by the folded reciprocal turns those
+ * into multiplies. Changes results by <=0.5 ULP (bit-identity intentionally
+ * not preserved here). */
+#define PRJ_GR_INV_CLIGHT (1.0 / PRJ_CLIGHT)
+#define PRJ_GR_INV_CLIGHT2 (1.0 / (PRJ_CLIGHT * PRJ_CLIGHT))
+
 typedef struct prj_hlld_state {
     double rho;
     double vx;
@@ -434,6 +442,11 @@ void prj_riemann_hlld(const double *WL, const double *WR,
 #if PRJ_DYNAMIC_GR
 #define PRJ_GR_HLLD_MAX_ITER 32
 #define PRJ_GR_HLLD_EPS 1.0e-12
+/* Weak-normal-field degeneracy: relativistic HLLD's rotational (Alfven) fan
+ * collapses when the normal field is dynamically negligible, leaving no
+ * constructible pressure root. Detect it by magnetization B_n^2/ptot rather
+ * than raw |B_n|, and route such faces to HLLE. */
+#define PRJ_GR_HLLD_BN2_DEGEN 1.0e-14
 
 enum prj_gr_hlld_q {
     PRJ_GRQ_D = 0,
@@ -568,13 +581,17 @@ static int prj_gr_hlld_build_tetrad(const double gamma[3][3],
     double bhat;
     double chat;
     double dhat;
+    double inv_det;
+#if PRJ_RIEMANN_DEBUG
     int a;
     int b;
+#endif
 
     if (gamma == 0 || beta == 0 || tet == 0 || alpha <= 0.0 ||
         !isfinite(alpha)) {
         return 0;
     }
+#if PRJ_RIEMANN_DEBUG
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             if (!isfinite(gamma[a][b])) {
@@ -582,6 +599,7 @@ static int prj_gr_hlld_build_tetrad(const double gamma[3][3],
             }
         }
     }
+#endif
     det = gamma[0][0] * (gamma[1][1] * gamma[2][2] -
             gamma[1][2] * gamma[2][1]) -
         gamma[0][1] * (gamma[1][0] * gamma[2][2] -
@@ -591,24 +609,25 @@ static int prj_gr_hlld_build_tetrad(const double gamma[3][3],
     if (!isfinite(det) || det <= 0.0) {
         return 0;
     }
+    inv_det = 1.0 / det;
     gu[0][0] = (gamma[1][1] * gamma[2][2] -
-        gamma[1][2] * gamma[2][1]) / det;
+        gamma[1][2] * gamma[2][1]) * inv_det;
     gu[0][1] = (gamma[0][2] * gamma[2][1] -
-        gamma[0][1] * gamma[2][2]) / det;
+        gamma[0][1] * gamma[2][2]) * inv_det;
     gu[0][2] = (gamma[0][1] * gamma[1][2] -
-        gamma[0][2] * gamma[1][1]) / det;
+        gamma[0][2] * gamma[1][1]) * inv_det;
     gu[1][0] = (gamma[1][2] * gamma[2][0] -
-        gamma[1][0] * gamma[2][2]) / det;
+        gamma[1][0] * gamma[2][2]) * inv_det;
     gu[1][1] = (gamma[0][0] * gamma[2][2] -
-        gamma[0][2] * gamma[2][0]) / det;
+        gamma[0][2] * gamma[2][0]) * inv_det;
     gu[1][2] = (gamma[0][2] * gamma[1][0] -
-        gamma[0][0] * gamma[1][2]) / det;
+        gamma[0][0] * gamma[1][2]) * inv_det;
     gu[2][0] = (gamma[1][0] * gamma[2][1] -
-        gamma[1][1] * gamma[2][0]) / det;
+        gamma[1][1] * gamma[2][0]) * inv_det;
     gu[2][1] = (gamma[0][1] * gamma[2][0] -
-        gamma[0][0] * gamma[2][1]) / det;
+        gamma[0][0] * gamma[2][1]) * inv_det;
     gu[2][2] = (gamma[0][0] * gamma[1][1] -
-        gamma[0][1] * gamma[1][0]) / det;
+        gamma[0][1] * gamma[1][0]) * inv_det;
 
     minor_yz = gamma[1][1] * gamma[2][2] - gamma[1][2] * gamma[1][2];
     if (gu[0][0] <= 0.0 || gamma[2][2] <= 0.0 || minor_yz <= 0.0) {
@@ -639,15 +658,21 @@ static int prj_gr_hlld_build_tetrad(const double gamma[3][3],
     tet->eup_t[2] = -beta[2] / alpha;
     tet->etx = tet->eup_t[0];
     tet->exx = tet->upper[0][0];
+#if PRJ_RIEMANN_DEBUG
     return prj_gr_hlld_finite_array(&tet->lower[0][0], 9) &&
         prj_gr_hlld_finite_array(&tet->upper[0][0], 9) &&
         prj_gr_hlld_finite_array(tet->eup_t, 3) &&
         isfinite(tet->etx) && isfinite(tet->exx);
+#else
+    return 1;
+#endif
 }
 
 static void prj_gr_hlld_fill_qf(prj_gr_hlld_state *s)
 {
-    double inv_w2 = 1.0 / s->wlor2;
+    /* 1/W^2 == 1 - v^2 exactly (W = 1/sqrt(1-v^2)); use the identity to avoid a
+     * division. */
+    double inv_w2 = 1.0 - s->v2;
     double vB = s->Bv;
 
     s->q[PRJ_GRQ_D] = s->D;
@@ -683,6 +708,7 @@ static int prj_gr_hlld_state_from_prim(const double *W, double pressure,
     double zeta;
     double disc;
     double den;
+    double inv_den;
     int d;
 
     if (W == 0 || tet == 0 || s == 0 || pressure <= 0.0 ||
@@ -690,20 +716,20 @@ static int prj_gr_hlld_state_from_prim(const double *W, double pressure,
         return 0;
     }
     s->rho = W[PRJ_PRIM_RHO];
-    s->eint_m = W[PRJ_PRIM_EINT] / (PRJ_CLIGHT * PRJ_CLIGHT);
-    s->p = pressure / (PRJ_CLIGHT * PRJ_CLIGHT);
+    s->eint_m = W[PRJ_PRIM_EINT] * PRJ_GR_INV_CLIGHT2;
+    s->p = pressure * PRJ_GR_INV_CLIGHT2;
     s->gamma = isfinite(gas_gamma) && gas_gamma > 0.0 ? gas_gamma : 5.0 / 3.0;
     s->ye = W[PRJ_PRIM_YE];
     if (s->rho <= 0.0 || s->eint_m < 0.0 || s->p <= 0.0 ||
         !isfinite(s->rho) || !isfinite(s->eint_m) || !isfinite(s->ye)) {
         return 0;
     }
-    beta_coord[0] = W[PRJ_PRIM_V1] / PRJ_CLIGHT;
-    beta_coord[1] = W[PRJ_PRIM_V2] / PRJ_CLIGHT;
-    beta_coord[2] = W[PRJ_PRIM_V3] / PRJ_CLIGHT;
-    B_coord_m[0] = bn_phys / PRJ_CLIGHT;
-    B_coord_m[1] = W[PRJ_PRIM_B2] / PRJ_CLIGHT;
-    B_coord_m[2] = W[PRJ_PRIM_B3] / PRJ_CLIGHT;
+    beta_coord[0] = W[PRJ_PRIM_V1] * PRJ_GR_INV_CLIGHT;
+    beta_coord[1] = W[PRJ_PRIM_V2] * PRJ_GR_INV_CLIGHT;
+    beta_coord[2] = W[PRJ_PRIM_V3] * PRJ_GR_INV_CLIGHT;
+    B_coord_m[0] = bn_phys * PRJ_GR_INV_CLIGHT;
+    B_coord_m[1] = W[PRJ_PRIM_B2] * PRJ_GR_INV_CLIGHT;
+    B_coord_m[2] = W[PRJ_PRIM_B3] * PRJ_GR_INV_CLIGHT;
     prj_gr_hlld_apply_lower(tet, beta_coord, s->v);
     prj_gr_hlld_apply_lower(tet, B_coord_m, s->B);
     s->v2 = prj_gr_hlld_dot3(s->v, s->v);
@@ -715,7 +741,7 @@ static int prj_gr_hlld_state_from_prim(const double *W, double pressure,
     s->wlor2 = s->wlor * s->wlor;
     s->B2 = prj_gr_hlld_dot3(s->B, s->B);
     s->Bv = prj_gr_hlld_dot3(s->B, s->v);
-    s->b2 = s->B2 / s->wlor2 + s->Bv * s->Bv;
+    s->b2 = s->B2 * (1.0 - s->v2) + s->Bv * s->Bv;
     s->rhoh = s->rho * (1.0 + s->eint_m) + s->p;
     s->ptot = s->p + 0.5 * s->b2;
     s->D = s->rho * s->wlor;
@@ -761,8 +787,9 @@ static int prj_gr_hlld_state_from_prim(const double *W, double pressure,
         return 0;
     }
     disc = sqrt(zeta) * sqrt(disc);
-    s->lam_m = (s->v[0] * (1.0 - zeta) - disc) / den;
-    s->lam_p = (s->v[0] * (1.0 - zeta) + disc) / den;
+    inv_den = 1.0 / den;
+    s->lam_m = (s->v[0] * (1.0 - zeta) - disc) * inv_den;
+    s->lam_p = (s->v[0] * (1.0 - zeta) + disc) * inv_den;
     if (!isfinite(s->lam_m) || !isfinite(s->lam_p)) {
         return 0;
     }
@@ -1029,6 +1056,12 @@ static double prj_gr_hlld_pressure_guess(const prj_gr_hlld_state *L,
     return guess;
 }
 
+static int prj_gr_hlld_fan_converged(double residual, const prj_gr_hlld_fan *fan)
+{
+    return fabs(residual) <= 1.0e-10 *
+        (fabs(fan->lambda_ar - fan->lambda_al) + 1.0);
+}
+
 static int prj_gr_hlld_solve_pressure(const prj_gr_hlld_state *L,
     const prj_gr_hlld_state *R, double lambda_l, double lambda_r,
     prj_gr_hlld_fan *fan)
@@ -1047,57 +1080,89 @@ static int prj_gr_hlld_solve_pressure(const prj_gr_hlld_state *L,
     guesses[3] = 2.0 * guesses[0];
     guesses[4] = 0.5 * guesses[0];
     for (ig = 0; ig < 5; ++ig) {
-        double p = guesses[ig];
+        double p0 = guesses[ig];
+        double p1;
+        double f0;
+        double f1;
+        double dp;
+        prj_gr_hlld_fan trial;
         int iter;
 
-        if (!(p > 0.0) || !isfinite(p)) {
+        if (!(p0 > 0.0) || !isfinite(p0)) {
             continue;
         }
-        for (iter = 0; iter < PRJ_GR_HLLD_MAX_ITER; ++iter) {
-            prj_gr_hlld_fan trial;
-            double f;
-            double fp;
-            double dp;
-            double deriv;
-            double pnew;
-
-            if (!prj_gr_hlld_build_fan(&side_l, &side_r, p,
-                    &trial, &f)) {
-                p *= 1.25;
+        /* Bootstrap the secant with two points built entirely from this face's
+         * own L/R states -- p0 is a face-local seed and p1 is a fixed relative
+         * offset from it. No dependence on any other face's result, so the flux
+         * loop stays free of loop-carried state. */
+        if (!prj_gr_hlld_build_fan(&side_l, &side_r, p0, &trial, &f0)) {
+            continue;
+        }
+        if (prj_gr_hlld_fan_converged(f0, &trial)) {
+            *fan = trial;
+            return 1;
+        }
+        dp = 1.0e-6 * PRJ_MAX(fabs(p0), scale);
+        p1 = p0 + dp;
+        if (!prj_gr_hlld_build_fan(&side_l, &side_r, p1, &trial, &f1)) {
+            p1 = p0 - dp;
+            if (!(p1 > 0.0) ||
+                !prj_gr_hlld_build_fan(&side_l, &side_r, p1, &trial, &f1)) {
                 continue;
             }
-            if (fabs(f) <= 1.0e-10 *
-                (fabs(trial.lambda_ar - trial.lambda_al) + 1.0)) {
+        }
+        if (prj_gr_hlld_fan_converged(f1, &trial)) {
+            *fan = trial;
+            return 1;
+        }
+        /* Secant iteration: one new residual evaluation per step, reusing the
+         * (p0,f0),(p1,f1) pair -- half the build_fan calls of the previous
+         * finite-difference Newton, which spent a second evaluation per step
+         * purely to estimate df/dp. */
+        for (iter = 0; iter < PRJ_GR_HLLD_MAX_ITER; ++iter) {
+            double denom = f1 - f0;
+            double pnew;
+            double fnew;
+            double step;
+            int ok;
+            int bt;
+
+            if (fabs(denom) <= 1.0e-300 || !isfinite(denom)) {
+                break;
+            }
+            pnew = p1 - f1 * (p1 - p0) / denom;
+            if (!(pnew > 0.0) || !isfinite(pnew)) {
+                pnew = 0.5 * p1;
+            }
+            if (pnew > 10.0 * p1) {
+                pnew = 10.0 * p1;
+            }
+            if (pnew < 0.1 * p1) {
+                pnew = 0.1 * p1;
+            }
+            ok = prj_gr_hlld_build_fan(&side_l, &side_r, pnew, &trial, &fnew);
+            /* If the trial pressure yields an invalid fan, backtrack toward the
+             * last good point p1 (bounded) rather than abandoning the seed. */
+            step = pnew - p1;
+            for (bt = 0; !ok && bt < 8; ++bt) {
+                step *= 0.5;
+                pnew = p1 + step;
+                if (!(pnew > 0.0)) {
+                    break;
+                }
+                ok = prj_gr_hlld_build_fan(&side_l, &side_r, pnew, &trial, &fnew);
+            }
+            if (!ok) {
+                break;
+            }
+            p0 = p1;
+            f0 = f1;
+            p1 = pnew;
+            f1 = fnew;
+            if (prj_gr_hlld_fan_converged(f1, &trial)) {
                 *fan = trial;
                 return 1;
             }
-            dp = 1.0e-6 * PRJ_MAX(fabs(p), scale);
-            if (!prj_gr_hlld_build_fan(&side_l, &side_r, p + dp,
-                    &trial, &fp)) {
-                dp = -0.5 * dp;
-                if (p + dp <= 0.0 ||
-                    !prj_gr_hlld_build_fan(&side_l, &side_r,
-                        p + dp, &trial, &fp)) {
-                    p *= 1.5;
-                    continue;
-                }
-            }
-            deriv = (fp - f) / dp;
-            if (fabs(deriv) <= 1.0e-14 || !isfinite(deriv)) {
-                p *= 1.25;
-                continue;
-            }
-            pnew = p - f / deriv;
-            if (!(pnew > 0.0) || !isfinite(pnew)) {
-                pnew = 0.5 * p;
-            }
-            if (pnew > 10.0 * p) {
-                pnew = 10.0 * p;
-            }
-            if (pnew < 0.1 * p) {
-                pnew = 0.1 * p;
-            }
-            p = pnew;
         }
     }
     return 0;
@@ -1263,16 +1328,17 @@ static void prj_riemann_gr_hlld_impl(const double *WL, const double *WR,
             R.B, R.v, flux, v_face, Bv1, Bv2);
         return;
     }
-    if (fabs(L.B[0]) <= PRJ_HLLD_SMALL_NUMBER *
-        sqrt(PRJ_MAX(L.ptot, R.ptot))) {
+    if (L.B[0] * L.B[0] < PRJ_GR_HLLD_BN2_DEGEN * PRJ_MAX(L.ptot, R.ptot)) {
         prj_gr_hlld_hlle_fallback(&L, &R, &tet, sqrt_gamma, alpha, beta,
             lambda_l, lambda_r, s_interface, flux, v_face, Bv1, Bv2);
         return;
     }
     if (!prj_gr_hlld_solve_pressure(&L, &R, lambda_l, lambda_r, &fan)) {
-        prj_gr_hlld_hlle_fallback(&L, &R, &tet, sqrt_gamma, alpha, beta,
-            lambda_l, lambda_r, s_interface, flux, v_face, Bv1, Bv2);
-        return;
+        /* The B_normal~=0 degeneracy above is handled by HLLE (relativistic
+         * HLLD is undefined there). Reaching here means HLLD *should* apply but
+         * the pressure root find did not converge -- surface it rather than
+         * silently degrading to HLLE. */
+        prj_riemann_hlld_fail("GR HLLD pressure solve failed to converge");
     }
     if (s_interface <= fan.lambda_l) {
         qsel = L.q;

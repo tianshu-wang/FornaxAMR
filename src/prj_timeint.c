@@ -2064,8 +2064,12 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
 
+        PRJ_SUBTIMER_START("sub_z4c_rhs");
         prj_z4c_compute_rhs(mesh, mpi, rad, 0, 0, tau_cm);
+        PRJ_SUBTIMER_STOP("sub_z4c_rhs");
+        PRJ_SUBTIMER_START("sub_z4c_sommerfeld");
         prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
+        PRJ_SUBTIMER_STOP("sub_z4c_sommerfeld");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_src_cell_update");
@@ -2100,7 +2104,9 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         /* Z4c slot 1 was advanced in place, per cell, inside the update loop
          * above (fused with the hydro recovery); only enforce + fill ghosts. */
+        PRJ_SUBTIMER_START("sub_z4c_finalize");
         prj_z4c_finalize_stage(mesh, mpi, bc, 1);
+        PRJ_SUBTIMER_STOP("sub_z4c_finalize");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_active");
@@ -2184,8 +2190,12 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
 
+        PRJ_SUBTIMER_START("sub_z4c_rhs");
         prj_z4c_compute_rhs(mesh, mpi, rad, 1, 0, tau_cm);
+        PRJ_SUBTIMER_STOP("sub_z4c_rhs");
+        PRJ_SUBTIMER_START("sub_z4c_sommerfeld");
         prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 1, 0);
+        PRJ_SUBTIMER_STOP("sub_z4c_sommerfeld");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_src_cell_update");
@@ -2218,7 +2228,9 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         /* Final geometry slot 0 (g^{n+1}) was advanced in place, per cell,
          * inside the update loop above; only enforce + fill ghosts here. */
+        PRJ_SUBTIMER_START("sub_z4c_finalize");
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
+        PRJ_SUBTIMER_STOP("sub_z4c_finalize");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_active");
