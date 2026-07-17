@@ -563,44 +563,6 @@ int main(int argc, char *argv[])
         }
         sim.time += dt_step;
         sim.step += 1;
-#if PRJ_DYNAMIC_GR
-        /* TEMP DIAG: worst relative eint margin above the EOS cold floor. */
-        if (prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
-            double worst = 1e300;
-            int wb = -1, wi = 0, wj = 0, wk = 0;
-            double wrho = 0.0, weint = 0.0, wye = 0.0, wfloor = 0.0;
-            int bi;
-            for (bi = 0; bi < sim.mesh.nblocks; ++bi) {
-                prj_block *b = &sim.mesh.blocks[bi];
-                int ci, cj, ck;
-                if (b->rank != mpi.rank || !b->active) {
-                    continue;
-                }
-                for (ci = 0; ci < PRJ_BLOCK_SIZE; ++ci) {
-                    for (cj = 0; cj < PRJ_BLOCK_SIZE; ++cj) {
-                        for (ck = 0; ck < PRJ_BLOCK_SIZE; ++ck) {
-                            double rho = b->W_mhd[WIDX(PRJ_PRIM_RHO, ci, cj, ck)];
-                            double eint = b->W_mhd[WIDX(PRJ_PRIM_EINT, ci, cj, ck)];
-                            double ye = b->W_mhd[WIDX(PRJ_PRIM_YE, ci, cj, ck)];
-                            double fl = prj_eos_low_temp_eint(&sim.eos, rho, ye,
-                                PRJ_EOS_CTX_MAIN);
-                            double marg = (eint - fl) / eint;
-                            if (marg < worst) {
-                                worst = marg; wb = b->id;
-                                wi = ci; wj = cj; wk = ck;
-                                wrho = rho; weint = eint; wye = ye; wfloor = fl;
-                            }
-                        }
-                    }
-                }
-            }
-            if (mpi.rank == 0) {
-                fprintf(stderr, "[eintmargin] step=%d min_rel=%.6e block=%d "
-                    "cell=(%d,%d,%d) rho=%.6e eint=%.6e floor=%.6e ye=%.6e\n",
-                    sim.step, worst, wb, wi, wj, wk, wrho, weint, wfloor, wye);
-            }
-        }
-#endif
         if (sim.amr_interval > 0 && sim.step % sim.amr_interval == 0) {
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "amr");
             /* The pressure_scale_height criterion reads per-cell b->grav, which
