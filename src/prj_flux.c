@@ -1211,20 +1211,64 @@ static void prj_flux_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
     }
 }
 
+static int prj_flux_gr_m1_cell_in_storage(int i, int j, int k)
+{
+    return i >= -PRJ_NGHOST && i < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
+        j >= -PRJ_NGHOST && j < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
+        k >= -PRJ_NGHOST && k < PRJ_BLOCK_SIZE + PRJ_NGHOST;
+}
+
+/* Central-difference d(v_comp/c)/dx^gt at cell (ci,cj,ck), scaled by the
+ * caller-supplied inv2dx = 1/(2 dx^gt c). Returns 0 (leaving *out untouched) if
+ * the 3-point stencil leaves storage or hits a non-finite velocity. */
+static int prj_flux_gr_m1_cell_transverse_dv(const double *W_block, int comp,
+    int gt, int ci, int cj, int ck, double inv2dx, double *out)
+{
+    int oi = gt == X1DIR ? 1 : 0;
+    int oj = gt == X2DIR ? 1 : 0;
+    int ok = gt == X3DIR ? 1 : 0;
+    double vp;
+    double vm;
+
+    if (!prj_flux_gr_m1_cell_in_storage(ci + oi, cj + oj, ck + ok) ||
+        !prj_flux_gr_m1_cell_in_storage(ci - oi, cj - oj, ck - ok)) {
+        return 0;
+    }
+    vp = W_block[WIDX(PRJ_PRIM_V1 + comp, ci + oi, cj + oj, ck + ok)];
+    vm = W_block[WIDX(PRJ_PRIM_V1 + comp, ci - oi, cj - oj, ck - ok)];
+    if (!isfinite(vp) || !isfinite(vm)) {
+        return 0;
+    }
+    *out = (vp - vm) * inv2dx;
+    return 1;
+}
+
+/* Face-centred velocity-gradient tensor dvdx[d][a] = d(v_{axis[a]}/c)/dx^{axis[d]}
+ * in the local flux axes (axis[0] = normal `dir`). The normal row (d = 0) is the
+ * two-cell difference across the face; the transverse rows (d = 1,2) average the
+ * cell-centred central differences of the two cells sharing the face, each side
+ * contributing only where its stencil stays in storage. This mirrors the
+ * coordinate-basis full gradient the source-term closure uses
+ * (prj_src_gr_m1_dvdx), rather than leaving the tangential shear rows zero. */
 static int prj_flux_gr_m1_face_dvdx(const double *W_block, int dir,
-    int il, int jl, int kl, int ir, int jr, int kr, double dx_dir,
+    int il, int jl, int kl, int ir, int jr, int kr, const double *dx,
     double dvdx[3][3])
 {
     int axis[3];
     int a;
     int d;
+    double dx_dir;
 
     for (d = 0; d < 3; ++d) {
         for (a = 0; a < 3; ++a) {
             dvdx[d][a] = 0.0;
         }
     }
-    if (W_block == 0 || !isfinite(dx_dir) || dx_dir <= 0.0) {
+    if (W_block == 0 || dx == 0) {
+        return 0;
+    }
+    dx_dir = dx[dir];
+    if (!isfinite(dx_dir) || dx_dir <= 0.0) {
         return 0;
     }
 
@@ -1245,6 +1289,37 @@ static int prj_flux_gr_m1_face_dvdx(const double *W_block, int dir,
             return 0;
         }
         dvdx[0][a] = (vR - vL) / (dx_dir * PRJ_CLIGHT);
+    }
+
+    for (d = 1; d < 3; ++d) {
+        int gt = axis[d];
+        double dxt = dx[gt];
+        double inv2dx;
+
+        if (!isfinite(dxt) || dxt <= 0.0) {
+            continue;
+        }
+        inv2dx = 1.0 / (2.0 * dxt * PRJ_CLIGHT);
+        for (a = 0; a < 3; ++a) {
+            int comp = axis[a];
+            double acc = 0.0;
+            double contrib;
+            int count = 0;
+
+            if (prj_flux_gr_m1_cell_transverse_dv(W_block, comp, gt,
+                    il, jl, kl, inv2dx, &contrib)) {
+                acc += contrib;
+                ++count;
+            }
+            if (prj_flux_gr_m1_cell_transverse_dv(W_block, comp, gt,
+                    ir, jr, kr, inv2dx, &contrib)) {
+                acc += contrib;
+                ++count;
+            }
+            if (count > 0) {
+                dvdx[d][a] = acc / (double)count;
+            }
+        }
     }
     return 1;
 }
@@ -1277,9 +1352,9 @@ static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
         }
     }
     ctx->opacity = opacity;
-    /* Face transport currently has a normal-centered velocity-gradient estimate;
-     * tangential rows remain zero until a transverse face-gradient stencil is
-     * added. */
+    /* Face transport carries the full velocity-gradient tensor: normal row from
+     * the across-face difference and tangential rows from the averaged
+     * cell-centred transverse stencils (prj_flux_gr_m1_face_dvdx). */
     ctx->have_shear = have_dvdx;
 }
 
@@ -1354,10 +1429,11 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
 static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
     const double *WR, const double *W_block, int dir,
     int il, int jl, int kl, int ir, int jr, int kr,
-    const prj_z4c_hydro_geom *geom, const double *chi_face, double dx_dir,
+    const prj_z4c_hydro_geom *geom, const double *chi_face, const double *dx,
     double *flux)
 {
     double dvdx_face[3][3];
+    double dx_dir = dx != 0 ? dx[dir] : 0.0;
     int have_dvdx;
     int field;
     int group;
@@ -1385,7 +1461,7 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
         normal_norm = sqrt(gnn_inv);
     }
     have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
-        dx_dir, dvdx_face);
+        dx, dvdx_face);
     prj_flux_gr_m1_closure_ctx(geom, WL, 0.0, dvdx_face, have_dvdx, &closureL);
     prj_flux_gr_m1_closure_ctx(geom, WR, 0.0, dvdx_face, have_dvdx, &closureR);
     prj_rad_gr_m1_prepare_side(&closureL, &sideL);
@@ -1913,7 +1989,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                             }
                             prj_flux_gr_m1(rad, WL, WR, W, dir,
                                 il, jl, kl, ir, jr, kr, &geom, chi_face,
-                                dx_dir, Fl);
+                                block->dx, Fl);
                         } else
 #endif
                         {
