@@ -1408,9 +1408,15 @@ static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
     int col;
     int row;
 
+    /* Gaussian elimination with partial pivoting + back substitution. Only the
+     * rows below each pivot are eliminated (forward sweep), then the upper-
+     * triangular system is back-solved -- ~40% fewer flops than a Gauss-Jordan
+     * sweep that also clears rows above every pivot. Solves the same system to
+     * machine precision (result differs by rounding only). */
     for (col = 0; col < 6; ++col) {
         int pivot = col;
         double pivabs = fabs(A[col][col]);
+        double inv_piv;
 
         for (row = col + 1; row < 6; ++row) {
             double v = fabs(A[row][col]);
@@ -1433,32 +1439,27 @@ static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
                 A[pivot][j] = tmp;
             }
         }
-        {
-            double inv_piv = 1.0 / A[col][col];
+        inv_piv = 1.0 / A[col][col];
+        for (row = col + 1; row < 6; ++row) {
+            double factor = A[row][col] * inv_piv;
             int j;
 
-            for (j = col; j < 7; ++j) {
-                A[col][j] *= inv_piv;
-            }
-        }
-        for (row = 0; row < 6; ++row) {
-            double factor;
-            int j;
-
-            if (row == col) {
-                continue;
-            }
-            factor = A[row][col];
             if (factor == 0.0) {
                 continue;
             }
-            for (j = col; j < 7; ++j) {
+            for (j = col + 1; j < 7; ++j) {
                 A[row][j] -= factor * A[col][j];
             }
         }
     }
-    for (row = 0; row < 6; ++row) {
-        x[row] = A[row][6];
+    for (row = 5; row >= 0; --row) {
+        double sum = A[row][6];
+        int j;
+
+        for (j = row + 1; j < 6; ++j) {
+            sum -= A[row][j] * x[j];
+        }
+        x[row] = sum / A[row][row];
         if (!isfinite(x[row])) {
             return 0;
         }
@@ -2214,6 +2215,79 @@ void prj_rad_gr_m1_pressure_cached(const prj_rad *rad,
     }
     prj_rad_gr_m1_prepare_pressure(rad, ctx, side, E, Fcov_in, &data);
     prj_rad_gr_m1_pressure_implicit(&data, P, 0);
+}
+
+void prj_rad_gr_m1_pressure_fbar(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov_in[3],
+    double P[3][3], double *fbar_out)
+{
+    prj_rad_gr_m1_side_data side;
+    prj_rad_gr_m1_pressure_data data;
+
+    if (fbar_out != 0) {
+        *fbar_out = 0.0;
+    }
+    if (P == 0) {
+        return;
+    }
+    if (ctx == 0 || Fcov_in == 0) {
+        prj_rad_m1_pressure(rad, E,
+            Fcov_in != 0 ? Fcov_in[0] : 0.0,
+            Fcov_in != 0 ? Fcov_in[1] : 0.0,
+            Fcov_in != 0 ? Fcov_in[2] : 0.0, P);
+        return;
+    }
+    prj_rad_gr_m1_prepare_side(ctx, &side);
+    prj_rad_gr_m1_prepare_pressure(rad, ctx, &side, E, Fcov_in, &data);
+    prj_rad_gr_m1_pressure_implicit(&data, P, fbar_out);
+}
+
+/* --- Cell-centered closure (P, fbar) cache, shared source -> frequency flux --- */
+#define PRJ_CLCACHE_NCELL (PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE)
+#define PRJ_CLCACHE_NGRP (PRJ_NRAD * PRJ_NEGROUP)
+static double g_clcache_P[PRJ_CLCACHE_NCELL][PRJ_CLCACHE_NGRP][3][3];
+static double g_clcache_fbar[PRJ_CLCACHE_NCELL][PRJ_CLCACHE_NGRP];
+static const void *g_clcache_block;
+static const void *g_clcache_wrad;
+static int g_clcache_stage = -1;
+static int g_clcache_valid;
+
+void prj_rad_gr_m1_closure_cache_begin(const void *block, const void *wrad,
+    int stage)
+{
+    g_clcache_block = block;
+    g_clcache_wrad = wrad;
+    g_clcache_stage = stage;
+    g_clcache_valid = 1;
+}
+
+void prj_rad_gr_m1_closure_cache_put(int active_cell, int grp,
+    const double P[3][3], double fbar)
+{
+    if (!g_clcache_valid || active_cell < 0 ||
+        active_cell >= PRJ_CLCACHE_NCELL || grp < 0 || grp >= PRJ_CLCACHE_NGRP) {
+        return;
+    }
+    memcpy(g_clcache_P[active_cell][grp], P, 9 * sizeof(double));
+    g_clcache_fbar[active_cell][grp] = fbar;
+}
+
+int prj_rad_gr_m1_closure_cache_get(const void *block, const void *wrad,
+    int stage, int active_cell, int grp, double P[3][3], double *fbar_out)
+{
+    if (!g_clcache_valid || block != g_clcache_block ||
+        wrad != g_clcache_wrad || stage != g_clcache_stage) {
+        return 0;
+    }
+    if (active_cell < 0 || active_cell >= PRJ_CLCACHE_NCELL || grp < 0 ||
+        grp >= PRJ_CLCACHE_NGRP) {
+        return 0;
+    }
+    memcpy(P, g_clcache_P[active_cell][grp], 9 * sizeof(double));
+    if (fbar_out != 0) {
+        *fbar_out = g_clcache_fbar[active_cell][grp];
+    }
+    return 1;
 }
 #endif
 
@@ -3590,7 +3664,15 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             prj_rad_gr_m1_prepare_side(&closure, &pside);
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g], Fcov,
                 &pdata);
-            prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
+            /* frequency_drifts (via decompose_m2) needs the full pdata, so
+             * prepare_pressure must run; but the geometric source term already
+             * solved the identical closure this stage, so reuse its (P, fbar)
+             * and skip the expensive implicit root-find on a cache hit. */
+            if (!prj_rad_gr_m1_closure_cache_get(block, W_state, z4c_stage,
+                    (ic * PRJ_BLOCK_SIZE + jc) * PRJ_BLOCK_SIZE + kc,
+                    field * PRJ_NEGROUP + g, Pg[g], &fbar)) {
+                prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
+            }
             prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &Acon,
                 Mq_cov[g]);
             Acon_spec[g] = Acon * inv_dnu[g];

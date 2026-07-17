@@ -102,6 +102,23 @@ void prj_rad_gr_m1_pressure_cached(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov[3],
     double P[3][3]);
+
+/* Like prj_rad_gr_m1_pressure but also returns the closure ratio fbar. */
+void prj_rad_gr_m1_pressure_fbar(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov[3],
+    double P[3][3], double *fbar_out);
+
+/* Cell-centered closure (P, fbar) cache. The GR geometric source term and the
+ * frequency-flux term solve the identical cell-centered closure (same W_rad,
+ * geometry, opacity) within one block/stage; the source populates this cache and
+ * the frequency flux reuses it. Guarded by a (block, wrad, stage) tag so a
+ * stale/absent entry simply forces a recompute -- never a wrong reuse. */
+void prj_rad_gr_m1_closure_cache_begin(const void *block, const void *wrad,
+    int stage);
+void prj_rad_gr_m1_closure_cache_put(int active_cell, int grp,
+    const double P[3][3], double fbar);
+int prj_rad_gr_m1_closure_cache_get(const void *block, const void *wrad,
+    int stage, int active_cell, int grp, double P[3][3], double *fbar_out);
 #endif
 #if PRJ_NRAD > 0
 void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,

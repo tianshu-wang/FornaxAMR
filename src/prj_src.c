@@ -546,6 +546,9 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
         block->id < 0 || block->active != 1 || W_rad == 0 || rad_rhs == 0) {
         return;
     }
+    /* Publish the cell-centered closure so the frequency-flux term (same stage,
+     * same W_rad, same geometry/opacity) can reuse it instead of re-solving. */
+    prj_rad_gr_m1_closure_cache_begin(block, W_rad, z4c_stage);
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -584,7 +587,15 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
 
                         prj_src_gr_m1_closure_ctx(&geom, W_mhd, block, i, j, k,
                             field, group, &closure);
-                        prj_rad_gr_m1_pressure(rad, &closure, E, Fcov, Pcon);
+                        {
+                            double fbar_cache;
+
+                            prj_rad_gr_m1_pressure_fbar(rad, &closure, E, Fcov,
+                                Pcon, &fbar_cache);
+                            prj_rad_gr_m1_closure_cache_put(
+                                (i * PRJ_BLOCK_SIZE + j) * PRJ_BLOCK_SIZE + k,
+                                field * PRJ_NEGROUP + group, Pcon, fbar_cache);
+                        }
 
                         /* Eq. 3.37/3.38 are written with c=1.  PRJ stores
                          * F_i as the physical radiation flux, while K_ij and
