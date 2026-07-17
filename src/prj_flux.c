@@ -1002,7 +1002,7 @@ static void prj_flux_gr_face_geom_from_cells(const prj_z4c_hydro_geom *gl,
      * the fields inconsistent and corrupts norms, raising/lowering, flux
      * densitization and the GRMHD HLLD input on curved/off-diagonal metrics. */
     {
-        double det = prj_flux_inv3(geom->gamma, geom->gamma_inv);
+        double det = prj_flux_inv3((const double (*)[3])geom->gamma, geom->gamma_inv);
 
         if (isfinite(det) && det > 0.0) {
             geom->sqrt_gamma = sqrt(det);
@@ -1915,7 +1915,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                                 prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
                             }
                             prj_riemann_gr_hlld(WL, WR, pL, pR, gL, gR,
-                                eos, geom.gamma, geom.sqrt_gamma, geom.alpha,
+                                eos, (const double (*)[3])geom.gamma,
+                                geom.sqrt_gamma, geom.alpha,
                                 geom.beta, bn, Fl, v_face_loc, &bv1, &bv2,
                                 deltau, deltav, deltaw);
                         } else

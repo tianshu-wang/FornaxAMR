@@ -90,7 +90,7 @@ void prj_problem_z4c_one_puncture(prj_sim *sim, prj_mpi *mpi)
     centers[0][2] = sim->mesh.z4c_params.puncture_center_cm[2];
     masses[0] = sim->mesh.z4c_params.puncture_mass_cm;
 
-    prj_z4c_init_punctures(&sim->mesh, mpi, 1, centers, masses, momenta,
+    prj_z4c_init_punctures(&sim->mesh, mpi, 1, (const double (*)[3])centers, masses, (const double (*)[3])momenta,
         sim->mesh.z4c_params.puncture_floor_radius_cm);
     prj_mhd_init(sim, mpi);
 }
@@ -116,7 +116,7 @@ void prj_problem_z4c_two_puncture(prj_sim *sim, prj_mpi *mpi)
     memcpy(momenta[1], sim->mesh.z4c_params.puncture_momentum_minus_cm,
         sizeof(momenta[1]));
 
-    prj_z4c_init_punctures(&sim->mesh, mpi, 2, centers, masses, momenta,
+    prj_z4c_init_punctures(&sim->mesh, mpi, 2, (const double (*)[3])centers, masses, (const double (*)[3])momenta,
         sim->mesh.z4c_params.puncture_floor_radius_cm);
     prj_mhd_init(sim, mpi);
 }

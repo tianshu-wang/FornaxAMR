@@ -514,7 +514,7 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
     }
 
     prj_z4c_load_metric(z, i, j, k, g);
-    prj_z4c_inv3(g, gu, &det_g);
+    prj_z4c_inv3((const double (*)[3])g, gu, &det_g);
     if (!isfinite(det_g) || det_g <= 0.0) {
         return 0;
     }
@@ -625,7 +625,7 @@ int prj_z4c_cell_sqrt_gamma(const prj_mesh *mesh, const prj_block *block,
     /* Reproduce load_hydro_geom's sqrt_gamma exactly: inv3 computes det via
      * det3 then clamps it, and we need the same clamped value. */
     prj_z4c_load_metric(z, i, j, k, g);
-    det_g = prj_z4c_det3(g);
+    det_g = prj_z4c_det3((const double (*)[3])g);
     if (!isfinite(det_g) || fabs(det_g) < 1.0e-300) {
         det_g = det_g < 0.0 ? -1.0e-300 : 1.0e-300;
     }
@@ -678,7 +678,7 @@ int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
     opt = &mesh->z4c_params;
 
     prj_z4c_load_metric(z, i, j, k, g);
-    prj_z4c_inv3(g, gu, &det_g);
+    prj_z4c_inv3((const double (*)[3])g, gu, &det_g);
     if (!isfinite(det_g) || det_g <= 0.0) {
         return 0;
     }
@@ -756,7 +756,7 @@ static void prj_z4c_enforce_cell(double *z, int i, int j, int k)
     int a, b;
 
     prj_z4c_load_metric(z, i, j, k, g);
-    det = prj_z4c_det3(g);
+    det = prj_z4c_det3((const double (*)[3])g);
     if (!isfinite(det) || det <= 0.0) {
         for (a = 0; a < 3; ++a) {
             for (b = 0; b < 3; ++b) {
@@ -778,7 +778,7 @@ static void prj_z4c_enforce_cell(double *z, int i, int j, int k)
     prj_z4c_set(z, PRJ_Z4C_GYZ, i, j, k, g[1][2]);
     prj_z4c_set(z, PRJ_Z4C_GZZ, i, j, k, g[2][2]);
 
-    prj_z4c_inv3(g, gu, 0);
+    prj_z4c_inv3((const double (*)[3])g, gu, 0);
     prj_z4c_load_A(z, i, j, k, A);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
@@ -2036,7 +2036,7 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
 
     prj_z4c_load_metric(z, i, j, k, g);
     prj_z4c_load_A(z, i, j, k, A);
-    prj_z4c_inv3(g, gu, &detg);
+    prj_z4c_inv3((const double (*)[3])g, gu, &detg);
     (void)detg;
     chi = prj_z4c_get(z, PRJ_Z4C_CHI, i, j, k);
     chi_guarded = chi > opt->chi_div_floor ? chi : opt->chi_div_floor;

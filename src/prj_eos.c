@@ -1143,11 +1143,11 @@ static int prj_eos_gr_metric_prepare(const prj_eos_gr_geom *geom, double g[3][3]
         }
     }
     minor2 = g[0][0] * g[1][1] - g[0][1] * g[1][0];
-    *det = prj_eos_gr_det3(g);
+    *det = prj_eos_gr_det3((const double (*)[3])g);
     if (g[0][0] <= 0.0 || minor2 <= 0.0 || *det <= 0.0 || !isfinite(*det)) {
         return 0;
     }
-    prj_eos_gr_inv3(g, gu, *det);
+    prj_eos_gr_inv3((const double (*)[3])g, gu, *det);
     *sqrt_det = sqrt(*det);
     return isfinite(*sqrt_det) && *sqrt_det > 0.0;
 }
@@ -1241,7 +1241,7 @@ int prj_eos_grmhd_state_from_prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     for (d = 0; d < 3; ++d) {
         state->beta_con[d] = W[PRJ_PRIM_V1 + d] / c;
     }
-    prj_eos_gr_lower(g, state->beta_con, state->beta_cov);
+    prj_eos_gr_lower((const double (*)[3])g, state->beta_con, state->beta_cov);
     state->beta2 = prj_eos_gr_dot_cov_con(state->beta_cov, state->beta_con);
     if (!isfinite(state->beta2) || state->beta2 < 0.0 || state->beta2 >= 1.0) {
         return PRJ_EOS_GR_BAD_STATE;
@@ -1255,7 +1255,7 @@ int prj_eos_grmhd_state_from_prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     state->Bcon[1] = W[PRJ_PRIM_B2];
     state->Bcon[2] = W[PRJ_PRIM_B3];
 #endif
-    prj_eos_gr_lower(g, state->Bcon, state->Bcov);
+    prj_eos_gr_lower((const double (*)[3])g, state->Bcon, state->Bcov);
     state->Bsq = prj_eos_gr_dot_cov_con(state->Bcov, state->Bcon);
     state->Bbeta = prj_eos_gr_dot_cov_con(state->Bcov, state->beta_con);
     if (!isfinite(state->Bsq) || !isfinite(state->Bbeta) || state->Bsq < 0.0) {
@@ -1640,7 +1640,7 @@ int prj_eos_gr_prim2cons(prj_eos *eos, const prj_eos_gr_geom *geom,
     for (d = 0; d < 3; ++d) {
         beta_con[d] = vcon[d] / c;
     }
-    prj_eos_gr_lower(g, beta_con, beta_cov);
+    prj_eos_gr_lower((const double (*)[3])g, beta_con, beta_cov);
     beta2 = prj_eos_gr_dot_cov_con(beta_cov, beta_con);
     if (!isfinite(beta2) || beta2 < 0.0 || beta2 >= 1.0) {
         return PRJ_EOS_GR_BAD_STATE;
@@ -1654,7 +1654,7 @@ int prj_eos_gr_prim2cons(prj_eos *eos, const prj_eos_gr_geom *geom,
     Bcon[1] = W[PRJ_PRIM_B2];
     Bcon[2] = W[PRJ_PRIM_B3];
 #endif
-    prj_eos_gr_lower(g, Bcon, Bcov);
+    prj_eos_gr_lower((const double (*)[3])g, Bcon, Bcov);
     Bsq = prj_eos_gr_dot_cov_con(Bcov, Bcon);
     Bbeta = prj_eos_gr_dot_cov_con(Bcov, beta_con);
     if (!isfinite(Bsq) || !isfinite(Bbeta) || Bsq < 0.0) {
@@ -1750,8 +1750,8 @@ int prj_eos_gr_cons2prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     rec.Bcon[1] = Uloc[PRJ_CONS_B2] / c;
     rec.Bcon[2] = Uloc[PRJ_CONS_B3] / c;
 #endif
-    prj_eos_gr_lower(g, rec.Bcon, rec.Bcov);
-    prj_eos_gr_raise(gu, rec.Scov, Scon);
+    prj_eos_gr_lower((const double (*)[3])g, rec.Bcon, rec.Bcov);
+    prj_eos_gr_raise((const double (*)[3])gu, rec.Scov, Scon);
     rec.Bsq = prj_eos_gr_dot_cov_con(rec.Bcov, rec.Bcon);
     rec.Ssq = prj_eos_gr_dot_cov_con(rec.Scov, Scon);
     rec.SB = prj_eos_gr_dot_cov_con(rec.Scov, rec.Bcon);
@@ -1907,7 +1907,7 @@ void prj_eos_cell_cons2prim(prj_eos *eos, const prj_mesh *mesh,
                 vv < 6 ? cons_name[vv] : "RAD", U[vv]);
         }
         {
-            double detg = prj_eos_gr_det3(geom.gamma);
+            double detg = prj_eos_gr_det3((const double (*)[3])geom.gamma);
 
             fprintf(stderr, "  physical 3-metric gamma_ij (used by recovery), "
                 "det=%.17e sqrt_det=%.17e:\n", detg, detg > 0.0 ? sqrt(detg) : -1.0);

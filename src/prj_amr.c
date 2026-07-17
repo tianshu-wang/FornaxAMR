@@ -965,7 +965,8 @@ static double prj_pressure_scale_height_cell_indicator(
         eint = prj_block_primitive_at(b, PRJ_PRIM_EINT, i, j, k);
         pressure_gas = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
         pressure = prj_amr_total_pressure_with_gr_geom_at(b, &geom, i, j, k);
-        dalpha2 = prj_amr_metric_dot(geom.gamma_inv, geom.dalpha, geom.dalpha);
+        dalpha2 = prj_amr_metric_dot((const double (*)[3])geom.gamma_inv,
+            geom.dalpha, geom.dalpha);
         if (!isfinite(dalpha2) || dalpha2 < 0.0 || !isfinite(geom.alpha) || geom.alpha <= 0.0) {
             prj_amr_fatal("AMR error: invalid full-GR lapse-gradient contraction in pressure-scale-height estimator");
         }

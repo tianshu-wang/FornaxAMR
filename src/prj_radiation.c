@@ -2510,11 +2510,11 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
     double lapse, const double *chi_face,
     double dx_dir, double v_face, double *flux)
 {
-    int field;
-    int group;
-
 #if PRJ_USE_RADIATION_M1
     {
+        int field;
+        int group;
+
         for (field = 0; field < PRJ_NRAD; ++field) {
             for (group = 0; group < PRJ_NEGROUP; ++group) {
                 int idx = field * PRJ_NEGROUP + group;
@@ -2625,8 +2625,6 @@ void prj_rad_flux(const prj_rad *rad, const double *WL, const double *WR,
     (void)v_face;
     (void)lapse;
     (void)flux;
-    (void)field;
-    (void)group;
 #endif
 }
 
