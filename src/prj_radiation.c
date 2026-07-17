@@ -2028,7 +2028,11 @@ static void prj_rad_gr_m1_frequency_drifts(
     for (i = 0; i < 3; ++i) {
         momentum_drift_cov[i] = 0.0;
         for (b = 0; b < 3; ++b) {
-            momentum_drift_cov[i] += ctx->gamma[i][b] * contract_con[b + 1];
+            /* M3 is assembled as a stress-tensor moment with M^{0i}=F^i/c.
+             * Convert the spatial projection back to the evolved physical
+             * flux F_i before the frequency-bin update. */
+            momentum_drift_cov[i] += PRJ_CLIGHT * ctx->gamma[i][b] *
+                contract_con[b + 1];
         }
     }
 }

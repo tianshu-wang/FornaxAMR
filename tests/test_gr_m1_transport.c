@@ -893,6 +893,9 @@ static void expected_rest_frame_gr_frequency_terms(const prj_rad *rad,
             }
         }
     }
+    for (a = 0; a < 3; ++a) {
+        momentum_drift[a] *= PRJ_CLIGHT;
+    }
 }
 
 static void check_gr_m1_frequency_third_moment_rest_frame_case(
@@ -1321,17 +1324,18 @@ static void check_gr_m1_sources(void)
     for (a = 0; a < 3; ++a) {
         expected[0] -= Fcon[a] * geom.dalpha[a] / geom.alpha;
         for (b = 0; b < 3; ++b) {
-            expected[0] += Pcon[a][b] * geom.K_dd[a][b];
+            expected[0] += PRJ_CLIGHT * Pcon[a][b] * geom.K_dd[a][b];
         }
     }
     expected[0] *= geom.alpha * geom.sqrt_gamma;
     for (d = 0; d < 3; ++d) {
-        double mom_src = -E * geom.dalpha[d];
+        double mom_src = -PRJ_CLIGHT * PRJ_CLIGHT * E * geom.dalpha[d];
 
         for (a = 0; a < 3; ++a) {
-            mom_src += Fcov[a] * geom.dbeta[d][a];
+            mom_src += PRJ_CLIGHT * Fcov[a] * geom.dbeta[d][a];
             for (b = 0; b < 3; ++b) {
-                mom_src += 0.5 * geom.alpha * Pcon[a][b] *
+                mom_src += 0.5 * geom.alpha * PRJ_CLIGHT * PRJ_CLIGHT *
+                    Pcon[a][b] *
                     geom.dgamma[d][a][b];
             }
         }

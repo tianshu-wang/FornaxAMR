@@ -564,6 +564,8 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
                         double Pcon[3][3];
                         prj_rad_gr_m1_closure_ctx closure;
                         double energy_src = 0.0;
+                        double c = PRJ_CLIGHT;
+                        double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
                         int a;
                         int b;
                         int d;
@@ -584,22 +586,28 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
                             field, group, &closure);
                         prj_rad_gr_m1_pressure(rad, &closure, E, Fcov, Pcon);
 
+                        /* Eq. 3.37/3.38 are written with c=1.  PRJ stores
+                         * F_i as the physical radiation flux, while K_ij and
+                         * metric derivatives are spatial derivatives, so the
+                         * restored source terms use c P K in the energy
+                         * equation and c^2/c factors in the evolved-F_i
+                         * equation below. */
                         for (a = 0; a < 3; ++a) {
                             energy_src -= Fcon[a] * geom.dalpha[a] / geom.alpha;
                             for (b = 0; b < 3; ++b) {
-                                energy_src += Pcon[a][b] * geom.K_dd[a][b];
+                                energy_src += c * Pcon[a][b] * geom.K_dd[a][b];
                             }
                         }
                         rad_rhs[RADVIDX(PRJ_RAD_CONS_E(field, group), i, j, k)] +=
                             geom.alpha * geom.sqrt_gamma * energy_src;
 
                         for (d = 0; d < 3; ++d) {
-                            double mom_src = -E * geom.dalpha[d];
+                            double mom_src = -c2 * E * geom.dalpha[d];
 
                             for (a = 0; a < 3; ++a) {
-                                mom_src += Fcov[a] * geom.dbeta[d][a];
+                                mom_src += c * Fcov[a] * geom.dbeta[d][a];
                                 for (b = 0; b < 3; ++b) {
-                                    mom_src += 0.5 * geom.alpha * Pcon[a][b] *
+                                    mom_src += 0.5 * geom.alpha * c2 * Pcon[a][b] *
                                         geom.dgamma[d][a][b];
                                 }
                             }
