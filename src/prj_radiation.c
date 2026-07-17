@@ -1393,6 +1393,14 @@ typedef struct prj_rad_gr_m1_pressure_data {
     double J0;
     double beta2;
     double f_euler;
+    /* fbar-independent pieces of the 6x6 closure system, precomputed once per
+     * solve so the bisection loop (~40 iterations) only rescales by the scalars
+     * thin_w/thick_w instead of rebuilding A0/H0/vcon products every iteration.
+     * Evaluation order matches the inline expressions it replaces so the result
+     * is bit-identical (no -ffast-math reassociation). */
+    double base_coef[6][6];
+    double Pthin_sym[6];
+    double Prad_sym[6];
 } prj_rad_gr_m1_pressure_data;
 
 static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
@@ -1589,6 +1597,26 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
             }
         }
     }
+
+    /* Precompute the fbar-independent RHS terms and coefficient matrix.  The
+     * expressions mirror prj_rad_gr_m1_pressure_for_fbar's inner loop exactly
+     * (same operand order) so per-iteration assembly reduces to a scalar
+     * rescale with bit-identical results. */
+    for (m = 0; m < 6; ++m) {
+        int i = prj_rad_gr_m1_sym_i[m];
+        int j = prj_rad_gr_m1_sym_j[m];
+        int n;
+
+        data->Pthin_sym[m] = data->Pthin[i][j];
+        data->Prad_sym[m] = data->A0[i][j] * data->J0 +
+            data->H0[i] * data->vcon[j] +
+            data->H0[j] * data->vcon[i];
+        for (n = 0; n < 6; ++n) {
+            data->base_coef[m][n] = data->A0[i][j] * data->Jcoef[n] +
+                data->Hcoef[i][n] * data->vcon[j] +
+                data->Hcoef[j][n] * data->vcon[i];
+        }
+    }
 }
 
 static void prj_rad_gr_m1_pressure_for_fbar(
@@ -1609,36 +1637,20 @@ static void prj_rad_gr_m1_pressure_for_fbar(
     chi = prj_rad_m1_chi(data->rad, fbar);
     thin_w = 0.5 * (3.0 * chi - 1.0);
     thick_w = 1.5 * (1.0 - chi);
-    memset(amat, 0, sizeof(amat));
+    /* Every column is written below, so no memset of amat is needed. */
     for (m = 0; m < 6; ++m) {
-        int i = prj_rad_gr_m1_sym_i[m];
-        int j = prj_rad_gr_m1_sym_j[m];
-        double rhs = thin_w * data->Pthin[i][j] + thick_w *
-            (data->A0[i][j] * data->J0 +
-                data->H0[i] * data->vcon[j] +
-                data->H0[j] * data->vcon[i]);
+        double rhs = thin_w * data->Pthin_sym[m] + thick_w * data->Prad_sym[m];
         int n;
 
         for (n = 0; n < 6; ++n) {
-            double coef = thick_w *
-                (data->A0[i][j] * data->Jcoef[n] +
-                    data->Hcoef[i][n] * data->vcon[j] +
-                    data->Hcoef[j][n] * data->vcon[i]);
-
-            amat[m][n] = (m == n ? 1.0 : 0.0) - coef;
+            amat[m][n] = (m == n ? 1.0 : 0.0) - thick_w * data->base_coef[m][n];
         }
         amat[m][6] = rhs;
     }
 
     if (!prj_rad_gr_m1_solve6(amat, sol)) {
         for (m = 0; m < 6; ++m) {
-            int i = prj_rad_gr_m1_sym_i[m];
-            int j = prj_rad_gr_m1_sym_j[m];
-
-            sol[m] = thin_w * data->Pthin[i][j] + thick_w *
-                (data->A0[i][j] * data->J0 +
-                    data->H0[i] * data->vcon[j] +
-                    data->H0[j] * data->vcon[i]);
+            sol[m] = thin_w * data->Pthin_sym[m] + thick_w * data->Prad_sym[m];
         }
     }
 
@@ -1767,27 +1779,62 @@ static void prj_rad_gr_m1_pressure_implicit(
         return;
     }
 
-    for (iter = 0; iter < 80; ++iter) {
-        double mid = 0.5 * (lo + hi);
+    /* Illinois-modified regula falsi. The bracket [lo, hi] has glo > 0 and
+     * ghi < 0 (guaranteed above), and every step keeps opposite signs at the
+     * endpoints, so convergence is guaranteed like bisection -- but the secant
+     * step gives superlinear convergence, typically ~6-10 iterations instead of
+     * the ~40 bisection needs to reach hi-lo < 1e-13. The Illinois halving of a
+     * repeatedly retained endpoint's g-value prevents the classic regula-falsi
+     * stagnation where one endpoint never moves. Same root of
+     * g(fbar) = derived_fbar(P(fbar)) - fbar to the same 1e-13 tolerance:
+     * physically equivalent to the old bisection, not bit-identical. */
+    {
+        int side = 0;
 
-        prj_rad_gr_m1_pressure_for_fbar(data, mid, Pmid);
-        fmid = prj_rad_gr_m1_derived_fbar(data, Pmid);
-        gmid = fmid - mid;
-        if (fabs(gmid) < 1.0e-13 || hi - lo < 1.0e-13) {
-            memcpy(P, Pmid, 9 * sizeof(double));
-            if (fbar_out != 0) {
-                *fbar_out = fmid;
+        for (iter = 0; iter < 80; ++iter) {
+            double denom = ghi - glo;
+            double mid;
+
+            /* False-position estimate; fall back to bisection if the secant is
+             * degenerate or would step outside the open bracket. */
+            if (!isfinite(denom) || fabs(denom) < 1.0e-300) {
+                mid = 0.5 * (lo + hi);
+            } else {
+                mid = (lo * ghi - hi * glo) / denom;
             }
-            return;
-        }
-        if (gmid > 0.0) {
-            lo = mid;
-            glo = gmid;
-            memcpy(Plo, Pmid, 9 * sizeof(double));
-        } else {
-            hi = mid;
-            ghi = gmid;
-            memcpy(Phi, Pmid, 9 * sizeof(double));
+            if (!isfinite(mid) || mid <= lo || mid >= hi) {
+                mid = 0.5 * (lo + hi);
+            }
+
+            prj_rad_gr_m1_pressure_for_fbar(data, mid, Pmid);
+            fmid = prj_rad_gr_m1_derived_fbar(data, Pmid);
+            gmid = fmid - mid;
+            if (fabs(gmid) < 1.0e-13 || hi - lo < 1.0e-13) {
+                memcpy(P, Pmid, 9 * sizeof(double));
+                if (fbar_out != 0) {
+                    *fbar_out = fmid;
+                }
+                return;
+            }
+            if (gmid > 0.0) {
+                /* Same sign as glo: root lies in [mid, hi]; advance lo. */
+                lo = mid;
+                glo = gmid;
+                memcpy(Plo, Pmid, 9 * sizeof(double));
+                if (side == 1) {
+                    ghi *= 0.5;   /* hi retained again -> down-weight it */
+                }
+                side = 1;
+            } else {
+                /* Same sign as ghi: root lies in [lo, mid]; advance hi. */
+                hi = mid;
+                ghi = gmid;
+                memcpy(Phi, Pmid, 9 * sizeof(double));
+                if (side == -1) {
+                    glo *= 0.5;   /* lo retained again -> down-weight it */
+                }
+                side = -1;
+            }
         }
     }
 

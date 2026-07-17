@@ -1241,9 +1241,14 @@ static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
     ctx->have_shear = have_dvdx;
 }
 
+/* Per-group state flux for one side of a face. The closure context (metric,
+ * dgamma, dvdx, vcon) is invariant across all (field, group) pairs of this
+ * side, so it is built once by the caller and passed in with only ctx->opacity
+ * refreshed per group; this hoists a memset + ~54-double geometry copy out of
+ * the NRAD*NEGROUP inner loop (bit-identical result). */
 static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
-    double opacity, const double dvdx[3][3], int have_dvdx,
+    const prj_rad_gr_m1_closure_ctx *closure,
     double U[4], double F[4], double *smin, double *smax)
 {
     const double c = PRJ_CLIGHT;
@@ -1252,7 +1257,6 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     double Fcov[3];
     double Fcon[3];
     double Pcon[3][3];
-    prj_rad_gr_m1_closure_ctx closure;
     double Fmag;
     double inv_Fmag;
     double f;
@@ -1273,8 +1277,7 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     }
     prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag, &inv_Fmag, &f);
 
-    prj_flux_gr_m1_closure_ctx(geom, W, opacity, dvdx, have_dvdx, &closure);
-    prj_rad_gr_m1_pressure(rad, &closure, E, Fcov, Pcon);
+    prj_rad_gr_m1_pressure(rad, closure, E, Fcov, Pcon);
 
     U[0] = geom->sqrt_gamma * E;
     F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
@@ -1312,12 +1315,19 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
     int have_dvdx;
     int field;
     int group;
+    /* Closure context is invariant across (field, group) for each side of the
+     * face; build it once here (opacity refreshed per group below) instead of
+     * rebuilding it in every prj_flux_gr_m1_state_flux call. */
+    prj_rad_gr_m1_closure_ctx closureL;
+    prj_rad_gr_m1_closure_ctx closureR;
 
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
     }
     have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
         dx_dir, dvdx_face);
+    prj_flux_gr_m1_closure_ctx(geom, WL, 0.0, dvdx_face, have_dvdx, &closureL);
+    prj_flux_gr_m1_closure_ctx(geom, WR, 0.0, dvdx_face, have_dvdx, &closureR);
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -1343,11 +1353,13 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             if (!isfinite(chi_ext) || chi_ext < 0.0) {
                 chi_ext = 0.0;
             }
+            closureL.opacity = chi_ext;
+            closureR.opacity = chi_ext;
 
-            prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, chi_ext,
-                dvdx_face, have_dvdx, UL, FphysL, &lamL_min, &lamL_max);
-            prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, chi_ext,
-                dvdx_face, have_dvdx, UR, FphysR, &lamR_min, &lamR_max);
+            prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &closureL,
+                UL, FphysL, &lamL_min, &lamL_max);
+            prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &closureR,
+                UR, FphysR, &lamR_min, &lamR_max);
 
             sL = lamL_min < lamR_min ? lamL_min : lamR_min;
             sR = lamL_max > lamR_max ? lamL_max : lamR_max;
