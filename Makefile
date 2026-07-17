@@ -4,6 +4,12 @@ WARN := -Wall -Wextra -pedantic
 
 MACHINE_MK := machine.mk
 SETUP_MK := setup.mk
+ifneq ($(strip $(machine)),)
+MACHINE_MK := machines/$(strip $(machine)).mk
+endif
+ifneq ($(strip $(setup)),)
+SETUP_MK := setups/$(strip $(setup)).mk
+endif
 
 GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)
 GIT_COMMIT := $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
