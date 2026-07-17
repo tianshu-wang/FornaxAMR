@@ -1348,18 +1348,23 @@ static void prj_rad_gr_m1_shear(const prj_rad_gr_m1_closure_ctx *ctx,
     *sigma2_out = sigma2;
 }
 
-static double prj_rad_gr_m1_lbar(const prj_rad_gr_m1_closure_ctx *ctx,
-    double divu, double sigma2)
+static double prj_rad_gr_m1_lbar_by_shear(double divu, double sigma2)
+{
+    if (sigma2 > 0.0 && divu > 0.0) {
+        return PRJ_RAD_GR_M1_CSIGMA * sqrt(divu / sigma2);
+    }
+    return 1.0e300;
+}
+
+static double prj_rad_gr_m1_lbar_from_side(const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side)
 {
     double by_opacity = 1.0e300;
-    double by_shear = 1.0e300;
+    double by_shear = side != 0 ? side->lbar_by_shear : 1.0e300;
     double opacity = ctx != 0 ? ctx->opacity : 0.0;
 
     if (isfinite(opacity) && opacity > 0.0) {
         by_opacity = 1.0 / opacity;
-    }
-    if (sigma2 > 0.0 && divu > 0.0) {
-        by_shear = PRJ_RAD_GR_M1_CSIGMA * sqrt(divu / sigma2);
     }
     if (by_opacity < by_shear) {
         return by_opacity;
@@ -1506,6 +1511,8 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
 
     prj_rad_gr_m1_shear(ctx, side->vcon, side->vcov, side->wlor,
         side->sigma_con, &side->divu, &side->sigma2);
+    side->lbar_by_shear = prj_rad_gr_m1_lbar_by_shear(side->divu,
+        side->sigma2);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             side->A0_kin[a][b] =
@@ -1604,7 +1611,7 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
     memcpy(data->Jcoef, side->Jcoef, sizeof(data->Jcoef));
     memcpy(data->Hcoef, side->Hcoef, sizeof(data->Hcoef));
 
-    lbar = prj_rad_gr_m1_lbar(ctx, side->divu, side->sigma2);
+    lbar = prj_rad_gr_m1_lbar_from_side(ctx, side);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             data->A0[a][b] = side->A0_kin[a][b] -
@@ -2222,7 +2229,6 @@ void prj_rad_gr_m1_pressure_fbar(const prj_rad *rad,
     double P[3][3], double *fbar_out)
 {
     prj_rad_gr_m1_side_data side;
-    prj_rad_gr_m1_pressure_data data;
 
     if (fbar_out != 0) {
         *fbar_out = 0.0;
@@ -2238,7 +2244,24 @@ void prj_rad_gr_m1_pressure_fbar(const prj_rad *rad,
         return;
     }
     prj_rad_gr_m1_prepare_side(ctx, &side);
-    prj_rad_gr_m1_prepare_pressure(rad, ctx, &side, E, Fcov_in, &data);
+    prj_rad_gr_m1_pressure_fbar_cached(rad, ctx, &side, E, Fcov_in, P,
+        fbar_out);
+}
+
+void prj_rad_gr_m1_pressure_fbar_cached(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
+    double P[3][3], double *fbar_out)
+{
+    prj_rad_gr_m1_pressure_data data;
+
+    if (fbar_out != 0) {
+        *fbar_out = 0.0;
+    }
+    if (P == 0 || ctx == 0 || side == 0 || Fcov_in == 0) {
+        return;
+    }
+    prj_rad_gr_m1_prepare_pressure(rad, ctx, side, E, Fcov_in, &data);
     prj_rad_gr_m1_pressure_implicit(&data, P, fbar_out);
 }
 
@@ -3591,21 +3614,18 @@ static void prj_rad_gr_m1_cell_dvcon_dx(const prj_block *block,
     }
 }
 
-static void prj_rad_gr_m1_freq_closure_ctx(const prj_z4c_hydro_geom *geom,
-    const prj_block *block, const double *W_mhd, const double dvcon_dx[3][3],
-    int i, int j, int k, int field, int group,
+static void prj_rad_gr_m1_freq_base_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const double *W_mhd, const double dvcon_dx[3][3], int i, int j, int k,
     prj_rad_gr_m1_closure_ctx *ctx)
 {
     double vcon[3];
-    double opacity;
     int a;
 
     for (a = 0; a < 3; ++a) {
         vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
             PRJ_CLIGHT : 0.0;
     }
-    opacity = prj_rad_gr_m1_cell_opacity(block, i, j, k, field, group);
-    prj_rad_gr_m1_fill_closure_ctx(geom, vcon, dvcon_dx, 1, opacity, ctx);
+    prj_rad_gr_m1_fill_closure_ctx(geom, vcon, dvcon_dx, 1, 0.0, ctx);
 }
 
 void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
@@ -3614,6 +3634,8 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
 {
     double dvcon_dx[3][3];
     prj_z4c_hydro_geom geom;
+    prj_rad_gr_m1_closure_ctx base_closure;
+    prj_rad_gr_m1_side_data pside;
     const double *W_mhd;
     double dt_geom;
     int field;
@@ -3638,6 +3660,9 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     }
 
     prj_rad_gr_m1_cell_dvcon_dx(block, ic, jc, kc, dvcon_dx);
+    prj_rad_gr_m1_freq_base_closure_ctx(&geom, W_mhd, dvcon_dx, ic, jc, kc,
+        &base_closure);
+    prj_rad_gr_m1_prepare_side(&base_closure, &pside);
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         double Eg[PRJ_NEGROUP];
@@ -3665,7 +3690,6 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             double Fcov[3];
             prj_rad_gr_m1_closure_ctx closure;
             prj_rad_gr_m1_pressure_data pdata;
-            prj_rad_gr_m1_side_data pside;
             double fbar;
             double Acon = 0.0;
 
@@ -3681,9 +3705,9 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             Fcov[1] = W_state[WIDX(PRJ_RAD_PRIM_F2(field, g), ic, jc, kc)];
             Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
 
-            prj_rad_gr_m1_freq_closure_ctx(&geom, block, W_mhd, dvcon_dx,
-                ic, jc, kc, field, g, &closure);
-            prj_rad_gr_m1_prepare_side(&closure, &pside);
+            closure = base_closure;
+            closure.opacity = prj_rad_gr_m1_cell_opacity(block, ic, jc, kc,
+                field, g);
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g], Fcov,
                 &pdata);
             /* frequency_drifts (via decompose_m2) needs the full pdata, so
@@ -3827,20 +3851,17 @@ static void prj_rad_gr_m1_clamp_conserved_cell(
     }
 }
 
-static void prj_rad_gr_m1_source_closure_ctx(const prj_z4c_hydro_geom *geom,
-    const prj_block *block, const double *W, const double dvcon_dx[3][3],
-    int i, int j, int k, int field, int group,
+static void prj_rad_gr_m1_source_base_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const double *W, const double dvcon_dx[3][3],
     prj_rad_gr_m1_closure_ctx *ctx)
 {
     double vcon[3];
-    double opacity;
     int a;
 
     for (a = 0; a < 3; ++a) {
         vcon[a] = W != 0 ? W[PRJ_PRIM_V1 + a] / PRJ_CLIGHT : 0.0;
     }
-    opacity = prj_rad_gr_m1_cell_opacity(block, i, j, k, field, group);
-    prj_rad_gr_m1_fill_closure_ctx(geom, vcon, dvcon_dx, 1, opacity, ctx);
+    prj_rad_gr_m1_fill_closure_ctx(geom, vcon, dvcon_dx, 1, 0.0, ctx);
 }
 
 void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
@@ -3858,6 +3879,8 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     double sigma[PRJ_NRAD * PRJ_NEGROUP];
     double delta[PRJ_NRAD * PRJ_NEGROUP];
     double dvcon_dx[3][3];
+    prj_rad_gr_m1_closure_ctx base_closure;
+    prj_rad_gr_m1_side_data pside;
     double rho;
     double eint;
     double T;
@@ -3892,6 +3915,8 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     prj_eos_rey(eos, rho, eint, W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
     T = eos_q[PRJ_EOS_TEMPERATURE];
     prj_rad_gr_m1_cell_dvcon_dx(block, i, j, k, dvcon_dx);
+    prj_rad_gr_m1_source_base_closure_ctx(&geom, W, dvcon_dx, &base_closure);
+    prj_rad_gr_m1_prepare_side(&base_closure, &pside);
 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         tmp[v] = 0.0;
@@ -3915,7 +3940,6 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             double hcov[4][4];
             prj_rad_gr_m1_closure_ctx closure;
             prj_rad_gr_m1_pressure_data pdata;
-            prj_rad_gr_m1_side_data pside;
 
             E = u[PRJ_CONS_RAD_E(field, group)] / geom.sqrt_gamma;
             Fcov[0] = u[PRJ_CONS_RAD_F1(field, group)] / geom.sqrt_gamma;
@@ -3923,9 +3947,9 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             Fcov[2] = u[PRJ_CONS_RAD_F3(field, group)] / geom.sqrt_gamma;
             prj_rad_gr_m1_clamp_ef(&geom, &E, Fcov);
 
-            prj_rad_gr_m1_source_closure_ctx(&geom, block, W, dvcon_dx, i, j, k,
-                field, group, &closure);
-            prj_rad_gr_m1_prepare_side(&closure, &pside);
+            closure = base_closure;
+            closure.opacity = prj_rad_gr_m1_cell_opacity(block, i, j, k,
+                field, group);
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, E, Fcov,
                 &pdata);
             prj_rad_gr_m1_pressure_implicit(&pdata, P, 0);

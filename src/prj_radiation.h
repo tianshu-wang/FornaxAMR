@@ -89,6 +89,7 @@ typedef struct prj_rad_gr_m1_side_data {
     double Hcoef[3][6];
     double divu;
     double sigma2;
+    double lbar_by_shear;
 } prj_rad_gr_m1_side_data;
 
 void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
@@ -106,6 +107,11 @@ void prj_rad_gr_m1_pressure_cached(const prj_rad *rad,
 /* Like prj_rad_gr_m1_pressure but also returns the closure ratio fbar. */
 void prj_rad_gr_m1_pressure_fbar(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov[3],
+    double P[3][3], double *fbar_out);
+
+void prj_rad_gr_m1_pressure_fbar_cached(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E, const double Fcov[3],
     double P[3][3], double *fbar_out);
 
 /* Cell-centered closure (P, fbar) cache. The GR geometric source term and the

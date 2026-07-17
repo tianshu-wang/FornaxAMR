@@ -487,21 +487,37 @@ static void prj_src_gr_m1_dvdx(const prj_block *block, int i, int j, int k,
     *have_dvdx = 1;
 }
 
-static void prj_src_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
-    const double *W_mhd, const prj_block *block, int i, int j, int k,
-    int field, int group, prj_rad_gr_m1_closure_ctx *ctx)
+static double prj_src_gr_m1_cell_opacity(const prj_block *block,
+    int i, int j, int k, int field, int group)
 {
     const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
     const int op_idx = field * PRJ_NEGROUP + group;
     const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
-    double dvdx[3][3];
-    int have_dvdx;
+    double opacity = 0.0;
+
+    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
+        double kappa = block->kappa_cell[op_off];
+        double sigma = block->sigma_cell[op_off];
+
+        if (isfinite(kappa) && kappa > 0.0) {
+            opacity += kappa;
+        }
+        if (isfinite(sigma) && sigma > 0.0) {
+            opacity += sigma;
+        }
+    }
+    return opacity;
+}
+
+static void prj_src_gr_m1_base_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const double *W_mhd, const double dvdx[3][3], int have_dvdx,
+    int i, int j, int k, prj_rad_gr_m1_closure_ctx *ctx)
+{
     int a;
     int b;
     int d;
 
     memset(ctx, 0, sizeof(*ctx));
-    prj_src_gr_m1_dvdx(block, i, j, k, dvdx, &have_dvdx);
     for (a = 0; a < 3; ++a) {
         ctx->vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
             PRJ_CLIGHT : 0.0;
@@ -514,23 +530,14 @@ static void prj_src_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
             }
         }
     }
-    for (d = 0; d < 3; ++d) {
-        for (a = 0; a < 3; ++a) {
-            ctx->dvdx[d][a] = dvdx[d][a];
+    if (dvdx != 0) {
+        for (d = 0; d < 3; ++d) {
+            for (a = 0; a < 3; ++a) {
+                ctx->dvdx[d][a] = dvdx[d][a];
+            }
         }
     }
     ctx->opacity = 0.0;
-    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
-        double kappa = block->kappa_cell[op_off];
-        double sigma = block->sigma_cell[op_off];
-
-        if (isfinite(kappa) && kappa > 0.0) {
-            ctx->opacity += kappa;
-        }
-        if (isfinite(sigma) && sigma > 0.0) {
-            ctx->opacity += sigma;
-        }
-    }
     ctx->have_shear = have_dvdx;
 }
 
@@ -553,12 +560,20 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                 prj_z4c_hydro_geom geom;
+                double dvdx[3][3];
+                int have_dvdx;
+                prj_rad_gr_m1_closure_ctx base_closure;
+                prj_rad_gr_m1_side_data pside;
                 int field;
                 int group;
 
                 if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
                     prj_src_gr_fail("radiation geometry load", -1, i, j, k);
                 }
+                prj_src_gr_m1_dvdx(block, i, j, k, dvdx, &have_dvdx);
+                prj_src_gr_m1_base_closure_ctx(&geom, W_mhd, dvdx, have_dvdx,
+                    i, j, k, &base_closure);
+                prj_rad_gr_m1_prepare_side(&base_closure, &pside);
                 for (field = 0; field < PRJ_NRAD; ++field) {
                     for (group = 0; group < PRJ_NEGROUP; ++group) {
                         double E;
@@ -585,13 +600,14 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
                             }
                         }
 
-                        prj_src_gr_m1_closure_ctx(&geom, W_mhd, block, i, j, k,
-                            field, group, &closure);
+                        closure = base_closure;
+                        closure.opacity = prj_src_gr_m1_cell_opacity(block,
+                            i, j, k, field, group);
                         {
                             double fbar_cache;
 
-                            prj_rad_gr_m1_pressure_fbar(rad, &closure, E, Fcov,
-                                Pcon, &fbar_cache);
+                            prj_rad_gr_m1_pressure_fbar_cached(rad, &closure,
+                                &pside, E, Fcov, Pcon, &fbar_cache);
                             prj_rad_gr_m1_closure_cache_put(
                                 (i * PRJ_BLOCK_SIZE + j) * PRJ_BLOCK_SIZE + k,
                                 field * PRJ_NEGROUP + group, Pcon, fbar_cache);

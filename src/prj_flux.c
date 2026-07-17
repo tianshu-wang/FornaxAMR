@@ -1249,7 +1249,7 @@ static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
 static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
     const prj_rad_gr_m1_closure_ctx *closure,
-    const prj_rad_gr_m1_side_data *side,
+    const prj_rad_gr_m1_side_data *side, double normal_scale,
     double U[4], double F[4], double *smin, double *smax)
 {
     const double c = PRJ_CLIGHT;
@@ -1263,8 +1263,6 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     double f;
     double lam_min;
     double lam_max;
-    double gnn;
-    double normal_scale;
     int i;
 
     E = W[PRJ_PRIM_RAD_E(field, group)];
@@ -1297,11 +1295,6 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
 
     prj_rad_m1_wavespeeds_with_fluxmag(E, Fcon[0], Fmag, inv_Fmag, f,
         &lam_min, &lam_max);
-    gnn = geom->gamma[0][0];
-    if (!isfinite(gnn) || gnn <= 0.0) {
-        gnn = 1.0;
-    }
-    normal_scale = geom->alpha / sqrt(gnn);
     *smin = c * (normal_scale * lam_min - geom->beta[0]);
     *smax = c * (normal_scale * lam_max - geom->beta[0]);
 }
@@ -1326,9 +1319,18 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
      * here and reuse in every prj_rad_gr_m1_pressure_cached call below. */
     prj_rad_gr_m1_side_data sideL;
     prj_rad_gr_m1_side_data sideR;
+    double normal_scale;
 
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
+    }
+    {
+        double gnn = geom->gamma[0][0];
+
+        if (!isfinite(gnn) || gnn <= 0.0) {
+            gnn = 1.0;
+        }
+        normal_scale = geom->alpha / sqrt(gnn);
     }
     have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
         dx_dir, dvdx_face);
@@ -1365,9 +1367,9 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             closureR.opacity = chi_ext;
 
             prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &closureL,
-                &sideL, UL, FphysL, &lamL_min, &lamL_max);
+                &sideL, normal_scale, UL, FphysL, &lamL_min, &lamL_max);
             prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &closureR,
-                &sideR, UR, FphysR, &lamR_min, &lamR_max);
+                &sideR, normal_scale, UR, FphysR, &lamR_min, &lamR_max);
 
             sL = lamL_min < lamR_min ? lamL_min : lamR_min;
             sR = lamL_max > lamR_max ? lamL_max : lamR_max;
@@ -1824,7 +1826,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                             v_face_loc[0], il, jl, kl, ir, jr, kr, Fl);
 #else
                         double dx_dir;
-                        double lapse_face = 1.0;
                         double chi_face[PRJ_NRAD * PRJ_NEGROUP];
                         const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
                         size_t off_L = (size_t)IDX(il, jl, kl) * stride;
@@ -1834,8 +1835,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                         const double *kappa_R = &block->kappa_cell[off_R];
                         const double *sigma_R = &block->sigma_cell[off_R];
                         int idx;
-                        lapse_face = 0.5 *
-                            (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
                         dx_dir = block->dx[dir];
 
                         for (idx = 0; idx < PRJ_NRAD * PRJ_NEGROUP; ++idx) {
@@ -1865,7 +1864,14 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                                 dx_dir, Fl);
                         } else
 #endif
-                        prj_rad_flux(rad, WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
+                        {
+                            double lapse_face = 0.5 *
+                                (block->lapse[IDX(il, jl, kl)] +
+                                    block->lapse[IDX(ir, jr, kr)]);
+
+                            prj_rad_flux(rad, WL, WR, lapse_face, chi_face,
+                                dx_dir, v_face_loc[0], Fl);
+                        }
 #endif
                     }
                     /* Transverse ghost faces (MHD CT/EMF layer) are skipped: the
