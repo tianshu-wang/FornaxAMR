@@ -732,6 +732,32 @@ static double prj_flux_det3(const double g[3][3])
         + g[0][2] * (g[1][0] * g[2][1] - g[1][1] * g[2][0]);
 }
 
+/* Cofactor inverse of a 3-metric; returns det(g). On a non-finite or
+ * non-positive determinant the inverse is left untouched (the caller keeps its
+ * fallback and the degenerate metric is caught downstream). Keeping gamma_inv
+ * the exact inverse of gamma is what makes face norms, raising/lowering and
+ * densitization mutually consistent. */
+static double prj_flux_inv3(const double g[3][3], double ginv[3][3])
+{
+    double det = prj_flux_det3(g);
+    double inv_det;
+
+    if (!isfinite(det) || det <= 0.0) {
+        return det;
+    }
+    inv_det = 1.0 / det;
+    ginv[0][0] = (g[1][1] * g[2][2] - g[1][2] * g[2][1]) * inv_det;
+    ginv[0][1] = (g[0][2] * g[2][1] - g[0][1] * g[2][2]) * inv_det;
+    ginv[0][2] = (g[0][1] * g[1][2] - g[0][2] * g[1][1]) * inv_det;
+    ginv[1][0] = (g[1][2] * g[2][0] - g[1][0] * g[2][2]) * inv_det;
+    ginv[1][1] = (g[0][0] * g[2][2] - g[0][2] * g[2][0]) * inv_det;
+    ginv[1][2] = (g[0][2] * g[1][0] - g[0][0] * g[1][2]) * inv_det;
+    ginv[2][0] = (g[1][0] * g[2][1] - g[1][1] * g[2][0]) * inv_det;
+    ginv[2][1] = (g[0][1] * g[2][0] - g[0][0] * g[2][1]) * inv_det;
+    ginv[2][2] = (g[0][0] * g[1][1] - g[0][1] * g[1][0]) * inv_det;
+    return det;
+}
+
 static void prj_flux_gr_print_face_location(const prj_block *block,
     int dir, int i, int j, int k)
 {
@@ -969,6 +995,19 @@ static void prj_flux_gr_face_geom_from_cells(const prj_z4c_hydro_geom *gl,
             }
         }
     }
+    /* Derive the face inverse-metric and sqrt(det) from the averaged gamma so
+     * they stay mutually consistent (gamma_inv == inverse(gamma),
+     * sqrt_gamma == sqrt(det gamma)). The independent averages above are kept
+     * only as a fallback for a degenerate metric; using them directly leaves
+     * the fields inconsistent and corrupts norms, raising/lowering, flux
+     * densitization and the GRMHD HLLD input on curved/off-diagonal metrics. */
+    {
+        double det = prj_flux_inv3(geom->gamma, geom->gamma_inv);
+
+        if (isfinite(det) && det > 0.0) {
+            geom->sqrt_gamma = sqrt(det);
+        }
+    }
 }
 
 static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
@@ -1017,7 +1056,7 @@ static void prj_flux_gr_hydro_state_flux(prj_eos *eos, const prj_block *block,
     double vn;
     double cs2;
     double cs;
-    double gnn;
+    double gnn_inv;
     int status;
     int a;
     int b;
@@ -1065,11 +1104,14 @@ static void prj_flux_gr_hydro_state_flux(prj_eos *eos, const prj_block *block,
         cs2 = PRJ_CLIGHT * PRJ_CLIGHT;
     }
     cs = sqrt(cs2);
-    gnn = geom->gamma[0][0];
-    if (!isfinite(gnn) || gnn <= 0.0) {
-        gnn = 1.0;
+    /* The normal characteristic speed scales with the norm of the face-normal
+     * one-form, sqrt(gamma^nn) = sqrt(gamma_inv[0][0]). 1/sqrt(gamma[0][0])
+     * only coincides with it for a diagonal face metric. */
+    gnn_inv = geom->gamma_inv[0][0];
+    if (!isfinite(gnn_inv) || gnn_inv <= 0.0) {
+        gnn_inv = 1.0;
     }
-    *speed = fabs(vn) + geom->alpha * cs / sqrt(gnn);
+    *speed = fabs(vn) + geom->alpha * cs * sqrt(gnn_inv);
 }
 
 static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
@@ -1249,7 +1291,7 @@ static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
 static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
     const prj_rad_gr_m1_closure_ctx *closure,
-    const prj_rad_gr_m1_side_data *side, double normal_scale,
+    const prj_rad_gr_m1_side_data *side, double normal_norm,
     double U[4], double F[4], double *smin, double *smax)
 {
     const double c = PRJ_CLIGHT;
@@ -1293,10 +1335,20 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
             (geom->alpha * c2 * Pn_i - c * geom->beta[0] * Fcov[i]);
     }
 
-    prj_rad_m1_wavespeeds_with_fluxmag(E, Fcon[0], Fmag, inv_Fmag, f,
-        &lam_min, &lam_max);
-    *smin = c * (normal_scale * lam_min - geom->beta[0]);
-    *smax = c * (normal_scale * lam_max - geom->beta[0]);
+    /* The wavespeed cosine mu = (F . n_hat)/|F| needs the orthonormal normal
+     * projection F^n_hat = Fcon[0]/sqrt(gamma^nn), not the raw contravariant
+     * Fcon[0]; otherwise mu (and the M1 eigenvalues) are wrong whenever
+     * gamma^nn != 1, i.e. for any non-orthonormal face metric. The coordinate
+     * wavespeed then scales by alpha*sqrt(gamma^nn) = alpha*normal_norm. */
+    {
+        double Fn_ortho = normal_norm > 0.0 ? Fcon[0] / normal_norm : Fcon[0];
+        double normal_scale = geom->alpha * normal_norm;
+
+        prj_rad_m1_wavespeeds_with_fluxmag(E, Fn_ortho, Fmag, inv_Fmag, f,
+            &lam_min, &lam_max);
+        *smin = c * (normal_scale * lam_min - geom->beta[0]);
+        *smax = c * (normal_scale * lam_max - geom->beta[0]);
+    }
 }
 
 static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
@@ -1319,18 +1371,18 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
      * here and reuse in every prj_rad_gr_m1_pressure_cached call below. */
     prj_rad_gr_m1_side_data sideL;
     prj_rad_gr_m1_side_data sideR;
-    double normal_scale;
+    double normal_norm;
 
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
     }
     {
-        double gnn = geom->gamma[0][0];
+        double gnn_inv = geom->gamma_inv[0][0];
 
-        if (!isfinite(gnn) || gnn <= 0.0) {
-            gnn = 1.0;
+        if (!isfinite(gnn_inv) || gnn_inv <= 0.0) {
+            gnn_inv = 1.0;
         }
-        normal_scale = geom->alpha / sqrt(gnn);
+        normal_norm = sqrt(gnn_inv);
     }
     have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
         dx_dir, dvdx_face);
@@ -1367,9 +1419,9 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             closureR.opacity = chi_ext;
 
             prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &closureL,
-                &sideL, normal_scale, UL, FphysL, &lamL_min, &lamL_max);
+                &sideL, normal_norm, UL, FphysL, &lamL_min, &lamL_max);
             prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &closureR,
-                &sideR, normal_scale, UR, FphysR, &lamR_min, &lamR_max);
+                &sideR, normal_norm, UR, FphysR, &lamR_min, &lamR_max);
 
             sL = lamL_min < lamR_min ? lamL_min : lamR_min;
             sR = lamL_max > lamR_max ? lamL_max : lamR_max;

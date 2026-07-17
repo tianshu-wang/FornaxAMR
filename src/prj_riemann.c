@@ -1346,7 +1346,11 @@ static void prj_riemann_gr_hlld_impl(const double *WL, const double *WR,
     if (!(lambda_l < lambda_r) || !isfinite(lambda_l) || !isfinite(lambda_r)) {
         prj_riemann_hlld_fail("invalid GR HLLD wave ordering");
     }
-    s_interface = beta[0] / (alpha * sqrt(gamma[0][0]));
+    /* Interface speed in the tetrad (orthonormal normal) frame: the shift
+     * projects onto the normal one-form with norm sqrt(gamma^xx), which the
+     * tetrad already carries as tet.exx = sqrt(gu[0][0]). 1/sqrt(gamma[0][0])
+     * only equals sqrt(gamma^xx) for a diagonal metric. */
+    s_interface = beta[0] * tet.exx / alpha;
     if (!isfinite(s_interface)) {
         s_interface = 0.0;
     }

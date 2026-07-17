@@ -1044,7 +1044,15 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
             PRJ_SUBTIMER_STOP("sub_rad_ffc");
 #endif
 #else
-            (void)T_cell;
+            /* Full-GR M1 matter coupling: this block is already gated on
+             * prj_eos_full_dynamic_gr_enabled(mesh), so the GR M1 source applies
+             * unconditionally here. Stage 1 and the non-MHD stage-2 paths call
+             * this; omitting it here left the coupled GRMHD+M1 RK2 step applying
+             * the matter back-reaction only once per step. */
+            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
+            prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
+                i, j, k, 0.5 * dt, &T_cell);
+            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
 #endif
             PRJ_SUBTIMER_STOP("sub_cell_radiation");
         }
