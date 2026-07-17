@@ -823,7 +823,12 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
 #else
 #if PRJ_DYNAMIC_GR
-        if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
+        if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
+            prj_rad_gr_m1_matter_update(rad, eos, mesh, block,
+                prj_stage_slot_from_bf_arg(use_bf1), u, i, j, k, dt, &T_cell);
+            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
+        } else {
 #endif
         PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
@@ -910,7 +915,10 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
 #else
 #if PRJ_DYNAMIC_GR
-        if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
+        if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+            prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 0, u1,
+                i, j, k, dt, &T_cell);
+        } else {
 #endif
         prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
         prj_rad_nucinel_step(rad, eos, u1, dt, T_cell);
@@ -1150,7 +1158,12 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
 #else
 #if PRJ_DYNAMIC_GR
-        if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
+        if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
+            prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
+                i, j, k, 0.5 * dt, &T_cell);
+            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
+        } else {
 #endif
         PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
@@ -1225,7 +1238,10 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
 #else
 #if PRJ_DYNAMIC_GR
-        if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
+        if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+            prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
+                i, j, k, 0.5 * dt, &T_cell);
+        } else {
 #endif
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
         prj_rad_nucinel_step(rad, eos, u, 0.5 * dt, T_cell);
@@ -1602,7 +1618,12 @@ static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
     PRJ_SUBTIMER_STOP("sub_rad_inel");
 #else
 #if PRJ_DYNAMIC_GR
-    if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
+        prj_rad_gr_m1_matter_update(rad, eos, mesh, block, stage, u1,
+            i, j, k, dt, &T_cell);
+        PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
+    } else {
 #endif
     PRJ_SUBTIMER_START("sub_rad_eleinel");
     prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
@@ -2671,7 +2692,14 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
 #endif
 #else
 #if PRJ_DYNAMIC_GR
-                        if (!prj_eos_full_dynamic_gr_enabled(mesh)) {
+                        if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+                            double T_cell = 0.0;
+
+                            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
+                            prj_rad_gr_m1_matter_update(rad, eos, mesh, block, stage,
+                                u1, i, j, k, dt_implicit, &T_cell);
+                            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
+                        } else {
 #endif
                         double T_cell = 0.0;
                         double kappa[PRJ_NRAD * PRJ_NEGROUP];

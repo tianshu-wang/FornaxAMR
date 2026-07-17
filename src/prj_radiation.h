@@ -87,6 +87,9 @@ void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
 void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     const prj_block *block, int z4c_stage, const double *W_state, double *u,
     int ic, int jc, int kc, double dt);
+void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage, double *u,
+    int i, int j, int k, double dt, double *final_temperature);
 #endif
 void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);

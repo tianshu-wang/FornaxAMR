@@ -3489,6 +3489,324 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
         }
     }
 }
+
+static void prj_rad_gr_m1_clamp_ef(const prj_z4c_hydro_geom *geom,
+    double *E, double Fcov[3])
+{
+    double Fcon[3];
+    double F2 = 0.0;
+    double Fmag;
+    double cE;
+    int a;
+    int b;
+
+    if (E == 0 || Fcov == 0) {
+        return;
+    }
+    if (!isfinite(*E) || *E <= 0.0) {
+        *E = 0.0;
+        Fcov[0] = 0.0;
+        Fcov[1] = 0.0;
+        Fcov[2] = 0.0;
+        return;
+    }
+    for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcov[a])) {
+            Fcov[a] = 0.0;
+        }
+        Fcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
+        }
+        F2 += Fcov[a] * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 <= 0.0) {
+        return;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * *E;
+    if (Fmag > cE && cE >= 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            Fcov[a] *= scale;
+        }
+    }
+}
+
+static void prj_rad_gr_m1_clamp_conserved_cell(
+    const prj_z4c_hydro_geom *geom, double *u)
+{
+    int field;
+    int group;
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            double E = u[PRJ_CONS_RAD_E(field, group)] / geom->sqrt_gamma;
+            double Fcov[3];
+
+            Fcov[0] = u[PRJ_CONS_RAD_F1(field, group)] / geom->sqrt_gamma;
+            Fcov[1] = u[PRJ_CONS_RAD_F2(field, group)] / geom->sqrt_gamma;
+            Fcov[2] = u[PRJ_CONS_RAD_F3(field, group)] / geom->sqrt_gamma;
+            prj_rad_gr_m1_clamp_ef(geom, &E, Fcov);
+            u[PRJ_CONS_RAD_E(field, group)] = geom->sqrt_gamma * E;
+            u[PRJ_CONS_RAD_F1(field, group)] = geom->sqrt_gamma * Fcov[0];
+            u[PRJ_CONS_RAD_F2(field, group)] = geom->sqrt_gamma * Fcov[1];
+            u[PRJ_CONS_RAD_F3(field, group)] = geom->sqrt_gamma * Fcov[2];
+        }
+    }
+}
+
+static void prj_rad_gr_m1_source_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const prj_block *block, const double *W, const double dvdx[3][3],
+    int i, int j, int k, int field, int group,
+    prj_rad_gr_m1_closure_ctx *ctx)
+{
+    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+    const int op_idx = field * PRJ_NEGROUP + group;
+    const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
+    int a;
+    int b;
+    int d;
+
+    memset(ctx, 0, sizeof(*ctx));
+    for (a = 0; a < 3; ++a) {
+        ctx->vcon[a] = W != 0 ? W[PRJ_PRIM_V1 + a] / PRJ_CLIGHT : 0.0;
+        for (b = 0; b < 3; ++b) {
+            ctx->gamma[a][b] = geom->gamma[a][b];
+            ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
+            ctx->K_dd[a][b] = geom->K_dd[a][b];
+            for (d = 0; d < 3; ++d) {
+                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
+            }
+        }
+    }
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            ctx->dvdx[d][a] = dvdx[d][a] / PRJ_CLIGHT;
+        }
+    }
+    ctx->opacity = 0.0;
+    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
+        double kappa = block->kappa_cell[op_off];
+        double sigma = block->sigma_cell[op_off];
+
+        if (isfinite(kappa) && kappa > 0.0) {
+            ctx->opacity += kappa;
+        }
+        if (isfinite(sigma) && sigma > 0.0) {
+            ctx->opacity += sigma;
+        }
+    }
+    ctx->have_shear = 1;
+}
+
+static void prj_rad_gr_m1_cell_dvdx(const prj_block *block,
+    int ic, int jc, int kc, double dvdx[3][3])
+{
+    double inv_dx[3];
+    int jdir;
+    int icomp;
+
+    memset(dvdx, 0, 9 * sizeof(double));
+    if (block == 0 || block->v_riemann[0] == 0 ||
+        block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
+        return;
+    }
+    inv_dx[0] = 1.0 / block->dx[0];
+    inv_dx[1] = 1.0 / block->dx[1];
+    inv_dx[2] = 1.0 / block->dx[2];
+    for (jdir = 0; jdir < 3; ++jdir) {
+        for (icomp = 0; icomp < 3; ++icomp) {
+            int il = ic;
+            int jl = jc;
+            int kl = kc;
+            int ir = ic;
+            int jr = jc;
+            int kr = kc;
+            double vL;
+            double vR;
+
+            if (jdir == X1DIR) {
+                ir = ic + 1;
+            } else if (jdir == X2DIR) {
+                jr = jc + 1;
+            } else {
+                kr = kc + 1;
+            }
+            vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+            vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
+            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+        }
+    }
+}
+
+void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage, double *u,
+    int i, int j, int k, double dt, double *final_temperature)
+{
+    prj_z4c_hydro_geom geom;
+    double W[PRJ_NVAR_PRIM];
+    double eos_q[PRJ_EOS_NQUANT];
+    double tmp[PRJ_NVAR_CONS];
+    double J_old[PRJ_NRAD * PRJ_NEGROUP];
+    double H_old[PRJ_NRAD * PRJ_NEGROUP][4];
+    double ucon_src[PRJ_NRAD * PRJ_NEGROUP][4];
+    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double sigma[PRJ_NRAD * PRJ_NEGROUP];
+    double delta[PRJ_NRAD * PRJ_NEGROUP];
+    double dvdx[3][3];
+    double rho;
+    double eint;
+    double T;
+    double Ye_final;
+    double dt_lapse;
+    double total_dE = 0.0;
+    double total_dF[3] = {0.0, 0.0, 0.0};
+    int field;
+    int group;
+    int v;
+
+    if (rad == 0 || eos == 0 || mesh == 0 || block == 0 || u == 0 ||
+        dt == 0.0 || !prj_eos_full_dynamic_gr_enabled(mesh)) {
+        return;
+    }
+    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
+        fprintf(stderr,
+            "prj_rad_gr_m1_matter_update: failed to load Z4c geometry at cell (%d,%d,%d)\n",
+            i, j, k);
+        exit(1);
+    }
+    dt_lapse = dt * geom.alpha;
+    if (dt_lapse == 0.0) {
+        return;
+    }
+
+    prj_rad_gr_m1_clamp_conserved_cell(&geom, u);
+    prj_eos_cell_cons2prim(eos, mesh, block, z4c_stage, i, j, k, u, W,
+        PRJ_EOS_CTX_MAIN);
+    rho = W[PRJ_PRIM_RHO];
+    eint = W[PRJ_PRIM_EINT];
+    prj_eos_rey(eos, rho, eint, W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
+    T = eos_q[PRJ_EOS_TEMPERATURE];
+    prj_rad_gr_m1_cell_dvdx(block, i, j, k, dvdx);
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        tmp[v] = 0.0;
+    }
+    tmp[PRJ_CONS_RHO] = rho;
+    tmp[PRJ_CONS_ETOT] = rho * eint;
+    tmp[PRJ_CONS_YE] = rho * W[PRJ_PRIM_YE];
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            double E;
+            double Fcov[3];
+            double P[3][3];
+            double J;
+            double H[4];
+            double L[4][4];
+            double ucon[4];
+            double ucov[4];
+            double hcon[4][4];
+            double hcov[4][4];
+            prj_rad_gr_m1_closure_ctx closure;
+            prj_rad_gr_m1_pressure_data pdata;
+
+            E = u[PRJ_CONS_RAD_E(field, group)] / geom.sqrt_gamma;
+            Fcov[0] = u[PRJ_CONS_RAD_F1(field, group)] / geom.sqrt_gamma;
+            Fcov[1] = u[PRJ_CONS_RAD_F2(field, group)] / geom.sqrt_gamma;
+            Fcov[2] = u[PRJ_CONS_RAD_F3(field, group)] / geom.sqrt_gamma;
+            prj_rad_gr_m1_clamp_ef(&geom, &E, Fcov);
+
+            prj_rad_gr_m1_source_closure_ctx(&geom, block, W, dvdx, i, j, k,
+                field, group, &closure);
+            prj_rad_gr_m1_prepare_pressure(rad, &closure, E, Fcov, &pdata);
+            prj_rad_gr_m1_pressure_implicit(&pdata, P, 0);
+            prj_rad_gr_m1_decompose_m2(&pdata, P, &J, H, L, ucon, ucov,
+                hcon, hcov);
+
+            J_old[idx] = J;
+            for (v = 0; v < 4; ++v) {
+                H_old[idx][v] = H[v];
+                ucon_src[idx][v] = ucon[v];
+            }
+            tmp[PRJ_CONS_RAD_E(field, group)] = J;
+            /* The GR closure uses M^{0i}=F^i/c, so comoving H has energy-density
+             * units.  The temporary non-GR M1 source state expects the evolved
+             * flux variable, hence cH here.  The inelastic M1 routines still
+             * leave these flux slots unchanged, matching the non-GR behavior. */
+            tmp[PRJ_CONS_RAD_F1(field, group)] = PRJ_CLIGHT * H[1];
+            tmp[PRJ_CONS_RAD_F2(field, group)] = PRJ_CLIGHT * H[2];
+            tmp[PRJ_CONS_RAD_F3(field, group)] = PRJ_CLIGHT * H[3];
+        }
+    }
+
+    prj_rad_eleinel_step(rad, eos, tmp, dt_lapse, T);
+    prj_rad_nucinel_step(rad, eos, tmp, dt_lapse, T);
+    prj_rad_energy_update(rad, eos, tmp, dt_lapse, 1.0, &T, kappa);
+    Ye_final = tmp[PRJ_CONS_RHO] > 0.0 ?
+        tmp[PRJ_CONS_YE] / tmp[PRJ_CONS_RHO] : W[PRJ_PRIM_YE];
+    prj_rad3_opac_lookup(rad, rho, T, Ye_final, 0, sigma, delta, 0);
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            double chi = kappa[idx] + sigma[idx] * (1.0 - delta[idx] / 3.0);
+            double hscale = 1.0 / (1.0 + dt_lapse * PRJ_CLIGHT * chi);
+            double dJ = tmp[PRJ_CONS_RAD_E(field, group)] - J_old[idx];
+            double dH[4];
+            double Scon[4];
+            double S_cov_spatial[3];
+            double dE_cons;
+            double dF_cons[3];
+            int a;
+            int b;
+
+            for (a = 0; a < 4; ++a) {
+                double H_new = H_old[idx][a] * hscale;
+
+                dH[a] = H_new - H_old[idx][a];
+                Scon[a] = dJ * ucon_src[idx][a] + dH[a];
+            }
+            dE_cons = geom.sqrt_gamma * Scon[0];
+            for (a = 0; a < 3; ++a) {
+                S_cov_spatial[a] = 0.0;
+                for (b = 0; b < 3; ++b) {
+                    S_cov_spatial[a] += geom.gamma[a][b] * Scon[b + 1];
+                }
+                dF_cons[a] = geom.sqrt_gamma * PRJ_CLIGHT * S_cov_spatial[a];
+            }
+
+            u[PRJ_CONS_RAD_E(field, group)] += dE_cons;
+            u[PRJ_CONS_RAD_F1(field, group)] += dF_cons[0];
+            u[PRJ_CONS_RAD_F2(field, group)] += dF_cons[1];
+            u[PRJ_CONS_RAD_F3(field, group)] += dF_cons[2];
+            total_dE += dE_cons;
+            total_dF[0] += dF_cons[0];
+            total_dF[1] += dF_cons[1];
+            total_dF[2] += dF_cons[2];
+        }
+    }
+
+    prj_rad_gr_m1_clamp_conserved_cell(&geom, u);
+    u[PRJ_CONS_ETOT] -= total_dE * RAD_SCALE;
+    u[PRJ_CONS_MOM1] -= total_dF[0] * RAD_SCALE /
+        (PRJ_CLIGHT * PRJ_CLIGHT);
+    u[PRJ_CONS_MOM2] -= total_dF[1] * RAD_SCALE /
+        (PRJ_CLIGHT * PRJ_CLIGHT);
+    u[PRJ_CONS_MOM3] -= total_dF[2] * RAD_SCALE /
+        (PRJ_CLIGHT * PRJ_CLIGHT);
+    u[PRJ_CONS_YE] = u[PRJ_CONS_RHO] * Ye_final;
+
+    /* This source solve freezes the frame velocity while coupling radiation
+     * and matter.  A future fully implicit GR-M1 source solve should include
+     * the velocity in the nonlinear system for strongly momentum-coupled cells. */
+    if (final_temperature != 0) {
+        *final_temperature = T;
+    }
+}
 #endif
 
 #if PRJ_USE_RADIATION_FSA

@@ -70,6 +70,75 @@ static void init_test_rad(prj_rad *rad)
     }
 }
 
+static void init_source_test_rad(prj_rad *rad, double sigma_value)
+{
+    const size_t ncorners = 2u * 2u * 2u * (size_t)PRJ_NEGROUP;
+    const double tiny = 1.0e-300;
+    int nu;
+    int g;
+
+    init_test_rad(rad);
+    rad->min_inel_density = 1.0e99;
+    rad->maxiter = 50;
+    rad->implicit_err_tol = 1.0e-10;
+    rad->nromax = 2;
+    rad->ntmax = 2;
+    rad->nyemax = 2;
+    rad->romin = 0.25;
+    rad->romax = 4.0;
+    rad->tmin = 0.25;
+    rad->tmax = 4.0;
+    rad->yemin = 0.0;
+    rad->yemax = 1.0;
+    rad->log_romin = log(rad->romin);
+    rad->log_romax = log(rad->romax);
+    rad->log_tmin = log(rad->tmin);
+    rad->log_tmax = log(rad->tmax);
+    rad->inv_logrho_span = 1.0 / (rad->log_romax - rad->log_romin);
+    rad->inv_logtemp_span = 1.0 / (rad->log_tmax - rad->log_tmin);
+    rad->inv_ye_span = 1.0 / (rad->yemax - rad->yemin);
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        rad->egroup[nu] = (double *)calloc((size_t)PRJ_NEGROUP, sizeof(double));
+        rad->eedge[nu] = (double *)calloc((size_t)PRJ_NEGROUP + 1u, sizeof(double));
+        rad->egroup_erg[nu] = (double *)calloc((size_t)PRJ_NEGROUP, sizeof(double));
+        rad->degroup_erg[nu] = (double *)calloc((size_t)PRJ_NEGROUP, sizeof(double));
+        rad->x_e[nu] = (double *)calloc((size_t)PRJ_NEGROUP, sizeof(double));
+        rad->log_egroup[nu] = (double *)calloc((size_t)PRJ_NEGROUP, sizeof(double));
+        rad->spec_factor[nu] = (double *)calloc((size_t)PRJ_NEGROUP, sizeof(double));
+        rad->absopac[nu] = (prj_table_real *)calloc(ncorners, sizeof(prj_table_real));
+        rad->scaopac[nu] = (prj_table_real *)calloc(ncorners, sizeof(prj_table_real));
+        rad->emis[nu] = (prj_table_real *)calloc(ncorners, sizeof(prj_table_real));
+        rad->sdelta[nu] = (prj_table_real *)calloc(ncorners, sizeof(prj_table_real));
+        if (rad->egroup[nu] == 0 || rad->eedge[nu] == 0 ||
+            rad->egroup_erg[nu] == 0 || rad->degroup_erg[nu] == 0 ||
+            rad->x_e[nu] == 0 || rad->log_egroup[nu] == 0 ||
+            rad->spec_factor[nu] == 0 || rad->absopac[nu] == 0 ||
+            rad->scaopac[nu] == 0 || rad->emis[nu] == 0 ||
+            rad->sdelta[nu] == 0) {
+            die("source opacity allocation failed");
+        }
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double e = 1.0 + (double)g;
+
+            rad->egroup[nu][g] = e;
+            rad->eedge[nu][g] = e;
+            rad->egroup_erg[nu][g] = e * PRJ_MEV_TO_ERG;
+            rad->degroup_erg[nu][g] = PRJ_MEV_TO_ERG;
+            rad->log_egroup[nu][g] = log(e);
+            rad->spec_factor[nu][g] = 1.0;
+            rad->x_e[nu][g] = 0.0;
+        }
+        rad->eedge[nu][PRJ_NEGROUP] = 1.0 + (double)PRJ_NEGROUP;
+        for (g = 0; g < (int)ncorners; ++g) {
+            rad->absopac[nu][g] = (prj_table_real)log(tiny);
+            rad->scaopac[nu][g] = (prj_table_real)log(sigma_value);
+            rad->emis[nu][g] = (prj_table_real)log(tiny);
+            rad->sdelta[nu][g] = 0.0;
+        }
+    }
+}
+
 static void make_closure_ctx(const prj_z4c_hydro_geom *geom,
     const double vcon[3], const double dvdx[3][3], int have_shear,
     double opacity, prj_rad_gr_m1_closure_ctx *ctx)
@@ -520,6 +589,22 @@ static void set_combined_rad_state(double *W, double E, const double F[3])
     W[PRJ_PRIM_RAD_F1(0, 0)] = F[0];
     W[PRJ_PRIM_RAD_F2(0, 0)] = F[1];
     W[PRJ_PRIM_RAD_F3(0, 0)] = F[2];
+}
+
+static void load_combined_cell_state(const prj_block *block,
+    int i, int j, int k, double *W)
+{
+    int v;
+
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        W[v] = 0.0;
+    }
+    for (v = 0; v < PRJ_NHYDRO; ++v) {
+        W[v] = block->W_mhd[WIDX(v, i, j, k)];
+    }
+    for (v = 0; v < PRJ_NVAR_RAD_PRIM; ++v) {
+        W[PRJ_NHYDRO + v] = block->W_rad[WIDX(v, i, j, k)];
+    }
 }
 
 static void check_flat_zero_shift_matches_non_gr(void)
@@ -1068,6 +1153,105 @@ static void cell_dimless_dvdx(const prj_block *block, int i, int j, int k,
     }
 }
 
+static void check_gr_m1_matter_source_clamp(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_eos eos;
+    prj_rad rad;
+    prj_block *block;
+    double W[PRJ_NVAR_PRIM];
+    double u[PRJ_NVAR_CONS];
+    double beta[3] = {0.0, 0.0, 0.0};
+    double gamma_diag[3] = {1.0, 1.0, 1.0};
+    double E = 1.5;
+    double Fcov[3] = {2.0 * PRJ_CLIGHT * 1.5, 0.0, 0.0};
+    double T = 0.0;
+    const int i = 2;
+    const int j = 2;
+    const int k = 2;
+    int dir;
+
+    init_test_mesh(&mesh, &coord);
+    init_test_eos(&eos);
+    init_source_test_rad(&rad, 1.0e-300);
+    block = &mesh.blocks[0];
+    set_uniform_z4c(block, 1.0, beta, gamma_diag);
+    fill_constant_state(block, E, Fcov);
+    for (dir = 0; dir < 3; ++dir) {
+        prj_fill(block->v_riemann[dir],
+            (size_t)PRJ_NDIM * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    }
+    load_combined_cell_state(block, i, j, k, W);
+    prj_eos_cell_prim2cons(&eos, &mesh, block, 0, i, j, k, W, u,
+        PRJ_EOS_CTX_MAIN);
+    prj_rad_gr_m1_matter_update(&rad, &eos, &mesh, block, 0, u,
+        i, j, k, 1.0e-12, &T);
+
+    assert_close("source clamp E", u[PRJ_CONS_RAD_E(0, 0)], E, 2.0e-12);
+    assert_close("source clamp F1", u[PRJ_CONS_RAD_F1(0, 0)],
+        PRJ_CLIGHT * E, 2.0e-12);
+    assert_close("source clamp F2", u[PRJ_CONS_RAD_F2(0, 0)], 0.0, 2.0e-12);
+    assert_close("source clamp F3", u[PRJ_CONS_RAD_F3(0, 0)], 0.0, 2.0e-12);
+    prj_rad3_opac_free(&rad);
+    prj_mesh_destroy(&mesh);
+}
+
+static void check_gr_m1_matter_source_rest_momentum(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_eos eos;
+    prj_rad rad;
+    prj_block *block;
+    double W[PRJ_NVAR_PRIM];
+    double u[PRJ_NVAR_CONS];
+    double beta[3] = {0.0, 0.0, 0.0};
+    double gamma_diag[3] = {1.0, 1.0, 1.0};
+    double E = 2.0;
+    double Fcov[3] = {0.3 * PRJ_CLIGHT * 2.0, 0.0, 0.0};
+    double sigma = 2.0 / PRJ_CLIGHT;
+    double dt = 0.25;
+    double hscale = 1.0 / (1.0 + dt * PRJ_CLIGHT * sigma);
+    double Fnew = Fcov[0] * hscale;
+    double T = 0.0;
+    const int i = 2;
+    const int j = 2;
+    const int k = 2;
+    int dir;
+
+    init_test_mesh(&mesh, &coord);
+    init_test_eos(&eos);
+    init_source_test_rad(&rad, sigma);
+    block = &mesh.blocks[0];
+    set_uniform_z4c(block, 1.0, beta, gamma_diag);
+    fill_constant_state(block, E, Fcov);
+    for (dir = 0; dir < 3; ++dir) {
+        prj_fill(block->v_riemann[dir],
+            (size_t)PRJ_NDIM * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    }
+    load_combined_cell_state(block, i, j, k, W);
+    prj_eos_cell_prim2cons(&eos, &mesh, block, 0, i, j, k, W, u,
+        PRJ_EOS_CTX_MAIN);
+    prj_rad_gr_m1_matter_update(&rad, &eos, &mesh, block, 0, u,
+        i, j, k, dt, &T);
+
+    assert_close("source momentum E unchanged", u[PRJ_CONS_RAD_E(0, 0)],
+        E, 2.0e-12);
+    assert_close("source momentum F damped", u[PRJ_CONS_RAD_F1(0, 0)],
+        Fnew, 1.0e-8);
+    {
+        double dF_actual = u[PRJ_CONS_RAD_F1(0, 0)] - Fcov[0];
+
+        assert_close("source matter momentum", u[PRJ_CONS_MOM1],
+            -dF_actual * RAD_SCALE / (PRJ_CLIGHT * PRJ_CLIGHT), 2.0e-12);
+    }
+    assert_close("source matter Ye", u[PRJ_CONS_YE], u[PRJ_CONS_RHO] * 0.2,
+        2.0e-12);
+    prj_rad3_opac_free(&rad);
+    prj_mesh_destroy(&mesh);
+}
+
 static void check_gr_m1_sources(void)
 {
     prj_mesh mesh;
@@ -1185,6 +1369,8 @@ int main(int argc, char **argv)
     check_gr_pressure_closure_boosted_fbar();
     check_gr_pressure_closure_small_velocity_uses_eulerian_fbar();
     check_gr_m1_frequency_third_moment_rest_frame();
+    check_gr_m1_matter_source_clamp();
+    check_gr_m1_matter_source_rest_momentum();
     check_gr_m1_sources();
     printf("test_gr_m1_transport: ok\n");
 #else
