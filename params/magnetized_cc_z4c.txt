@@ -73,13 +73,13 @@ use_full_dynamic_gr = 1
 z4c_chi_psi_power = -4
 z4c_floor_chi = 1
 z4c_chi_min_floor = 1.0e-8
-z4c_diss = 0.5
+z4c_diss = 0.3
 
 z4c_lapse_oplog = 2.0
 z4c_lapse_advect = 1.0
 z4c_shift_Gamma = 1.0
 z4c_shift_advect = 1.0
-z4c_shift_eta_inv_cm = 0.0
+z4c_shift_eta_inv_cm = 1.0e-6
 
-z4c_damp_kappa1_inv_cm = 0.0
+z4c_damp_kappa1_inv_cm = 1.0e-6
 z4c_damp_kappa2 = 0.0

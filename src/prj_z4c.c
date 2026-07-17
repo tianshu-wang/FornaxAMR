@@ -47,9 +47,9 @@ void prj_z4c_init_params(prj_z4c_params *params)
     params->chi_psi_power = -4.0;
     params->chi_div_floor = -1000.0;
     params->chi_min_floor = 1.0e-12;
-    params->floor_chi = 0;
-    params->diss = 0.0;
-    params->damp_kappa1_inv_cm = 0.0;
+    params->floor_chi = 1;
+    params->diss = 0.3;
+    params->damp_kappa1_inv_cm = 1.0e-6;
     params->damp_kappa2 = 0.0;
     params->lapse_harmonicf = 1.0;
     params->lapse_harmonic = 0.0;
@@ -63,7 +63,7 @@ void prj_z4c_init_params(prj_z4c_params *params)
     params->shift_advect = 1.0;
     params->shift_alpha2Gamma = 0.0;
     params->shift_H = 0.0;
-    params->shift_eta_inv_cm = 0.0;
+    params->shift_eta_inv_cm = 1.0e-6;
     params->puncture_mass_cm = 1.0;
     params->puncture_center_cm[0] = 0.0;
     params->puncture_center_cm[1] = 0.0;
