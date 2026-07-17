@@ -3497,36 +3497,39 @@ static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int sid
 }
 
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
-static void prj_rad_gr_m1_raise_vec(const prj_z4c_hydro_geom *geom,
-    const double vcov[3], double vcon[3])
-{
-    int a;
-    int b;
-
-    for (a = 0; a < 3; ++a) {
-        vcon[a] = 0.0;
-        for (b = 0; b < 3; ++b) {
-            vcon[a] += geom->gamma_inv[a][b] * vcov[b];
-        }
-    }
-}
-
-static void prj_rad_gr_m1_freq_closure_ctx(const prj_z4c_hydro_geom *geom,
-    const prj_block *block, const double *W_mhd, const double dvdx[3][3],
-    int i, int j, int k, int field, int group,
-    prj_rad_gr_m1_closure_ctx *ctx)
+static double prj_rad_gr_m1_cell_opacity(const prj_block *block,
+    int i, int j, int k, int field, int group)
 {
     const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
     const int op_idx = field * PRJ_NEGROUP + group;
     const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
+    double opacity = 0.0;
+
+    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
+        double kappa = block->kappa_cell[op_off];
+        double sigma = block->sigma_cell[op_off];
+
+        if (isfinite(kappa) && kappa > 0.0) {
+            opacity += kappa;
+        }
+        if (isfinite(sigma) && sigma > 0.0) {
+            opacity += sigma;
+        }
+    }
+    return opacity;
+}
+
+static void prj_rad_gr_m1_fill_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const double vcon[3], const double dvcon_dx[3][3], int have_shear,
+    double opacity, prj_rad_gr_m1_closure_ctx *ctx)
+{
     int a;
     int b;
     int d;
 
     memset(ctx, 0, sizeof(*ctx));
     for (a = 0; a < 3; ++a) {
-        ctx->vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
-            PRJ_CLIGHT : 0.0;
+        ctx->vcon[a] = vcon != 0 ? vcon[a] : 0.0;
         for (b = 0; b < 3; ++b) {
             ctx->gamma[a][b] = geom->gamma[a][b];
             ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
@@ -3536,58 +3539,29 @@ static void prj_rad_gr_m1_freq_closure_ctx(const prj_z4c_hydro_geom *geom,
             }
         }
     }
-    for (d = 0; d < 3; ++d) {
-        for (a = 0; a < 3; ++a) {
-            ctx->dvdx[d][a] = dvdx[d][a] / PRJ_CLIGHT;
+    if (dvcon_dx != 0) {
+        for (d = 0; d < 3; ++d) {
+            for (a = 0; a < 3; ++a) {
+                ctx->dvdx[d][a] = dvcon_dx[d][a];
+            }
         }
     }
-    ctx->opacity = 0.0;
-    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
-        double kappa = block->kappa_cell[op_off];
-        double sigma = block->sigma_cell[op_off];
-
-        if (isfinite(kappa) && kappa > 0.0) {
-            ctx->opacity += kappa;
-        }
-        if (isfinite(sigma) && sigma > 0.0) {
-            ctx->opacity += sigma;
-        }
-    }
-    ctx->have_shear = 1;
+    ctx->opacity = opacity;
+    ctx->have_shear = have_shear;
 }
 
-void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
-    const prj_block *block, int z4c_stage, const double *W_state, double *u,
-    int ic, int jc, int kc, double dt)
+static void prj_rad_gr_m1_cell_dvcon_dx(const prj_block *block,
+    int ic, int jc, int kc, double dvcon_dx[3][3])
 {
-    double dvdx[3][3];
     double inv_dx[3];
-    prj_z4c_hydro_geom geom;
-    const double *W_mhd;
-    double dt_geom;
     int jdir;
     int icomp;
-    int field;
 
-    if (rad == 0 || mesh == 0 || block == 0 || W_state == 0 || u == 0) {
+    memset(dvcon_dx, 0, 9 * sizeof(double));
+    if (block == 0 || block->v_riemann[0] == 0 ||
+        block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
         return;
     }
-    if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 ||
-        block->v_riemann[2] == 0) {
-        return;
-    }
-    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, ic, jc, kc, &geom)) {
-        fprintf(stderr,
-            "prj_rad_freq_flux_apply_gr_m1: failed to load Z4c geometry at cell (%d,%d,%d)\n",
-            ic, jc, kc);
-        exit(1);
-    }
-    W_mhd = prj_block_mhd_stage_const(block, z4c_stage);
-    dt_geom = dt * geom.alpha * geom.sqrt_gamma;
-    if (dt_geom == 0.0) {
-        return;
-    }
-
     inv_dx[0] = 1.0 / block->dx[0];
     inv_dx[1] = 1.0 / block->dx[1];
     inv_dx[2] = 1.0 / block->dx[2];
@@ -3611,13 +3585,62 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             }
             vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
             vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
-            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+            dvcon_dx[jdir][icomp] =
+                (vR - vL) * inv_dx[jdir] / PRJ_CLIGHT;
         }
     }
+}
+
+static void prj_rad_gr_m1_freq_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const prj_block *block, const double *W_mhd, const double dvcon_dx[3][3],
+    int i, int j, int k, int field, int group,
+    prj_rad_gr_m1_closure_ctx *ctx)
+{
+    double vcon[3];
+    double opacity;
+    int a;
+
+    for (a = 0; a < 3; ++a) {
+        vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
+            PRJ_CLIGHT : 0.0;
+    }
+    opacity = prj_rad_gr_m1_cell_opacity(block, i, j, k, field, group);
+    prj_rad_gr_m1_fill_closure_ctx(geom, vcon, dvcon_dx, 1, opacity, ctx);
+}
+
+void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, const double *W_state, double *u,
+    int ic, int jc, int kc, double dt)
+{
+    double dvcon_dx[3][3];
+    prj_z4c_hydro_geom geom;
+    const double *W_mhd;
+    double dt_geom;
+    int field;
+
+    if (rad == 0 || mesh == 0 || block == 0 || W_state == 0 || u == 0) {
+        return;
+    }
+    if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 ||
+        block->v_riemann[2] == 0) {
+        return;
+    }
+    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, ic, jc, kc, &geom)) {
+        fprintf(stderr,
+            "prj_rad_freq_flux_apply_gr_m1: failed to load Z4c geometry at cell (%d,%d,%d)\n",
+            ic, jc, kc);
+        exit(1);
+    }
+    W_mhd = prj_block_mhd_stage_const(block, z4c_stage);
+    dt_geom = dt * geom.alpha * geom.sqrt_gamma;
+    if (dt_geom == 0.0) {
+        return;
+    }
+
+    prj_rad_gr_m1_cell_dvcon_dx(block, ic, jc, kc, dvcon_dx);
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         double Eg[PRJ_NEGROUP];
-        double Fcon[PRJ_NEGROUP][3];
         double Pg[PRJ_NEGROUP][3][3];
         double Mq_cov[PRJ_NEGROUP][3];
         double Acon_spec[PRJ_NEGROUP];
@@ -3657,10 +3680,9 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             Fcov[0] = W_state[WIDX(PRJ_RAD_PRIM_F1(field, g), ic, jc, kc)];
             Fcov[1] = W_state[WIDX(PRJ_RAD_PRIM_F2(field, g), ic, jc, kc)];
             Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
-            prj_rad_gr_m1_raise_vec(&geom, Fcov, Fcon[g]);
 
-            prj_rad_gr_m1_freq_closure_ctx(&geom, block, W_mhd, dvdx, ic, jc, kc,
-                field, g, &closure);
+            prj_rad_gr_m1_freq_closure_ctx(&geom, block, W_mhd, dvcon_dx,
+                ic, jc, kc, field, g, &closure);
             prj_rad_gr_m1_prepare_side(&closure, &pside);
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g], Fcov,
                 &pdata);
@@ -3806,87 +3828,19 @@ static void prj_rad_gr_m1_clamp_conserved_cell(
 }
 
 static void prj_rad_gr_m1_source_closure_ctx(const prj_z4c_hydro_geom *geom,
-    const prj_block *block, const double *W, const double dvdx[3][3],
+    const prj_block *block, const double *W, const double dvcon_dx[3][3],
     int i, int j, int k, int field, int group,
     prj_rad_gr_m1_closure_ctx *ctx)
 {
-    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
-    const int op_idx = field * PRJ_NEGROUP + group;
-    const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
+    double vcon[3];
+    double opacity;
     int a;
-    int b;
-    int d;
 
-    memset(ctx, 0, sizeof(*ctx));
     for (a = 0; a < 3; ++a) {
-        ctx->vcon[a] = W != 0 ? W[PRJ_PRIM_V1 + a] / PRJ_CLIGHT : 0.0;
-        for (b = 0; b < 3; ++b) {
-            ctx->gamma[a][b] = geom->gamma[a][b];
-            ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
-            ctx->K_dd[a][b] = geom->K_dd[a][b];
-            for (d = 0; d < 3; ++d) {
-                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
-            }
-        }
+        vcon[a] = W != 0 ? W[PRJ_PRIM_V1 + a] / PRJ_CLIGHT : 0.0;
     }
-    for (d = 0; d < 3; ++d) {
-        for (a = 0; a < 3; ++a) {
-            ctx->dvdx[d][a] = dvdx[d][a] / PRJ_CLIGHT;
-        }
-    }
-    ctx->opacity = 0.0;
-    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
-        double kappa = block->kappa_cell[op_off];
-        double sigma = block->sigma_cell[op_off];
-
-        if (isfinite(kappa) && kappa > 0.0) {
-            ctx->opacity += kappa;
-        }
-        if (isfinite(sigma) && sigma > 0.0) {
-            ctx->opacity += sigma;
-        }
-    }
-    ctx->have_shear = 1;
-}
-
-static void prj_rad_gr_m1_cell_dvdx(const prj_block *block,
-    int ic, int jc, int kc, double dvdx[3][3])
-{
-    double inv_dx[3];
-    int jdir;
-    int icomp;
-
-    memset(dvdx, 0, 9 * sizeof(double));
-    if (block == 0 || block->v_riemann[0] == 0 ||
-        block->v_riemann[1] == 0 || block->v_riemann[2] == 0) {
-        return;
-    }
-    inv_dx[0] = 1.0 / block->dx[0];
-    inv_dx[1] = 1.0 / block->dx[1];
-    inv_dx[2] = 1.0 / block->dx[2];
-    for (jdir = 0; jdir < 3; ++jdir) {
-        for (icomp = 0; icomp < 3; ++icomp) {
-            int il = ic;
-            int jl = jc;
-            int kl = kc;
-            int ir = ic;
-            int jr = jc;
-            int kr = kc;
-            double vL;
-            double vR;
-
-            if (jdir == X1DIR) {
-                ir = ic + 1;
-            } else if (jdir == X2DIR) {
-                jr = jc + 1;
-            } else {
-                kr = kc + 1;
-            }
-            vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
-            vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
-            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
-        }
-    }
+    opacity = prj_rad_gr_m1_cell_opacity(block, i, j, k, field, group);
+    prj_rad_gr_m1_fill_closure_ctx(geom, vcon, dvcon_dx, 1, opacity, ctx);
 }
 
 void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
@@ -3903,7 +3857,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
     double sigma[PRJ_NRAD * PRJ_NEGROUP];
     double delta[PRJ_NRAD * PRJ_NEGROUP];
-    double dvdx[3][3];
+    double dvcon_dx[3][3];
     double rho;
     double eint;
     double T;
@@ -3937,7 +3891,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     eint = W[PRJ_PRIM_EINT];
     prj_eos_rey(eos, rho, eint, W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
     T = eos_q[PRJ_EOS_TEMPERATURE];
-    prj_rad_gr_m1_cell_dvdx(block, i, j, k, dvdx);
+    prj_rad_gr_m1_cell_dvcon_dx(block, i, j, k, dvcon_dx);
 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         tmp[v] = 0.0;
@@ -3969,7 +3923,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             Fcov[2] = u[PRJ_CONS_RAD_F3(field, group)] / geom.sqrt_gamma;
             prj_rad_gr_m1_clamp_ef(&geom, &E, Fcov);
 
-            prj_rad_gr_m1_source_closure_ctx(&geom, block, W, dvdx, i, j, k,
+            prj_rad_gr_m1_source_closure_ctx(&geom, block, W, dvcon_dx, i, j, k,
                 field, group, &closure);
             prj_rad_gr_m1_prepare_side(&closure, &pside);
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, E, Fcov,
