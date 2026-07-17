@@ -1466,20 +1466,81 @@ static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
     return 1;
 }
 
+/* Per-side kinematics + shear for the GR M1 closure. Depends only on the fluid
+ * velocity and the face geometry (NOT on E/F or opacity), so it is identical
+ * for every energy group of a face side. Split out of prepare_pressure so the
+ * interface flux can build it once per side instead of once per group; the
+ * arithmetic (including operand order for the A0/h_mix/Jcoef/Hcoef terms) is
+ * unchanged, so prepare_pressure below reproduces the old result bit-for-bit. */
+void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
+    prj_rad_gr_m1_side_data *side)
+{
+    double beta2;
+    int a;
+    int b;
+    int m;
+
+    for (a = 0; a < 3; ++a) {
+        side->vcon[a] = isfinite(ctx->vcon[a]) ? ctx->vcon[a] : 0.0;
+    }
+    beta2 = prj_rad_gr_m1_dot_con_con(ctx, side->vcon, side->vcon);
+    if (!isfinite(beta2) || beta2 < 0.0) {
+        beta2 = 0.0;
+        side->vcon[0] = side->vcon[1] = side->vcon[2] = 0.0;
+    }
+    if (beta2 >= 1.0) {
+        double scale = sqrt((1.0 - 1.0e-12) / beta2);
+
+        for (a = 0; a < 3; ++a) {
+            side->vcon[a] *= scale;
+        }
+        beta2 = 1.0 - 1.0e-12;
+    }
+    side->beta2 = beta2;
+    prj_rad_gr_m1_lower_vec_ctx(ctx, side->vcon, side->vcov);
+    side->wlor = 1.0 / sqrt(1.0 - beta2);
+    for (a = 0; a < 3; ++a) {
+        side->u_cov[a] = side->wlor * side->vcov[a];
+    }
+
+    prj_rad_gr_m1_shear(ctx, side->vcon, side->vcov, side->wlor,
+        side->sigma_con, &side->divu, &side->sigma2);
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            side->A0_kin[a][b] =
+                (ctx->gamma_inv[a][b] + 4.0 * side->vcon[a] * side->vcon[b]) /
+                    3.0;
+            side->h_mix[a][b] = (a == b ? 1.0 : 0.0) +
+                side->wlor * side->wlor * side->vcon[a] * side->vcov[b];
+        }
+    }
+
+    for (m = 0; m < 6; ++m) {
+        int p = prj_rad_gr_m1_sym_i[m];
+        int q = prj_rad_gr_m1_sym_j[m];
+
+        side->Jcoef[m] = side->u_cov[p] * side->u_cov[q] *
+            (p == q ? 1.0 : 2.0);
+        for (a = 0; a < 3; ++a) {
+            side->Hcoef[a][m] = -side->h_mix[a][p] * side->u_cov[q];
+            if (p != q) {
+                side->Hcoef[a][m] -= side->h_mix[a][q] * side->u_cov[p];
+            }
+        }
+    }
+}
+
 static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
-    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov_in[3],
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
     prj_rad_gr_m1_pressure_data *data)
 {
-    double sigma_con[3][3];
     double F2;
     double Fmag;
     double cE;
-    double beta2;
     double FdotV;
     double Fdotu;
     double Q0;
-    double divu;
-    double sigma2;
     double lbar;
     int a;
     int b;
@@ -1529,39 +1590,24 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         }
     }
 
+    /* Per-side kinematics were computed once in prj_rad_gr_m1_prepare_side. */
     for (a = 0; a < 3; ++a) {
-        data->vcon[a] = isfinite(ctx->vcon[a]) ? ctx->vcon[a] : 0.0;
-    }
-    beta2 = prj_rad_gr_m1_dot_con_con(ctx, data->vcon, data->vcon);
-    if (!isfinite(beta2) || beta2 < 0.0) {
-        beta2 = 0.0;
-        data->vcon[0] = data->vcon[1] = data->vcon[2] = 0.0;
-    }
-    if (beta2 >= 1.0) {
-        double scale = sqrt((1.0 - 1.0e-12) / beta2);
-
-        for (a = 0; a < 3; ++a) {
-            data->vcon[a] *= scale;
-        }
-        beta2 = 1.0 - 1.0e-12;
-    }
-    data->beta2 = beta2;
-    prj_rad_gr_m1_lower_vec_ctx(ctx, data->vcon, data->vcov);
-    data->wlor = 1.0 / sqrt(1.0 - beta2);
-    for (a = 0; a < 3; ++a) {
-        data->u_cov[a] = data->wlor * data->vcov[a];
+        data->vcon[a] = side->vcon[a];
+        data->vcov[a] = side->vcov[a];
+        data->u_cov[a] = side->u_cov[a];
         data->Fhat_con[a] = data->Fcon[a] / PRJ_CLIGHT;
     }
+    data->wlor = side->wlor;
+    data->beta2 = side->beta2;
+    memcpy(data->h_mix, side->h_mix, sizeof(data->h_mix));
+    memcpy(data->Jcoef, side->Jcoef, sizeof(data->Jcoef));
+    memcpy(data->Hcoef, side->Hcoef, sizeof(data->Hcoef));
 
-    prj_rad_gr_m1_shear(ctx, data->vcon, data->vcov, data->wlor,
-        sigma_con, &divu, &sigma2);
-    lbar = prj_rad_gr_m1_lbar(ctx, divu, sigma2);
+    lbar = prj_rad_gr_m1_lbar(ctx, side->divu, side->sigma2);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
-            data->A0[a][b] =
-                (ctx->gamma_inv[a][b] + 4.0 * data->vcon[a] * data->vcon[b]) /
-                    3.0 -
-                (4.0 * lbar / 15.0) * sigma_con[a][b];
+            data->A0[a][b] = side->A0_kin[a][b] -
+                (4.0 * lbar / 15.0) * side->sigma_con[a][b];
         }
     }
 
@@ -1578,24 +1624,6 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
             data->wlor * data->wlor * data->vcon[a] * FdotV;
 
         data->H0[a] = Q0 * h_n + data->wlor * h_F;
-        for (b = 0; b < 3; ++b) {
-            data->h_mix[a][b] = (a == b ? 1.0 : 0.0) +
-                data->wlor * data->wlor * data->vcon[a] * data->vcov[b];
-        }
-    }
-
-    for (m = 0; m < 6; ++m) {
-        int p = prj_rad_gr_m1_sym_i[m];
-        int q = prj_rad_gr_m1_sym_j[m];
-
-        data->Jcoef[m] = data->u_cov[p] * data->u_cov[q] *
-            (p == q ? 1.0 : 2.0);
-        for (a = 0; a < 3; ++a) {
-            data->Hcoef[a][m] = -data->h_mix[a][p] * data->u_cov[q];
-            if (p != q) {
-                data->Hcoef[a][m] -= data->h_mix[a][q] * data->u_cov[p];
-            }
-        }
     }
 
     /* Precompute the fbar-independent RHS terms and coefficient matrix.  The
@@ -1742,6 +1770,70 @@ static void prj_rad_gr_m1_pressure_implicit(
         return;
     }
 
+    /* Seed with the Eulerian closure f_euler (leading-order root). If it is
+     * already within tolerance we are done in one evaluation; otherwise it
+     * brackets the root against a single endpoint on a much tighter interval
+     * than [0, 1], so Illinois needs fewer iterations. Only if f_euler fails to
+     * bracket (rare, non-monotone g) do we fall through to the full [0, 1]
+     * bracketing below. Physically equivalent to that bracket, not bit-identical. */
+    {
+        double fe = data->f_euler;
+        double Pe[3][3];
+        double fe_derived;
+        double ge;
+
+        prj_rad_gr_m1_pressure_for_fbar(data, fe, Pe);
+        fe_derived = prj_rad_gr_m1_derived_fbar(data, Pe);
+        ge = fe_derived - fe;
+        if (fabs(ge) < 1.0e-13) {
+            memcpy(P, Pe, 9 * sizeof(double));
+            if (fbar_out != 0) {
+                *fbar_out = fe_derived;
+            }
+            return;
+        }
+        if (ge > 0.0) {
+            /* root in (fe, hi]; confirm the hi=1 endpoint has g < 0 */
+            prj_rad_gr_m1_pressure_for_fbar(data, hi, Phi);
+            fhi = prj_rad_gr_m1_derived_fbar(data, Phi);
+            ghi = fhi - hi;
+            if (fabs(ghi) < 1.0e-13) {
+                memcpy(P, Phi, 9 * sizeof(double));
+                if (fbar_out != 0) {
+                    *fbar_out = fhi;
+                }
+                return;
+            }
+            if (ghi < 0.0) {
+                lo = fe;
+                glo = ge;
+                memcpy(Plo, Pe, 9 * sizeof(double));
+                goto illinois;
+            }
+        } else {
+            /* root in [lo, fe); confirm the lo=0 endpoint has g > 0 */
+            prj_rad_gr_m1_pressure_for_fbar(data, lo, Plo);
+            flo = prj_rad_gr_m1_derived_fbar(data, Plo);
+            glo = flo - lo;
+            if (fabs(glo) < 1.0e-13) {
+                memcpy(P, Plo, 9 * sizeof(double));
+                if (fbar_out != 0) {
+                    *fbar_out = flo;
+                }
+                return;
+            }
+            if (glo > 0.0) {
+                hi = fe;
+                ghi = ge;
+                memcpy(Phi, Pe, 9 * sizeof(double));
+                goto illinois;
+            }
+        }
+        /* f_euler did not bracket the root: reset and use full [0, 1]. */
+        lo = 0.0;
+        hi = 1.0;
+    }
+
     prj_rad_gr_m1_pressure_for_fbar(data, lo, Plo);
     flo = prj_rad_gr_m1_derived_fbar(data, Plo);
     glo = flo - lo;
@@ -1788,12 +1880,14 @@ static void prj_rad_gr_m1_pressure_implicit(
      * stagnation where one endpoint never moves. Same root of
      * g(fbar) = derived_fbar(P(fbar)) - fbar to the same 1e-13 tolerance:
      * physically equivalent to the old bisection, not bit-identical. */
+illinois:
     {
         int side = 0;
 
         for (iter = 0; iter < 80; ++iter) {
             double denom = ghi - glo;
             double mid;
+
 
             /* False-position estimate; fall back to bisection if the secant is
              * degenerate or would step outside the open bracket. */
@@ -2088,7 +2182,7 @@ void prj_rad_gr_m1_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov_in[3],
     double P[3][3])
 {
-    prj_rad_gr_m1_pressure_data data;
+    prj_rad_gr_m1_side_data side;
 
     if (P == 0) {
         return;
@@ -2100,7 +2194,25 @@ void prj_rad_gr_m1_pressure(const prj_rad *rad,
             Fcov_in != 0 ? Fcov_in[2] : 0.0, P);
         return;
     }
-    prj_rad_gr_m1_prepare_pressure(rad, ctx, E, Fcov_in, &data);
+    prj_rad_gr_m1_prepare_side(ctx, &side);
+    prj_rad_gr_m1_pressure_cached(rad, ctx, &side, E, Fcov_in, P);
+}
+
+/* Fast path for callers (interface flux) that solve the closure for many energy
+ * groups at one point: the per-side kinematics `side` are built once via
+ * prj_rad_gr_m1_prepare_side and reused, so only the E/F/opacity-dependent work
+ * runs per group. */
+void prj_rad_gr_m1_pressure_cached(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
+    double P[3][3])
+{
+    prj_rad_gr_m1_pressure_data data;
+
+    if (P == 0 || ctx == 0 || side == 0 || Fcov_in == 0) {
+        return;
+    }
+    prj_rad_gr_m1_prepare_pressure(rad, ctx, side, E, Fcov_in, &data);
     prj_rad_gr_m1_pressure_implicit(&data, P, 0);
 }
 #endif
@@ -3456,6 +3568,7 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             double Fcov[3];
             prj_rad_gr_m1_closure_ctx closure;
             prj_rad_gr_m1_pressure_data pdata;
+            prj_rad_gr_m1_side_data pside;
             double fbar;
             double Acon = 0.0;
 
@@ -3474,7 +3587,9 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
 
             prj_rad_gr_m1_freq_closure_ctx(&geom, block, W_mhd, dvdx, ic, jc, kc,
                 field, g, &closure);
-            prj_rad_gr_m1_prepare_pressure(rad, &closure, Eg[g], Fcov, &pdata);
+            prj_rad_gr_m1_prepare_side(&closure, &pside);
+            prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g], Fcov,
+                &pdata);
             prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
             prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &Acon,
                 Mq_cov[g]);
@@ -3764,6 +3879,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             double hcov[4][4];
             prj_rad_gr_m1_closure_ctx closure;
             prj_rad_gr_m1_pressure_data pdata;
+            prj_rad_gr_m1_side_data pside;
 
             E = u[PRJ_CONS_RAD_E(field, group)] / geom.sqrt_gamma;
             Fcov[0] = u[PRJ_CONS_RAD_F1(field, group)] / geom.sqrt_gamma;
@@ -3773,7 +3889,9 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
 
             prj_rad_gr_m1_source_closure_ctx(&geom, block, W, dvdx, i, j, k,
                 field, group, &closure);
-            prj_rad_gr_m1_prepare_pressure(rad, &closure, E, Fcov, &pdata);
+            prj_rad_gr_m1_prepare_side(&closure, &pside);
+            prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, E, Fcov,
+                &pdata);
             prj_rad_gr_m1_pressure_implicit(&pdata, P, 0);
             prj_rad_gr_m1_decompose_m2(&pdata, P, &J, H, L, ucon, ucov,
                 hcon, hcov);

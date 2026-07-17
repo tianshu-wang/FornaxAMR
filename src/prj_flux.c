@@ -1249,6 +1249,7 @@ static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
 static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
     const prj_rad_gr_m1_closure_ctx *closure,
+    const prj_rad_gr_m1_side_data *side,
     double U[4], double F[4], double *smin, double *smax)
 {
     const double c = PRJ_CLIGHT;
@@ -1277,7 +1278,7 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     }
     prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag, &inv_Fmag, &f);
 
-    prj_rad_gr_m1_pressure(rad, closure, E, Fcov, Pcon);
+    prj_rad_gr_m1_pressure_cached(rad, closure, side, E, Fcov, Pcon);
 
     U[0] = geom->sqrt_gamma * E;
     F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
@@ -1320,6 +1321,11 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
      * rebuilding it in every prj_flux_gr_m1_state_flux call. */
     prj_rad_gr_m1_closure_ctx closureL;
     prj_rad_gr_m1_closure_ctx closureR;
+    /* Per-side velocity/geometry kinematics (shear, Christoffel, ...) are
+     * invariant across all NRAD*NEGROUP groups, so build them once per side
+     * here and reuse in every prj_rad_gr_m1_pressure_cached call below. */
+    prj_rad_gr_m1_side_data sideL;
+    prj_rad_gr_m1_side_data sideR;
 
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
@@ -1328,6 +1334,8 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
         dx_dir, dvdx_face);
     prj_flux_gr_m1_closure_ctx(geom, WL, 0.0, dvdx_face, have_dvdx, &closureL);
     prj_flux_gr_m1_closure_ctx(geom, WR, 0.0, dvdx_face, have_dvdx, &closureR);
+    prj_rad_gr_m1_prepare_side(&closureL, &sideL);
+    prj_rad_gr_m1_prepare_side(&closureR, &sideR);
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -1357,9 +1365,9 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             closureR.opacity = chi_ext;
 
             prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &closureL,
-                UL, FphysL, &lamL_min, &lamL_max);
+                &sideL, UL, FphysL, &lamL_min, &lamL_max);
             prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &closureR,
-                UR, FphysR, &lamR_min, &lamR_max);
+                &sideR, UR, FphysR, &lamR_min, &lamR_max);
 
             sL = lamL_min < lamR_min ? lamL_min : lamR_min;
             sR = lamL_max > lamR_max ? lamL_max : lamR_max;

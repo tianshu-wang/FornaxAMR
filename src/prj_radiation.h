@@ -71,8 +71,36 @@ typedef struct prj_rad_gr_m1_closure_ctx {
     int have_shear;
 } prj_rad_gr_m1_closure_ctx;
 
+/* Per-side (velocity + geometry) kinematics for the GR M1 closure. These are
+ * invariant across all energy groups of a face side, so callers that solve the
+ * closure for many groups at one point (e.g. the interface flux) build this
+ * once with prj_rad_gr_m1_prepare_side and pass it to the _cached solve,
+ * hoisting the expensive shear/Christoffel work out of the per-group loop. */
+typedef struct prj_rad_gr_m1_side_data {
+    double vcon[3];
+    double vcov[3];
+    double u_cov[3];
+    double wlor;
+    double beta2;
+    double sigma_con[3][3];
+    double A0_kin[3][3];
+    double h_mix[3][3];
+    double Jcoef[6];
+    double Hcoef[3][6];
+    double divu;
+    double sigma2;
+} prj_rad_gr_m1_side_data;
+
+void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
+    prj_rad_gr_m1_side_data *side);
+
 void prj_rad_gr_m1_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov[3],
+    double P[3][3]);
+
+void prj_rad_gr_m1_pressure_cached(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E, const double Fcov[3],
     double P[3][3]);
 #endif
 #if PRJ_NRAD > 0
