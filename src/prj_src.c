@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "prj.h"
 
@@ -442,6 +443,178 @@ static void prj_src_gr_hydro_z4c(prj_eos *eos, const prj_mesh *mesh,
         }
     }
 }
+
+#if PRJ_USE_RADIATION_M1
+static void prj_src_gr_m1_dvdx(const prj_block *block, int i, int j, int k,
+    double dvdx[3][3], int *have_dvdx)
+{
+    double inv_dx[3];
+    int jdir;
+    int icomp;
+
+    memset(dvdx, 0, 9 * sizeof(double));
+    *have_dvdx = 0;
+    if (block == 0 || block->v_riemann[0] == 0 || block->v_riemann[1] == 0 ||
+        block->v_riemann[2] == 0) {
+        return;
+    }
+    inv_dx[0] = 1.0 / block->dx[0];
+    inv_dx[1] = 1.0 / block->dx[1];
+    inv_dx[2] = 1.0 / block->dx[2];
+    for (jdir = 0; jdir < 3; ++jdir) {
+        for (icomp = 0; icomp < 3; ++icomp) {
+            int il = i;
+            int jl = j;
+            int kl = k;
+            int ir = i;
+            int jr = j;
+            int kr = k;
+            double vL;
+            double vR;
+
+            if (jdir == X1DIR) {
+                ir = i + 1;
+            } else if (jdir == X2DIR) {
+                jr = j + 1;
+            } else {
+                kr = k + 1;
+            }
+            vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+            vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
+            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir] / PRJ_CLIGHT;
+        }
+    }
+    *have_dvdx = 1;
+}
+
+static void prj_src_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const double *W_mhd, const prj_block *block, int i, int j, int k,
+    int field, int group, prj_rad_gr_m1_closure_ctx *ctx)
+{
+    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+    const int op_idx = field * PRJ_NEGROUP + group;
+    const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
+    double dvdx[3][3];
+    int have_dvdx;
+    int a;
+    int b;
+    int d;
+
+    memset(ctx, 0, sizeof(*ctx));
+    prj_src_gr_m1_dvdx(block, i, j, k, dvdx, &have_dvdx);
+    for (a = 0; a < 3; ++a) {
+        ctx->vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
+            PRJ_CLIGHT : 0.0;
+        for (b = 0; b < 3; ++b) {
+            ctx->gamma[a][b] = geom->gamma[a][b];
+            ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
+            ctx->K_dd[a][b] = geom->K_dd[a][b];
+            for (d = 0; d < 3; ++d) {
+                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
+            }
+        }
+    }
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            ctx->dvdx[d][a] = dvdx[d][a];
+        }
+    }
+    ctx->opacity = 0.0;
+    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
+        double kappa = block->kappa_cell[op_off];
+        double sigma = block->sigma_cell[op_off];
+
+        if (isfinite(kappa) && kappa > 0.0) {
+            ctx->opacity += kappa;
+        }
+        if (isfinite(sigma) && sigma > 0.0) {
+            ctx->opacity += sigma;
+        }
+    }
+    ctx->have_shear = have_dvdx;
+}
+
+static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, const double *restrict W_mhd,
+    double *restrict W_rad, double *restrict rad_rhs)
+{
+    int i;
+    int j;
+    int k;
+
+    if (!prj_eos_full_dynamic_gr_enabled(mesh) || rad == 0 || block == 0 ||
+        block->id < 0 || block->active != 1 || W_rad == 0 || rad_rhs == 0) {
+        return;
+    }
+    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                prj_z4c_hydro_geom geom;
+                int field;
+                int group;
+
+                if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
+                    prj_src_gr_fail("radiation geometry load", -1, i, j, k);
+                }
+                for (field = 0; field < PRJ_NRAD; ++field) {
+                    for (group = 0; group < PRJ_NEGROUP; ++group) {
+                        double E;
+                        double Fcov[3];
+                        double Fcon[3];
+                        double Pcon[3][3];
+                        prj_rad_gr_m1_closure_ctx closure;
+                        double energy_src = 0.0;
+                        int a;
+                        int b;
+                        int d;
+
+                        E = W_rad[WIDX(PRJ_RAD_PRIM_E(field, group), i, j, k)];
+                        Fcov[0] = W_rad[WIDX(PRJ_RAD_PRIM_F1(field, group), i, j, k)];
+                        Fcov[1] = W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)];
+                        Fcov[2] = W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)];
+
+                        for (a = 0; a < 3; ++a) {
+                            Fcon[a] = 0.0;
+                            for (b = 0; b < 3; ++b) {
+                                Fcon[a] += geom.gamma_inv[a][b] * Fcov[b];
+                            }
+                        }
+
+                        prj_src_gr_m1_closure_ctx(&geom, W_mhd, block, i, j, k,
+                            field, group, &closure);
+                        prj_rad_gr_m1_pressure(rad, &closure, E, Fcov, Pcon);
+
+                        for (a = 0; a < 3; ++a) {
+                            energy_src -= Fcon[a] * geom.dalpha[a] / geom.alpha;
+                            for (b = 0; b < 3; ++b) {
+                                energy_src += Pcon[a][b] * geom.K_dd[a][b];
+                            }
+                        }
+                        rad_rhs[RADVIDX(PRJ_RAD_CONS_E(field, group), i, j, k)] +=
+                            geom.alpha * geom.sqrt_gamma * energy_src;
+
+                        for (d = 0; d < 3; ++d) {
+                            double mom_src = -E * geom.dalpha[d];
+
+                            for (a = 0; a < 3; ++a) {
+                                mom_src += Fcov[a] * geom.dbeta[d][a];
+                                for (b = 0; b < 3; ++b) {
+                                    mom_src += 0.5 * geom.alpha * Pcon[a][b] *
+                                        geom.dgamma[d][a][b];
+                                }
+                            }
+                            rad_rhs[RADVIDX(PRJ_RAD_CONS_F1(field, group) + d,
+                                i, j, k)] += geom.sqrt_gamma * mom_src;
+                        }
+                        /* S^alpha matter-coupling terms are intentionally
+                         * omitted in this first GR-M1 transport pass. */
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
 #endif
 
 void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
@@ -484,6 +657,9 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
 #if PRJ_DYNAMIC_GR
     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
         prj_src_gr_hydro_z4c(eos, mesh, block, z4c_stage, W_mhd, mhd_rhs);
+#if PRJ_USE_RADIATION_M1
+        prj_src_gr_m1_z4c(rad, mesh, block, z4c_stage, W_mhd, W_rad, rad_rhs);
+#endif
     } else
 #else
     (void)mesh;
@@ -492,6 +668,9 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     prj_src_monopole_gravity(rad, block, grav, W_mhd, W_rad, mhd_rhs, rad_rhs);
     PRJ_SUBTIMER_STOP("sub_src_gravity");
     PRJ_SUBTIMER_START("sub_src_rad_vel_grad");
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+    if (!prj_eos_full_dynamic_gr_enabled(mesh))
+#endif
     prj_src_radiation_vel_grad(rad, block, W_rad, rad_rhs);
     PRJ_SUBTIMER_STOP("sub_src_rad_vel_grad");
 }

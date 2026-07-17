@@ -17,14 +17,37 @@ static void die(const char *msg)
 
 static double expected_r_com(const prj_block *block, const double x_com[3], int i, int j, int k)
 {
-    double x1 = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
-    double x2 = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
-    double x3 = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
-    double dx1 = x1 - x_com[0];
-    double dx2 = x2 - x_com[1];
-    double dx3 = x3 - x_com[2];
+    static const double gq_node[3] = {
+        -0.77459666924148337704, 0.0, 0.77459666924148337704
+    };
+    static const double gq_wnorm[3] = {5.0 / 18.0, 8.0 / 18.0, 5.0 / 18.0};
+    double xc = block->xmin[0] + ((double)i + 0.5) * block->dx[0] - x_com[0];
+    double yc = block->xmin[1] + ((double)j + 0.5) * block->dx[1] - x_com[1];
+    double zc = block->xmin[2] + ((double)k + 0.5) * block->dx[2] - x_com[2];
+    double hx = 0.5 * block->dx[0];
+    double hy = 0.5 * block->dx[1];
+    double hz = 0.5 * block->dx[2];
+    double r_avg = 0.0;
+    int a;
+    int b;
+    int c;
 
-    return sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+    for (a = 0; a < 3; ++a) {
+        double dx1 = xc + hx * gq_node[a];
+
+        for (b = 0; b < 3; ++b) {
+            double dx2 = yc + hy * gq_node[b];
+            double wab = gq_wnorm[a] * gq_wnorm[b];
+
+            for (c = 0; c < 3; ++c) {
+                double dx3 = zc + hz * gq_node[c];
+
+                r_avg += wab * gq_wnorm[c] *
+                    sqrt(dx1 * dx1 + dx2 * dx2 + dx3 * dx3);
+            }
+        }
+    }
+    return r_avg;
 }
 
 static void assert_r_com(const prj_block *block, const double x_com[3], int i, int j, int k)

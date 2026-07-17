@@ -356,6 +356,93 @@ static void test_fill_block_pair(prj_block *block, prj_block *mirror)
     }
 }
 
+#if PRJ_DYNAMIC_GR
+static double test_original_gr_bface(int dir, int i)
+{
+    if (dir == X1DIR) {
+        return 3.0e9 + 1.0e7 * (double)(i - PRJ_BLOCK_SIZE / 2);
+    }
+    if (dir == X2DIR) {
+        return -1.5e9 + 5.0e6 * (double)i;
+    }
+    return 0.8e9 - 4.0e6 * (double)i;
+}
+
+static void test_fill_gr_block_pair(prj_block *block, prj_block *mirror)
+{
+    const double gamma = 5.0 / 3.0;
+    const int mid = PRJ_BLOCK_SIZE / 2;
+    int i;
+    int j;
+    int k;
+    int dir;
+
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                double W[PRJ_NVAR_MHD_PRIM];
+                double WM[PRJ_NVAR_MHD_PRIM];
+                double p;
+                double pm;
+                int io = PRJ_BLOCK_SIZE - 1 - i;
+
+                if (i < mid) {
+                    test_set_state(W, 1.15, 2.0e7, -1.0e7, 0.6e7,
+                        2.5e20, 0.17, 3.0e9, 2.0e9, -1.0e9, gamma);
+                } else {
+                    test_set_state(W, 0.85, -1.5e7, 0.8e7, -0.4e7,
+                        2.0e20, 0.20, 3.0e9, -1.5e9, 0.7e9, gamma);
+                }
+                p = test_pressure_from_state(W, gamma);
+                test_fill_cell(block, i, j, k, W, p, gamma);
+
+                if (io < mid) {
+                    test_set_state(WM, 1.15, 2.0e7, -1.0e7, 0.6e7,
+                        2.5e20, 0.17, 3.0e9, 2.0e9, -1.0e9, gamma);
+                } else {
+                    test_set_state(WM, 0.85, -1.5e7, 0.8e7, -0.4e7,
+                        2.0e20, 0.20, 3.0e9, -1.5e9, 0.7e9, gamma);
+                }
+                test_mirror_state(WM, WM);
+                pm = test_pressure_from_state(WM, gamma);
+                test_fill_cell(mirror, i, j, k, WM, pm, gamma);
+            }
+        }
+    }
+
+    for (dir = 0; dir < 3; ++dir) {
+        int imax = PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
+        int jmax = PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
+        int kmax = PRJ_BLOCK_SIZE + PRJ_NGHOST - 1;
+
+        if (dir == X1DIR) {
+            imax = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+        } else if (dir == X2DIR) {
+            jmax = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+        } else {
+            kmax = PRJ_BLOCK_SIZE + PRJ_NGHOST;
+        }
+        for (i = -PRJ_NGHOST; i <= imax; ++i) {
+            for (j = -PRJ_NGHOST; j <= jmax; ++j) {
+                for (k = -PRJ_NGHOST; k <= kmax; ++k) {
+                    int io = (dir == X1DIR) ? PRJ_BLOCK_SIZE - i : PRJ_BLOCK_SIZE - 1 - i;
+                    double bf = test_original_gr_bface(dir, i);
+                    double bfm = test_original_gr_bface(dir, io);
+
+                    if (dir == X1DIR) {
+                        block->Bf[dir][FACE_IDX(dir, i, j, k)] = bf;
+                        mirror->Bf[dir][FACE_IDX(dir, i, j, k)] = -bfm;
+                    } else {
+                        block->Bf[dir][FACE_IDX(dir, i, j, k)] = bf;
+                        mirror->Bf[dir][FACE_IDX(dir, i, j, k)] = bfm;
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
 static void test_flux_update_symmetry(void)
 {
     prj_block block;
@@ -374,6 +461,8 @@ static void test_flux_update_symmetry(void)
     if (prj_block_alloc_data(&block) != 0 || prj_block_alloc_data(&mirror) != 0) {
         die("block allocation failed");
     }
+    prj_fill(block.W_mhd, prj_block_data_count(), 0.0);
+    prj_fill(mirror.W_mhd, prj_block_data_count(), 0.0);
     test_fill_block_pair(&block, &mirror);
     for (int dir = 0; dir < 3; ++dir) {
         flux[dir] = block.flux[dir];
@@ -438,11 +527,13 @@ static void test_gr_flux_update_symmetry(void)
         prj_mesh_init(&mirror_mesh, 1, 1, 1, 0, &mirror_coord, 0) != 0) {
         die("GR mesh allocation failed");
     }
-    prj_z4c_init_mesh_flat(&mesh, 0);
-    prj_z4c_init_mesh_flat(&mirror_mesh, 0);
     block = &mesh.blocks[0];
     mirror = &mirror_mesh.blocks[0];
-    test_fill_block_pair(block, mirror);
+    prj_fill(block->W_mhd, prj_block_data_count(), 0.0);
+    prj_fill(mirror->W_mhd, prj_block_data_count(), 0.0);
+    prj_z4c_init_mesh_flat(&mesh, 0);
+    prj_z4c_init_mesh_flat(&mirror_mesh, 0);
+    test_fill_gr_block_pair(block, mirror);
     for (dir = 0; dir < 3; ++dir) {
         flux[dir] = block->flux[dir];
         flux_m[dir] = mirror->flux[dir];

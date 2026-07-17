@@ -1866,7 +1866,7 @@ void prj_eos_cell_prim2cons(prj_eos *eos, const prj_mesh *mesh,
     if (status != PRJ_EOS_GR_OK) {
         prj_eos_gr_cell_fail("prim2cons", status, i, j, k, ctx);
     }
-    for (v = 0; v < PRJ_NHYDRO; ++v) {
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         U[v] = Ugr[v];
     }
 }
@@ -1935,7 +1935,7 @@ void prj_eos_cell_cons2prim(prj_eos *eos, const prj_mesh *mesh,
         fflush(stderr);
         prj_eos_gr_cell_fail("cons2prim", status, i, j, k, ctx);
     }
-    for (v = 0; v < PRJ_NHYDRO; ++v) {
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
         W[v] = Wgr[v];
     }
 }

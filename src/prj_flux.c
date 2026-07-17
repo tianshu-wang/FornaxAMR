@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <string.h>
 
 #include "prj.h"
 
@@ -944,22 +945,28 @@ static void prj_flux_gr_face_geom_from_cells(const prj_z4c_hydro_geom *gl,
     int axis[3];
     int a;
     int b;
+    int d;
 
     prj_flux_local_axes(dir, axis);
     geom->alpha = 0.5 * (gl->alpha + gr->alpha);
     geom->sqrt_gamma = 0.5 * (gl->sqrt_gamma + gr->sqrt_gamma);
     for (a = 0; a < 3; ++a) {
         geom->beta[a] = 0.5 * (gl->beta[axis[a]] + gr->beta[axis[a]]);
-        geom->dalpha[a] = 0.0;
+        geom->dalpha[a] = 0.5 * (gl->dalpha[axis[a]] + gr->dalpha[axis[a]]);
         for (b = 0; b < 3; ++b) {
             geom->gamma[a][b] =
                 0.5 * (gl->gamma[axis[a]][axis[b]] + gr->gamma[axis[a]][axis[b]]);
             geom->gamma_inv[a][b] =
                 0.5 * (gl->gamma_inv[axis[a]][axis[b]] + gr->gamma_inv[axis[a]][axis[b]]);
-            geom->dgamma[a][b][0] = 0.0;
-            geom->dgamma[a][b][1] = 0.0;
-            geom->dgamma[a][b][2] = 0.0;
-            geom->dbeta[a][b] = 0.0;
+            geom->K_dd[a][b] =
+                0.5 * (gl->K_dd[axis[a]][axis[b]] + gr->K_dd[axis[a]][axis[b]]);
+            geom->dbeta[a][b] =
+                0.5 * (gl->dbeta[axis[a]][axis[b]] + gr->dbeta[axis[a]][axis[b]]);
+            for (d = 0; d < 3; ++d) {
+                geom->dgamma[d][a][b] =
+                    0.5 * (gl->dgamma[axis[d]][axis[a]][axis[b]] +
+                        gr->dgamma[axis[d]][axis[a]][axis[b]]);
+            }
         }
     }
 }
@@ -971,8 +978,8 @@ static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
     prj_z4c_hydro_geom gl;
     prj_z4c_hydro_geom gr;
 
-    if (!prj_z4c_load_hydro_metric_geom(mesh, block, stage, il, jl, kl, &gl) ||
-        !prj_z4c_load_hydro_metric_geom(mesh, block, stage, ir, jr, kr, &gr)) {
+    if (!prj_z4c_load_hydro_geom(mesh, block, stage, il, jl, kl, &gl) ||
+        !prj_z4c_load_hydro_geom(mesh, block, stage, ir, jr, kr, &gr)) {
         return 0;
     }
     prj_flux_gr_face_geom_from_cells(&gl, &gr, dir, geom);
@@ -1107,6 +1114,279 @@ static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
         v_face_loc[2] = WR[PRJ_PRIM_V3];
     }
 }
+
+#if PRJ_USE_RADIATION_M1
+static void prj_flux_gr_m1_raise_vec(const prj_z4c_hydro_geom *geom,
+    const double vcov[3], double vcon[3])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        vcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            vcon[a] += geom->gamma_inv[a][b] * vcov[b];
+        }
+    }
+}
+
+static void prj_flux_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
+    double *E, double Fcov[3], double Fcon[3], double *Fmag_out,
+    double *inv_Fmag_out, double *f_out)
+{
+    double F2;
+    double Fmag;
+    double cE;
+    double scale;
+    int d;
+
+    if (*E < 0.0) {
+        *E = 0.0;
+    }
+    prj_flux_gr_m1_raise_vec(geom, Fcov, Fcon);
+    F2 = 0.0;
+    for (d = 0; d < 3; ++d) {
+        F2 += Fcov[d] * Fcon[d];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * (*E);
+    if (Fmag > cE && Fmag > 0.0) {
+        scale = cE / Fmag;
+        for (d = 0; d < 3; ++d) {
+            Fcov[d] *= scale;
+            Fcon[d] *= scale;
+        }
+        Fmag = cE;
+    }
+    *Fmag_out = Fmag;
+    *inv_Fmag_out = Fmag > 0.0 ? 1.0 / Fmag : 0.0;
+    *f_out = cE > 0.0 ? Fmag / cE : 0.0;
+    if (*f_out > 1.0) {
+        *f_out = 1.0;
+    }
+}
+
+static int prj_flux_gr_m1_face_dvdx(const double *W_block, int dir,
+    int il, int jl, int kl, int ir, int jr, int kr, double dx_dir,
+    double dvdx[3][3])
+{
+    int axis[3];
+    int a;
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            dvdx[d][a] = 0.0;
+        }
+    }
+    if (W_block == 0 || !isfinite(dx_dir) || dx_dir <= 0.0) {
+        return 0;
+    }
+
+    prj_flux_local_axes(dir, axis);
+    for (a = 0; a < 3; ++a) {
+        int v = PRJ_PRIM_V1 + axis[a];
+        double vL = W_block[WIDX(v, il, jl, kl)];
+        double vR = W_block[WIDX(v, ir, jr, kr)];
+
+        if (!isfinite(vL) || !isfinite(vR)) {
+            for (d = 0; d < 3; ++d) {
+                int q;
+
+                for (q = 0; q < 3; ++q) {
+                    dvdx[d][q] = 0.0;
+                }
+            }
+            return 0;
+        }
+        dvdx[0][a] = (vR - vL) / (dx_dir * PRJ_CLIGHT);
+    }
+    return 1;
+}
+
+static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const double *W, double opacity, const double dvdx[3][3], int have_dvdx,
+    prj_rad_gr_m1_closure_ctx *ctx)
+{
+    int a;
+    int b;
+    int d;
+
+    memset(ctx, 0, sizeof(*ctx));
+    for (a = 0; a < 3; ++a) {
+        ctx->vcon[a] = W != 0 ? W[PRJ_PRIM_V1 + a] / PRJ_CLIGHT : 0.0;
+        for (b = 0; b < 3; ++b) {
+            ctx->gamma[a][b] = geom->gamma[a][b];
+            ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
+            ctx->K_dd[a][b] = geom->K_dd[a][b];
+            for (d = 0; d < 3; ++d) {
+                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
+            }
+        }
+    }
+    if (have_dvdx && dvdx != 0) {
+        for (d = 0; d < 3; ++d) {
+            for (a = 0; a < 3; ++a) {
+                ctx->dvdx[d][a] = dvdx[d][a];
+            }
+        }
+    }
+    ctx->opacity = opacity;
+    /* Face transport currently has a normal-centered velocity-gradient estimate;
+     * tangential rows remain zero until a transverse face-gradient stencil is
+     * added. */
+    ctx->have_shear = have_dvdx;
+}
+
+static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
+    const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
+    double opacity, const double dvdx[3][3], int have_dvdx,
+    double U[4], double F[4], double *smin, double *smax)
+{
+    const double c = PRJ_CLIGHT;
+    const double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    double E;
+    double Fcov[3];
+    double Fcon[3];
+    double Pcon[3][3];
+    prj_rad_gr_m1_closure_ctx closure;
+    double Fmag;
+    double inv_Fmag;
+    double f;
+    double lam_min;
+    double lam_max;
+    double gnn;
+    double normal_scale;
+    int i;
+
+    E = W[PRJ_PRIM_RAD_E(field, group)];
+    Fcov[0] = W[PRJ_PRIM_RAD_F1(field, group)];
+    Fcov[1] = W[PRJ_PRIM_RAD_F2(field, group)];
+    Fcov[2] = W[PRJ_PRIM_RAD_F3(field, group)];
+    for (i = 0; i < 3; ++i) {
+        if (!isfinite(Fcov[i])) {
+            Fcov[i] = 0.0;
+        }
+    }
+    prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag, &inv_Fmag, &f);
+
+    prj_flux_gr_m1_closure_ctx(geom, W, opacity, dvdx, have_dvdx, &closure);
+    prj_rad_gr_m1_pressure(rad, &closure, E, Fcov, Pcon);
+
+    U[0] = geom->sqrt_gamma * E;
+    F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
+        c * geom->beta[0] * E);
+    for (i = 0; i < 3; ++i) {
+        double Pn_i = 0.0;
+        int a;
+
+        U[1 + i] = geom->sqrt_gamma * Fcov[i];
+        for (a = 0; a < 3; ++a) {
+            Pn_i += geom->gamma[i][a] * Pcon[0][a];
+        }
+        F[1 + i] = geom->sqrt_gamma *
+            (geom->alpha * c2 * Pn_i - c * geom->beta[0] * Fcov[i]);
+    }
+
+    prj_rad_m1_wavespeeds_with_fluxmag(E, Fcon[0], Fmag, inv_Fmag, f,
+        &lam_min, &lam_max);
+    gnn = geom->gamma[0][0];
+    if (!isfinite(gnn) || gnn <= 0.0) {
+        gnn = 1.0;
+    }
+    normal_scale = geom->alpha / sqrt(gnn);
+    *smin = c * (normal_scale * lam_min - geom->beta[0]);
+    *smax = c * (normal_scale * lam_max - geom->beta[0]);
+}
+
+static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
+    const double *WR, const double *W_block, int dir,
+    int il, int jl, int kl, int ir, int jr, int kr,
+    const prj_z4c_hydro_geom *geom, const double *chi_face, double dx_dir,
+    double *flux)
+{
+    double dvdx_face[3][3];
+    int have_dvdx;
+    int field;
+    int group;
+
+    if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
+        return;
+    }
+    have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
+        dx_dir, dvdx_face);
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            double UL[4];
+            double UR[4];
+            double FphysL[4];
+            double FphysR[4];
+            double lamL_min;
+            double lamL_max;
+            double lamR_min;
+            double lamR_max;
+            double sL;
+            double sR;
+            double denom;
+            double inv_denom;
+            double chi_ext;
+            double tau;
+            double eps;
+            double eps2;
+            int q;
+
+            chi_ext = chi_face != 0 ? chi_face[idx] : 0.0;
+            if (!isfinite(chi_ext) || chi_ext < 0.0) {
+                chi_ext = 0.0;
+            }
+
+            prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, chi_ext,
+                dvdx_face, have_dvdx, UL, FphysL, &lamL_min, &lamL_max);
+            prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, chi_ext,
+                dvdx_face, have_dvdx, UR, FphysR, &lamR_min, &lamR_max);
+
+            sL = lamL_min < lamR_min ? lamL_min : lamR_min;
+            sR = lamL_max > lamR_max ? lamL_max : lamR_max;
+            if (sL > 0.0) {
+                sL = 0.0;
+            }
+            if (sR < 0.0) {
+                sR = 0.0;
+            }
+            if (sR - sL < 1.0e-30) {
+                sL = -PRJ_CLIGHT;
+                sR = PRJ_CLIGHT;
+            }
+            denom = sR - sL;
+            inv_denom = 1.0 / denom;
+
+            tau = chi_ext * dx_dir;
+            eps = 3.0 / (5.0 * tau + 1.0e-10);
+            if (eps > 1.0) {
+                eps = 1.0;
+            }
+            eps2 = eps * eps;
+
+            flux[PRJ_CONS_RAD_E(field, group)] =
+                (sR * FphysL[0] - sL * FphysR[0] +
+                    eps * sL * sR * (UR[0] - UL[0])) * inv_denom;
+            for (q = 0; q < 3; ++q) {
+                int v = PRJ_CONS_RAD_F1(field, group) + q;
+
+                flux[v] =
+                    (eps2 * (sR * FphysL[1 + q] - sL * FphysR[1 + q]) +
+                        eps * sL * sR * (UR[1 + q] - UL[1 + q])) *
+                    inv_denom +
+                    (1.0 - eps2) * 0.5 * (FphysL[1 + q] + FphysR[1 + q]);
+            }
+        }
+    }
+}
+#endif
 #endif
 
 #if !PRJ_MHD
@@ -1315,7 +1595,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
     static double pRp[PRJ_BS];
     static double gLp[PRJ_BS];
     static double gRp[PRJ_BS];
-#if PRJ_DYNAMIC_GR && PRJ_MHD
+#if PRJ_DYNAMIC_GR
     static prj_z4c_hydro_geom gr_cell_geom[PRJ_BLOCK_NCELLS];
     int full_dynamic_gr = prj_eos_full_dynamic_gr_enabled(mesh);
     int z4c_stage = prj_stage_slot_from_bf_arg(use_bf1);
@@ -1336,7 +1616,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
      * active cells in the same-level ghost shadow and the 1-ghost halo after
      * eos_fill_mesh. See prj_flux_fill_transport_opacity_active/halo. */
 
-#if PRJ_DYNAMIC_GR && PRJ_MHD
+#if PRJ_DYNAMIC_GR
     if (full_dynamic_gr) {
         int gi;
         int gj;
@@ -1345,7 +1625,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
         for (gi = -PRJ_NGHOST; gi < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gi) {
             for (gj = -PRJ_NGHOST; gj < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gj) {
                 for (gk = -PRJ_NGHOST; gk < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gk) {
-                    if (!prj_z4c_load_hydro_metric_geom(mesh, block, z4c_stage,
+                    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage,
                             gi, gj, gk, &gr_cell_geom[LIDX(gi, gj, gk)])) {
                         prj_flux_gr_fail("geometry cache load", -1, 0, gi, gj, gk);
                     }
@@ -1545,11 +1825,26 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                             double sR_o = sigma_R[idx];
                             double k_sum = kL + kR;
                             double s_sum = sL_o + sR_o;
-                            double k_face = 2.0 * kL * kR / k_sum;
-                            double s_face = 2.0 * sL_o * sR_o / s_sum;
+                            double k_face = k_sum > 0.0 ? 2.0 * kL * kR / k_sum : 0.0;
+                            double s_face = s_sum > 0.0 ? 2.0 * sL_o * sR_o / s_sum : 0.0;
                             chi_face[idx] = k_face + s_face;
                         }
 
+#if PRJ_DYNAMIC_GR
+                        if (full_dynamic_gr) {
+                            prj_z4c_hydro_geom geom;
+
+                            if (!gr_cell_geom_ready ||
+                                !prj_flux_gr_face_geom_cached(gr_cell_geom, dir,
+                                    il, jl, kl, ir, jr, kr, &geom)) {
+                                prj_flux_gr_fail("radiation geometry load", -1,
+                                    dir, i, j, k);
+                            }
+                            prj_flux_gr_m1(rad, WL, WR, W, dir,
+                                il, jl, kl, ir, jr, kr, &geom, chi_face,
+                                dx_dir, Fl);
+                        } else
+#endif
                         prj_rad_flux(rad, WL, WR, lapse_face, chi_face, dx_dir, v_face_loc[0], Fl);
 #endif
                     }

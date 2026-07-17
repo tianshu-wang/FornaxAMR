@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
+
 #include "prj.h"
 
 static void die(const char *msg)
@@ -240,6 +244,102 @@ static void assert_hydro_roundtrip(const double *W, const double *Wout)
 #endif
 }
 
+#if PRJ_DYNAMIC_GR && PRJ_NRAD > 0
+static void init_cell_wrapper_mesh(prj_mesh *mesh, prj_coord *coord)
+{
+    memset(mesh, 0, sizeof(*mesh));
+    memset(coord, 0, sizeof(*coord));
+    prj_z4c_init_params(&mesh->z4c_params);
+    mesh->use_full_dynamic_gr = 1;
+    coord->x1min = 0.0;
+    coord->x1max = (double)PRJ_BLOCK_SIZE;
+    coord->x2min = 0.0;
+    coord->x2max = (double)PRJ_BLOCK_SIZE;
+    coord->x3min = 0.0;
+    coord->x3max = (double)PRJ_BLOCK_SIZE;
+    if (prj_mesh_init(mesh, 1, 1, 1, 0, coord, 0) != 0) {
+        die("cell-wrapper mesh init failed");
+    }
+}
+
+static void set_diagonal_z4c_metric(prj_block *block,
+    double chi, double gxx, double gyy, double gzz)
+{
+    double *z;
+    int i;
+    int j;
+    int k;
+
+    z = prj_block_z4c_stage(block, 0);
+    if (z == 0) {
+        die("missing z4c storage for cell-wrapper test");
+    }
+    for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+        for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+            for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
+                z[Z4CIDX(PRJ_Z4C_CHI, i, j, k)] = chi;
+                z[Z4CIDX(PRJ_Z4C_GXX, i, j, k)] = gxx;
+                z[Z4CIDX(PRJ_Z4C_GXY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GXZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GYY, i, j, k)] = gyy;
+                z[Z4CIDX(PRJ_Z4C_GYZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GZZ, i, j, k)] = gzz;
+                z[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AYY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AYZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AZZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_THETA, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_ALPHA, i, j, k)] = 1.0;
+                z[Z4CIDX(PRJ_Z4C_BETAX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_BETAY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_BETAZ, i, j, k)] = 0.0;
+            }
+        }
+    }
+}
+
+static void test_cell_wrappers_preserve_radiation_slots(prj_eos *eos)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_block *block;
+    double W[PRJ_NVAR_PRIM];
+    double Wout[PRJ_NVAR_PRIM];
+    double U[PRJ_NVAR_CONS];
+    const int i = 1;
+    const int j = 2;
+    const int k = 3;
+    const double chi = 0.25;
+    const double gxx = 2.0;
+    const double gyy = 0.5;
+    const double gzz = 1.5;
+    double sqrt_det;
+
+    init_cell_wrapper_mesh(&mesh, &coord);
+    block = &mesh.blocks[0];
+    set_diagonal_z4c_metric(block, chi, gxx, gyy, gzz);
+    sqrt_det = sqrt(gxx * gyy * gzz / (chi * chi * chi));
+
+    set_state(W, 1.4e8, 0.01 * PRJ_CLIGHT, -0.02 * PRJ_CLIGHT,
+        0.015 * PRJ_CLIGHT, 3.0e18, 0.28);
+    fill_radiation_state(W);
+    prj_eos_cell_prim2cons(eos, &mesh, block, 0, i, j, k, W, U,
+        PRJ_EOS_CTX_MAIN);
+    assert_radiation_densitized(W, U, sqrt_det);
+    prj_eos_cell_cons2prim(eos, &mesh, block, 0, i, j, k, U, Wout,
+        PRJ_EOS_CTX_MAIN);
+    assert_hydro_roundtrip(W, Wout);
+    assert_radiation_roundtrip(W, Wout);
+    prj_mesh_destroy(&mesh);
+}
+#endif
+
 static void test_low_velocity_limit(prj_eos *eos)
 {
     prj_eos_gr_geom geom;
@@ -356,11 +456,18 @@ static void test_invalid_inputs(prj_eos *eos)
     }
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     prj_eos eos;
     prj_eos_gr_geom flat;
     prj_eos_gr_geom curved;
+
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Init(&argc, &argv);
+#else
+    (void)argc;
+    (void)argv;
+#endif
 
     init_ideal_eos(&eos);
     set_flat_geom(&flat);
@@ -370,7 +477,13 @@ int main(void)
         -0.03 * PRJ_CLIGHT, 0.02 * PRJ_CLIGHT, 4.0e18);
     test_roundtrip(&eos, "curved", &curved, 2.0e8, 0.04 * PRJ_CLIGHT,
         -0.02 * PRJ_CLIGHT, 0.03 * PRJ_CLIGHT, 6.0e18);
+#if PRJ_DYNAMIC_GR && PRJ_NRAD > 0
+    test_cell_wrappers_preserve_radiation_slots(&eos);
+#endif
     test_invalid_inputs(&eos);
     printf("test_gr_prim_cons: ok\n");
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Finalize();
+#endif
     return 0;
 }

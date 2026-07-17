@@ -1056,6 +1056,33 @@ static double prj_gr_hlld_pressure_guess(const prj_gr_hlld_state *L,
     return guess;
 }
 
+static int prj_gr_hlld_same_primitive_state(const double *WL, const double *WR,
+    double pL, double pR, double gL, double gR)
+{
+    const int vars[] = {
+        PRJ_PRIM_RHO,
+        PRJ_PRIM_V1,
+        PRJ_PRIM_V2,
+        PRJ_PRIM_V3,
+        PRJ_PRIM_EINT,
+        PRJ_PRIM_YE,
+        PRJ_PRIM_B2,
+        PRJ_PRIM_B3
+    };
+    int n;
+
+    if (pL != pR || gL != gR) {
+        return 0;
+    }
+    for (n = 0; n < (int)(sizeof(vars) / sizeof(vars[0])); ++n) {
+        int v = vars[n];
+        if (WL[v] != WR[v]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int prj_gr_hlld_fan_converged(double residual, const prj_gr_hlld_fan *fan)
 {
     return fabs(residual) <= 1.0e-10 *
@@ -1308,6 +1335,11 @@ static void prj_riemann_gr_hlld_impl(const double *WL, const double *WR,
     if (!prj_gr_hlld_state_from_prim(WL, pL, gL, &tet, bn_phys, &L) ||
         !prj_gr_hlld_state_from_prim(WR, pR, gR, &tet, bn_phys, &R)) {
         prj_riemann_hlld_fail("invalid GR HLLD primitive state");
+    }
+    if (prj_gr_hlld_same_primitive_state(WL, WR, pL, pR, gL, gR)) {
+        prj_gr_hlld_emit_flux(&tet, sqrt_gamma, alpha, beta, L.q, L.f,
+            L.B, L.v, flux, v_face, Bv1, Bv2);
+        return;
     }
     lambda_l = PRJ_MIN(L.lam_m, R.lam_m);
     lambda_r = PRJ_MAX(L.lam_p, R.lam_p);

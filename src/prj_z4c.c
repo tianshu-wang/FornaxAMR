@@ -1807,6 +1807,47 @@ static void prj_z4c_lower_vec(const double g[3][3], const double v_con[3],
 }
 #endif
 
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+static void prj_z4c_rad_gr_m1_closure_ctx(const prj_block *block,
+    const prj_z4c_hydro_geom *geom, const double *W_mhd, int i, int j, int k,
+    int field, int group, prj_rad_gr_m1_closure_ctx *ctx)
+{
+    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+    const int op_idx = field * PRJ_NEGROUP + group;
+    const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
+    int a;
+    int b;
+    int d;
+
+    memset(ctx, 0, sizeof(*ctx));
+    for (a = 0; a < 3; ++a) {
+        ctx->vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
+            PRJ_CLIGHT : 0.0;
+        for (b = 0; b < 3; ++b) {
+            ctx->gamma[a][b] = geom->gamma[a][b];
+            ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
+            ctx->K_dd[a][b] = geom->K_dd[a][b];
+            for (d = 0; d < 3; ++d) {
+                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
+            }
+        }
+    }
+    ctx->opacity = 0.0;
+    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
+        double kappa = block->kappa_cell[op_off];
+        double sigma = block->sigma_cell[op_off];
+
+        if (isfinite(kappa) && kappa > 0.0) {
+            ctx->opacity += kappa;
+        }
+        if (isfinite(sigma) && sigma > 0.0) {
+            ctx->opacity += sigma;
+        }
+    }
+    ctx->have_shear = 0;
+}
+#endif
+
 static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *block,
     const prj_z4c_hydro_geom *geom, const double *W_mhd, const double *W_rad,
     int i, int j, int k, double t_cgs[PRJ_NTMUNU])
@@ -1864,17 +1905,34 @@ static void prj_z4c_build_tmunu_cell_cgs(const prj_rad *rad, const prj_block *bl
             for (group = 0; group < PRJ_NEGROUP; ++group) {
                 double Erad = W_rad[WIDX(PRJ_RAD_PRIM_E(field, group), i, j, k)] *
                     RAD_SCALE;
-                double Frad[3] = {
+                double Frad_cov[3] = {
                     W_rad[WIDX(PRJ_RAD_PRIM_F1(field, group), i, j, k)] * RAD_SCALE,
                     W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)] * RAD_SCALE,
                     W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)] * RAD_SCALE
                 };
-                double Frad_cov[3];
                 double P[3][3];
                 double Pcov[3][3];
 
-                prj_rad_m1_pressure(rad, Erad, Frad[0], Frad[1], Frad[2], P);
-                prj_z4c_lower_vec(geom->gamma, Frad, Frad_cov);
+#if PRJ_DYNAMIC_GR
+                {
+                    prj_rad_gr_m1_closure_ctx closure;
+
+                    prj_z4c_rad_gr_m1_closure_ctx(block, geom, W_mhd, i, j, k,
+                        field, group, &closure);
+                    prj_rad_gr_m1_pressure(rad, &closure, Erad, Frad_cov, P);
+                }
+#else
+                {
+                    double Frad_con[3];
+
+                    Frad_con[0] = Frad_cov[0];
+                    Frad_con[1] = Frad_cov[1];
+                    Frad_con[2] = Frad_cov[2];
+                    prj_rad_m1_pressure(rad, Erad, Frad_con[0], Frad_con[1],
+                        Frad_con[2], P);
+                    prj_z4c_lower_vec(geom->gamma, Frad_con, Frad_cov);
+                }
+#endif
                 memset(Pcov, 0, sizeof(Pcov));
                 for (a = 0; a < 3; ++a) {
                     for (b = 0; b < 3; ++b) {

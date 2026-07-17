@@ -68,6 +68,12 @@ typedef double prj_table_real;
 #ifndef PRJ_DYNAMIC_GR
 #define PRJ_DYNAMIC_GR 0
 #endif
+#ifndef PRJ_RAD_GR_M1_CSIGMA
+#define PRJ_RAD_GR_M1_CSIGMA 0.5
+#endif
+#ifndef PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA
+#define PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA 1.0e-4
+#endif
 
 #define PRJ_TIMEINT_RK2 1
 #define PRJ_TIMEINT_ESSPRK 2

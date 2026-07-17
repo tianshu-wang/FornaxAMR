@@ -59,6 +59,22 @@ void prj_rad_ffc_fsa(prj_rad *rad, double *u, double dt);
 #endif
 #endif
 void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, double F3, double P[3][3]);
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+typedef struct prj_rad_gr_m1_closure_ctx {
+    double gamma[3][3];
+    double gamma_inv[3][3];
+    double dgamma[3][3][3];
+    double K_dd[3][3];
+    double vcon[3];
+    double dvdx[3][3];
+    double opacity;
+    int have_shear;
+} prj_rad_gr_m1_closure_ctx;
+
+void prj_rad_gr_m1_pressure(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov[3],
+    double P[3][3]);
+#endif
 #if PRJ_NRAD > 0
 void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,
     double *lam_min, double *lam_max);
@@ -67,6 +83,11 @@ void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double
 #endif
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, const double *W_state, double *u,
+    int ic, int jc, int kc, double dt);
+#endif
 void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);
 

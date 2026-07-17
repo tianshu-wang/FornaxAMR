@@ -1170,6 +1170,890 @@ void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, dou
     }
 }
 
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+static void prj_rad_gr_m1_raise_vec_ctx(const prj_rad_gr_m1_closure_ctx *ctx,
+    const double vcov[3], double vcon[3])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        vcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            vcon[a] += ctx->gamma_inv[a][b] * vcov[b];
+        }
+    }
+}
+
+static void prj_rad_gr_m1_lower_vec_ctx(const prj_rad_gr_m1_closure_ctx *ctx,
+    const double vcon[3], double vcov[3])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        vcov[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            vcov[a] += ctx->gamma[a][b] * vcon[b];
+        }
+    }
+}
+
+static double prj_rad_gr_m1_dot_con_con(const prj_rad_gr_m1_closure_ctx *ctx,
+    const double v[3], const double w[3])
+{
+    double dot = 0.0;
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            dot += ctx->gamma[a][b] * v[a] * w[b];
+        }
+    }
+    return dot;
+}
+
+static void prj_rad_gr_m1_christoffel(const prj_rad_gr_m1_closure_ctx *ctx,
+    double Gamma[3][3][3])
+{
+    int a;
+    int b;
+    int c;
+    int d;
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            for (c = 0; c < 3; ++c) {
+                Gamma[a][b][c] = 0.0;
+                for (d = 0; d < 3; ++d) {
+                    Gamma[a][b][c] += 0.5 * ctx->gamma_inv[a][d] *
+                        (ctx->dgamma[b][c][d] + ctx->dgamma[c][b][d] -
+                            ctx->dgamma[d][b][c]);
+                }
+            }
+        }
+    }
+}
+
+static void prj_rad_gr_m1_shear(const prj_rad_gr_m1_closure_ctx *ctx,
+    const double vcon[3], const double vcov[3], double wlor,
+    double sigma_con[3][3], double *divu_out, double *sigma2_out)
+{
+    double Gamma[3][3][3];
+    double du_cov[3][3];
+    double D_cov[3][3];
+    double h_cov[3][3];
+    double h_con[3][3];
+    double bracket[3][3];
+    double u_cov[3];
+    double dbeta2[3];
+    double dw[3];
+    double divu = 0.0;
+    double sigma_cov[3][3];
+    double sigma2 = 0.0;
+    int a;
+    int b;
+    int c;
+    int d;
+
+    memset(sigma_con, 0, 9 * sizeof(double));
+    *divu_out = 0.0;
+    *sigma2_out = 0.0;
+    if (ctx == 0 || !ctx->have_shear) {
+        return;
+    }
+
+    prj_rad_gr_m1_christoffel(ctx, Gamma);
+    for (a = 0; a < 3; ++a) {
+        u_cov[a] = wlor * vcov[a];
+    }
+    for (d = 0; d < 3; ++d) {
+        dbeta2[d] = 0.0;
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                dbeta2[d] += ctx->dgamma[d][a][b] * vcon[a] * vcon[b] +
+                    2.0 * ctx->gamma[a][b] * vcon[a] * ctx->dvdx[d][b];
+            }
+        }
+        dw[d] = 0.5 * wlor * wlor * wlor * dbeta2[d];
+    }
+
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            double dvcov = 0.0;
+
+            for (b = 0; b < 3; ++b) {
+                dvcov += ctx->dgamma[d][a][b] * vcon[b] +
+                    ctx->gamma[a][b] * ctx->dvdx[d][b];
+            }
+            du_cov[d][a] = dw[d] * vcov[a] + wlor * dvcov;
+        }
+    }
+
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            D_cov[d][a] = du_cov[d][a] - wlor * ctx->K_dd[d][a];
+            for (b = 0; b < 3; ++b) {
+                D_cov[d][a] -= Gamma[b][d][a] * u_cov[b];
+            }
+            divu += ctx->gamma_inv[d][a] * D_cov[d][a];
+        }
+    }
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            h_cov[a][b] = ctx->gamma[a][b] + u_cov[a] * u_cov[b];
+            h_con[a][b] = ctx->gamma_inv[a][b] +
+                wlor * wlor * vcon[a] * vcon[b];
+        }
+    }
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            bracket[a][b] = D_cov[a][b] + D_cov[b][a] -
+                (2.0 / 3.0) * h_cov[a][b] * divu;
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            for (c = 0; c < 3; ++c) {
+                for (d = 0; d < 3; ++d) {
+                    sigma_con[a][b] += h_con[a][c] * h_con[b][d] *
+                        bracket[c][d];
+                }
+            }
+        }
+    }
+
+    memset(sigma_cov, 0, sizeof(sigma_cov));
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            for (c = 0; c < 3; ++c) {
+                for (d = 0; d < 3; ++d) {
+                    sigma_cov[a][b] += ctx->gamma[a][c] * ctx->gamma[b][d] *
+                        sigma_con[c][d];
+                }
+            }
+            sigma2 += sigma_con[a][b] * sigma_cov[a][b];
+        }
+    }
+    if (!isfinite(divu)) {
+        divu = 0.0;
+    }
+    if (!isfinite(sigma2) || sigma2 < 0.0) {
+        sigma2 = 0.0;
+    }
+    *divu_out = divu;
+    *sigma2_out = sigma2;
+}
+
+static double prj_rad_gr_m1_lbar(const prj_rad_gr_m1_closure_ctx *ctx,
+    double divu, double sigma2)
+{
+    double by_opacity = 1.0e300;
+    double by_shear = 1.0e300;
+    double opacity = ctx != 0 ? ctx->opacity : 0.0;
+
+    if (isfinite(opacity) && opacity > 0.0) {
+        by_opacity = 1.0 / opacity;
+    }
+    if (sigma2 > 0.0 && divu > 0.0) {
+        by_shear = PRJ_RAD_GR_M1_CSIGMA * sqrt(divu / sigma2);
+    }
+    if (by_opacity < by_shear) {
+        return by_opacity;
+    }
+    if (by_shear < 1.0e299) {
+        return by_shear;
+    }
+    return by_opacity < 1.0e299 ? by_opacity : 0.0;
+}
+
+static const int prj_rad_gr_m1_sym_i[6] = {0, 1, 2, 0, 0, 1};
+static const int prj_rad_gr_m1_sym_j[6] = {0, 1, 2, 1, 2, 2};
+
+typedef struct prj_rad_gr_m1_pressure_data {
+    const prj_rad *rad;
+    const prj_rad_gr_m1_closure_ctx *ctx;
+    double E;
+    double Fcov[3];
+    double Fcon[3];
+    double Fhat_con[3];
+    double Pthin[3][3];
+    double A0[3][3];
+    double vcon[3];
+    double vcov[3];
+    double u_cov[3];
+    double h_mix[3][3];
+    double H0[3];
+    double Hcoef[3][6];
+    double Jcoef[6];
+    double wlor;
+    double J0;
+    double beta2;
+    double f_euler;
+} prj_rad_gr_m1_pressure_data;
+
+static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
+{
+    int col;
+    int row;
+
+    for (col = 0; col < 6; ++col) {
+        int pivot = col;
+        double pivabs = fabs(A[col][col]);
+
+        for (row = col + 1; row < 6; ++row) {
+            double v = fabs(A[row][col]);
+
+            if (v > pivabs) {
+                pivabs = v;
+                pivot = row;
+            }
+        }
+        if (!isfinite(pivabs) || pivabs < 1.0e-14) {
+            return 0;
+        }
+        if (pivot != col) {
+            int j;
+
+            for (j = col; j < 7; ++j) {
+                double tmp = A[col][j];
+
+                A[col][j] = A[pivot][j];
+                A[pivot][j] = tmp;
+            }
+        }
+        {
+            double inv_piv = 1.0 / A[col][col];
+            int j;
+
+            for (j = col; j < 7; ++j) {
+                A[col][j] *= inv_piv;
+            }
+        }
+        for (row = 0; row < 6; ++row) {
+            double factor;
+            int j;
+
+            if (row == col) {
+                continue;
+            }
+            factor = A[row][col];
+            if (factor == 0.0) {
+                continue;
+            }
+            for (j = col; j < 7; ++j) {
+                A[row][j] -= factor * A[col][j];
+            }
+        }
+    }
+    for (row = 0; row < 6; ++row) {
+        x[row] = A[row][6];
+        if (!isfinite(x[row])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov_in[3],
+    prj_rad_gr_m1_pressure_data *data)
+{
+    double sigma_con[3][3];
+    double F2;
+    double Fmag;
+    double cE;
+    double beta2;
+    double FdotV;
+    double Fdotu;
+    double Q0;
+    double divu;
+    double sigma2;
+    double lbar;
+    int a;
+    int b;
+    int m;
+
+    memset(data, 0, sizeof(*data));
+    data->rad = rad;
+    data->ctx = ctx;
+    if (!isfinite(E) || E < 0.0) {
+        E = 0.0;
+    }
+    data->E = E;
+    for (a = 0; a < 3; ++a) {
+        data->Fcov[a] = isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
+    }
+    prj_rad_gr_m1_raise_vec_ctx(ctx, data->Fcov, data->Fcon);
+    F2 = 0.0;
+    for (a = 0; a < 3; ++a) {
+        F2 += data->Fcov[a] * data->Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * E;
+    if (Fmag > cE && Fmag > 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            data->Fcov[a] *= scale;
+            data->Fcon[a] *= scale;
+        }
+        F2 *= scale * scale;
+        Fmag = cE;
+    }
+    data->f_euler = cE > 0.0 ? Fmag / cE : 0.0;
+    if (data->f_euler > 1.0) {
+        data->f_euler = 1.0;
+    }
+
+    memset(data->Pthin, 0, sizeof(data->Pthin));
+    if (E > 0.0 && F2 > 0.0) {
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                data->Pthin[a][b] = E * data->Fcon[a] * data->Fcon[b] / F2;
+            }
+        }
+    }
+
+    for (a = 0; a < 3; ++a) {
+        data->vcon[a] = isfinite(ctx->vcon[a]) ? ctx->vcon[a] : 0.0;
+    }
+    beta2 = prj_rad_gr_m1_dot_con_con(ctx, data->vcon, data->vcon);
+    if (!isfinite(beta2) || beta2 < 0.0) {
+        beta2 = 0.0;
+        data->vcon[0] = data->vcon[1] = data->vcon[2] = 0.0;
+    }
+    if (beta2 >= 1.0) {
+        double scale = sqrt((1.0 - 1.0e-12) / beta2);
+
+        for (a = 0; a < 3; ++a) {
+            data->vcon[a] *= scale;
+        }
+        beta2 = 1.0 - 1.0e-12;
+    }
+    data->beta2 = beta2;
+    prj_rad_gr_m1_lower_vec_ctx(ctx, data->vcon, data->vcov);
+    data->wlor = 1.0 / sqrt(1.0 - beta2);
+    for (a = 0; a < 3; ++a) {
+        data->u_cov[a] = data->wlor * data->vcov[a];
+        data->Fhat_con[a] = data->Fcon[a] / PRJ_CLIGHT;
+    }
+
+    prj_rad_gr_m1_shear(ctx, data->vcon, data->vcov, data->wlor,
+        sigma_con, &divu, &sigma2);
+    lbar = prj_rad_gr_m1_lbar(ctx, divu, sigma2);
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            data->A0[a][b] =
+                (ctx->gamma_inv[a][b] + 4.0 * data->vcon[a] * data->vcon[b]) /
+                    3.0 -
+                (4.0 * lbar / 15.0) * sigma_con[a][b];
+        }
+    }
+
+    FdotV = 0.0;
+    for (a = 0; a < 3; ++a) {
+        FdotV += data->Fhat_con[a] * data->vcov[a];
+    }
+    Fdotu = data->wlor * FdotV;
+    data->J0 = E * data->wlor * data->wlor - 2.0 * data->wlor * Fdotu;
+    Q0 = E * data->wlor - Fdotu;
+    for (a = 0; a < 3; ++a) {
+        double h_n = -data->wlor * data->wlor * data->vcon[a];
+        double h_F = data->Fhat_con[a] +
+            data->wlor * data->wlor * data->vcon[a] * FdotV;
+
+        data->H0[a] = Q0 * h_n + data->wlor * h_F;
+        for (b = 0; b < 3; ++b) {
+            data->h_mix[a][b] = (a == b ? 1.0 : 0.0) +
+                data->wlor * data->wlor * data->vcon[a] * data->vcov[b];
+        }
+    }
+
+    for (m = 0; m < 6; ++m) {
+        int p = prj_rad_gr_m1_sym_i[m];
+        int q = prj_rad_gr_m1_sym_j[m];
+
+        data->Jcoef[m] = data->u_cov[p] * data->u_cov[q] *
+            (p == q ? 1.0 : 2.0);
+        for (a = 0; a < 3; ++a) {
+            data->Hcoef[a][m] = -data->h_mix[a][p] * data->u_cov[q];
+            if (p != q) {
+                data->Hcoef[a][m] -= data->h_mix[a][q] * data->u_cov[p];
+            }
+        }
+    }
+}
+
+static void prj_rad_gr_m1_pressure_for_fbar(
+    const prj_rad_gr_m1_pressure_data *data, double fbar, double P[3][3])
+{
+    double amat[6][7];
+    double sol[6];
+    double chi;
+    double thin_w;
+    double thick_w;
+    int m;
+
+    if (!isfinite(fbar) || fbar < 0.0) {
+        fbar = 0.0;
+    } else if (fbar > 1.0) {
+        fbar = 1.0;
+    }
+    chi = prj_rad_m1_chi(data->rad, fbar);
+    thin_w = 0.5 * (3.0 * chi - 1.0);
+    thick_w = 1.5 * (1.0 - chi);
+    memset(amat, 0, sizeof(amat));
+    for (m = 0; m < 6; ++m) {
+        int i = prj_rad_gr_m1_sym_i[m];
+        int j = prj_rad_gr_m1_sym_j[m];
+        double rhs = thin_w * data->Pthin[i][j] + thick_w *
+            (data->A0[i][j] * data->J0 +
+                data->H0[i] * data->vcon[j] +
+                data->H0[j] * data->vcon[i]);
+        int n;
+
+        for (n = 0; n < 6; ++n) {
+            double coef = thick_w *
+                (data->A0[i][j] * data->Jcoef[n] +
+                    data->Hcoef[i][n] * data->vcon[j] +
+                    data->Hcoef[j][n] * data->vcon[i]);
+
+            amat[m][n] = (m == n ? 1.0 : 0.0) - coef;
+        }
+        amat[m][6] = rhs;
+    }
+
+    if (!prj_rad_gr_m1_solve6(amat, sol)) {
+        for (m = 0; m < 6; ++m) {
+            int i = prj_rad_gr_m1_sym_i[m];
+            int j = prj_rad_gr_m1_sym_j[m];
+
+            sol[m] = thin_w * data->Pthin[i][j] + thick_w *
+                (data->A0[i][j] * data->J0 +
+                    data->H0[i] * data->vcon[j] +
+                    data->H0[j] * data->vcon[i]);
+        }
+    }
+
+    memset(P, 0, 9 * sizeof(double));
+    for (m = 0; m < 6; ++m) {
+        int i = prj_rad_gr_m1_sym_i[m];
+        int j = prj_rad_gr_m1_sym_j[m];
+
+        P[i][j] = sol[m];
+        P[j][i] = sol[m];
+    }
+}
+
+static double prj_rad_gr_m1_derived_fbar(
+    const prj_rad_gr_m1_pressure_data *data, const double P[3][3])
+{
+    const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
+    double R0;
+    double Rcon[3];
+    double J;
+    double numerator;
+    double denom;
+    int a;
+    int b;
+
+    /* Eq. 3.29 is evaluated in the local Eulerian-normal frame:
+     * M^{00}=E, M^{0i}=F^i/c, M^{ij}=P^{ij}.  Eq. 6.24 then uses
+     * h_{alpha gamma} R^alpha R^gamma / J^2 with
+     * R^alpha=M^{alpha beta}u_beta and J=M^{alpha beta}u_alpha u_beta. */
+    R0 = -data->E * data->wlor;
+    J = data->J0;
+    for (a = 0; a < 3; ++a) {
+        R0 += data->Fhat_con[a] * data->u_cov[a];
+        Rcon[a] = -data->wlor * data->Fhat_con[a];
+        for (b = 0; b < 3; ++b) {
+            Rcon[a] += P[a][b] * data->u_cov[b];
+            J += P[a][b] * data->u_cov[a] * data->u_cov[b];
+        }
+    }
+
+    numerator = (data->wlor * data->wlor - 1.0) * R0 * R0;
+    for (a = 0; a < 3; ++a) {
+        numerator += -2.0 * data->wlor * data->u_cov[a] * R0 * Rcon[a];
+        for (b = 0; b < 3; ++b) {
+            numerator += (ctx->gamma[a][b] +
+                data->u_cov[a] * data->u_cov[b]) * Rcon[a] * Rcon[b];
+        }
+    }
+    if (!isfinite(numerator) || numerator < 0.0) {
+        numerator = 0.0;
+    }
+    denom = fabs(J);
+    if (!isfinite(denom) || denom <= 0.0) {
+        return 0.0;
+    }
+    numerator = sqrt(numerator) / denom;
+    if (!isfinite(numerator) || numerator < 0.0) {
+        return 0.0;
+    }
+    if (numerator > 1.0) {
+        return 1.0;
+    }
+    return numerator;
+}
+
+static void prj_rad_gr_m1_pressure_implicit(
+    const prj_rad_gr_m1_pressure_data *data, double P[3][3],
+    double *fbar_out)
+{
+    double Plo[3][3];
+    double Phi[3][3];
+    double Pmid[3][3];
+    double flo;
+    double fhi;
+    double fmid;
+    double glo;
+    double ghi;
+    double gmid;
+    double lo = 0.0;
+    double hi = 1.0;
+    int iter;
+
+    if (data->beta2 < PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA *
+            PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA) {
+        prj_rad_gr_m1_pressure_for_fbar(data, data->f_euler, P);
+        if (fbar_out != 0) {
+            *fbar_out = data->f_euler;
+        }
+        return;
+    }
+
+    prj_rad_gr_m1_pressure_for_fbar(data, lo, Plo);
+    flo = prj_rad_gr_m1_derived_fbar(data, Plo);
+    glo = flo - lo;
+    if (fabs(glo) < 1.0e-13) {
+        memcpy(P, Plo, 9 * sizeof(double));
+        if (fbar_out != 0) {
+            *fbar_out = flo;
+        }
+        return;
+    }
+
+    prj_rad_gr_m1_pressure_for_fbar(data, hi, Phi);
+    fhi = prj_rad_gr_m1_derived_fbar(data, Phi);
+    ghi = fhi - hi;
+    if (fabs(ghi) < 1.0e-13) {
+        memcpy(P, Phi, 9 * sizeof(double));
+        if (fbar_out != 0) {
+            *fbar_out = fhi;
+        }
+        return;
+    }
+
+    if (glo < 0.0 || ghi > 0.0) {
+        if (fabs(glo) <= fabs(ghi)) {
+            memcpy(P, Plo, 9 * sizeof(double));
+            if (fbar_out != 0) {
+                *fbar_out = flo;
+            }
+        } else {
+            memcpy(P, Phi, 9 * sizeof(double));
+            if (fbar_out != 0) {
+                *fbar_out = fhi;
+            }
+        }
+        return;
+    }
+
+    for (iter = 0; iter < 80; ++iter) {
+        double mid = 0.5 * (lo + hi);
+
+        prj_rad_gr_m1_pressure_for_fbar(data, mid, Pmid);
+        fmid = prj_rad_gr_m1_derived_fbar(data, Pmid);
+        gmid = fmid - mid;
+        if (fabs(gmid) < 1.0e-13 || hi - lo < 1.0e-13) {
+            memcpy(P, Pmid, 9 * sizeof(double));
+            if (fbar_out != 0) {
+                *fbar_out = fmid;
+            }
+            return;
+        }
+        if (gmid > 0.0) {
+            lo = mid;
+            glo = gmid;
+            memcpy(Plo, Pmid, 9 * sizeof(double));
+        } else {
+            hi = mid;
+            ghi = gmid;
+            memcpy(Phi, Pmid, 9 * sizeof(double));
+        }
+    }
+
+    (void)glo;
+    (void)ghi;
+    {
+        double fbar = 0.5 * (lo + hi);
+
+        prj_rad_gr_m1_pressure_for_fbar(data, fbar, P);
+        if (fbar_out != 0) {
+            *fbar_out = fbar;
+        }
+    }
+}
+
+static void prj_rad_gr_m1_decompose_m2(
+    const prj_rad_gr_m1_pressure_data *data, const double P[3][3],
+    double *J_out, double H[4], double L[4][4], double ucon[4],
+    double ucov[4], double hcon[4][4], double hcov[4][4])
+{
+    const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
+    double M2[4][4];
+    double J = data->J0;
+    int a;
+    int b;
+    int m;
+
+    memset(M2, 0, sizeof(M2));
+    M2[0][0] = data->E;
+    for (a = 0; a < 3; ++a) {
+        M2[0][a + 1] = data->Fhat_con[a];
+        M2[a + 1][0] = data->Fhat_con[a];
+        for (b = 0; b < 3; ++b) {
+            M2[a + 1][b + 1] = P[a][b];
+        }
+    }
+
+    for (m = 0; m < 6; ++m) {
+        int i = prj_rad_gr_m1_sym_i[m];
+        int j = prj_rad_gr_m1_sym_j[m];
+
+        J += data->Jcoef[m] * P[i][j];
+    }
+    *J_out = J;
+
+    memset(H, 0, 4 * sizeof(double));
+    for (a = 0; a < 3; ++a) {
+        H[a + 1] = data->H0[a];
+        for (m = 0; m < 6; ++m) {
+            int i = prj_rad_gr_m1_sym_i[m];
+            int j = prj_rad_gr_m1_sym_j[m];
+
+            H[a + 1] += data->Hcoef[a][m] * P[i][j];
+        }
+        H[0] += data->u_cov[a] * H[a + 1];
+    }
+    if (data->wlor > 0.0) {
+        H[0] /= data->wlor;
+    } else {
+        H[0] = 0.0;
+    }
+
+    ucon[0] = data->wlor;
+    ucov[0] = -data->wlor;
+    for (a = 0; a < 3; ++a) {
+        ucon[a + 1] = data->wlor * data->vcon[a];
+        ucov[a + 1] = data->u_cov[a];
+    }
+
+    memset(hcon, 0, 16 * sizeof(double));
+    memset(hcov, 0, 16 * sizeof(double));
+    hcon[0][0] = -1.0 + ucon[0] * ucon[0];
+    hcov[0][0] = -1.0 + ucov[0] * ucov[0];
+    for (a = 0; a < 3; ++a) {
+        hcon[0][a + 1] = ucon[0] * ucon[a + 1];
+        hcon[a + 1][0] = hcon[0][a + 1];
+        hcov[0][a + 1] = ucov[0] * ucov[a + 1];
+        hcov[a + 1][0] = hcov[0][a + 1];
+        for (b = 0; b < 3; ++b) {
+            hcon[a + 1][b + 1] =
+                ctx->gamma_inv[a][b] + ucon[a + 1] * ucon[b + 1];
+            hcov[a + 1][b + 1] =
+                ctx->gamma[a][b] + ucov[a + 1] * ucov[b + 1];
+        }
+    }
+
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            L[a][b] = M2[a][b] - J * ucon[a] * ucon[b] -
+                H[a] * ucon[b] - H[b] * ucon[a];
+        }
+    }
+}
+
+static void prj_rad_gr_m1_grad_cu_cov(
+    const prj_rad_gr_m1_pressure_data *data, double grad_cu_cov[3][4])
+{
+    const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
+    double Gamma[3][3][3];
+    double du_cov[3][3];
+    double D_cov[3][3];
+    double dbeta2[3];
+    double dw[3];
+    int a;
+    int b;
+    int d;
+
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 4; ++a) {
+            grad_cu_cov[d][a] = 0.0;
+        }
+    }
+    if (ctx == 0) {
+        return;
+    }
+
+    prj_rad_gr_m1_christoffel(ctx, Gamma);
+    for (d = 0; d < 3; ++d) {
+        dbeta2[d] = 0.0;
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                dbeta2[d] += ctx->dgamma[d][a][b] * data->vcon[a] *
+                    data->vcon[b] +
+                    2.0 * ctx->gamma[a][b] * data->vcon[a] *
+                    ctx->dvdx[d][b];
+            }
+        }
+        dw[d] = 0.5 * data->wlor * data->wlor * data->wlor * dbeta2[d];
+    }
+
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            double dvcov = 0.0;
+
+            for (b = 0; b < 3; ++b) {
+                dvcov += ctx->dgamma[d][a][b] * data->vcon[b] +
+                    ctx->gamma[a][b] * ctx->dvdx[d][b];
+            }
+            du_cov[d][a] = dw[d] * data->vcov[a] + data->wlor * dvcov;
+        }
+    }
+
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            D_cov[d][a] = du_cov[d][a] - data->wlor * ctx->K_dd[d][a];
+            for (b = 0; b < 3; ++b) {
+                D_cov[d][a] -= Gamma[b][d][a] * data->u_cov[b];
+            }
+            grad_cu_cov[d][a + 1] = PRJ_CLIGHT * D_cov[d][a];
+            grad_cu_cov[d][0] -= data->vcon[a] * grad_cu_cov[d][a + 1];
+        }
+    }
+    /* TODO(GR-M1 frequency): include explicit temporal derivative support for
+     * nabla_0(c u_beta) once stage-time fluid derivatives are available.  The
+     * current GR transport equations only contract the spatial k index here. */
+}
+
+static void prj_rad_gr_m1_frequency_drifts(
+    const prj_rad_gr_m1_pressure_data *data, const double P[3][3],
+    double fbar, double *energy_drift, double momentum_drift_cov[3])
+{
+    const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
+    double J;
+    double H[4];
+    double L[4][4];
+    double ucon[4];
+    double ucov[4];
+    double hcon[4][4];
+    double hcov[4][4];
+    double Hnorm2 = 0.0;
+    double inv_Hnorm3 = 0.0;
+    double chi;
+    double thin_w;
+    double thick_w;
+    double grad_cu_cov[3][4];
+    double contract_con[4] = {0.0, 0.0, 0.0, 0.0};
+    int alpha;
+    int beta;
+    int gamma;
+    int b;
+    int d;
+    int i;
+
+    prj_rad_gr_m1_decompose_m2(data, P, &J, H, L, ucon, ucov, hcon, hcov);
+    prj_rad_gr_m1_grad_cu_cov(data, grad_cu_cov);
+    for (alpha = 0; alpha < 4; ++alpha) {
+        for (beta = 0; beta < 4; ++beta) {
+            Hnorm2 += hcov[alpha][beta] * H[alpha] * H[beta];
+        }
+    }
+    if (isfinite(Hnorm2) && Hnorm2 > 0.0) {
+        inv_Hnorm3 = 1.0 / (Hnorm2 * sqrt(Hnorm2));
+    }
+
+    if (!isfinite(fbar) || fbar < 0.0) {
+        fbar = 0.0;
+    } else if (fbar > 1.0) {
+        fbar = 1.0;
+    }
+    chi = prj_rad_m1_chi(data->rad, fbar);
+    thin_w = 0.5 * (3.0 * chi - 1.0);
+    thick_w = 1.5 * (1.0 - chi);
+
+    for (alpha = 0; alpha < 4; ++alpha) {
+        for (b = 0; b < 4; ++b) {
+            beta = b;
+            for (d = 0; d < 3; ++d) {
+                double Nthin = 0.0;
+                double Nthick;
+                double N;
+                double M3;
+
+                gamma = d + 1;
+                if (inv_Hnorm3 > 0.0) {
+                    Nthin = J * H[alpha] * H[beta] * H[gamma] *
+                        inv_Hnorm3;
+                }
+                Nthick = 0.2 * (H[alpha] * hcon[beta][gamma] +
+                    H[beta] * hcon[alpha][gamma] +
+                    H[gamma] * hcon[alpha][beta]);
+                N = thin_w * Nthin + thick_w * Nthick;
+                M3 = J * ucon[alpha] * ucon[beta] * ucon[gamma] +
+                    H[alpha] * ucon[beta] * ucon[gamma] +
+                    H[beta] * ucon[alpha] * ucon[gamma] +
+                    H[gamma] * ucon[alpha] * ucon[beta] +
+                    L[alpha][beta] * ucon[gamma] +
+                    L[alpha][gamma] * ucon[beta] +
+                    L[beta][gamma] * ucon[alpha] + N;
+
+                contract_con[alpha] += M3 * grad_cu_cov[d][beta];
+            }
+        }
+    }
+
+    if (energy_drift != 0) {
+        *energy_drift = contract_con[0];
+    }
+    for (i = 0; i < 3; ++i) {
+        momentum_drift_cov[i] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            momentum_drift_cov[i] += ctx->gamma[i][b] * contract_con[b + 1];
+        }
+    }
+}
+
+void prj_rad_gr_m1_pressure(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov_in[3],
+    double P[3][3])
+{
+    prj_rad_gr_m1_pressure_data data;
+
+    if (P == 0) {
+        return;
+    }
+    if (ctx == 0 || Fcov_in == 0) {
+        prj_rad_m1_pressure(rad, E,
+            Fcov_in != 0 ? Fcov_in[0] : 0.0,
+            Fcov_in != 0 ? Fcov_in[1] : 0.0,
+            Fcov_in != 0 ? Fcov_in[2] : 0.0, P);
+        return;
+    }
+    prj_rad_gr_m1_prepare_pressure(rad, ctx, E, Fcov_in, &data);
+    prj_rad_gr_m1_pressure_implicit(&data, P, 0);
+}
+#endif
+
 #if PRJ_NRAD > 0
 /* Contraction M[b] = sum_{a,c} Q^{abc} dvdx[a][c] of the Levermore third moment
  * with the velocity gradient, computed analytically so the 27 components of Q
@@ -2374,6 +3258,238 @@ static double prj_rad_recon_face(const double q[PRJ_NEGROUP], int gcell, int sid
     (void)side;
     return q[gcell];
 }
+
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+static void prj_rad_gr_m1_raise_vec(const prj_z4c_hydro_geom *geom,
+    const double vcov[3], double vcon[3])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        vcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            vcon[a] += geom->gamma_inv[a][b] * vcov[b];
+        }
+    }
+}
+
+static void prj_rad_gr_m1_freq_closure_ctx(const prj_z4c_hydro_geom *geom,
+    const prj_block *block, const double *W_mhd, const double dvdx[3][3],
+    int i, int j, int k, int field, int group,
+    prj_rad_gr_m1_closure_ctx *ctx)
+{
+    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
+    const int op_idx = field * PRJ_NEGROUP + group;
+    const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
+    int a;
+    int b;
+    int d;
+
+    memset(ctx, 0, sizeof(*ctx));
+    for (a = 0; a < 3; ++a) {
+        ctx->vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
+            PRJ_CLIGHT : 0.0;
+        for (b = 0; b < 3; ++b) {
+            ctx->gamma[a][b] = geom->gamma[a][b];
+            ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
+            ctx->K_dd[a][b] = geom->K_dd[a][b];
+            for (d = 0; d < 3; ++d) {
+                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
+            }
+        }
+    }
+    for (d = 0; d < 3; ++d) {
+        for (a = 0; a < 3; ++a) {
+            ctx->dvdx[d][a] = dvdx[d][a] / PRJ_CLIGHT;
+        }
+    }
+    ctx->opacity = 0.0;
+    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
+        double kappa = block->kappa_cell[op_off];
+        double sigma = block->sigma_cell[op_off];
+
+        if (isfinite(kappa) && kappa > 0.0) {
+            ctx->opacity += kappa;
+        }
+        if (isfinite(sigma) && sigma > 0.0) {
+            ctx->opacity += sigma;
+        }
+    }
+    ctx->have_shear = 1;
+}
+
+void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, const double *W_state, double *u,
+    int ic, int jc, int kc, double dt)
+{
+    double dvdx[3][3];
+    double inv_dx[3];
+    prj_z4c_hydro_geom geom;
+    const double *W_mhd;
+    double dt_geom;
+    int jdir;
+    int icomp;
+    int field;
+
+    if (rad == 0 || mesh == 0 || block == 0 || W_state == 0 || u == 0) {
+        return;
+    }
+    if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 ||
+        block->v_riemann[2] == 0) {
+        return;
+    }
+    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, ic, jc, kc, &geom)) {
+        fprintf(stderr,
+            "prj_rad_freq_flux_apply_gr_m1: failed to load Z4c geometry at cell (%d,%d,%d)\n",
+            ic, jc, kc);
+        exit(1);
+    }
+    W_mhd = prj_block_mhd_stage_const(block, z4c_stage);
+    dt_geom = dt * geom.alpha * geom.sqrt_gamma;
+    if (dt_geom == 0.0) {
+        return;
+    }
+
+    inv_dx[0] = 1.0 / block->dx[0];
+    inv_dx[1] = 1.0 / block->dx[1];
+    inv_dx[2] = 1.0 / block->dx[2];
+    for (jdir = 0; jdir < 3; ++jdir) {
+        for (icomp = 0; icomp < 3; ++icomp) {
+            int il = ic;
+            int jl = jc;
+            int kl = kc;
+            int ir = ic;
+            int jr = jc;
+            int kr = kc;
+            double vL;
+            double vR;
+
+            if (jdir == X1DIR) {
+                ir = ic + 1;
+            } else if (jdir == X2DIR) {
+                jr = jc + 1;
+            } else {
+                kr = kc + 1;
+            }
+            vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
+            vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
+            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir];
+        }
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        double Eg[PRJ_NEGROUP];
+        double Fcon[PRJ_NEGROUP][3];
+        double Pg[PRJ_NEGROUP][3][3];
+        double Mq_cov[PRJ_NEGROUP][3];
+        double Acon_spec[PRJ_NEGROUP];
+        double Mq_spec[PRJ_NEGROUP][3];
+        double inv_dnu[PRJ_NEGROUP];
+        double energy_face[PRJ_NEGROUP + 1] = {0.0};
+        double momentum_face[PRJ_NEGROUP + 1][PRJ_NDIM] = {{0.0}};
+        double energy_available[PRJ_NEGROUP];
+        const double *nu_face = rad->eedge[field];
+        int g;
+        int gf;
+        int a;
+
+        if (nu_face == 0) {
+            fprintf(stderr, "prj_rad_freq_flux_apply_gr_m1: missing eedge for field %d\n",
+                field);
+            exit(1);
+        }
+
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            double dnu = nu_face[g + 1] - nu_face[g];
+            double Fcov[3];
+            prj_rad_gr_m1_closure_ctx closure;
+            prj_rad_gr_m1_pressure_data pdata;
+            double fbar;
+            double Acon = 0.0;
+
+            if (dnu <= 0.0) {
+                fprintf(stderr,
+                    "prj_rad_freq_flux_apply_gr_m1: non-positive eedge width for field %d group %d\n",
+                    field, g);
+                exit(1);
+            }
+            inv_dnu[g] = 1.0 / dnu;
+            Eg[g] = W_state[WIDX(PRJ_RAD_PRIM_E(field, g), ic, jc, kc)];
+            Fcov[0] = W_state[WIDX(PRJ_RAD_PRIM_F1(field, g), ic, jc, kc)];
+            Fcov[1] = W_state[WIDX(PRJ_RAD_PRIM_F2(field, g), ic, jc, kc)];
+            Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
+            prj_rad_gr_m1_raise_vec(&geom, Fcov, Fcon[g]);
+
+            prj_rad_gr_m1_freq_closure_ctx(&geom, block, W_mhd, dvdx, ic, jc, kc,
+                field, g, &closure);
+            prj_rad_gr_m1_prepare_pressure(rad, &closure, Eg[g], Fcov, &pdata);
+            prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
+            prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &Acon,
+                Mq_cov[g]);
+            Acon_spec[g] = Acon * inv_dnu[g];
+            for (a = 0; a < 3; ++a) {
+                Mq_spec[g][a] = Mq_cov[g][a] * inv_dnu[g];
+            }
+            energy_available[g] = u[PRJ_CONS_RAD_E(field, g)];
+        }
+
+        for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+            double face_drift = Acon_spec[gf - 1] + Acon_spec[gf];
+            int gu = face_drift >= 0.0 ? gf : gf - 1;
+            double nu = nu_face[gf];
+
+            energy_face[gf] += nu * Acon_spec[gu];
+            for (a = 0; a < 3; ++a) {
+                momentum_face[gf][a] += nu * Mq_spec[gu][a];
+            }
+        }
+
+        {
+            double outgoing[PRJ_NEGROUP] = {0.0};
+            double theta[PRJ_NEGROUP];
+
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                if (energy_face[gf] > 0.0) {
+                    outgoing[gf] += energy_face[gf];
+                } else if (energy_face[gf] < 0.0) {
+                    outgoing[gf - 1] -= energy_face[gf];
+                }
+            }
+            for (g = 0; g < PRJ_NEGROUP; ++g) {
+                double drain = dt_geom * outgoing[g];
+
+                theta[g] = 1.0;
+                if (drain > energy_available[g]) {
+                    theta[g] = energy_available[g] > 0.0 && drain > 0.0
+                        ? nextafter(energy_available[g] / drain, 0.0)
+                        : 0.0;
+                }
+            }
+            for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+                int donor = energy_face[gf] > 0.0 ? gf : gf - 1;
+                double factor = theta[donor];
+
+                energy_face[gf] *= factor;
+                for (a = 0; a < PRJ_NDIM; ++a) {
+                    momentum_face[gf][a] *= factor;
+                }
+            }
+        }
+
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            u[PRJ_CONS_RAD_E(field, g)] += dt_geom *
+                (energy_face[g + 1] - energy_face[g]);
+            u[PRJ_CONS_RAD_F1(field, g)] += dt_geom *
+                (momentum_face[g + 1][0] - momentum_face[g][0]);
+            u[PRJ_CONS_RAD_F2(field, g)] += dt_geom *
+                (momentum_face[g + 1][1] - momentum_face[g][1]);
+            u[PRJ_CONS_RAD_F3(field, g)] += dt_geom *
+                (momentum_face[g + 1][2] - momentum_face[g][2]);
+        }
+    }
+}
+#endif
 
 #if PRJ_USE_RADIATION_FSA
 static void prj_rad_fsa_omega_faces(const prj_rad *rad, int field,

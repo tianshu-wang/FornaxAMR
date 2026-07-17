@@ -12,6 +12,7 @@
 #define OPAC_PARAM_FILE "../opacbin.extendT.param"
 #define OPAC_FILE "../opacity.SFHo.juo.horo.brem1.extendedT.bin"
 
+#if PRJ_NRAD > 0
 static void die(const char *message)
 {
     fprintf(stderr, "reproduce_rad_newton: %s\n", message);
@@ -74,7 +75,14 @@ int main(int argc, char **argv)
 #if defined(PRJ_ENABLE_MPI)
     MPI_Init(&argc, &argv);
 #endif
-    if (argc < 2 || argc > 4) {
+    if (argc < 2) {
+        printf("reproduce_rad_newton: skipped (pass crash.err to run reproducer)\n");
+#if defined(PRJ_ENABLE_MPI)
+        MPI_Finalize();
+#endif
+        return 0;
+    }
+    if (argc > 4) {
         die("usage: reproduce_rad_newton crash.err [maxiter] [clamp_negative]");
     }
     if (argc >= 3) maxiter = atoi(argv[2]);
@@ -178,3 +186,19 @@ int main(int argc, char **argv)
 #endif
     return 0;
 }
+#else
+int main(int argc, char **argv)
+{
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Init(&argc, &argv);
+#else
+    (void)argc;
+    (void)argv;
+#endif
+    printf("reproduce_rad_newton: skipped (radiation disabled)\n");
+#if defined(PRJ_ENABLE_MPI)
+    MPI_Finalize();
+#endif
+    return 0;
+}
+#endif
