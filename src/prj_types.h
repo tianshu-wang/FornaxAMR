@@ -168,8 +168,10 @@ struct prj_block {
     double *U_rad;
     double *mhd_rhs;
     double *rad_rhs;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     double *deriv_ex;
     double *deriv_im;
+#endif
     double *flux[3];
     double *v_riemann[3];
     double *kappa_cell;

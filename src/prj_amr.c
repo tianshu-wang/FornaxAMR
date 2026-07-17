@@ -2326,8 +2326,10 @@ void prj_amr_refine_block(prj_mesh *mesh, const prj_mpi *mpi, int block_id)
             child->U_rad = 0;
             child->mhd_rhs = 0;
             child->rad_rhs = 0;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
             child->deriv_ex = 0;
             child->deriv_im = 0;
+#endif
             child->flux[0] = 0;
             child->flux[1] = 0;
             child->flux[2] = 0;

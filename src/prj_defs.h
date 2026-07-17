@@ -79,6 +79,7 @@ typedef double prj_table_real;
 #define PRJ_TIMEINT_ESSPRK 2
 #define PRJ_TIMEINT_ESSPRK9_3 3
 #define PRJ_TIMEINT_IMEX 4
+#define PRJ_TIMEINT_ESSPRK10_4 5
 #ifndef RK2
 #define RK2 PRJ_TIMEINT_RK2
 #endif
@@ -88,6 +89,9 @@ typedef double prj_table_real;
 #ifndef eSSPRK9_3
 #define eSSPRK9_3 PRJ_TIMEINT_ESSPRK9_3
 #endif
+#ifndef eSSPRK10_4
+#define eSSPRK10_4 PRJ_TIMEINT_ESSPRK10_4
+#endif
 #ifndef IMEX
 #define IMEX PRJ_TIMEINT_IMEX
 #endif
@@ -96,7 +100,9 @@ typedef double prj_table_real;
  * corresponding -D is passed on the command line (see the Makefile's
  * TIME_INTEGRATION_DEF), so editing here is enough -- no Makefile edit needed.
  *
- * Select the scheme with TIME_INTEGRATION: IMEX, RK2, eSSPRK9_2, eSSPRK9_3.
+ * Select the scheme with TIME_INTEGRATION: IMEX, RK2, eSSPRK9_2, eSSPRK9_3,
+ * eSSPRK10_4.  The default is eSSPRK10_4 (Ketcheson 10-stage 4th-order SSP,
+ * C = 6, so calc_dt takes a step up to 6x the forward-Euler-stable dt).
  *   - eSSPRK9_2 with a different stage count: set PRJ_TIMEINT_ESSPRK_N.
  *   - IMEX with a different Butcher tableau: set PRJ_TIMEINT_TABLEAU_NAME and
  *     PRJ_TIMEINT_TABLEAU_NSTAGES.  These two MUST agree: NSTAGES must equal the
@@ -109,7 +115,7 @@ typedef double prj_table_real;
  *        PRJ_TIMEINT_TABLEAU_NSTAGES=3
  */
 #ifndef TIME_INTEGRATION
-#define TIME_INTEGRATION RK2
+#define TIME_INTEGRATION eSSPRK10_4
 #endif
 #ifndef PRJ_TIMEINT_ESSPRK_N
 #define PRJ_TIMEINT_ESSPRK_N 9
@@ -126,6 +132,8 @@ typedef double prj_table_real;
 #endif
 #elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
 /* Exact named third-order scheme. */
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK10_4
+/* Exact named fourth-order scheme (Ketcheson eSSPRK(10,4), C = 6). */
 #elif TIME_INTEGRATION == PRJ_TIMEINT_IMEX
 #if PRJ_TIMEINT_TABLEAU_NSTAGES < 1
 #error "TIME_INTEGRATION=IMEX requires PRJ_TIMEINT_TABLEAU_NSTAGES >= 1"
@@ -133,19 +141,28 @@ typedef double prj_table_real;
 #elif TIME_INTEGRATION != RK2
 #error "Unsupported TIME_INTEGRATION value"
 #endif
-#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
-#define PRJ_TIMEINT_EXTRA_SAVED_STATES 1
+/* Number of saved-state slots (beyond the working slot 0) each explicit SSP
+ * scheme needs for its low-storage blends:
+ *   eSSPRK9_2 -> 1 (u^n),  eSSPRK9_3 -> 3,  eSSPRK10_4 -> 2 (u^n, u5n). */
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK
+#define PRJ_TIMEINT_ESSPRK_NSAVED 1
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
+#define PRJ_TIMEINT_ESSPRK_NSAVED 3
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK10_4
+#define PRJ_TIMEINT_ESSPRK_NSAVED 2
 #else
-#define PRJ_TIMEINT_EXTRA_SAVED_STATES 0
+#define PRJ_TIMEINT_ESSPRK_NSAVED 0
 #endif
 #if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
 #define PRJ_BLOCK_NSTAGES PRJ_TIMEINT_TABLEAU_NSTAGES
-#elif PRJ_TIMEINT_EXTRA_SAVED_STATES
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
 #define PRJ_BLOCK_NSTAGES 4
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK10_4
+#define PRJ_BLOCK_NSTAGES 3
 #else
 #define PRJ_BLOCK_NSTAGES 2
 #endif
-#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK || TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
+#if PRJ_TIMEINT_ESSPRK_NSAVED >= 1
 #define PRJ_TIMEINT_USES_ESSPRK_STEP 1
 #else
 #define PRJ_TIMEINT_USES_ESSPRK_STEP 0

@@ -1865,6 +1865,8 @@ double prj_timeint_calc_dt(const prj_mesh *mesh, prj_eos *eos, const prj_rad *ra
     dt_global *= (double)(PRJ_TIMEINT_ESSPRK_N - 1);
 #elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
     dt_global *= 6.0;
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK10_4
+    dt_global *= 6.0;
 #elif TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     dt_global *= tableau->r;
 #endif
@@ -1886,10 +1888,12 @@ static double *prj_timeint_eSSPRK_saved_W(prj_block *block, int saved_state)
     if (saved_state == 1) {
         return prj_block_prim_stage(block, 1);
     }
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+#if PRJ_TIMEINT_ESSPRK_NSAVED >= 2
     if (saved_state == 2) {
         return prj_block_prim_stage(block, 2);
     }
+#endif
+#if PRJ_TIMEINT_ESSPRK_NSAVED >= 3
     if (saved_state == 3) {
         return prj_block_prim_stage(block, 3);
     }
@@ -1907,10 +1911,12 @@ static double *prj_timeint_eSSPRK_saved_bf_dir(prj_block *block, int saved_state
     if (saved_state == 1) {
         return prj_block_bf_stage(block, dir, 1);
     }
-#if PRJ_TIMEINT_EXTRA_SAVED_STATES
+#if PRJ_TIMEINT_ESSPRK_NSAVED >= 2
     if (saved_state == 2) {
         return prj_block_bf_stage(block, dir, 2);
     }
+#endif
+#if PRJ_TIMEINT_ESSPRK_NSAVED >= 3
     if (saved_state == 3) {
         return prj_block_bf_stage(block, dir, 3);
     }
@@ -2258,6 +2264,67 @@ static void prj_timeint_eSSPRK9_3_advance(prj_mesh *mesh, const prj_coord *coord
     for (n = 0; n < 2; ++n) {
         prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
     }
+}
+#endif
+
+#if TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK10_4
+/* Ketcheson eSSPRK(10,4), low-storage form (C = 6). Three slots: working slot 0,
+ * saved slot 1 (u^n) and saved slot 2 (u5n). Each eSSPRK_step advances slot 0 by
+ * one forward-Euler substep u <- u + (dt/6) F(u); blends form convex
+ * combinations of slot 0 with a saved slot. Mirrors prj_timeint_eSSPRK9_3_advance
+ * with the (10,4) stage/slot counts. */
+static void prj_timeint_eSSPRK10_4_advance(prj_mesh *mesh, const prj_coord *coord,
+    const prj_bc *bc, prj_eos *eos, prj_rad *rad, prj_grav *grav, prj_mpi *mpi,
+    double dt, double *dt_src, prj_timer *timer)
+{
+    double dt_sub = dt / 6.0;
+    int n;
+
+    /* slot 1 <- u^n */
+    prj_timeint_eSSPRK_save_state(mesh, mpi, 1);
+
+    /* slot 0 <- u5n = five forward-Euler substeps applied to u^n
+     *          = u^(4) + (1/6) dt F(u^(4)) */
+    for (n = 0; n < 5; ++n) {
+        prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+    }
+
+    /* slot 2 <- u5n (kept for the final combination) */
+    prj_timeint_eSSPRK_save_state(mesh, mpi, 2);
+
+    /* slot 0 <- u^(5) = (3/5) u^n + (2/5) u5n */
+    prj_timeint_eSSPRK_blend_with_saved(mesh, bc, eos, rad, grav, mpi, timer,
+        1, 3.0 / 5.0,
+        "essprk10_4_blend1_cell_update",
+        "essprk10_4_blend1_eos_fill_active",
+        "essprk10_4_blend1_ghost_grav_opac",
+        "essprk10_4_blend1_eos_fill_mesh");
+
+    /* slot 0 <- u10n = five forward-Euler substeps applied to u^(5)
+     *          = u^(9) + (1/6) dt F(u^(9)) */
+    for (n = 0; n < 5; ++n) {
+        prj_timeint_eSSPRK_step(mesh, coord, bc, eos, rad, grav, mpi, dt_sub, dt_src, timer);
+    }
+
+    /* u^{n+1} = (1/25) u^n + (9/25) u5n + (3/5) u10n, formed as two convex
+     * blends of slot 0 (= u10n):
+     *   slot 0 <- (3/8) u5n + (5/8) u10n            (fold in u5n from slot 2)
+     *   slot 0 <- (1/25) u^n + (24/25) slot 0       (fold in u^n from slot 1)
+     * expands to (1/25) u^n + (24/25)(3/8) u5n + (24/25)(5/8) u10n
+     *          = (1/25) u^n + (9/25) u5n + (3/5) u10n. */
+    prj_timeint_eSSPRK_blend_with_saved(mesh, bc, eos, rad, grav, mpi, timer,
+        2, 3.0 / 8.0,
+        "essprk10_4_blend2_cell_update",
+        "essprk10_4_blend2_eos_fill_active",
+        "essprk10_4_blend2_ghost_grav_opac",
+        "essprk10_4_blend2_eos_fill_mesh");
+
+    prj_timeint_eSSPRK_blend_with_saved(mesh, bc, eos, rad, grav, mpi, timer,
+        1, 1.0 / 25.0,
+        "essprk10_4_blend3_cell_update",
+        "essprk10_4_blend3_eos_fill_active",
+        "essprk10_4_blend3_ghost_grav_opac",
+        "essprk10_4_blend3_eos_fill_mesh");
 }
 #endif
 
@@ -2784,6 +2851,9 @@ void prj_timeint_step(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc, 
 #elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK9_3
     (void)tableau;
     prj_timeint_eSSPRK9_3_advance(mesh, coord, bc, eos, rad, grav, mpi, dt, dt_src, timer);
+#elif TIME_INTEGRATION == PRJ_TIMEINT_ESSPRK10_4
+    (void)tableau;
+    prj_timeint_eSSPRK10_4_advance(mesh, coord, bc, eos, rad, grav, mpi, dt, dt_src, timer);
 #elif TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     int stage;
 

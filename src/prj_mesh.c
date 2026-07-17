@@ -294,8 +294,10 @@ static void prj_block_init_empty(prj_block *b)
     b->U_rad = 0;
     b->mhd_rhs = 0;
     b->rad_rhs = 0;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     b->deriv_ex = 0;
     b->deriv_im = 0;
+#endif
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
@@ -514,9 +516,6 @@ int prj_block_alloc_data(prj_block *b)
     base += deriv_count;
     b->deriv_im = base;
     base += deriv_count;
-#else
-    b->deriv_ex = 0;
-    b->deriv_im = 0;
 #endif
     b->flux[0] = base;
     base += cons_count;
@@ -621,8 +620,10 @@ void prj_block_free_data(prj_block *b)
     b->U_rad = 0;
     b->mhd_rhs = 0;
     b->rad_rhs = 0;
+#if TIME_INTEGRATION == PRJ_TIMEINT_IMEX
     b->deriv_ex = 0;
     b->deriv_im = 0;
+#endif
     b->flux[0] = 0;
     b->flux[1] = 0;
     b->flux[2] = 0;
