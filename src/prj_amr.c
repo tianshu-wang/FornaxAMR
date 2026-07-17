@@ -58,16 +58,18 @@ static double prj_block_cell_size(const prj_block *block)
 
 #if defined(PRJ_ENABLE_MPI)
 #define PRJ_AMR_CHILD_TRANSFER_TAG 300
+#endif
 
 static void prj_amr_fatal(const char *message)
 {
     if (message != 0) {
         fprintf(stderr, "%s\n", message);
     }
+#if defined(PRJ_ENABLE_MPI)
     MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+#endif
     exit(EXIT_FAILURE);
 }
-#endif
 
 static int prj_clamp_storage_index(int idx)
 {
@@ -623,14 +625,80 @@ static double prj_block_primitive_at(const prj_block *b, int v, int i, int j, in
     return prj_block_prim_value_const(b, 0, v, i, j, k);
 }
 
-/* Total pressure used by the AMR estimators: gas pressure plus magnetic
- * pressure.  In this code's units the magnetic pressure equals the magnetic
- * energy density, P_mag = 0.5*|B|^2 (the same 0.5*B^2 that enters the conserved
- * total energy in prj_eos_cons2prim / prj_mhd_bf2bc and the total pressure in
- * prj_riemann), with B the cell-centred field in the primitive state.  Without
- * MHD this reduces to the gas pressure.  Indices are raw storage indices, to
- * match the eosvar access in the estimators. */
-static double prj_amr_total_pressure_at(const prj_block *b, int i, int j, int k)
+static double prj_amr_metric_dot(const double metric[3][3], const double a[3], const double b[3])
+{
+    double dot = 0.0;
+    int m;
+    int n;
+
+    for (m = 0; m < 3; ++m) {
+        for (n = 0; n < 3; ++n) {
+            dot += metric[m][n] * a[m] * b[n];
+        }
+    }
+    return dot;
+}
+
+static double prj_amr_gr_magnetic_pressure_at(
+    const prj_z4c_hydro_geom *geom, const prj_block *b, int i, int j, int k)
+{
+#if PRJ_MHD
+    double Bcon[3];
+    double beta_con[3];
+    double Bsq;
+    double beta2;
+    double Bbeta;
+    double wlor2;
+    double pmag;
+    int d;
+
+    if (geom == 0 || b == 0 || b->W_mhd == 0) {
+        prj_amr_fatal("AMR error: full-GR magnetic pressure requires Z4c geometry and MHD primitives");
+    }
+
+    for (d = 0; d < 3; ++d) {
+        Bcon[d] = prj_block_primitive_at(b, PRJ_PRIM_B1 + d, i, j, k);
+        beta_con[d] = prj_block_primitive_at(b, PRJ_PRIM_V1 + d, i, j, k) / PRJ_CLIGHT;
+    }
+
+    Bsq = prj_amr_metric_dot(geom->gamma, Bcon, Bcon);
+    beta2 = prj_amr_metric_dot(geom->gamma, beta_con, beta_con);
+    Bbeta = prj_amr_metric_dot(geom->gamma, Bcon, beta_con);
+    if (!isfinite(Bsq) || !isfinite(beta2) || !isfinite(Bbeta) ||
+        Bsq < 0.0 || beta2 < 0.0 || beta2 >= 1.0) {
+        prj_amr_fatal("AMR error: invalid full-GR metric contraction in magnetic pressure");
+    }
+
+    wlor2 = 1.0 / (1.0 - beta2);
+    pmag = 0.5 * (Bsq / wlor2 + Bbeta * Bbeta);
+    if (!isfinite(pmag) || pmag < 0.0) {
+        prj_amr_fatal("AMR error: invalid full-GR magnetic pressure");
+    }
+    return pmag;
+#else
+    (void)geom;
+    (void)b;
+    (void)i;
+    (void)j;
+    (void)k;
+    return 0.0;
+#endif
+}
+
+static double prj_amr_total_pressure_with_gr_geom_at(
+    const prj_block *b, const prj_z4c_hydro_geom *geom, int i, int j, int k)
+{
+    double pressure;
+
+    if (b == 0 || geom == 0 || b->eosvar == 0) {
+        prj_amr_fatal("AMR error: full-GR pressure requires EOS variables and Z4c geometry");
+    }
+    pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+    pressure += prj_amr_gr_magnetic_pressure_at(geom, b, i, j, k);
+    return pressure;
+}
+
+static double prj_amr_total_pressure_non_gr_at(const prj_block *b, int i, int j, int k)
 {
     double pressure = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
 #if PRJ_MHD
@@ -643,7 +711,30 @@ static double prj_amr_total_pressure_at(const prj_block *b, int i, int j, int k)
     return pressure;
 }
 
-static double prj_block_sound_speed_at(const prj_block *b, prj_eos *eos, int i, int j, int k)
+/* Total pressure used by the AMR estimators.  Non-GR runs keep the historical
+ * gas + 0.5*B^2 pressure.  Full dynamic GR uses the Z4c spatial metric and the
+ * same GRMHD magnetic-pressure convention as prj_eos_grmhd_state_from_prim. */
+static double prj_amr_total_pressure_at(
+    const prj_mesh *mesh, const prj_block *b, int stage, int i, int j, int k)
+{
+#if PRJ_DYNAMIC_GR
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        prj_z4c_hydro_geom geom;
+
+        if (!prj_z4c_load_hydro_geom(mesh, b, stage, i, j, k, &geom)) {
+            prj_amr_fatal("AMR error: failed to load full-GR geometry for pressure estimator");
+        }
+        return prj_amr_total_pressure_with_gr_geom_at(b, &geom, i, j, k);
+    }
+#else
+    (void)mesh;
+    (void)stage;
+#endif
+    return prj_amr_total_pressure_non_gr_at(b, i, j, k);
+}
+
+static double prj_block_sound_speed_at(
+    const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     double rho;
     double eint;
@@ -658,7 +749,7 @@ static double prj_block_sound_speed_at(const prj_block *b, prj_eos *eos, int i, 
     }
     /* Use total (gas + magnetic) pressure so the velocity estimator normalises
      * by a fast-magnetosonic-like speed in MHD runs. */
-    pressure = prj_amr_total_pressure_at(b, i, j, k);
+    pressure = prj_amr_total_pressure_at(mesh, b, 0, i, j, k);
     gamma = b->eosvar[EIDX(PRJ_EOSVAR_GAMMA, i, j, k)];
     if (pressure <= 0.0 || gamma <= 0.0) {
         return 0.0;
@@ -734,8 +825,6 @@ static void prj_apply_eint_floor(prj_eos *eos, double E_floor, double cell_vol,
 
 static double prj_loehner_cell_value(const prj_mesh *mesh, const prj_block *b, int lohner_var, int i, int j, int k)
 {
-    (void)mesh;
-
     if (b == 0) {
         return 0.0;
     }
@@ -745,7 +834,7 @@ static double prj_loehner_cell_value(const prj_mesh *mesh, const prj_block *b, i
     if (lohner_var == PRJ_LOHNER_VAR_TEMPERATURE) {
         return b->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
     }
-    return prj_amr_total_pressure_at(b, i, j, k);
+    return prj_amr_total_pressure_at(mesh, b, 0, i, j, k);
 }
 
 static double prj_loehner_cell_indicator(
@@ -811,7 +900,8 @@ static double prj_loehner_cell_indicator(
     return prj_sqrt_double(numerator / denominator);
 }
 
-static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int i, int j, int k)
+static double prj_velocity_cell_indicator(
+    const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int i, int j, int k)
 {
     const double small = 1.0e-14;
     double v1;
@@ -824,7 +914,7 @@ static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int 
     v1 = prj_block_primitive_at(b, PRJ_PRIM_V1, i, j, k);
     v2 = prj_block_primitive_at(b, PRJ_PRIM_V2, i, j, k);
     v3 = prj_block_primitive_at(b, PRJ_PRIM_V3, i, j, k);
-    cs = prj_block_sound_speed_at(b, eos, i, j, k);
+    cs = prj_block_sound_speed_at(mesh, b, eos, i, j, k);
     for (axis = 0; axis < 3; ++axis) {
         int side;
 
@@ -843,10 +933,13 @@ static double prj_velocity_cell_indicator(const prj_block *b, prj_eos *eos, int 
     return max_indicator;
 }
 
-static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i, int j, int k)
+static double prj_pressure_scale_height_cell_indicator(
+    const prj_mesh *mesh, const prj_block *b, int i, int j, int k)
 {
     int cache_idx;
     double rho;
+    double eint;
+    double pressure_gas;
     double pressure;
     double accel;
     double g1;
@@ -855,13 +948,48 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
     double cell_size;
     double Hp;
 
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        prj_z4c_hydro_geom geom;
+        double dalpha2;
+        double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+        double rho_eff;
+
+        if (b == 0 || b->eosvar == 0) {
+            return 0.0;
+        }
+        if (!prj_z4c_load_hydro_geom(mesh, b, 0, i, j, k, &geom)) {
+            prj_amr_fatal("AMR error: failed to load full-GR geometry for pressure-scale-height estimator");
+        }
+
+        rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
+        eint = prj_block_primitive_at(b, PRJ_PRIM_EINT, i, j, k);
+        pressure_gas = b->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)];
+        pressure = prj_amr_total_pressure_with_gr_geom_at(b, &geom, i, j, k);
+        dalpha2 = prj_amr_metric_dot(geom.gamma_inv, geom.dalpha, geom.dalpha);
+        if (!isfinite(dalpha2) || dalpha2 < 0.0 || !isfinite(geom.alpha) || geom.alpha <= 0.0) {
+            prj_amr_fatal("AMR error: invalid full-GR lapse-gradient contraction in pressure-scale-height estimator");
+        }
+        accel = c2 * prj_sqrt_double(dalpha2) / geom.alpha;
+        rho_eff = rho + (rho * eint + pressure_gas) / c2;
+        cell_size = prj_block_cell_size(b);
+
+        if (rho_eff <= 0.0 || pressure <= 0.0 || accel <= 0.0 || cell_size <= 0.0) {
+            return 0.0;
+        }
+        Hp = pressure / (rho_eff * accel);
+        if (!isfinite(Hp) || Hp <= 0.0) {
+            return 0.0;
+        }
+        return cell_size / Hp;
+    }
+
     if (b == 0 || b->grav[0] == 0 || b->grav[1] == 0 || b->grav[2] == 0) {
         return 0.0;
     }
 
     cache_idx = prj_block_cache_index(i, j, k);
     rho = prj_block_primitive_at(b, PRJ_PRIM_RHO, i, j, k);
-    pressure = prj_amr_total_pressure_at(b, i, j, k);
+    pressure = prj_amr_total_pressure_non_gr_at(b, i, j, k);
     g1 = b->grav[0][cache_idx];
     g2 = b->grav[1][cache_idx];
     g3 = b->grav[2][cache_idx];
@@ -885,15 +1013,17 @@ static double prj_pressure_scale_height_cell_indicator(const prj_block *b, int i
     return cell_size / Hp;
 }
 
-static double prj_fractional_jump_cell_value(const prj_block *b, int jump_var, int i, int j, int k)
+static double prj_fractional_jump_cell_value(
+    const prj_mesh *mesh, const prj_block *b, int jump_var, int i, int j, int k)
 {
     if (jump_var == PRJ_FRACTIONAL_JUMP_VAR_PRESSURE) {
-        return prj_amr_total_pressure_at(b, i, j, k);
+        return prj_amr_total_pressure_at(mesh, b, 0, i, j, k);
     }
     return b->W_mhd[WIDX(PRJ_PRIM_RHO, i, j, k)];
 }
 
-static double prj_fractional_jump_cell_indicator(const prj_block *b, int jump_var, int i, int j, int k)
+static double prj_fractional_jump_cell_indicator(
+    const prj_mesh *mesh, const prj_block *b, int jump_var, int i, int j, int k)
 {
     const double small = 1.0e-14;
     double q0;
@@ -912,7 +1042,7 @@ static double prj_fractional_jump_cell_indicator(const prj_block *b, int jump_va
         return 0.0;
     }
 
-    q0 = prj_fractional_jump_cell_value(b, jump_var, i, j, k);
+    q0 = prj_fractional_jump_cell_value(mesh, b, jump_var, i, j, k);
     if (q0 <= 0.0) {
         return 0.0;
     }
@@ -927,7 +1057,7 @@ static double prj_fractional_jump_cell_indicator(const prj_block *b, int jump_va
                 if (di == 0 && dj == 0 && dk == 0) {
                     continue;
                 }
-                qnei = prj_fractional_jump_cell_value(b, jump_var, i + di, j + dj, k + dk);
+                qnei = prj_fractional_jump_cell_value(mesh, b, jump_var, i + di, j + dj, k + dk);
                 if (qnei <= 0.0) {
                     continue;
                 }
@@ -945,13 +1075,13 @@ static double prj_amr_cell_indicator_for_estimator(
     const prj_mesh *mesh, const prj_block *b, prj_eos *eos, int amr_idx, int estimator, int i, int j, int k)
 {
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP) {
-        return prj_fractional_jump_cell_indicator(b, mesh->amr_fractional_jump_var[amr_idx], i, j, k);
+        return prj_fractional_jump_cell_indicator(mesh, b, mesh->amr_fractional_jump_var[amr_idx], i, j, k);
     }
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_PRESSURE_SCALE_HEIGHT) {
-        return prj_pressure_scale_height_cell_indicator(b, i, j, k);
+        return prj_pressure_scale_height_cell_indicator(mesh, b, i, j, k);
     }
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
-        return prj_velocity_cell_indicator(b, eos, i, j, k);
+        return prj_velocity_cell_indicator(mesh, b, eos, i, j, k);
     }
     return prj_loehner_cell_indicator(
         mesh, b, eos, mesh->amr_lohner_var[amr_idx], mesh->amr_lohner_eps[amr_idx], i, j, k);
