@@ -285,7 +285,15 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     }
     sim->mesh.use_amr_angular_resolution_limit = 0;
     sim->mesh.use_BJ = 0;
+    /* When the code is compiled with dynamic GR, default to full dynamic GR so a
+     * GR build is full GR unless a param file sets use_full_dynamic_gr=0. IMEX
+     * does not support full dynamic GR, so an IMEX+GR build hits the guard in
+     * prj_io_finalize_z4c_params and fails loudly on purpose. */
+#if PRJ_DYNAMIC_GR
+    sim->mesh.use_full_dynamic_gr = 1;
+#else
     sim->mesh.use_full_dynamic_gr = 0;
+#endif
     sim->mesh.z4c_initialized = 0;
     sim->mesh.z4c_extrap_order = 2;
     sim->mesh.amr_init_scale_factor = 0.5;
