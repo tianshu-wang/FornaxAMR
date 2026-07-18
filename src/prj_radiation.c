@@ -1236,6 +1236,9 @@ static void prj_rad_gr_m1_christoffel(const prj_rad_gr_m1_closure_ctx *ctx,
     }
 }
 
+#if PRJ_INCLUDE_RADIATION_VISCOSITY
+/* Shear tensor + mean-free-path helpers: only used by the viscous closure path
+ * (the -(4 lbar/15) sigma term). Not compiled when radiation viscosity is off. */
 static void prj_rad_gr_m1_shear(const prj_rad_gr_m1_closure_ctx *ctx,
     const double vcon[3], const double vcov[3], double wlor,
     double sigma_con[3][3], double *divu_out, double *sigma2_out)
@@ -1374,6 +1377,7 @@ static double prj_rad_gr_m1_lbar_from_side(const prj_rad_gr_m1_closure_ctx *ctx,
     }
     return by_opacity < 1.0e299 ? by_opacity : 0.0;
 }
+#endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
 
 static const int prj_rad_gr_m1_sym_i[6] = {0, 1, 2, 0, 0, 1};
 static const int prj_rad_gr_m1_sym_j[6] = {0, 1, 2, 1, 2, 2};
@@ -1399,13 +1403,22 @@ typedef struct prj_rad_gr_m1_pressure_data {
     double beta2;
     double f_euler;
     /* fbar-independent pieces of the 6x6 closure system, precomputed once per
-     * solve so the bisection loop (~40 iterations) only rescales by the scalars
-     * thin_w/thick_w instead of rebuilding A0/H0/vcon products every iteration.
-     * Evaluation order matches the inline expressions it replaces so the result
-     * is bit-identical (no -ffast-math reassociation). */
+     * solve so each root-finding evaluation (Newton or the Illinois fallback)
+     * only rescales by the scalars thin_w/thick_w instead of rebuilding
+     * A0/H0/vcon products every iteration. Evaluation order matches the inline
+     * expressions it replaces so the result is bit-identical (no -ffast-math
+     * reassociation). */
     double base_coef[6][6];
     double Pthin_sym[6];
     double Prad_sym[6];
+    /* Max row-sum of |base_coef|. The per-fbar system is (I - thick_w*base_coef)
+     * P = rhs; base_coef carries the fluid-velocity coupling and scales as
+     * O(v^2/c^2), so for non-relativistic flows this matrix is I minus a tiny
+     * perturbation. When |thick_w|*base_row_absmax is safely < 1 the inverse is
+     * evaluated as a truncated Neumann series (a few branch-free 6x6 mat-vecs)
+     * instead of a full Gaussian elimination; decided once per group here so the
+     * per-iteration solve carries no norm/branch overhead. */
+    double base_row_absmax;
 } prj_rad_gr_m1_pressure_data;
 
 static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
@@ -1472,6 +1485,7 @@ static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
     return 1;
 }
 
+#if PRJ_INCLUDE_RADIATION_VISCOSITY
 /* Per-side kinematics + shear for the GR M1 closure. Depends only on the fluid
  * velocity and the face geometry (NOT on E/F or opacity), so it is identical
  * for every energy group of a face side. Split out of prepare_pressure so the
@@ -1536,8 +1550,114 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
             }
         }
     }
-}
 
+    /* Velocity/metric-only parts of the closure coefficient matrix (see the
+     * struct comment). base_coef_kin is the A0_kin + Hcoef*vcon contribution;
+     * sigma_jcoef isolates the shear part that prepare_pressure scales by lbar.
+     * Row sums (of |.|) bound ||base_coef||_inf for the Neumann guard. */
+    for (m = 0; m < 6; ++m) {
+        int i = prj_rad_gr_m1_sym_i[m];
+        int j = prj_rad_gr_m1_sym_j[m];
+        double kin_row = 0.0;
+        double sig_row = 0.0;
+        int n;
+
+        for (n = 0; n < 6; ++n) {
+            double kin = side->A0_kin[i][j] * side->Jcoef[n] +
+                side->Hcoef[i][n] * side->vcon[j] +
+                side->Hcoef[j][n] * side->vcon[i];
+            double sig = side->sigma_con[i][j] * side->Jcoef[n];
+
+            side->base_coef_kin[m][n] = kin;
+            side->sigma_jcoef[m][n] = sig;
+            kin_row += fabs(kin);
+            sig_row += fabs(sig);
+        }
+        side->base_kin_rowsum[m] = kin_row;
+        side->sigma_jcoef_rowsum[m] = sig_row;
+    }
+}
+#else /* !PRJ_INCLUDE_RADIATION_VISCOSITY */
+/* Inviscid per-side kinematics for the GR M1 closure: identical to the viscous
+ * prepare_side above but with the radiation shear-viscosity machinery removed
+ * (no shear tensor, no mean-free-path length, no sigma_jcoef). With the
+ * -(4 lbar/15) sigma term gone, base_coef == base_coef_kin, so only that piece
+ * is built here and its row sum is the exact ||base_coef||_inf. */
+void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
+    prj_rad_gr_m1_side_data *side)
+{
+    double beta2;
+    int a;
+    int b;
+    int m;
+
+    for (a = 0; a < 3; ++a) {
+        side->vcon[a] = isfinite(ctx->vcon[a]) ? ctx->vcon[a] : 0.0;
+    }
+    beta2 = prj_rad_gr_m1_dot_con_con(ctx, side->vcon, side->vcon);
+    if (!isfinite(beta2) || beta2 < 0.0) {
+        beta2 = 0.0;
+        side->vcon[0] = side->vcon[1] = side->vcon[2] = 0.0;
+    }
+    if (beta2 >= 1.0) {
+        double scale = sqrt((1.0 - 1.0e-12) / beta2);
+
+        for (a = 0; a < 3; ++a) {
+            side->vcon[a] *= scale;
+        }
+        beta2 = 1.0 - 1.0e-12;
+    }
+    side->beta2 = beta2;
+    prj_rad_gr_m1_lower_vec_ctx(ctx, side->vcon, side->vcov);
+    side->wlor = 1.0 / sqrt(1.0 - beta2);
+    for (a = 0; a < 3; ++a) {
+        side->u_cov[a] = side->wlor * side->vcov[a];
+    }
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            side->A0_kin[a][b] =
+                (ctx->gamma_inv[a][b] + 4.0 * side->vcon[a] * side->vcon[b]) /
+                    3.0;
+            side->h_mix[a][b] = (a == b ? 1.0 : 0.0) +
+                side->wlor * side->wlor * side->vcon[a] * side->vcov[b];
+        }
+    }
+
+    for (m = 0; m < 6; ++m) {
+        int p = prj_rad_gr_m1_sym_i[m];
+        int q = prj_rad_gr_m1_sym_j[m];
+
+        side->Jcoef[m] = side->u_cov[p] * side->u_cov[q] *
+            (p == q ? 1.0 : 2.0);
+        for (a = 0; a < 3; ++a) {
+            side->Hcoef[a][m] = -side->h_mix[a][p] * side->u_cov[q];
+            if (p != q) {
+                side->Hcoef[a][m] -= side->h_mix[a][q] * side->u_cov[p];
+            }
+        }
+    }
+
+    for (m = 0; m < 6; ++m) {
+        int i = prj_rad_gr_m1_sym_i[m];
+        int j = prj_rad_gr_m1_sym_j[m];
+        double kin_row = 0.0;
+        int n;
+
+        for (n = 0; n < 6; ++n) {
+            double kin = side->A0_kin[i][j] * side->Jcoef[n] +
+                side->Hcoef[i][n] * side->vcon[j] +
+                side->Hcoef[j][n] * side->vcon[i];
+
+            side->base_coef_kin[m][n] = kin;
+            kin_row += fabs(kin);
+        }
+        side->base_kin_rowsum[m] = kin_row;
+    }
+}
+#endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
+
+#if PRJ_INCLUDE_RADIATION_VISCOSITY
 static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
@@ -1634,23 +1754,223 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         data->H0[a] = Q0 * h_n + data->wlor * h_F;
     }
 
-    /* Precompute the fbar-independent RHS terms and coefficient matrix.  The
-     * expressions mirror prj_rad_gr_m1_pressure_for_fbar's inner loop exactly
-     * (same operand order) so per-iteration assembly reduces to a scalar
-     * rescale with bit-identical results. */
+    /* Precompute the fbar-independent RHS terms (symmetric-storage Pthin/Prad).
+     * The coefficient matrix itself is assembled just below from the per-side
+     * pieces. */
     for (m = 0; m < 6; ++m) {
         int i = prj_rad_gr_m1_sym_i[m];
         int j = prj_rad_gr_m1_sym_j[m];
-        int n;
 
         data->Pthin_sym[m] = data->Pthin[i][j];
         data->Prad_sym[m] = data->A0[i][j] * data->J0 +
             data->H0[i] * data->vcon[j] +
             data->H0[j] * data->vcon[i];
+    }
+
+    /* base_coef = base_coef_kin - (4 lbar/15) * sigma_jcoef. Both matrices are
+     * velocity/metric-only (E/F-independent) and were built once per side in
+     * prepare_side; here only the scalar lbar (opacity-dependent, hence per
+     * group) recombines them, replacing the full 6x6 triple-product build. The
+     * distributed multiply rounds differently than the old fused form, so the
+     * result matches to rounding (~1e-16), not bit-for-bit. */
+    {
+        double clbar = (4.0 * lbar / 15.0);
+
+        data->base_row_absmax = 0.0;
+        for (m = 0; m < 6; ++m) {
+            int n;
+
+            for (n = 0; n < 6; ++n) {
+                data->base_coef[m][n] = side->base_coef_kin[m][n] -
+                    clbar * side->sigma_jcoef[m][n];
+            }
+            /* Upper bound on the row sum of |base_coef| via the triangle
+             * inequality; conservative for the Neumann guard (may fall back to
+             * the full solve slightly more often, never less safely). */
+            {
+                double row = side->base_kin_rowsum[m] +
+                    fabs(clbar) * side->sigma_jcoef_rowsum[m];
+
+                if (row > data->base_row_absmax) {
+                    data->base_row_absmax = row;
+                }
+            }
+        }
+    }
+}
+#else /* !PRJ_INCLUDE_RADIATION_VISCOSITY */
+/* Inviscid closure assembly + E/F -> fluid-frame J/H conversion: identical to
+ * the viscous prepare_pressure above but with the radiation-viscosity term
+ * dropped. A0 == A0_kin (no lbar, no shear), so Prad and the coefficient matrix
+ * carry no mean-free-path dependence, and base_coef == base_coef_kin. */
+static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
+    prj_rad_gr_m1_pressure_data *data)
+{
+    double F2;
+    double Fmag;
+    double cE;
+    double FdotV;
+    double Fdotu;
+    double Q0;
+    int a;
+    int b;
+    int m;
+
+    memset(data, 0, sizeof(*data));
+    data->rad = rad;
+    data->ctx = ctx;
+    if (!isfinite(E) || E < 0.0) {
+        E = 0.0;
+    }
+    data->E = E;
+    for (a = 0; a < 3; ++a) {
+        data->Fcov[a] = isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
+    }
+    prj_rad_gr_m1_raise_vec_ctx(ctx, data->Fcov, data->Fcon);
+    F2 = 0.0;
+    for (a = 0; a < 3; ++a) {
+        F2 += data->Fcov[a] * data->Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * E;
+    if (Fmag > cE && Fmag > 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            data->Fcov[a] *= scale;
+            data->Fcon[a] *= scale;
+        }
+        F2 *= scale * scale;
+        Fmag = cE;
+    }
+    data->f_euler = cE > 0.0 ? Fmag / cE : 0.0;
+    if (data->f_euler > 1.0) {
+        data->f_euler = 1.0;
+    }
+
+    memset(data->Pthin, 0, sizeof(data->Pthin));
+    if (E > 0.0 && F2 > 0.0) {
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                data->Pthin[a][b] = E * data->Fcon[a] * data->Fcon[b] / F2;
+            }
+        }
+    }
+
+    /* Per-side kinematics were computed once in prj_rad_gr_m1_prepare_side. */
+    for (a = 0; a < 3; ++a) {
+        data->vcon[a] = side->vcon[a];
+        data->vcov[a] = side->vcov[a];
+        data->u_cov[a] = side->u_cov[a];
+        data->Fhat_con[a] = data->Fcon[a] / PRJ_CLIGHT;
+    }
+    data->wlor = side->wlor;
+    data->beta2 = side->beta2;
+    memcpy(data->h_mix, side->h_mix, sizeof(data->h_mix));
+    memcpy(data->Jcoef, side->Jcoef, sizeof(data->Jcoef));
+    memcpy(data->Hcoef, side->Hcoef, sizeof(data->Hcoef));
+
+    /* No radiation viscosity: A0 is the pure kinematic Eddington tensor. */
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            data->A0[a][b] = side->A0_kin[a][b];
+        }
+    }
+
+    FdotV = 0.0;
+    for (a = 0; a < 3; ++a) {
+        FdotV += data->Fhat_con[a] * data->vcov[a];
+    }
+    Fdotu = data->wlor * FdotV;
+    data->J0 = E * data->wlor * data->wlor - 2.0 * data->wlor * Fdotu;
+    Q0 = E * data->wlor - Fdotu;
+    for (a = 0; a < 3; ++a) {
+        double h_n = -data->wlor * data->wlor * data->vcon[a];
+        double h_F = data->Fhat_con[a] +
+            data->wlor * data->wlor * data->vcon[a] * FdotV;
+
+        data->H0[a] = Q0 * h_n + data->wlor * h_F;
+    }
+
+    for (m = 0; m < 6; ++m) {
+        int i = prj_rad_gr_m1_sym_i[m];
+        int j = prj_rad_gr_m1_sym_j[m];
+
+        data->Pthin_sym[m] = data->Pthin[i][j];
+        data->Prad_sym[m] = data->A0[i][j] * data->J0 +
+            data->H0[i] * data->vcon[j] +
+            data->H0[j] * data->vcon[i];
+    }
+
+    /* base_coef == base_coef_kin (no viscosity); base_kin_rowsum is then the
+     * exact row-sum bound on ||base_coef||_inf for the Neumann guard. */
+    data->base_row_absmax = 0.0;
+    for (m = 0; m < 6; ++m) {
+        int n;
+
         for (n = 0; n < 6; ++n) {
-            data->base_coef[m][n] = data->A0[i][j] * data->Jcoef[n] +
-                data->Hcoef[i][n] * data->vcon[j] +
-                data->Hcoef[j][n] * data->vcon[i];
+            data->base_coef[m][n] = side->base_coef_kin[m][n];
+        }
+        if (side->base_kin_rowsum[m] > data->base_row_absmax) {
+            data->base_row_absmax = side->base_kin_rowsum[m];
+        }
+    }
+}
+#endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
+
+/* Solve (I - thick_w*base_coef) sol = rhs by a truncated Neumann series when the
+ * coupling is weak (caller guarantees ||thick_w*base_coef||_inf < 1). N carries
+ * the O(v^2/c^2) velocity coupling, so sol = (I + N + N^2 + ...) rhs converges
+ * geometrically; we accumulate terms until the next one is negligible relative
+ * to the running sum. Replaces a 6x6 Gaussian elimination (with pivoting and 6
+ * divisions) by a few branch-free mat-vecs -- the dominant win for the closure
+ * in non-relativistic flows. */
+static void prj_rad_gr_m1_neumann_solve(const double base_coef[6][6],
+    double thick_w, const double rhs[6], double sol[6])
+{
+    double term[6];
+    int k;
+    int m;
+    int n;
+
+    for (m = 0; m < 6; ++m) {
+        sol[m] = rhs[m];
+        term[m] = rhs[m];
+    }
+    for (k = 0; k < 8; ++k) {
+        double next[6];
+        double tmax = 0.0;
+        double smax = 0.0;
+
+        for (m = 0; m < 6; ++m) {
+            double s = 0.0;
+
+            for (n = 0; n < 6; ++n) {
+                s += thick_w * base_coef[m][n] * term[n];
+            }
+            next[m] = s;
+        }
+        for (m = 0; m < 6; ++m) {
+            double a;
+
+            sol[m] += next[m];
+            term[m] = next[m];
+            a = fabs(next[m]);
+            if (a > tmax) {
+                tmax = a;
+            }
+            a = fabs(sol[m]);
+            if (a > smax) {
+                smax = a;
+            }
+        }
+        if (tmax <= 1.0e-15 * smax) {
+            break;
         }
     }
 }
@@ -1659,6 +1979,7 @@ static void prj_rad_gr_m1_pressure_for_fbar(
     const prj_rad_gr_m1_pressure_data *data, double fbar, double P[3][3])
 {
     double amat[6][7];
+    double rhs[6];
     double sol[6];
     double chi;
     double thin_w;
@@ -1673,20 +1994,28 @@ static void prj_rad_gr_m1_pressure_for_fbar(
     chi = prj_rad_m1_chi(data->rad, fbar);
     thin_w = 0.5 * (3.0 * chi - 1.0);
     thick_w = 1.5 * (1.0 - chi);
-    /* Every column is written below, so no memset of amat is needed. */
     for (m = 0; m < 6; ++m) {
-        double rhs = thin_w * data->Pthin_sym[m] + thick_w * data->Prad_sym[m];
-        int n;
-
-        for (n = 0; n < 6; ++n) {
-            amat[m][n] = (m == n ? 1.0 : 0.0) - thick_w * data->base_coef[m][n];
-        }
-        amat[m][6] = rhs;
+        rhs[m] = thin_w * data->Pthin_sym[m] + thick_w * data->Prad_sym[m];
     }
 
-    if (!prj_rad_gr_m1_solve6(amat, sol)) {
+    if (fabs(thick_w) * data->base_row_absmax < PRJ_RAD_GR_M1_NEUMANN_MAXNORM) {
+        prj_rad_gr_m1_neumann_solve(data->base_coef, thick_w, rhs, sol);
+    } else {
+        /* Relativistic coupling: fall back to the full solve. Every column is
+         * written below, so no memset of amat is needed. */
         for (m = 0; m < 6; ++m) {
-            sol[m] = thin_w * data->Pthin_sym[m] + thick_w * data->Prad_sym[m];
+            int n;
+
+            for (n = 0; n < 6; ++n) {
+                amat[m][n] =
+                    (m == n ? 1.0 : 0.0) - thick_w * data->base_coef[m][n];
+            }
+            amat[m][6] = rhs[m];
+        }
+        if (!prj_rad_gr_m1_solve6(amat, sol)) {
+            for (m = 0; m < 6; ++m) {
+                sol[m] = rhs[m];
+            }
         }
     }
 
@@ -1752,6 +2081,77 @@ static double prj_rad_gr_m1_derived_fbar(
     return numerator;
 }
 
+/* Newton-Raphson attempt on g(fbar) = derived_fbar(P(fbar)) - fbar. There is no
+ * analytic Jacobian through the chi/q closure interpolation, so g' is estimated
+ * by a one-sided finite difference (stepped inward at the fbar=1 edge), costing
+ * two residual evaluations per iteration. Seeded from the Eulerian closure it
+ * typically converges in ~3-4 iterations. Returns 1 and fills P / *fbar_out on
+ * success; returns 0 (leaving P untouched) on any failure -- non-finite iterate,
+ * a step leaving [0, 1], a degenerate derivative, stagnation short of tolerance,
+ * or exhausting the iteration cap -- so the caller can fall back to the
+ * guaranteed-convergent Illinois bracketing. */
+static int prj_rad_gr_m1_pressure_newton(
+    const prj_rad_gr_m1_pressure_data *data, double f0, double P[3][3],
+    double *fbar_out)
+{
+    const double tol = PRJ_RAD_GR_M1_FBAR_TOL;
+    double f = f0;
+    int iter;
+
+    if (!isfinite(f) || f < 0.0) {
+        f = 0.0;
+    } else if (f > 1.0) {
+        f = 1.0;
+    }
+
+    for (iter = 0; iter < 15; ++iter) {
+        double Pf[3][3];
+        double Ph[3][3];
+        double fderiv;
+        double g;
+        double h;
+        double fh;
+        double gh;
+        double deriv;
+        double fnew;
+
+        prj_rad_gr_m1_pressure_for_fbar(data, f, Pf);
+        fderiv = prj_rad_gr_m1_derived_fbar(data, Pf);
+        g = fderiv - f;
+        if (fabs(g) < tol) {
+            memcpy(P, Pf, 9 * sizeof(double));
+            if (fbar_out != 0) {
+                *fbar_out = fderiv;
+            }
+            return 1;
+        }
+
+        h = 1.0e-7 * (1.0 + fabs(f));
+        fh = f + h;
+        if (fh > 1.0) {
+            fh = f - h;
+        }
+        prj_rad_gr_m1_pressure_for_fbar(data, fh, Ph);
+        gh = prj_rad_gr_m1_derived_fbar(data, Ph) - fh;
+
+        deriv = (gh - g) / (fh - f);
+        if (!isfinite(deriv) || fabs(deriv) < 1.0e-12) {
+            return 0;
+        }
+        fnew = f - g / deriv;
+        if (!isfinite(fnew) || fnew < 0.0 || fnew > 1.0) {
+            return 0;
+        }
+        if (fabs(fnew - f) < tol) {
+            /* Step has stalled without meeting the residual tolerance: hand off
+             * to Illinois rather than accept a possibly spurious root. */
+            return 0;
+        }
+        f = fnew;
+    }
+    return 0;
+}
+
 static void prj_rad_gr_m1_pressure_implicit(
     const prj_rad_gr_m1_pressure_data *data, double P[3][3],
     double *fbar_out)
@@ -1778,12 +2178,21 @@ static void prj_rad_gr_m1_pressure_implicit(
         return;
     }
 
-    /* Seed with the Eulerian closure f_euler (leading-order root). If it is
-     * already within tolerance we are done in one evaluation; otherwise it
-     * brackets the root against a single endpoint on a much tighter interval
-     * than [0, 1], so Illinois needs fewer iterations. Only if f_euler fails to
-     * bracket (rare, non-monotone g) do we fall through to the full [0, 1]
-     * bracketing below. Physically equivalent to that bracket, not bit-identical. */
+    /* Fast path: Newton-Raphson seeded from the Eulerian closure. On success it
+     * fills P / fbar_out and returns; on any failure it leaves P untouched and
+     * we drop through to the Illinois bracketing, which is guaranteed to bracket
+     * and converge on the same root. */
+    if (prj_rad_gr_m1_pressure_newton(data, data->f_euler, P, fbar_out)) {
+        return;
+    }
+
+    /* Illinois fallback (reached only when Newton above bailed). Seed with the
+     * Eulerian closure f_euler (leading-order root). If it is already within
+     * tolerance we are done in one evaluation; otherwise it brackets the root
+     * against a single endpoint on a much tighter interval than [0, 1], so
+     * Illinois needs fewer iterations. Only if f_euler fails to bracket (rare,
+     * non-monotone g) do we fall through to the full [0, 1] bracketing below.
+     * Physically equivalent to that bracket, not bit-identical. */
     {
         double fe = data->f_euler;
         double Pe[3][3];
@@ -1793,7 +2202,7 @@ static void prj_rad_gr_m1_pressure_implicit(
         prj_rad_gr_m1_pressure_for_fbar(data, fe, Pe);
         fe_derived = prj_rad_gr_m1_derived_fbar(data, Pe);
         ge = fe_derived - fe;
-        if (fabs(ge) < 1.0e-13) {
+        if (fabs(ge) < PRJ_RAD_GR_M1_FBAR_TOL) {
             memcpy(P, Pe, 9 * sizeof(double));
             if (fbar_out != 0) {
                 *fbar_out = fe_derived;
@@ -1805,7 +2214,7 @@ static void prj_rad_gr_m1_pressure_implicit(
             prj_rad_gr_m1_pressure_for_fbar(data, hi, Phi);
             fhi = prj_rad_gr_m1_derived_fbar(data, Phi);
             ghi = fhi - hi;
-            if (fabs(ghi) < 1.0e-13) {
+            if (fabs(ghi) < PRJ_RAD_GR_M1_FBAR_TOL) {
                 memcpy(P, Phi, 9 * sizeof(double));
                 if (fbar_out != 0) {
                     *fbar_out = fhi;
@@ -1823,7 +2232,7 @@ static void prj_rad_gr_m1_pressure_implicit(
             prj_rad_gr_m1_pressure_for_fbar(data, lo, Plo);
             flo = prj_rad_gr_m1_derived_fbar(data, Plo);
             glo = flo - lo;
-            if (fabs(glo) < 1.0e-13) {
+            if (fabs(glo) < PRJ_RAD_GR_M1_FBAR_TOL) {
                 memcpy(P, Plo, 9 * sizeof(double));
                 if (fbar_out != 0) {
                     *fbar_out = flo;
@@ -1845,7 +2254,7 @@ static void prj_rad_gr_m1_pressure_implicit(
     prj_rad_gr_m1_pressure_for_fbar(data, lo, Plo);
     flo = prj_rad_gr_m1_derived_fbar(data, Plo);
     glo = flo - lo;
-    if (fabs(glo) < 1.0e-13) {
+    if (fabs(glo) < PRJ_RAD_GR_M1_FBAR_TOL) {
         memcpy(P, Plo, 9 * sizeof(double));
         if (fbar_out != 0) {
             *fbar_out = flo;
@@ -1856,7 +2265,7 @@ static void prj_rad_gr_m1_pressure_implicit(
     prj_rad_gr_m1_pressure_for_fbar(data, hi, Phi);
     fhi = prj_rad_gr_m1_derived_fbar(data, Phi);
     ghi = fhi - hi;
-    if (fabs(ghi) < 1.0e-13) {
+    if (fabs(ghi) < PRJ_RAD_GR_M1_FBAR_TOL) {
         memcpy(P, Phi, 9 * sizeof(double));
         if (fbar_out != 0) {
             *fbar_out = fhi;
@@ -1911,7 +2320,7 @@ illinois:
             prj_rad_gr_m1_pressure_for_fbar(data, mid, Pmid);
             fmid = prj_rad_gr_m1_derived_fbar(data, Pmid);
             gmid = fmid - mid;
-            if (fabs(gmid) < 1.0e-13 || hi - lo < 1.0e-13) {
+            if (fabs(gmid) < PRJ_RAD_GR_M1_FBAR_TOL || hi - lo < PRJ_RAD_GR_M1_FBAR_TOL) {
                 memcpy(P, Pmid, 9 * sizeof(double));
                 if (fbar_out != 0) {
                     *fbar_out = fmid;

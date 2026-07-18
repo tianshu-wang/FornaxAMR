@@ -74,6 +74,27 @@ typedef double prj_table_real;
 #ifndef PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA
 #define PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA 1.0e-4
 #endif
+/* Select the GR M1 closure scheme at compile time. When 1 (default) the closure
+ * includes the diffusion-limit radiation shear-viscosity term -(4 lbar/15) sigma
+ * in the Eddington tensor. When 0 a separate closure path is compiled that omits
+ * that term entirely (no shear/mean-free-path machinery). */
+#ifndef PRJ_INCLUDE_RADIATION_VISCOSITY
+#define PRJ_INCLUDE_RADIATION_VISCOSITY 1
+#endif
+/* Guard for the truncated-Neumann closure solve (see prj_rad_gr_m1_pressure_data).
+ * The velocity coupling matrix N = thick_w*base_coef has ||N||_inf bounded by
+ * 1.5*base_row_absmax; when that bound is below this threshold the series
+ * I+N+N^2+... converges geometrically and a handful of terms reach machine
+ * precision, so we take the cheap branch-free path instead of Gaussian
+ * elimination. Above it (relativistic cells) we fall back to the full solve. */
+#ifndef PRJ_RAD_GR_M1_NEUMANN_MAXNORM
+#define PRJ_RAD_GR_M1_NEUMANN_MAXNORM 1.0e-2
+#endif
+/* Convergence tolerance for the fluid-frame flux-factor root-find (Newton and
+ * the Illinois fallback): |g(fbar)| and the Illinois bracket width. */
+#ifndef PRJ_RAD_GR_M1_FBAR_TOL
+#define PRJ_RAD_GR_M1_FBAR_TOL 1.0e-6
+#endif
 
 #define PRJ_TIMEINT_RK2 1
 #define PRJ_TIMEINT_ESSPRK 2

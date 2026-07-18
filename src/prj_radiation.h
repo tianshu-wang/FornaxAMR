@@ -90,6 +90,15 @@ typedef struct prj_rad_gr_m1_side_data {
     double divu;
     double sigma2;
     double lbar_by_shear;
+    /* Velocity/metric-only (E/F-independent) pieces of the closure coefficient
+     * matrix, precomputed once per side so the per-group prepare_pressure only
+     * recombines them with the scalar lbar (see prj_rad_gr_m1_prepare_pressure).
+     * base_coef = base_coef_kin - (4 lbar/15) * sigma_jcoef. The *_rowsum arrays
+     * are the per-row sums of |.| used to bound ||base_coef||_inf. */
+    double base_coef_kin[6][6];
+    double sigma_jcoef[6][6];
+    double base_kin_rowsum[6];
+    double sigma_jcoef_rowsum[6];
 } prj_rad_gr_m1_side_data;
 
 void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
