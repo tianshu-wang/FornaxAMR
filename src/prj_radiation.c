@@ -1411,6 +1411,11 @@ typedef struct prj_rad_gr_m1_pressure_data {
     double base_coef[6][6];
     double Pthin_sym[6];
     double Prad_sym[6];
+    /* Closed-form optically-thick pressure tensor P_TH^{ij} (Shibata et al.
+     * eqs 6.17-6.19 with viscosity, or 29-31 without). Built once per group in
+     * prepare_pressure; the per-fbar closure is then the explicit blend
+     * P = thin_w*Pthin + thick_w*Pthick with no linear solve. */
+    double Pthick[3][3];
     /* Max row-sum of |base_coef|. The per-fbar system is (I - thick_w*base_coef)
      * P = rhs; base_coef carries the fluid-velocity coupling and scales as
      * O(v^2/c^2), so for non-relativistic flows this matrix is I minus a tiny
@@ -1420,70 +1425,6 @@ typedef struct prj_rad_gr_m1_pressure_data {
      * per-iteration solve carries no norm/branch overhead. */
     double base_row_absmax;
 } prj_rad_gr_m1_pressure_data;
-
-static int prj_rad_gr_m1_solve6(double A[6][7], double x[6])
-{
-    int col;
-    int row;
-
-    /* Gaussian elimination with partial pivoting + back substitution. Only the
-     * rows below each pivot are eliminated (forward sweep), then the upper-
-     * triangular system is back-solved -- ~40% fewer flops than a Gauss-Jordan
-     * sweep that also clears rows above every pivot. Solves the same system to
-     * machine precision (result differs by rounding only). */
-    for (col = 0; col < 6; ++col) {
-        int pivot = col;
-        double pivabs = fabs(A[col][col]);
-        double inv_piv;
-
-        for (row = col + 1; row < 6; ++row) {
-            double v = fabs(A[row][col]);
-
-            if (v > pivabs) {
-                pivabs = v;
-                pivot = row;
-            }
-        }
-        if (!isfinite(pivabs) || pivabs < 1.0e-14) {
-            return 0;
-        }
-        if (pivot != col) {
-            int j;
-
-            for (j = col; j < 7; ++j) {
-                double tmp = A[col][j];
-
-                A[col][j] = A[pivot][j];
-                A[pivot][j] = tmp;
-            }
-        }
-        inv_piv = 1.0 / A[col][col];
-        for (row = col + 1; row < 6; ++row) {
-            double factor = A[row][col] * inv_piv;
-            int j;
-
-            if (factor == 0.0) {
-                continue;
-            }
-            for (j = col + 1; j < 7; ++j) {
-                A[row][j] -= factor * A[col][j];
-            }
-        }
-    }
-    for (row = 5; row >= 0; --row) {
-        double sum = A[row][6];
-        int j;
-
-        for (j = row + 1; j < 6; ++j) {
-            sum -= A[row][j] * x[j];
-        }
-        x[row] = sum / A[row][row];
-        if (!isfinite(x[row])) {
-            return 0;
-        }
-    }
-    return 1;
-}
 
 #if PRJ_INCLUDE_RADIATION_VISCOSITY
 /* Per-side kinematics + shear for the GR M1 closure. Depends only on the fluid
@@ -1657,6 +1598,17 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
 }
 #endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
 
+/* Closed-form optically-thick pressure tensor (defined below prepare_pressure). */
+#if PRJ_INCLUDE_RADIATION_VISCOSITY
+static void prj_rad_gr_m1_pressure_thick(const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double lbar, double E,
+    const double Fhat_con[3], const double Fhat_cov[3], double P[3][3]);
+#else
+static void prj_rad_gr_m1_pressure_thick(const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E,
+    const double Fhat_con[3], const double Fhat_cov[3], double P[3][3]);
+#endif
+
 #if PRJ_INCLUDE_RADIATION_VISCOSITY
 static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx,
@@ -1752,6 +1704,18 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
             data->wlor * data->wlor * data->vcon[a] * FdotV;
 
         data->H0[a] = Q0 * h_n + data->wlor * h_F;
+    }
+
+    /* Closed-form optically-thick pressure tensor (eqs 6.17-6.19); the per-fbar
+     * closure below blends it with Pthin, so no per-iteration linear solve. */
+    {
+        double Fhat_cov[3];
+
+        for (a = 0; a < 3; ++a) {
+            Fhat_cov[a] = data->Fcov[a] / PRJ_CLIGHT;
+        }
+        prj_rad_gr_m1_pressure_thick(ctx, side, lbar, E, data->Fhat_con,
+            Fhat_cov, data->Pthick);
     }
 
     /* Precompute the fbar-independent RHS terms (symmetric-storage Pthin/Prad).
@@ -1897,6 +1861,18 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         data->H0[a] = Q0 * h_n + data->wlor * h_F;
     }
 
+    /* Closed-form optically-thick pressure tensor (eqs 29-31); the per-fbar
+     * closure below blends it with Pthin, so no per-iteration linear solve. */
+    {
+        double Fhat_cov[3];
+
+        for (a = 0; a < 3; ++a) {
+            Fhat_cov[a] = data->Fcov[a] / PRJ_CLIGHT;
+        }
+        prj_rad_gr_m1_pressure_thick(ctx, side, E, data->Fhat_con,
+            Fhat_cov, data->Pthick);
+    }
+
     for (m = 0; m < 6; ++m) {
         int i = prj_rad_gr_m1_sym_i[m];
         int j = prj_rad_gr_m1_sym_j[m];
@@ -1923,68 +1899,135 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
 }
 #endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
 
-/* Solve (I - thick_w*base_coef) sol = rhs by a truncated Neumann series when the
- * coupling is weak (caller guarantees ||thick_w*base_coef||_inf < 1). N carries
- * the O(v^2/c^2) velocity coupling, so sol = (I + N + N^2 + ...) rhs converges
- * geometrically; we accumulate terms until the next one is negligible relative
- * to the running sum. Replaces a 6x6 Gaussian elimination (with pivoting and 6
- * divisions) by a few branch-free mat-vecs -- the dominant win for the closure
- * in non-relativistic flows. */
-static void prj_rad_gr_m1_neumann_solve(const double base_coef[6][6],
-    double thick_w, const double rhs[6], double sol[6])
+#if PRJ_INCLUDE_RADIATION_VISCOSITY
+/* Closed-form optically-thick radiation-pressure tensor P_TH^{ij} WITH radiation
+ * viscosity (Shibata et al. eqs 6.16-6.19). The fluid-frame energy J and flux
+ * H_i are the analytic inversion of the simultaneous moment equations -- no
+ * linear solve -- carrying the shear scalars sigma0 = (4 lbar/15) sigma^{ab}
+ * n_a n_b and sigma_i = (4 lbar/15) sigma^{ab} n_a gamma_{bi}, which reduce to
+ * spatial contractions of side->sigma_con with the fluid velocity:
+ *   sigma0   = (4 lbar/15) sigma^{ij} v_i v_j
+ *   sigma_i  = -(4 lbar/15) gamma_{ik} sigma^{kj} v_j.
+ * Fhat = F/c is the flux in stress-tensor units (M^{0i} = F^i/c). */
+static void prj_rad_gr_m1_pressure_thick(const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double lbar, double E,
+    const double Fhat_con[3], const double Fhat_cov[3], double P[3][3])
 {
-    double term[6];
-    int k;
-    int m;
-    int n;
+    double w = side->wlor;
+    double W2 = w * w;
+    double clbar = 4.0 * lbar / 15.0;
+    double Svcon[3];
+    double sig_cov[3];
+    double sigma0 = 0.0;
+    double FdotU = 0.0;
+    double J;
+    double dH;
+    double Hcov[3];
+    double Hcon[3];
+    double Vcon[3];
+    int a;
+    int b;
 
-    for (m = 0; m < 6; ++m) {
-        sol[m] = rhs[m];
-        term[m] = rhs[m];
+    for (a = 0; a < 3; ++a) {
+        double S = 0.0;
+
+        for (b = 0; b < 3; ++b) {
+            S += side->sigma_con[a][b] * side->vcov[b];   /* S^k = sigma^{kj} v_j */
+        }
+        Svcon[a] = S;
+        sigma0 += side->vcov[a] * S;
     }
-    for (k = 0; k < 8; ++k) {
-        double next[6];
-        double tmax = 0.0;
-        double smax = 0.0;
+    sigma0 *= clbar;
+    for (a = 0; a < 3; ++a) {
+        double s = 0.0;
 
-        for (m = 0; m < 6; ++m) {
-            double s = 0.0;
-
-            for (n = 0; n < 6; ++n) {
-                s += thick_w * base_coef[m][n] * term[n];
-            }
-            next[m] = s;
+        for (b = 0; b < 3; ++b) {
+            s += ctx->gamma[a][b] * Svcon[b];             /* lower S with gamma */
         }
-        for (m = 0; m < 6; ++m) {
-            double a;
+        sig_cov[a] = -clbar * s;
+        FdotU += Fhat_con[a] * side->u_cov[a];            /* F^k u_k */
+    }
 
-            sol[m] += next[m];
-            term[m] = next[m];
-            a = fabs(next[m]);
-            if (a > tmax) {
-                tmax = a;
-            }
-            a = fabs(sol[m]);
-            if (a > smax) {
-                smax = a;
-            }
-        }
-        if (tmax <= 1.0e-15 * smax) {
-            break;
+    /* (6.17) */
+    J = ((2.0 * W2 - 1.0) * E - 2.0 * w * FdotU) /
+        ((2.0 * W2 + 1.0) / 3.0 + sigma0);
+
+    /* (6.18) */
+    dH = w * (2.0 * W2 + 1.0 + 3.0 * sigma0);
+    for (a = 0; a < 3; ++a) {
+        double ui = side->u_cov[a];
+        double Acoef = 4.0 * W2 * w * ui +
+            3.0 * (2.0 * W2 - 1.0) * sig_cov[a] + 3.0 * sigma0 * w * ui;
+        double Bcoef = (4.0 * W2 + 1.0) * ui + 6.0 * w * sig_cov[a] +
+            3.0 * sigma0 * ui;
+
+        Hcov[a] = Fhat_cov[a] / w + (-Acoef * E + Bcoef * FdotU) / dH;
+    }
+    prj_rad_gr_m1_raise_vec_ctx(ctx, Hcov, Hcon);
+    prj_rad_gr_m1_raise_vec_ctx(ctx, side->u_cov, Vcon);  /* V^i = gamma^{ij} u_j */
+
+    /* (6.19) */
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            P[a][b] = J * ((ctx->gamma_inv[a][b] + 4.0 * Vcon[a] * Vcon[b]) / 3.0 -
+                    clbar * side->sigma_con[a][b]) +
+                Hcon[a] * Vcon[b] + Hcon[b] * Vcon[a];
         }
     }
 }
+#else /* !PRJ_INCLUDE_RADIATION_VISCOSITY */
+/* Closed-form optically-thick radiation-pressure tensor P_TH^{ij} WITHOUT
+ * radiation viscosity (eqs 29-31): the pressure is isotropic in the fluid rest
+ * frame (L = (1/3) J h), so J and H_i are closed form -- no linear solve. This
+ * is the lbar -> 0 / sigma -> 0 limit of the viscous form above. */
+static void prj_rad_gr_m1_pressure_thick(const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E,
+    const double Fhat_con[3], const double Fhat_cov[3], double P[3][3])
+{
+    double w = side->wlor;
+    double W2 = w * w;
+    double FdotU = 0.0;
+    double J;
+    double dH;
+    double Hcov[3];
+    double Hcon[3];
+    double Vcon[3];
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        FdotU += Fhat_con[a] * side->u_cov[a];            /* F^k u_k */
+    }
+    /* (29) */
+    J = 3.0 / (2.0 * W2 + 1.0) * ((2.0 * W2 - 1.0) * E - 2.0 * w * FdotU);
+    /* (30) */
+    dH = w * (2.0 * W2 + 1.0);
+    for (a = 0; a < 3; ++a) {
+        double ui = side->u_cov[a];
+
+        Hcov[a] = Fhat_cov[a] / w +
+            (-(4.0 * W2 * w * ui) * E + ((4.0 * W2 + 1.0) * ui) * FdotU) / dH;
+    }
+    prj_rad_gr_m1_raise_vec_ctx(ctx, Hcov, Hcon);
+    prj_rad_gr_m1_raise_vec_ctx(ctx, side->u_cov, Vcon);  /* V^i = gamma^{ij} u_j */
+    /* (31) */
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            P[a][b] = J * (ctx->gamma_inv[a][b] + 4.0 * Vcon[a] * Vcon[b]) / 3.0 +
+                Hcon[a] * Vcon[b] + Hcon[b] * Vcon[a];
+        }
+    }
+}
+#endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
 
 static void prj_rad_gr_m1_pressure_for_fbar(
     const prj_rad_gr_m1_pressure_data *data, double fbar, double P[3][3])
 {
-    double amat[6][7];
-    double rhs[6];
-    double sol[6];
     double chi;
     double thin_w;
     double thick_w;
-    int m;
+    int a;
+    int b;
 
     if (!isfinite(fbar) || fbar < 0.0) {
         fbar = 0.0;
@@ -1994,38 +2037,13 @@ static void prj_rad_gr_m1_pressure_for_fbar(
     chi = prj_rad_m1_chi(data->rad, fbar);
     thin_w = 0.5 * (3.0 * chi - 1.0);
     thick_w = 1.5 * (1.0 - chi);
-    for (m = 0; m < 6; ++m) {
-        rhs[m] = thin_w * data->Pthin_sym[m] + thick_w * data->Prad_sym[m];
-    }
 
-    if (fabs(thick_w) * data->base_row_absmax < PRJ_RAD_GR_M1_NEUMANN_MAXNORM) {
-        prj_rad_gr_m1_neumann_solve(data->base_coef, thick_w, rhs, sol);
-    } else {
-        /* Relativistic coupling: fall back to the full solve. Every column is
-         * written below, so no memset of amat is needed. */
-        for (m = 0; m < 6; ++m) {
-            int n;
-
-            for (n = 0; n < 6; ++n) {
-                amat[m][n] =
-                    (m == n ? 1.0 : 0.0) - thick_w * data->base_coef[m][n];
-            }
-            amat[m][6] = rhs[m];
+    /* Explicit M1 blend of the thin closure and the closed-form optically-thick
+     * tensor (built once per group in prepare_pressure) -- no linear solve. */
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            P[a][b] = thin_w * data->Pthin[a][b] + thick_w * data->Pthick[a][b];
         }
-        if (!prj_rad_gr_m1_solve6(amat, sol)) {
-            for (m = 0; m < 6; ++m) {
-                sol[m] = rhs[m];
-            }
-        }
-    }
-
-    memset(P, 0, 9 * sizeof(double));
-    for (m = 0; m < 6; ++m) {
-        int i = prj_rad_gr_m1_sym_i[m];
-        int j = prj_rad_gr_m1_sym_j[m];
-
-        P[i][j] = sol[m];
-        P[j][i] = sol[m];
     }
 }
 
