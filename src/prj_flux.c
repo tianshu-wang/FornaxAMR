@@ -1172,9 +1172,49 @@ static void prj_flux_gr_m1_raise_vec(const prj_z4c_hydro_geom *geom,
     }
 }
 
+static double prj_flux_gr_m1_chi_exact(double f)
+{
+    if (f <= 0.0) {
+        return 1.0 / 3.0;
+    }
+    if (f >= 1.0) {
+        return 1.0;
+    }
+    return (3.0 + 4.0 * f * f) / (5.0 + 2.0 * sqrt(4.0 - 3.0 * f * f));
+}
+
+static double prj_flux_gr_m1_chi(const prj_rad *rad, double f)
+{
+    double scaled;
+    double w;
+    double chi;
+    int idx;
+
+    if (!isfinite(f) || f <= 0.0) {
+        f = 0.0;
+    } else if (f > 1.0) {
+        f = 1.0;
+    }
+    if (rad == 0 || !isfinite(rad->chi[0]) || !isfinite(rad->chi[NCLOSURE]) ||
+        rad->chi[0] <= 0.0 || rad->chi[NCLOSURE] <= 0.0) {
+        return prj_flux_gr_m1_chi_exact(f);
+    }
+    if (f <= 0.0) {
+        return rad->chi[0];
+    }
+    if (f >= 1.0) {
+        return rad->chi[NCLOSURE];
+    }
+
+    scaled = f * (double)NCLOSURE;
+    idx = (int)scaled;
+    w = scaled - (double)idx;
+    chi = rad->chi[idx] + w * (rad->chi[idx + 1] - rad->chi[idx]);
+    return isfinite(chi) ? chi : prj_flux_gr_m1_chi_exact(f);
+}
+
 static void prj_flux_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
-    double *E, double Fcov[3], double Fcon[3], double *Fmag_out,
-    double *inv_Fmag_out, double *f_out)
+    double *E, double Fcov[3], double Fcon[3], double *Fmag_out)
 {
     double F2;
     double Fmag;
@@ -1182,7 +1222,7 @@ static void prj_flux_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
     double scale;
     int d;
 
-    if (*E < 0.0) {
+    if (!isfinite(*E) || *E < 0.0) {
         *E = 0.0;
     }
     prj_flux_gr_m1_raise_vec(geom, Fcov, Fcon);
@@ -1204,11 +1244,91 @@ static void prj_flux_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
         Fmag = cE;
     }
     *Fmag_out = Fmag;
-    *inv_Fmag_out = Fmag > 0.0 ? 1.0 / Fmag : 0.0;
-    *f_out = cE > 0.0 ? Fmag / cE : 0.0;
-    if (*f_out > 1.0) {
-        *f_out = 1.0;
+}
+
+static void prj_flux_gr_m1_wavespeeds(const prj_rad *rad,
+    const prj_z4c_hydro_geom *geom, const prj_rad_gr_m1_side_data *side,
+    const double Fcon[3], double Fmag, double zeta,
+    double *smin, double *smax)
+{
+    double alpha = geom->alpha;
+    double beta_d = geom->beta[0];
+    double gdd = geom->gamma_inv[0][0];
+    double wlor = side->wlor;
+    double wlor2;
+    double p;
+    double r2;
+    double r;
+    double den;
+    double lambda_thin_l;
+    double lambda_thin_r;
+    double lambda_thick_l_a;
+    double lambda_thick_r_a;
+    double lambda_fluid;
+    double lambda_thick_l;
+    double lambda_thick_r;
+    double chi;
+    double thin_w;
+    double thick_w;
+    double lambda_l;
+    double lambda_r;
+
+    if (!isfinite(alpha) || alpha <= 0.0) {
+        alpha = 1.0;
     }
+    if (!isfinite(beta_d)) {
+        beta_d = 0.0;
+    }
+    if (!isfinite(gdd) || gdd <= 0.0) {
+        gdd = 1.0;
+    }
+    if (!isfinite(wlor) || wlor <= 0.0) {
+        wlor = 1.0;
+    }
+
+    if (Fmag > 0.0 && isfinite(Fmag)) {
+        double thin_speed = alpha * fabs(Fcon[0]) / Fmag;
+
+        lambda_thin_l = -beta_d - thin_speed;
+        lambda_thin_r = -beta_d + thin_speed;
+    } else {
+        lambda_thin_l = -beta_d;
+        lambda_thin_r = -beta_d;
+    }
+
+    wlor2 = wlor * wlor;
+    p = alpha * side->vcon[0] / wlor;
+    if (!isfinite(p)) {
+        p = 0.0;
+    }
+    r2 = alpha * alpha * gdd * (2.0 * wlor2 + 1.0) -
+        2.0 * wlor2 * p * p;
+    if (!isfinite(r2) || r2 < 0.0) {
+        r2 = 0.0;
+    }
+    r = sqrt(r2);
+    den = 2.0 * wlor2 + 1.0;
+    lambda_fluid = -beta_d + p;
+    lambda_thick_l_a = -beta_d + (2.0 * p * wlor2 - r) / den;
+    lambda_thick_r_a = -beta_d + (2.0 * p * wlor2 + r) / den;
+    lambda_thick_l = lambda_thick_l_a < lambda_fluid ?
+        lambda_thick_l_a : lambda_fluid;
+    lambda_thick_r = lambda_thick_r_a > lambda_fluid ?
+        lambda_thick_r_a : lambda_fluid;
+
+    chi = prj_flux_gr_m1_chi(rad, zeta);
+    thin_w = 0.5 * (3.0 * chi - 1.0);
+    thick_w = 1.5 * (1.0 - chi);
+    lambda_l = thin_w * lambda_thin_l + thick_w * lambda_thick_l;
+    lambda_r = thin_w * lambda_thin_r + thick_w * lambda_thick_r;
+
+    if (!isfinite(lambda_l) || !isfinite(lambda_r) || lambda_l >= lambda_r) {
+        *smin = -PRJ_CLIGHT;
+        *smax = PRJ_CLIGHT;
+        return;
+    }
+    *smin = PRJ_CLIGHT * lambda_l;
+    *smax = PRJ_CLIGHT * lambda_r;
 }
 
 static int prj_flux_gr_m1_cell_in_storage(int i, int j, int k)
@@ -1366,8 +1486,8 @@ static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
 static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
     const prj_rad_gr_m1_closure_ctx *closure,
-    const prj_rad_gr_m1_side_data *side, double normal_norm,
-    double U[4], double F[4], double *smin, double *smax)
+    const prj_rad_gr_m1_side_data *side, double U[4], double F[4],
+    double *smin, double *smax)
 {
     const double c = PRJ_CLIGHT;
     const double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
@@ -1376,10 +1496,7 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     double Fcon[3];
     double Pcon[3][3];
     double Fmag;
-    double inv_Fmag;
-    double f;
-    double lam_min;
-    double lam_max;
+    double fbar = 0.0;
     int i;
 
     E = W[PRJ_PRIM_RAD_E(field, group)];
@@ -1391,9 +1508,10 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
             Fcov[i] = 0.0;
         }
     }
-    prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag, &inv_Fmag, &f);
+    prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag);
 
-    prj_rad_gr_m1_pressure_cached(rad, closure, side, E, Fcov, Pcon);
+    prj_rad_gr_m1_pressure_fbar_cached(rad, closure, side, E, Fcov, Pcon,
+        &fbar);
 
     U[0] = geom->sqrt_gamma * E;
     F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
@@ -1410,20 +1528,7 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
             (geom->alpha * c2 * Pn_i - c * geom->beta[0] * Fcov[i]);
     }
 
-    /* The wavespeed cosine mu = (F . n_hat)/|F| needs the orthonormal normal
-     * projection F^n_hat = Fcon[0]/sqrt(gamma^nn), not the raw contravariant
-     * Fcon[0]; otherwise mu (and the M1 eigenvalues) are wrong whenever
-     * gamma^nn != 1, i.e. for any non-orthonormal face metric. The coordinate
-     * wavespeed then scales by alpha*sqrt(gamma^nn) = alpha*normal_norm. */
-    {
-        double Fn_ortho = normal_norm > 0.0 ? Fcon[0] / normal_norm : Fcon[0];
-        double normal_scale = geom->alpha * normal_norm;
-
-        prj_rad_m1_wavespeeds_with_fluxmag(E, Fn_ortho, Fmag, inv_Fmag, f,
-            &lam_min, &lam_max);
-        *smin = c * (normal_scale * lam_min - geom->beta[0]);
-        *smax = c * (normal_scale * lam_max - geom->beta[0]);
-    }
+    prj_flux_gr_m1_wavespeeds(rad, geom, side, Fcon, Fmag, fbar, smin, smax);
 }
 
 static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
@@ -1444,21 +1549,12 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
     prj_rad_gr_m1_closure_ctx closureR;
     /* Per-side velocity/geometry kinematics (shear, Christoffel, ...) are
      * invariant across all NRAD*NEGROUP groups, so build them once per side
-     * here and reuse in every prj_rad_gr_m1_pressure_cached call below. */
+     * here and reuse in every prj_rad_gr_m1_pressure_fbar_cached call below. */
     prj_rad_gr_m1_side_data sideL;
     prj_rad_gr_m1_side_data sideR;
-    double normal_norm;
 
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
-    }
-    {
-        double gnn_inv = geom->gamma_inv[0][0];
-
-        if (!isfinite(gnn_inv) || gnn_inv <= 0.0) {
-            gnn_inv = 1.0;
-        }
-        normal_norm = sqrt(gnn_inv);
     }
     have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
         dx, dvdx_face);
@@ -1495,9 +1591,9 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             closureR.opacity = chi_ext;
 
             prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &closureL,
-                &sideL, normal_norm, UL, FphysL, &lamL_min, &lamL_max);
+                &sideL, UL, FphysL, &lamL_min, &lamL_max);
             prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &closureR,
-                &sideR, normal_norm, UR, FphysR, &lamR_min, &lamR_max);
+                &sideR, UR, FphysR, &lamR_min, &lamR_max);
 
             sL = lamL_min < lamR_min ? lamL_min : lamR_min;
             sR = lamL_max > lamR_max ? lamL_max : lamR_max;

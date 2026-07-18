@@ -570,6 +570,36 @@ static void fill_constant_state(prj_block *block, double E, const double Fcov[3]
         (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP * (size_t)PRJ_BLOCK_NCELLS, 0.0);
 }
 
+static void fill_xface_discontinuity(prj_block *block, int iface,
+    double EL, const double FcovL[3], double ER, const double FcovR[3],
+    const double vcon[3])
+{
+    int i;
+    int j;
+    int k;
+
+    fill_constant_state(block, ER, FcovR);
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                const double E = i < iface ? EL : ER;
+                const double *Fcov = i < iface ? FcovL : FcovR;
+
+                block->W_mhd[WIDX(PRJ_PRIM_V1, i, j, k)] =
+                    PRJ_CLIGHT * vcon[0];
+                block->W_mhd[WIDX(PRJ_PRIM_V2, i, j, k)] =
+                    PRJ_CLIGHT * vcon[1];
+                block->W_mhd[WIDX(PRJ_PRIM_V3, i, j, k)] =
+                    PRJ_CLIGHT * vcon[2];
+                block->W_rad[WIDX(PRJ_RAD_PRIM_E(0, 0), i, j, k)] = E;
+                block->W_rad[WIDX(PRJ_RAD_PRIM_F1(0, 0), i, j, k)] = Fcov[0];
+                block->W_rad[WIDX(PRJ_RAD_PRIM_F2(0, 0), i, j, k)] = Fcov[1];
+                block->W_rad[WIDX(PRJ_RAD_PRIM_F3(0, 0), i, j, k)] = Fcov[2];
+            }
+        }
+    }
+}
+
 static void flux_at_xface(prj_eos *eos, prj_rad *rad, prj_mesh *mesh,
     int iface, int j, int k, double out[4])
 {
@@ -581,6 +611,160 @@ static void flux_at_xface(prj_eos *eos, prj_rad *rad, prj_mesh *mesh,
     out[1] = block->flux[X1DIR][VIDX(PRJ_CONS_RAD_F1(0, 0), iface, j, k)];
     out[2] = block->flux[X1DIR][VIDX(PRJ_CONS_RAD_F2(0, 0), iface, j, k)];
     out[3] = block->flux[X1DIR][VIDX(PRJ_CONS_RAD_F3(0, 0), iface, j, k)];
+}
+
+static void expected_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
+    double *E, double Fcov[3], double Fcon[3], double *Fmag_out)
+{
+    double F2 = 0.0;
+    double Fmag;
+    double cE;
+    int a;
+    int b;
+
+    if (!isfinite(*E) || *E < 0.0) {
+        *E = 0.0;
+    }
+    for (a = 0; a < 3; ++a) {
+        Fcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
+        }
+        F2 += Fcov[a] * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * *E;
+    if (Fmag > cE && Fmag > 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            Fcov[a] *= scale;
+            Fcon[a] *= scale;
+        }
+        Fmag = cE;
+    }
+    *Fmag_out = Fmag;
+}
+
+static void expected_gr_m1_speeds(const prj_rad *rad,
+    const prj_z4c_hydro_geom *geom, const double vcon[3],
+    const double Fcon[3], double Fmag, double zeta,
+    double *smin, double *smax)
+{
+    double beta2 = 0.0;
+    double wlor;
+    double wlor2;
+    double p;
+    double r2;
+    double r;
+    double den;
+    double thin_speed = Fmag > 0.0 ? geom->alpha * fabs(Fcon[0]) / Fmag : 0.0;
+    double lambda_thin_l = -geom->beta[0] - thin_speed;
+    double lambda_thin_r = -geom->beta[0] + thin_speed;
+    double lambda_thick_l_a;
+    double lambda_thick_r_a;
+    double lambda_fluid;
+    double lambda_thick_l;
+    double lambda_thick_r;
+    double chi;
+    double thin_w;
+    double thick_w;
+    double lambda_l;
+    double lambda_r;
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            beta2 += geom->gamma[a][b] * vcon[a] * vcon[b];
+        }
+    }
+    if (!isfinite(beta2) || beta2 < 0.0) {
+        beta2 = 0.0;
+    }
+    wlor = 1.0 / sqrt(1.0 - beta2);
+    wlor2 = wlor * wlor;
+    p = geom->alpha * vcon[0] / wlor;
+    r2 = geom->alpha * geom->alpha * geom->gamma_inv[0][0] *
+        (2.0 * wlor2 + 1.0) - 2.0 * wlor2 * p * p;
+    if (!isfinite(r2) || r2 < 0.0) {
+        r2 = 0.0;
+    }
+    r = sqrt(r2);
+    den = 2.0 * wlor2 + 1.0;
+    lambda_fluid = -geom->beta[0] + p;
+    lambda_thick_l_a = -geom->beta[0] + (2.0 * p * wlor2 - r) / den;
+    lambda_thick_r_a = -geom->beta[0] + (2.0 * p * wlor2 + r) / den;
+    lambda_thick_l = lambda_thick_l_a < lambda_fluid ?
+        lambda_thick_l_a : lambda_fluid;
+    lambda_thick_r = lambda_thick_r_a > lambda_fluid ?
+        lambda_thick_r_a : lambda_fluid;
+    chi = test_m1_chi_lookup(rad, zeta);
+    thin_w = 0.5 * (3.0 * chi - 1.0);
+    thick_w = 1.5 * (1.0 - chi);
+    lambda_l = thin_w * lambda_thin_l + thick_w * lambda_thick_l;
+    lambda_r = thin_w * lambda_thin_r + thick_w * lambda_thick_r;
+    *smin = PRJ_CLIGHT * lambda_l;
+    *smax = PRJ_CLIGHT * lambda_r;
+}
+
+static void expected_gr_m1_side_energy_flux(const prj_rad *rad,
+    const prj_z4c_hydro_geom *geom, const double vcon[3],
+    double Ein, const double Fcov_in[3],
+    double *U, double *Fphys, double *smin, double *smax)
+{
+    prj_rad_gr_m1_closure_ctx ctx;
+    double Fcov[3] = {Fcov_in[0], Fcov_in[1], Fcov_in[2]};
+    double Fcon[3];
+    double Pcon[3][3];
+    double E = Ein;
+    double Fmag;
+    double fbar = 0.0;
+
+    expected_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag);
+    make_closure_ctx(geom, vcon, 0, 0, 0.0, &ctx);
+    prj_rad_gr_m1_pressure_fbar(rad, &ctx, E, Fcov, Pcon, &fbar);
+    expected_gr_m1_speeds(rad, geom, vcon, Fcon, Fmag, fbar, smin, smax);
+    *U = geom->sqrt_gamma * E;
+    *Fphys = geom->sqrt_gamma *
+        (geom->alpha * Fcon[0] - PRJ_CLIGHT * geom->beta[0] * E);
+}
+
+static double expected_gr_m1_hll_energy_flux(const prj_rad *rad,
+    const prj_z4c_hydro_geom *geom, const double vcon[3],
+    double EL, const double FcovL[3], double ER, const double FcovR[3])
+{
+    double UL;
+    double UR;
+    double FL;
+    double FR;
+    double sminL;
+    double smaxL;
+    double sminR;
+    double smaxR;
+    double sL;
+    double sR;
+
+    expected_gr_m1_side_energy_flux(rad, geom, vcon, EL, FcovL,
+        &UL, &FL, &sminL, &smaxL);
+    expected_gr_m1_side_energy_flux(rad, geom, vcon, ER, FcovR,
+        &UR, &FR, &sminR, &smaxR);
+    sL = sminL < sminR ? sminL : sminR;
+    sR = smaxL > smaxR ? smaxL : smaxR;
+    if (sL > 0.0) {
+        sL = 0.0;
+    }
+    if (sR < 0.0) {
+        sR = 0.0;
+    }
+    if (sR - sL < 1.0e-30) {
+        sL = -PRJ_CLIGHT;
+        sR = PRJ_CLIGHT;
+    }
+    return (sR * FL - sL * FR + sL * sR * (UR - UL)) / (sR - sL);
 }
 
 static void set_combined_rad_state(double *W, double E, const double F[3])
@@ -721,6 +905,63 @@ static void check_curved_diagonal_flux(void)
     assert_close("curved F2 flux", got[2], expected[2], 2.0e-12);
     assert_close("curved F3 flux", got[3], expected[3], 2.0e-12);
     prj_mesh_destroy(&mesh);
+}
+
+static void check_gr_m1_characteristic_speed_case(const char *name,
+    double alpha, const double beta[3], const double gamma_diag[3],
+    const double vcon[3], double EL, const double FcovL[3],
+    double ER, const double FcovR[3])
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_eos eos;
+    prj_rad rad;
+    prj_z4c_hydro_geom geom;
+    const int iface = PRJ_BLOCK_SIZE / 2;
+    double got[4];
+    double expected;
+
+    init_test_mesh(&mesh, &coord);
+    init_test_eos(&eos);
+    init_test_rad(&rad);
+    set_uniform_z4c(&mesh.blocks[0], alpha, beta, gamma_diag);
+    fill_xface_discontinuity(&mesh.blocks[0], iface, EL, FcovL, ER, FcovR,
+        vcon);
+    flux_at_xface(&eos, &rad, &mesh, iface, 1, 1, got);
+    if (!prj_z4c_load_hydro_geom(&mesh, &mesh.blocks[0], 0, iface, 1, 1,
+            &geom)) {
+        die("characteristic-speed geometry load failed");
+    }
+    expected = expected_gr_m1_hll_energy_flux(&rad, &geom, vcon, EL, FcovL,
+        ER, FcovR);
+    assert_close(name, got[0], expected, 3.0e-12);
+    prj_mesh_destroy(&mesh);
+}
+
+static void check_gr_m1_characteristic_speeds(void)
+{
+    {
+        double beta[3] = {0.0, 0.0, 0.0};
+        double gamma_diag[3] = {1.0, 1.0, 1.0};
+        double vcon[3] = {0.22, -0.05, 0.03};
+        double Fzero[3] = {0.0, 0.0, 0.0};
+
+        check_gr_m1_characteristic_speed_case("GR M1 thick speed energy flux",
+            0.91, beta, gamma_diag, vcon, 2.0, Fzero, 1.3, Fzero);
+    }
+    {
+        double beta[3] = {0.017, -0.006, 0.004};
+        double gamma_diag[3] = {1.7, 0.8, 1.3};
+        double vcon[3] = {0.12, -0.04, 0.03};
+        double FcovL[3] = {0.32 * PRJ_CLIGHT, -0.11 * PRJ_CLIGHT,
+            0.08 * PRJ_CLIGHT};
+        double FcovR[3] = {0.18 * PRJ_CLIGHT, 0.07 * PRJ_CLIGHT,
+            -0.04 * PRJ_CLIGHT};
+
+        check_gr_m1_characteristic_speed_case(
+            "GR M1 interpolated speed energy flux", 0.82, beta, gamma_diag,
+            vcon, 2.4, FcovL, 1.6, FcovR);
+    }
 }
 
 static void check_gr_pressure_closure_zero_velocity(void)
@@ -1369,6 +1610,7 @@ int main(int argc, char **argv)
     check_flat_zero_shift_matches_non_gr();
     check_flat_shift_terms();
     check_curved_diagonal_flux();
+    check_gr_m1_characteristic_speeds();
     check_gr_pressure_closure_zero_velocity();
     check_gr_pressure_closure_boosted_fbar();
     check_gr_pressure_closure_small_velocity_uses_eulerian_fbar();
