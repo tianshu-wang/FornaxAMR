@@ -206,102 +206,37 @@ static void expected_zero_velocity_gr_pressure(const prj_rad *rad,
     }
 }
 
-static int test_solve6(double A[6][7], double x[6])
-{
-    int col;
-    int row;
-
-    for (col = 0; col < 6; ++col) {
-        int pivot = col;
-        double pivabs = fabs(A[col][col]);
-
-        for (row = col + 1; row < 6; ++row) {
-            double v = fabs(A[row][col]);
-
-            if (v > pivabs) {
-                pivabs = v;
-                pivot = row;
-            }
-        }
-        if (!isfinite(pivabs) || pivabs < 1.0e-14) {
-            return 0;
-        }
-        if (pivot != col) {
-            int j;
-
-            for (j = col; j < 7; ++j) {
-                double tmp = A[col][j];
-
-                A[col][j] = A[pivot][j];
-                A[pivot][j] = tmp;
-            }
-        }
-        {
-            double inv_piv = 1.0 / A[col][col];
-            int j;
-
-            for (j = col; j < 7; ++j) {
-                A[col][j] *= inv_piv;
-            }
-        }
-        for (row = 0; row < 6; ++row) {
-            double factor;
-            int j;
-
-            if (row == col) {
-                continue;
-            }
-            factor = A[row][col];
-            if (factor == 0.0) {
-                continue;
-            }
-            for (j = col; j < 7; ++j) {
-                A[row][j] -= factor * A[col][j];
-            }
-        }
-    }
-    for (row = 0; row < 6; ++row) {
-        x[row] = A[row][6];
-        if (!isfinite(x[row])) {
-            return 0;
-        }
-    }
-    return 1;
-}
-
+/* Expected M1 pressure for a boosted state on a flat metric: the explicit
+ * blend P = thin_w*Pthin + thick_w*Pthick with the CLOSED-FORM inviscid
+ * optically-thick tensor (Shibata et al. 2011; the pure-thick inversion of
+ * E, F_i into fluid-frame J, H_i), mirroring the production closure in
+ * prj_rad_gr_m1_pressure_thick / prj_rad_gr_m1_pressure_for_fbar. On the
+ * flat metric, raising indices is the identity (Fcon = Fcov, V^i = u_i). */
 static void expected_flat_boosted_pressure_for_fbar(const prj_rad *rad,
     double E, const double Fcov_in[3], const double vcon_in[3], double fbar,
     double P[3][3])
 {
-    static const int ia[6] = {0, 1, 2, 0, 0, 1};
-    static const int ib[6] = {0, 1, 2, 1, 2, 2};
     double Fcov[3];
     double Fhat[3];
     double Pthin[3][3];
-    double A0[3][3];
+    double Pthick[3][3];
     double vcon[3];
     double u_cov[3];
-    double h_mix[3][3];
-    double H0[3];
-    double Hcoef[3][6];
-    double Jcoef[6];
-    double amat[6][7];
-    double sol[6];
+    double Hcov[3];
     double F2 = 0.0;
     double Fmag;
     double cE;
     double beta2 = 0.0;
     double wlor;
-    double FdotV = 0.0;
-    double Fdotu;
-    double J0;
-    double Q0;
+    double W2;
+    double FdotU = 0.0;
+    double J;
+    double dH;
     double chi;
     double thin_w;
     double thick_w;
     int a;
     int b;
-    int m;
 
     memset(Pthin, 0, sizeof(Pthin));
     for (a = 0; a < 3; ++a) {
@@ -338,66 +273,37 @@ static void expected_flat_boosted_pressure_for_fbar(const prj_rad *rad,
         beta2 = 1.0 - 1.0e-12;
     }
     wlor = 1.0 / sqrt(1.0 - beta2);
+    W2 = wlor * wlor;
     for (a = 0; a < 3; ++a) {
         u_cov[a] = wlor * vcon[a];
         Fhat[a] = Fcov[a] / PRJ_CLIGHT;
-        FdotV += Fhat[a] * vcon[a];
+        FdotU += Fhat[a] * u_cov[a];
     }
-    Fdotu = wlor * FdotV;
-    J0 = E * wlor * wlor - 2.0 * wlor * Fdotu;
-    Q0 = E * wlor - Fdotu;
+
+    J = 3.0 / (2.0 * W2 + 1.0) * ((2.0 * W2 - 1.0) * E - 2.0 * wlor * FdotU);
+    dH = wlor * (2.0 * W2 + 1.0);
     for (a = 0; a < 3; ++a) {
-        double h_n = -wlor * wlor * vcon[a];
-        double h_F = Fhat[a] + wlor * wlor * vcon[a] * FdotV;
+        double ui = u_cov[a];
 
-        H0[a] = Q0 * h_n + wlor * h_F;
+        Hcov[a] = Fhat[a] / wlor +
+            (-(4.0 * W2 * wlor * ui) * E + ((4.0 * W2 + 1.0) * ui) * FdotU) /
+                dH;
+    }
+    for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
-            h_mix[a][b] = (a == b ? 1.0 : 0.0) +
-                wlor * wlor * vcon[a] * vcon[b];
-            A0[a][b] = ((a == b ? 1.0 : 0.0) +
-                4.0 * vcon[a] * vcon[b]) / 3.0;
+            Pthick[a][b] = J * ((a == b ? 1.0 : 0.0) +
+                    4.0 * u_cov[a] * u_cov[b]) / 3.0 +
+                Hcov[a] * u_cov[b] + Hcov[b] * u_cov[a];
         }
     }
-    for (m = 0; m < 6; ++m) {
-        int p = ia[m];
-        int q = ib[m];
 
-        Jcoef[m] = u_cov[p] * u_cov[q] * (p == q ? 1.0 : 2.0);
-        for (a = 0; a < 3; ++a) {
-            Hcoef[a][m] = -h_mix[a][p] * u_cov[q];
-            if (p != q) {
-                Hcoef[a][m] -= h_mix[a][q] * u_cov[p];
-            }
-        }
-    }
     chi = test_m1_chi_lookup(rad, fbar);
     thin_w = 0.5 * (3.0 * chi - 1.0);
     thick_w = 1.5 * (1.0 - chi);
-    memset(amat, 0, sizeof(amat));
-    for (m = 0; m < 6; ++m) {
-        int i = ia[m];
-        int j = ib[m];
-        int n;
-
-        amat[m][6] = thin_w * Pthin[i][j] + thick_w *
-            (A0[i][j] * J0 + H0[i] * vcon[j] + H0[j] * vcon[i]);
-        for (n = 0; n < 6; ++n) {
-            double coef = thick_w * (A0[i][j] * Jcoef[n] +
-                Hcoef[i][n] * vcon[j] + Hcoef[j][n] * vcon[i]);
-
-            amat[m][n] = (m == n ? 1.0 : 0.0) - coef;
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            P[a][b] = thin_w * Pthin[a][b] + thick_w * Pthick[a][b];
         }
-    }
-    if (!test_solve6(amat, sol)) {
-        die("boosted pressure solve failed");
-    }
-    memset(P, 0, 9 * sizeof(double));
-    for (m = 0; m < 6; ++m) {
-        int i = ia[m];
-        int j = ib[m];
-
-        P[i][j] = sol[m];
-        P[j][i] = sol[m];
     }
 }
 
@@ -687,7 +593,8 @@ static void expected_gr_m1_speeds(const prj_rad *rad,
     }
     wlor = 1.0 / sqrt(1.0 - beta2);
     wlor2 = wlor * wlor;
-    p = geom->alpha * vcon[0] / wlor;
+    /* p = alpha V^x / w = alpha v^x (Shibata et al. 2011). */
+    p = geom->alpha * vcon[0];
     r2 = geom->alpha * geom->alpha * geom->gamma_inv[0][0] *
         (2.0 * wlor2 + 1.0) - 2.0 * wlor2 * p * p;
     if (!isfinite(r2) || r2 < 0.0) {
@@ -1035,10 +942,14 @@ static void check_gr_pressure_closure_boosted_fbar(void)
     }
     expected_flat_boosted_pressure_for_fbar(&rad, E, Fcov, vcon, fbar,
         expected);
+    /* The closure root-find converges fbar only to PRJ_RAD_GR_M1_FBAR_TOL
+     * (1e-6); production P is evaluated at its final iterate while `expected`
+     * is rebuilt at the derived fbar, so they agree only to O(tol * dP/dfbar),
+     * not to machine precision. */
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             assert_close("boosted GR pressure closure", got[a][b],
-                expected[a][b], 2.0e-11);
+                expected[a][b], 1.0e-7);
         }
     }
     prj_mesh_destroy(&mesh);

@@ -1351,10 +1351,16 @@ static void prj_rad_gr_m1_shear(const prj_rad_gr_m1_closure_ctx *ctx,
     *sigma2_out = sigma2;
 }
 
-static double prj_rad_gr_m1_lbar_by_shear(double divu, double sigma2)
+/* Shear-limited cap on the viscosity mean free path (Shibata et al. 2011):
+ *   lbar = min(1/kappa_bar, C_sigma sqrt(V^k u_k / sigma^{ab} sigma_ab)),
+ * with V^k u_k = gamma^{kj} u_j u_k = W^2 v^2 (dimensionless), so the cap is a
+ * length like 1/kappa. It keeps the O(lbar) viscous term from exceeding the
+ * zeroth-order isotropic pressure at large shear; for a static fluid (u2 = 0)
+ * it shuts the viscosity off entirely. */
+static double prj_rad_gr_m1_lbar_by_shear(double u2, double sigma2)
 {
-    if (sigma2 > 0.0 && divu > 0.0) {
-        return PRJ_RAD_GR_M1_CSIGMA * sqrt(divu / sigma2);
+    if (sigma2 > 0.0) {
+        return u2 > 0.0 ? PRJ_RAD_GR_M1_CSIGMA * sqrt(u2 / sigma2) : 0.0;
     }
     return 1.0e300;
 }
@@ -1362,20 +1368,21 @@ static double prj_rad_gr_m1_lbar_by_shear(double divu, double sigma2)
 static double prj_rad_gr_m1_lbar_from_side(const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side)
 {
-    double by_opacity = 1.0e300;
+    double by_opacity;
     double by_shear = side != 0 ? side->lbar_by_shear : 1.0e300;
     double opacity = ctx != 0 ? ctx->opacity : 0.0;
 
-    if (isfinite(opacity) && opacity > 0.0) {
-        by_opacity = 1.0 / opacity;
+    /* No collisions -> no radiation viscosity. The O(lbar) correction is an
+     * optically-thick expansion in the mean free path; with zero opacity the
+     * shear cap alone would set lbar ~ 1/|sigma|, so the viscous stress
+     * (4 lbar/15) J sigma stays FINITE (~ C_sigma W|v| J) even when sigma is
+     * pure finite-difference roundoff noise, injecting a noise-directed
+     * anisotropy in transparent cells. */
+    if (!isfinite(opacity) || opacity <= 0.0) {
+        return 0.0;
     }
-    if (by_opacity < by_shear) {
-        return by_opacity;
-    }
-    if (by_shear < 1.0e299) {
-        return by_shear;
-    }
-    return by_opacity < 1.0e299 ? by_opacity : 0.0;
+    by_opacity = 1.0 / opacity;
+    return by_opacity < by_shear ? by_opacity : by_shear;
 }
 #endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
 
@@ -1466,8 +1473,8 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
 
     prj_rad_gr_m1_shear(ctx, side->vcon, side->vcov, side->wlor,
         side->sigma_con, &side->divu, &side->sigma2);
-    side->lbar_by_shear = prj_rad_gr_m1_lbar_by_shear(side->divu,
-        side->sigma2);
+    side->lbar_by_shear = prj_rad_gr_m1_lbar_by_shear(
+        side->wlor * side->wlor * side->beta2, side->sigma2);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             side->A0_kin[a][b] =
@@ -2516,9 +2523,37 @@ static void prj_rad_gr_m1_grad_cu_cov(
             grad_cu_cov[d][0] -= data->vcon[a] * grad_cu_cov[d][a + 1];
         }
     }
-    /* TODO(GR-M1 frequency): include explicit temporal derivative support for
-     * nabla_0(c u_beta) once stage-time fluid derivatives are available.  The
-     * current GR transport equations only contract the spatial k index here. */
+    /* TODO(GR-M1 frequency): the paper's drift term contracts the third moment
+     * with the FULL gradient, M^{alpha beta gamma} nabla_gamma u_beta (Shibata
+     * et al. 2011, eq. 3.33/3.36), where gamma runs over all four normal-frame
+     * legs. Only the spatial legs (gamma = d) are built here; the temporal leg
+     * nabla_0(c u_beta) = n^mu nabla_mu(c u_beta) is dropped because it needs
+     * stage-time fluid derivatives (d/dt of W and W v_i) that are not
+     * available at this point in the update.
+     *
+     * What the omission drops, physically:
+     *   - the fluid-acceleration part of the drift (a_beta = u^gamma
+     *     nabla_gamma u_beta contracted against M3), and with it the
+     *     GRAVITATIONAL REDSHIFT of the spectrum: for a static fluid in a
+     *     static metric the missing energy-drift piece reduces to
+     *     ~ F^i d_i(ln alpha), so radiation climbing out of the potential
+     *     well is not redshifted across frequency bins;
+     *   - the explicit d/dt Doppler terms for time-dependent flows.
+     * What is kept: the velocity-gradient (compression/expansion/shear)
+     * Doppler shift and the extrinsic-curvature (-W K_ij) part above.
+     *
+     * Note the ENERGY-INTEGRATED redshift is NOT lost: the geometric sources
+     * (-F^j d_j alpha, alpha P^{ij} K_ij, ... in prj_src_gr_m1_z4c) act on
+     * every group, so the total energy/momentum budget is correct; only the
+     * redistribution of energy BETWEEN frequency bins misses these terms.
+     * The same truncation applies to the shear tensor and divu used by the
+     * radiation-viscosity closure (prj_rad_gr_m1_shear), where the dropped
+     * pieces are an O(v) correction to an already O(lbar) term.
+     *
+     * Restoring the temporal leg needs either stage-time derivatives of the
+     * fluid state (e.g. finite-differencing W v_i across RK stages) or
+     * evaluating a_beta from the Euler equation (a_i = -d_i p / (rho h) +
+     * d_i ln alpha in the stationary limit) as a proxy. */
 }
 
 static void prj_rad_gr_m1_frequency_drifts(

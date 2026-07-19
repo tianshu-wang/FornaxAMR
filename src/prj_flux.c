@@ -1297,7 +1297,10 @@ static void prj_flux_gr_m1_wavespeeds(const prj_rad *rad,
     }
 
     wlor2 = wlor * wlor;
-    p = alpha * side->vcon[0] / wlor;
+    /* Shibata et al. 2011: p = alpha V^x / w with V^x = gamma^{xj} u_j =
+     * w v^x, so p = alpha v^x (Valencia velocity); as w -> infinity p tends
+     * to the local light speed alpha / sqrt(gamma_xx), not 0. */
+    p = alpha * side->vcon[0];
     if (!isfinite(p)) {
         p = 0.0;
     }
