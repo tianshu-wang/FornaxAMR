@@ -995,9 +995,14 @@ static void check_gr_pressure_closure_small_velocity_uses_eulerian_fbar(void)
     prj_mesh_destroy(&mesh);
 }
 
+/* The geom argument supplies the actually-loaded lapse gradient: even for a
+ * uniform lapse the shared Z4c stencil leaves O(eps) coefficient-rounding
+ * noise in dalpha, which the (physically correct) gravitational-shift terms
+ * of the drift pick up; folding geom->dalpha into the expectation keeps this
+ * test tight at 1e-10 instead of at the FD noise floor. */
 static void expected_rest_frame_gr_frequency_terms(const prj_rad *rad,
-    double E, const double Fcov[3], const double grad[3][3],
-    double *energy_drift, double momentum_drift[3])
+    const prj_z4c_hydro_geom *geom, double E, const double Fcov[3],
+    const double grad[3][3], double *energy_drift, double momentum_drift[3])
 {
     double H[3];
     double n[3];
@@ -1027,12 +1032,15 @@ static void expected_rest_frame_gr_frequency_terms(const prj_rad *rad,
         n[a] = Hmag > 0.0 ? H[a] / Hmag : 0.0;
     }
     for (a = 0; a < 3; ++a) {
+        *energy_drift += Fcov[a] * geom->dalpha[a] / geom->alpha;
         for (b = 0; b < 3; ++b) {
             double Pthin = E * n[a] * n[b];
             double Pthick = (a == b ? E / 3.0 : 0.0);
             double P = thin_w * Pthin + thick_w * Pthick;
 
             *energy_drift += P * grad[a][b];
+            momentum_drift[a] += PRJ_CLIGHT * P * geom->dalpha[b] /
+                geom->alpha;
             for (d = 0; d < 3; ++d) {
                 double Nthin = E * n[a] * n[b] * n[d];
                 double Nthick = 0.2 *
@@ -1057,6 +1065,7 @@ static void check_gr_m1_frequency_third_moment_rest_frame_case(
     prj_coord coord;
     prj_rad rad;
     prj_block *block;
+    prj_z4c_hydro_geom geom;
     double beta[3] = {0.0, 0.0, 0.0};
     double gamma_diag[3] = {1.0, 1.0, 1.0};
     double eedge_store[PRJ_NRAD][PRJ_NEGROUP + 1];
@@ -1093,6 +1102,9 @@ static void check_gr_m1_frequency_third_moment_rest_frame_case(
     block = &mesh.blocks[0];
     set_uniform_z4c(block, 1.0, beta, gamma_diag);
     fill_constant_state(block, 0.0, Fcov0);
+    if (!prj_z4c_load_hydro_geom(&mesh, block, 0, i, j, k, &geom)) {
+        die("rest frame drift geometry load failed");
+    }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (gf = 0; gf <= PRJ_NEGROUP; ++gf) {
@@ -1120,7 +1132,7 @@ static void check_gr_m1_frequency_third_moment_rest_frame_case(
         u[PRJ_CONS_RAD_F1(0, group)] = 0.0;
         u[PRJ_CONS_RAD_F2(0, group)] = 0.0;
         u[PRJ_CONS_RAD_F3(0, group)] = 0.0;
-        expected_rest_frame_gr_frequency_terms(&rad, E, Fcov, grad,
+        expected_rest_frame_gr_frequency_terms(&rad, &geom, E, Fcov, grad,
             &expected_A[group], expected_mq[group]);
     }
 
@@ -1190,6 +1202,176 @@ static void check_gr_m1_frequency_third_moment_rest_frame(void)
 {
     check_gr_m1_frequency_third_moment_rest_frame_case(1.0, 1);
     check_gr_m1_frequency_third_moment_rest_frame_case(-1.0, 0);
+}
+
+static void set_linear_source_z4c(prj_block *block, int ic, int jc, int kc,
+    double alpha0, const double dalpha[3], const double dbeta[3][3],
+    const double dgamma_diag[3][3], const double K[3][3]);
+
+/* Gravitational redshift across frequency bins (Cardall, Endeve & Mezzacappa
+ * 2013, Eqs. 146/149): a static fluid (v = 0) in a static, flat-3-metric
+ * spacetime with a nonuniform lapse must drift spectral energy at the rate
+ *   A     = F^i d_i(alpha) / alpha,
+ *   Mq_j  = c^2 P_j^i d_i(alpha) / alpha,
+ * with the standard M1 closure P of the local (E, F).  Positive A (flux up
+ * the lapse gradient) moves energy toward LOWER bins -- redshift. */
+static void check_gr_m1_frequency_redshift_case(double slope_scale,
+    int expect_upper_donor)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_rad rad;
+    prj_block *block;
+    prj_z4c_hydro_geom geom;
+    double dalpha_idx[3] = {1.2e-11, -0.4e-11, 0.6e-11};
+    double dbeta[3][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+    double dgamma_diag[3][3] =
+        {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+    double Kzero[3][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
+    double eedge_store[PRJ_NRAD][PRJ_NEGROUP + 1];
+    double u[PRJ_NVAR_CONS] = {0.0};
+    double E0 = 2.0;
+    double flux_factor_vec[3] = {0.30, -0.08, 0.05};
+    double Fcov0[3] = {0.0, 0.0, 0.0};
+    double expected_A[PRJ_NEGROUP];
+    double expected_mq[PRJ_NEGROUP][3];
+    double expected_energy_face[PRJ_NEGROUP + 1] = {0.0};
+    double expected_momentum_face[PRJ_NEGROUP + 1][3] = {{0.0}};
+    double dt = 1.0;
+    int field;
+    int group;
+    int gf;
+    int dir;
+    int a;
+    int b;
+    const int i = 2;
+    const int j = 2;
+    const int k = 2;
+    const int gtest = 2;
+    char name[128];
+
+    init_test_mesh(&mesh, &coord);
+    init_test_rad(&rad);
+    block = &mesh.blocks[0];
+    for (a = 0; a < 3; ++a) {
+        dalpha_idx[a] *= slope_scale;
+    }
+    set_linear_source_z4c(block, i, j, k, 1.0, dalpha_idx, dbeta,
+        dgamma_diag, Kzero);
+    fill_constant_state(block, 0.0, Fcov0);
+    for (dir = 0; dir < 3; ++dir) {
+        prj_fill(block->v_riemann[dir],
+            (size_t)PRJ_NDIM * (size_t)PRJ_BLOCK_NCELLS, 0.0);
+    }
+    if (!prj_z4c_load_hydro_geom(&mesh, block, 0, i, j, k, &geom)) {
+        die("redshift test geometry load failed");
+    }
+    assert_close("redshift test lapse", geom.alpha, 1.0, 1.0e-12);
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (gf = 0; gf <= PRJ_NEGROUP; ++gf) {
+            eedge_store[field][gf] = 1.0 + (double)gf;
+        }
+        rad.eedge[field] = eedge_store[field];
+    }
+    for (group = 0; group < PRJ_NEGROUP; ++group) {
+        double E = E0 * (1.0 + 0.07 * (double)group);
+        double Fcov[3];
+        double H[3];
+        double n[3];
+        double Hmag = 0.0;
+        double fbar;
+        double chi;
+        double thin_w;
+        double thick_w;
+
+        for (a = 0; a < 3; ++a) {
+            Fcov[a] = E * flux_factor_vec[a] * PRJ_CLIGHT;
+        }
+        block->W_rad[WIDX(PRJ_RAD_PRIM_E(0, group), i, j, k)] = E;
+        block->W_rad[WIDX(PRJ_RAD_PRIM_F1(0, group), i, j, k)] = Fcov[0];
+        block->W_rad[WIDX(PRJ_RAD_PRIM_F2(0, group), i, j, k)] = Fcov[1];
+        block->W_rad[WIDX(PRJ_RAD_PRIM_F3(0, group), i, j, k)] = Fcov[2];
+        u[PRJ_CONS_RAD_E(0, group)] = 100.0;
+        u[PRJ_CONS_RAD_F1(0, group)] = 0.0;
+        u[PRJ_CONS_RAD_F2(0, group)] = 0.0;
+        u[PRJ_CONS_RAD_F3(0, group)] = 0.0;
+
+        for (a = 0; a < 3; ++a) {
+            H[a] = Fcov[a] / PRJ_CLIGHT;
+            Hmag += H[a] * H[a];
+        }
+        Hmag = sqrt(Hmag);
+        fbar = E > 0.0 ? Hmag / E : 0.0;
+        chi = test_m1_chi_lookup(&rad, fbar);
+        thin_w = 0.5 * (3.0 * chi - 1.0);
+        thick_w = 1.5 * (1.0 - chi);
+        for (a = 0; a < 3; ++a) {
+            n[a] = Hmag > 0.0 ? H[a] / Hmag : 0.0;
+        }
+        expected_A[group] = 0.0;
+        for (a = 0; a < 3; ++a) {
+            expected_A[group] += Fcov[a] * geom.dalpha[a] / geom.alpha;
+            expected_mq[group][a] = 0.0;
+            for (b = 0; b < 3; ++b) {
+                double P = thin_w * E * n[a] * n[b] +
+                    thick_w * (a == b ? E / 3.0 : 0.0);
+
+                expected_mq[group][a] += PRJ_CLIGHT * PRJ_CLIGHT * P *
+                    geom.dalpha[b] / geom.alpha;
+            }
+        }
+    }
+
+    if (expect_upper_donor && expected_A[gtest] <= 0.0) {
+        die("positive redshift test has non-positive drift");
+    }
+    if (!expect_upper_donor && expected_A[gtest] >= 0.0) {
+        die("negative redshift test has non-negative drift");
+    }
+
+    for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
+        double face_drift = expected_A[gf - 1] + expected_A[gf];
+        int donor = face_drift >= 0.0 ? gf : gf - 1;
+        double nu = eedge_store[0][gf];
+
+        expected_energy_face[gf] = nu * expected_A[donor];
+        for (a = 0; a < 3; ++a) {
+            expected_momentum_face[gf][a] = nu * expected_mq[donor][a];
+        }
+    }
+
+    prj_rad_freq_flux_apply_gr_m1(&rad, &mesh, block, 0, block->W_rad, u,
+        i, j, k, dt);
+    snprintf(name, sizeof(name), "GR redshift energy drift %s",
+        expect_upper_donor ? "positive" : "negative");
+    assert_close(name, u[PRJ_CONS_RAD_E(0, gtest)],
+        100.0 + dt * (expected_energy_face[gtest + 1] -
+            expected_energy_face[gtest]), 1.0e-10);
+    for (a = 0; a < 3; ++a) {
+        snprintf(name, sizeof(name), "GR redshift momentum drift F%d %s",
+            a + 1, expect_upper_donor ? "positive" : "negative");
+        assert_close(name, u[PRJ_CONS_RAD_F1(0, gtest) + a],
+            dt * (expected_momentum_face[gtest + 1][a] -
+                expected_momentum_face[gtest][a]), 1.0e-10);
+    }
+    {
+        double total = 0.0;
+
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            total += u[PRJ_CONS_RAD_E(0, group)] - 100.0;
+        }
+        snprintf(name, sizeof(name), "GR redshift bin conservation %s",
+            expect_upper_donor ? "positive" : "negative");
+        assert_close(name, total, 0.0, 1.0e-10);
+    }
+    prj_mesh_destroy(&mesh);
+}
+
+static void check_gr_m1_frequency_gravitational_redshift(void)
+{
+    check_gr_m1_frequency_redshift_case(1.0, 1);
+    check_gr_m1_frequency_redshift_case(-1.0, 0);
 }
 
 static void set_linear_source_z4c(prj_block *block, int ic, int jc, int kc,
@@ -1526,6 +1708,7 @@ int main(int argc, char **argv)
     check_gr_pressure_closure_boosted_fbar();
     check_gr_pressure_closure_small_velocity_uses_eulerian_fbar();
     check_gr_m1_frequency_third_moment_rest_frame();
+    check_gr_m1_frequency_gravitational_redshift();
     check_gr_m1_matter_source_clamp();
     check_gr_m1_matter_source_rest_momentum();
     check_gr_m1_sources();

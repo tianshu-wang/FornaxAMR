@@ -2465,100 +2465,46 @@ static void prj_rad_gr_m1_decompose_m2(
     }
 }
 
-static void prj_rad_gr_m1_grad_cu_cov(
-    const prj_rad_gr_m1_pressure_data *data, double grad_cu_cov[3][4])
-{
-    const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
-    double Gamma[3][3][3];
-    double du_cov[3][3];
-    double D_cov[3][3];
-    double dbeta2[3];
-    double dw[3];
-    int a;
-    int b;
-    int d;
-
-    for (d = 0; d < 3; ++d) {
-        for (a = 0; a < 4; ++a) {
-            grad_cu_cov[d][a] = 0.0;
-        }
-    }
-    if (ctx == 0) {
-        return;
-    }
-
-    prj_rad_gr_m1_christoffel(ctx, Gamma);
-    for (d = 0; d < 3; ++d) {
-        dbeta2[d] = 0.0;
-        for (a = 0; a < 3; ++a) {
-            for (b = 0; b < 3; ++b) {
-                dbeta2[d] += ctx->dgamma[d][a][b] * data->vcon[a] *
-                    data->vcon[b] +
-                    2.0 * ctx->gamma[a][b] * data->vcon[a] *
-                    ctx->dvdx[d][b];
-            }
-        }
-        dw[d] = 0.5 * data->wlor * data->wlor * data->wlor * dbeta2[d];
-    }
-
-    for (d = 0; d < 3; ++d) {
-        for (a = 0; a < 3; ++a) {
-            double dvcov = 0.0;
-
-            for (b = 0; b < 3; ++b) {
-                dvcov += ctx->dgamma[d][a][b] * data->vcon[b] +
-                    ctx->gamma[a][b] * ctx->dvdx[d][b];
-            }
-            du_cov[d][a] = dw[d] * data->vcov[a] + data->wlor * dvcov;
-        }
-    }
-
-    for (d = 0; d < 3; ++d) {
-        for (a = 0; a < 3; ++a) {
-            D_cov[d][a] = du_cov[d][a] - data->wlor * ctx->K_dd[d][a];
-            for (b = 0; b < 3; ++b) {
-                D_cov[d][a] -= Gamma[b][d][a] * data->u_cov[b];
-            }
-            grad_cu_cov[d][a + 1] = PRJ_CLIGHT * D_cov[d][a];
-            grad_cu_cov[d][0] -= data->vcon[a] * grad_cu_cov[d][a + 1];
-        }
-    }
-    /* TODO(GR-M1 frequency): the paper's drift term contracts the third moment
-     * with the FULL gradient, M^{alpha beta gamma} nabla_gamma u_beta (Shibata
-     * et al. 2011, eq. 3.33/3.36), where gamma runs over all four normal-frame
-     * legs. Only the spatial legs (gamma = d) are built here; the temporal leg
-     * nabla_0(c u_beta) = n^mu nabla_mu(c u_beta) is dropped because it needs
-     * stage-time fluid derivatives (d/dt of W and W v_i) that are not
-     * available at this point in the update.
-     *
-     * What the omission drops, physically:
-     *   - the fluid-acceleration part of the drift (a_beta = u^gamma
-     *     nabla_gamma u_beta contracted against M3), and with it the
-     *     GRAVITATIONAL REDSHIFT of the spectrum: for a static fluid in a
-     *     static metric the missing energy-drift piece reduces to
-     *     ~ F^i d_i(ln alpha), so radiation climbing out of the potential
-     *     well is not redshifted across frequency bins;
-     *   - the explicit d/dt Doppler terms for time-dependent flows.
-     * What is kept: the velocity-gradient (compression/expansion/shear)
-     * Doppler shift and the extrinsic-curvature (-W K_ij) part above.
-     *
-     * Note the ENERGY-INTEGRATED redshift is NOT lost: the geometric sources
-     * (-F^j d_j alpha, alpha P^{ij} K_ij, ... in prj_src_gr_m1_z4c) act on
-     * every group, so the total energy/momentum budget is correct; only the
-     * redistribution of energy BETWEEN frequency bins misses these terms.
-     * The same truncation applies to the shear tensor and divu used by the
-     * radiation-viscosity closure (prj_rad_gr_m1_shear), where the dropped
-     * pieces are an O(v) correction to an already O(lbar) term.
-     *
-     * Restoring the temporal leg needs either stage-time derivatives of the
-     * fluid state (e.g. finite-differencing W v_i across RK stages) or
-     * evaluating a_beta from the Euler equation (a_i = -d_i p / (rho h) +
-     * d_i ln alpha in the stationary limit) as a proxy. */
-}
-
+/* Momentum-space divergence (frequency-drift) integrands for the GR M1
+ * moments, in the 3+1 Eulerian-projection form of Cardall, Endeve &
+ * Mezzacappa 2013 (arXiv:1209.2151), Eqs. 145-150.
+ *
+ * The monochromatic energy equation carries (1/e^2) d/de [e^2 (R_n + O_n)]
+ * on its left-hand side and the momentum equation the analogous
+ * (R_g + O_g)_j term (paper Eqs. 173-174).  Both are assembled from the
+ * Eulerian projections Z, Y^i, X^{ij}, W^{ijk} of the third momentum moment
+ * U^{rho nu mu} (paper Eqs. 119-122).  Because this file stores 4-tensors on
+ * normal-frame legs (index 0 is the n-projection: M2[0][0] = E,
+ * ucon[0] = Lorentz factor), those projections are just components of the
+ * assembled M3 -- no projection algebra and, unlike the previous
+ * Shibata-style M3 : grad(u) contraction, no 3-Christoffels.
+ *
+ * The returned drifts are the integrands the caller's bin-face update
+ * expects,
+ *   energy_drift       = -(R_n + O_n)  / (alpha sqrt(gamma))
+ *   momentum_drift[j]  = -(R_g + O_g)_j / (alpha sqrt(gamma))
+ * (the caller multiplies by dt alpha sqrt(gamma) and the bin-face energy),
+ * with the usual unit factors: one PRJ_CLIGHT converting spatial gradients
+ * (1/cm) to 1/s, and one more on the momentum drift converting the F/c legs
+ * of M3 back to the evolved physical flux F_i.
+ *
+ * The gravitational-shift terms R (Eqs. 146/149) need only d_i alpha,
+ * d_i beta^k, d_m gamma_ki and K_ij, so the spectral gravitational redshift
+ * is complete here.  The observer-acceleration terms O (Eqs. 147/150)
+ * involve n^mu d_mu = (d_t - beta^i d_i)/alpha of the Lorentz factor W and
+ * of W v^k; the -beta^i d_i part is included, while the d_t part is dropped
+ * because stage-time fluid derivatives are not available at this point in
+ * the update.  That truncation vanishes for stationary flow and is the only
+ * remaining incompleteness of this term.  (The energy-INTEGRATED budget is
+ * unaffected either way: the geometric sources in prj_src_gr_m1_z4c act on
+ * every group, and this bin redistribution telescopes to zero.)  The same
+ * d_t truncation still applies to the shear tensor used by the
+ * radiation-viscosity closure (prj_rad_gr_m1_shear), an O(v) correction to
+ * an already O(lbar) term. */
 static void prj_rad_gr_m1_frequency_drifts(
     const prj_rad_gr_m1_pressure_data *data, const double P[3][3],
-    double fbar, double *energy_drift, double momentum_drift_cov[3])
+    double fbar, const prj_z4c_hydro_geom *geom, double *energy_drift,
+    double momentum_drift_cov[3])
 {
     const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
     double J;
@@ -2573,17 +2519,30 @@ static void prj_rad_gr_m1_frequency_drifts(
     double chi;
     double thin_w;
     double thick_w;
-    double grad_cu_cov[3][4];
-    double contract_con[4] = {0.0, 0.0, 0.0, 0.0};
+    double M3[4][4][4];
+    double Ycov[3];
+    double Xmix[3][3];
+    double Xcov[3][3];
+    double dLam[3];
+    double dLv[3][3];
+    double dLv_cov[3][3];
+    double nDLam;
+    double nDLv[3];
+    double inv_alpha;
+    double Rn;
+    double On;
     int alpha;
     int beta;
     int gamma;
+    int a;
     int b;
     int d;
     int i;
+    int j;
+    int k;
+    int m;
 
     prj_rad_gr_m1_decompose_m2(data, P, &J, H, L, ucon, ucov, hcon, hcov);
-    prj_rad_gr_m1_grad_cu_cov(data, grad_cu_cov);
     for (alpha = 0; alpha < 4; ++alpha) {
         for (beta = 0; beta < 4; ++beta) {
             Hnorm2 += hcov[alpha][beta] * H[alpha] * H[beta];
@@ -2602,16 +2561,15 @@ static void prj_rad_gr_m1_frequency_drifts(
     thin_w = 0.5 * (3.0 * chi - 1.0);
     thick_w = 1.5 * (1.0 - chi);
 
+    /* Full symmetric third moment on normal-frame legs: Lagrangian
+     * decomposition (paper Eq. 118) with the thin/thick interpolated third
+     * angular moment. */
     for (alpha = 0; alpha < 4; ++alpha) {
-        for (b = 0; b < 4; ++b) {
-            beta = b;
-            for (d = 0; d < 3; ++d) {
+        for (beta = 0; beta < 4; ++beta) {
+            for (gamma = 0; gamma < 4; ++gamma) {
                 double Nthin = 0.0;
                 double Nthick;
-                double N;
-                double M3;
 
-                gamma = d + 1;
                 if (inv_Hnorm3 > 0.0) {
                     Nthin = J * H[alpha] * H[beta] * H[gamma] *
                         inv_Hnorm3;
@@ -2619,32 +2577,154 @@ static void prj_rad_gr_m1_frequency_drifts(
                 Nthick = 0.2 * (H[alpha] * hcon[beta][gamma] +
                     H[beta] * hcon[alpha][gamma] +
                     H[gamma] * hcon[alpha][beta]);
-                N = thin_w * Nthin + thick_w * Nthick;
-                M3 = J * ucon[alpha] * ucon[beta] * ucon[gamma] +
+                M3[alpha][beta][gamma] =
+                    J * ucon[alpha] * ucon[beta] * ucon[gamma] +
                     H[alpha] * ucon[beta] * ucon[gamma] +
                     H[beta] * ucon[alpha] * ucon[gamma] +
                     H[gamma] * ucon[alpha] * ucon[beta] +
                     L[alpha][beta] * ucon[gamma] +
                     L[alpha][gamma] * ucon[beta] +
-                    L[beta][gamma] * ucon[alpha] + N;
-
-                contract_con[alpha] += M3 * grad_cu_cov[d][beta];
+                    L[beta][gamma] * ucon[alpha] +
+                    thin_w * Nthin + thick_w * Nthick;
             }
         }
     }
 
-    if (energy_drift != 0) {
-        *energy_drift = contract_con[0];
-    }
-    for (i = 0; i < 3; ++i) {
-        momentum_drift_cov[i] = 0.0;
+    /* Eulerian projections read off the normal-frame legs (Eqs. 119-122):
+     * Z = M3[0][0][0], Y^i = M3[0][0][i], X^{ij} = M3[0][i][j],
+     * W^{ijk} = M3[i][j][k]; gamma-lowered variants as needed below. */
+    for (k = 0; k < 3; ++k) {
+        Ycov[k] = 0.0;
         for (b = 0; b < 3; ++b) {
-            /* M3 is assembled as a stress-tensor moment with M^{0i}=F^i/c.
-             * Convert the spatial projection back to the evolved physical
-             * flux F_i before the frequency-bin update. */
-            momentum_drift_cov[i] += PRJ_CLIGHT * ctx->gamma[i][b] *
-                contract_con[b + 1];
+            Ycov[k] += ctx->gamma[k][b] * M3[0][0][b + 1];
         }
+    }
+    for (k = 0; k < 3; ++k) {
+        for (i = 0; i < 3; ++i) {
+            Xmix[k][i] = 0.0;
+            for (b = 0; b < 3; ++b) {
+                Xmix[k][i] += ctx->gamma[k][b] * M3[0][b + 1][i + 1];
+            }
+        }
+    }
+    for (j = 0; j < 3; ++j) {
+        for (k = 0; k < 3; ++k) {
+            Xcov[j][k] = 0.0;
+            for (b = 0; b < 3; ++b) {
+                Xcov[j][k] += ctx->gamma[k][b] * Xmix[j][b];
+            }
+        }
+    }
+
+    /* d_d W and d_d (W v^k), with W = (1 - gamma_ab v^a v^b)^{-1/2}; the
+     * metric-gradient part of d(v^2) is included. */
+    for (d = 0; d < 3; ++d) {
+        double dv2 = 0.0;
+
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                dv2 += ctx->dgamma[d][a][b] * data->vcon[a] *
+                    data->vcon[b] +
+                    2.0 * ctx->gamma[a][b] * data->vcon[a] *
+                    ctx->dvdx[d][b];
+            }
+        }
+        dLam[d] = 0.5 * data->wlor * data->wlor * data->wlor * dv2;
+        for (k = 0; k < 3; ++k) {
+            dLv[d][k] = dLam[d] * data->vcon[k] +
+                data->wlor * ctx->dvdx[d][k];
+        }
+    }
+    for (d = 0; d < 3; ++d) {
+        for (b = 0; b < 3; ++b) {
+            dLv_cov[d][b] = 0.0;
+            for (k = 0; k < 3; ++k) {
+                dLv_cov[d][b] += ctx->gamma[b][k] * dLv[d][k];
+            }
+        }
+    }
+    inv_alpha = 1.0 / geom->alpha;
+    /* n^mu d_mu = (d_t - beta^i d_i)/alpha; d_t dropped (see comment). */
+    nDLam = 0.0;
+    for (i = 0; i < 3; ++i) {
+        nDLam -= geom->beta[i] * inv_alpha * dLam[i];
+    }
+    for (k = 0; k < 3; ++k) {
+        nDLv[k] = 0.0;
+        for (i = 0; i < 3; ++i) {
+            nDLv[k] -= geom->beta[i] * inv_alpha * dLv[i][k];
+        }
+    }
+
+    /* Energy projection: R_n (Eq. 146) and O_n (Eq. 147), without the
+     * alpha sqrt(gamma) prefactor. */
+    Rn = 0.0;
+    On = M3[0][0][0] * nDLam;
+    for (i = 0; i < 3; ++i) {
+        Rn += (M3[0][0][0] * data->vcon[i] - M3[0][0][i + 1]) *
+            geom->dalpha[i] * inv_alpha;
+        On += M3[0][0][i + 1] * dLam[i];
+        for (k = 0; k < 3; ++k) {
+            Rn -= Ycov[k] * data->vcon[i] * geom->dbeta[i][k] * inv_alpha;
+            On -= Xmix[k][i] * dLv[i][k];
+        }
+    }
+    for (k = 0; k < 3; ++k) {
+        On -= Ycov[k] * nDLv[k];
+        for (i = 0; i < 3; ++i) {
+            double Xki = M3[0][k + 1][i + 1];
+
+            Rn += Xki * ctx->K_dd[k][i];
+            for (m = 0; m < 3; ++m) {
+                Rn -= 0.5 * Xki * data->vcon[m] * ctx->dgamma[m][k][i];
+            }
+        }
+    }
+    Rn *= data->wlor;
+    if (energy_drift != 0) {
+        *energy_drift = -PRJ_CLIGHT * (Rn + On);
+    }
+
+    /* Momentum projection: (R_g)_j (Eq. 149) and (O_g)_j (Eq. 150), same
+     * structure with (Z, Y, X) -> (Y_j, X_j, W_j). */
+    for (j = 0; j < 3; ++j) {
+        double Wmix[3][3];
+        double Rg = 0.0;
+        double Og = Ycov[j] * nDLam;
+
+        for (k = 0; k < 3; ++k) {
+            for (i = 0; i < 3; ++i) {
+                Wmix[k][i] = 0.0;
+                for (a = 0; a < 3; ++a) {
+                    Wmix[k][i] += ctx->gamma[j][a] *
+                        M3[a + 1][k + 1][i + 1];
+                }
+            }
+        }
+        for (i = 0; i < 3; ++i) {
+            Rg += (Ycov[j] * data->vcon[i] - Xmix[j][i]) *
+                geom->dalpha[i] * inv_alpha;
+            Og += Xmix[j][i] * dLam[i];
+            for (k = 0; k < 3; ++k) {
+                Rg -= Xcov[j][k] * data->vcon[i] * geom->dbeta[i][k] *
+                    inv_alpha;
+            }
+        }
+        for (k = 0; k < 3; ++k) {
+            Og -= Xcov[j][k] * nDLv[k];
+            for (i = 0; i < 3; ++i) {
+                Rg += Wmix[k][i] * ctx->K_dd[k][i];
+                Og -= Wmix[k][i] * dLv_cov[i][k];
+                for (m = 0; m < 3; ++m) {
+                    Rg -= 0.5 * Wmix[k][i] * data->vcon[m] *
+                        ctx->dgamma[m][k][i];
+                }
+            }
+        }
+        Rg *= data->wlor;
+        /* One PRJ_CLIGHT for gradient units, one to convert the F/c legs of
+         * M3 back to the evolved physical flux F_j. */
+        momentum_drift_cov[j] = -PRJ_CLIGHT * PRJ_CLIGHT * (Rg + Og);
     }
 }
 
@@ -4179,8 +4259,8 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                     field * PRJ_NEGROUP + g, Pg[g], &fbar)) {
                 prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
             }
-            prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &Acon,
-                Mq_cov[g]);
+            prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &geom,
+                &Acon, Mq_cov[g]);
             Acon_spec[g] = Acon * inv_dnu[g];
             for (a = 0; a < 3; ++a) {
                 Mq_spec[g][a] = Mq_cov[g][a] * inv_dnu[g];
