@@ -664,6 +664,8 @@ static const char *prj_flux_gr_status_name(int status)
     }
 }
 
+#if !PRJ_MHD
+/* Variable-name helpers for the hydro-only GR diagnostics further below. */
 static const char *prj_flux_prim_name(int var)
 {
     static const char *const names[6] = {
@@ -690,6 +692,7 @@ static const char *prj_flux_eosvar_name(int var)
 
     return var >= 0 && var < 3 ? names[var] : "unknown";
 }
+#endif /* !PRJ_MHD */
 
 static void prj_flux_gr_abort(void)
 {
@@ -758,6 +761,10 @@ static double prj_flux_inv3(const double g[3][3], double ginv[3][3])
     return det;
 }
 
+#if !PRJ_MHD
+/* Diagnostics + hydro-only GR flux path below: used by prj_flux_gr_hydro_hll,
+ * the dynamic-GR Riemann fallback when MHD is off. MHD builds take the
+ * prj_riemann_gr_hlld path instead, so none of this is compiled there. */
 static void prj_flux_gr_print_face_location(const prj_block *block,
     int dir, int i, int j, int k)
 {
@@ -964,6 +971,7 @@ static void prj_flux_gr_state_fail(const char *op, int status,
     fflush(stderr);
     prj_flux_gr_abort();
 }
+#endif /* !PRJ_MHD */
 
 static void prj_flux_gr_face_geom_from_cells(const prj_z4c_hydro_geom *gl,
     const prj_z4c_hydro_geom *gr, int dir, prj_z4c_hydro_geom *geom)
@@ -1010,6 +1018,7 @@ static void prj_flux_gr_face_geom_from_cells(const prj_z4c_hydro_geom *gl,
     }
 }
 
+#if !PRJ_MHD
 static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
     int stage, int dir, int il, int jl, int kl, int ir, int jr, int kr,
     prj_z4c_hydro_geom *geom)
@@ -1024,6 +1033,7 @@ static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
     prj_flux_gr_face_geom_from_cells(&gl, &gr, dir, geom);
     return 1;
 }
+#endif /* !PRJ_MHD */
 
 static int prj_flux_gr_face_geom_cached(const prj_z4c_hydro_geom *cell_geom,
     int dir, int il, int jl, int kl, int ir, int jr, int kr,
@@ -1043,6 +1053,7 @@ static int prj_flux_gr_face_geom_cached(const prj_z4c_hydro_geom *cell_geom,
     return 1;
 }
 
+#if !PRJ_MHD
 static void prj_flux_gr_hydro_state_flux(prj_eos *eos, const prj_block *block,
     const double *W_block, const double *eosvar, int z4c_stage,
     const prj_z4c_hydro_geom *geom, const double *W, double pressure,
@@ -1156,6 +1167,7 @@ static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
         v_face_loc[2] = WR[PRJ_PRIM_V3];
     }
 }
+#endif /* !PRJ_MHD */
 
 #if PRJ_USE_RADIATION_M1
 static void prj_flux_gr_m1_raise_vec(const prj_z4c_hydro_geom *geom,

@@ -1274,9 +1274,12 @@ int prj_eos_grmhd_state_from_prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     if (!isfinite(state->E) || !isfinite(state->tau)) {
         return PRJ_EOS_GR_BAD_STATE;
     }
+    /* S_i = (rho h W^2 + B^2) v_i - (B.v) B_i: only the fluid enthalpy
+     * carries W^2; the Eulerian-field B^2 term does not (it already absorbs
+     * the alpha^2 (b^0)^2 piece of W^2 b^2). */
     for (d = 0; d < 3; ++d) {
-        state->S_cov[d] = (state->enthalpy + state->Bsq) *
-            state->wlor2 * state->beta_cov[d] -
+        state->S_cov[d] = (state->enthalpy * state->wlor2 + state->Bsq) *
+            state->beta_cov[d] -
             state->Bbeta * state->Bcov[d];
     }
     for (a = 0; a < 3; ++a) {
@@ -1287,7 +1290,7 @@ int prj_eos_grmhd_state_from_prim(prj_eos *eos, const prj_eos_gr_geom *geom,
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             state->stress_cov[a][b] =
-                (state->enthalpy + state->Bsq) * state->wlor2 *
+                (state->enthalpy * state->wlor2 + state->Bsq) *
                 state->beta_cov[a] * state->beta_cov[b] +
                 state->ptot * g[a][b] -
                 state->Bcov[a] * state->Bcov[b] / state->wlor2 -
@@ -1667,7 +1670,7 @@ int prj_eos_gr_prim2cons(prj_eos *eos, const prj_eos_gr_geom *geom,
     Utmp[PRJ_CONS_RHO] = rho * wlor;
     for (d = 0; d < 3; ++d) {
         Utmp[PRJ_CONS_MOM1 + d] =
-            ((w + Bsq) * wlor2 * beta_cov[d] - Bbeta * Bcov[d]) / c;
+            ((w * wlor2 + Bsq) * beta_cov[d] - Bbeta * Bcov[d]) / c;
     }
     Utmp[PRJ_CONS_ETOT] = (rho * eint + pressure) * wlor2 +
         rho * c2 * wlor * wlor_m1 - pressure + Bsq -

@@ -377,7 +377,8 @@ static void test_low_velocity_limit(prj_eos *eos)
 }
 
 static void test_roundtrip(prj_eos *eos, const char *name, const prj_eos_gr_geom *geom,
-    double rho, double v1, double v2, double v3, double eint)
+    double rho, double v1, double v2, double v3, double eint,
+    const double *Bfield)
 {
     double W[PRJ_NVAR_PRIM];
     double Wout[PRJ_NVAR_PRIM];
@@ -387,6 +388,15 @@ static void test_roundtrip(prj_eos *eos, const char *name, const prj_eos_gr_geom
     int v;
 
     set_state(W, rho, v1, v2, v3, eint, 0.32);
+#if PRJ_MHD
+    if (Bfield != 0) {
+        W[PRJ_PRIM_B1] = Bfield[0];
+        W[PRJ_PRIM_B2] = Bfield[1];
+        W[PRJ_PRIM_B3] = Bfield[2];
+    }
+#else
+    (void)Bfield;
+#endif
     fill_radiation_state(W);
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
         Wout[v] = -9.0e99;
@@ -474,9 +484,26 @@ int main(int argc, char **argv)
     set_curved_geom(&curved);
     test_low_velocity_limit(&eos);
     test_roundtrip(&eos, "flat", &flat, 1.0e8, 0.08 * PRJ_CLIGHT,
-        -0.03 * PRJ_CLIGHT, 0.02 * PRJ_CLIGHT, 4.0e18);
+        -0.03 * PRJ_CLIGHT, 0.02 * PRJ_CLIGHT, 4.0e18, 0);
     test_roundtrip(&eos, "curved", &curved, 2.0e8, 0.04 * PRJ_CLIGHT,
-        -0.02 * PRJ_CLIGHT, 0.03 * PRJ_CLIGHT, 6.0e18);
+        -0.02 * PRJ_CLIGHT, 0.03 * PRJ_CLIGHT, 6.0e18, 0);
+#if PRJ_MHD
+    /* Magnetically dominated (sigma = B^2/rho c^2 ~ 0.5) and fast (v ~ 0.3c):
+     * sensitive to the W^2 placement in S_i = (rho h W^2 + B^2)v_i - (B.v)B_i;
+     * the (rho h + B^2)W^2 form errs here at the percent level, far above the
+     * roundtrip tolerance, while weakly magnetized states cannot tell the
+     * difference. */
+    {
+        double Bstrong[3] = {2.0e14, -1.2e14, 0.8e14};
+
+        test_roundtrip(&eos, "flat high-sigma", &flat, 1.0e8,
+            0.30 * PRJ_CLIGHT, -0.10 * PRJ_CLIGHT, 0.05 * PRJ_CLIGHT,
+            4.0e18, Bstrong);
+        test_roundtrip(&eos, "curved high-sigma", &curved, 1.0e8,
+            0.25 * PRJ_CLIGHT, -0.08 * PRJ_CLIGHT, 0.06 * PRJ_CLIGHT,
+            4.0e18, Bstrong);
+    }
+#endif
 #if PRJ_DYNAMIC_GR && PRJ_NRAD > 0
     test_cell_wrappers_preserve_radiation_slots(&eos);
 #endif

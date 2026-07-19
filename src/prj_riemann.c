@@ -746,8 +746,11 @@ static int prj_gr_hlld_state_from_prim(const double *W, double pressure,
     s->ptot = s->p + 0.5 * s->b2;
     s->D = s->rho * s->wlor;
     s->H = s->rhoh * s->wlor2 - s->p + s->B2 - 0.5 * s->b2;
+    /* J_i = (rho h W^2 + B^2) v_i - (B.v) B_i; in this orthonormal frame it
+     * must equal the energy flux (H + ptot) v_i - (B.v) B_i since T^{0i} is
+     * symmetric. */
     for (d = 0; d < 3; ++d) {
-        s->J[d] = (s->rhoh + s->B2) * s->wlor2 * s->v[d] -
+        s->J[d] = (s->rhoh * s->wlor2 + s->B2) * s->v[d] -
             s->Bv * s->B[d];
     }
     if (s->rhoh <= 0.0 || s->ptot <= 0.0 || s->D <= 0.0 ||
