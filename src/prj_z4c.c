@@ -1311,6 +1311,7 @@ static void prj_z4c_apply_physical_bcs(prj_mesh *mesh, const prj_mpi *mpi,
     }
 }
 
+#if PRJ_NGHOST_Z4C != 2 && PRJ_NGHOST_Z4C != 4
 static double prj_z4c_restrict_value(const double *src, int var, int i, int j, int k)
 {
     double sum = 0.0;
@@ -1339,6 +1340,7 @@ static double prj_z4c_prolong_value(const double *src, int var, int i, int j, in
 
     return c + target[0] * sx + target[1] * sy + target[2] * sz;
 }
+#endif
 
 static void prj_z4c_clear_block_aux(prj_block *block)
 {
@@ -1497,6 +1499,67 @@ static double prj_z4c_amr_restrict_value(const double *src, int var, int i, int 
 #endif
 }
 
+static int prj_z4c_fine_index_odd(int fine_index)
+{
+    return (fine_index % 2) != 0;
+}
+
+static double prj_z4c_amr_prolong_slot_value(const double *src,
+    const prj_neighbor *slot, int var, int i, int j, int k)
+{
+#if PRJ_NGHOST_Z4C == 2 || PRJ_NGHOST_Z4C == 4
+    int fi = i + slot->recv_loc_start_z4c[0];
+    int fj = j + slot->recv_loc_start_z4c[1];
+    int fk = k + slot->recv_loc_start_z4c[2];
+    int pi = i / 2 + slot->send_loc_start_z4c[0];
+    int pj = j / 2 + slot->send_loc_start_z4c[1];
+    int pk = k / 2 + slot->send_loc_start_z4c[2];
+    int ibase, jbase, kbase;
+    int ni, nj, nk;
+    double wi[5], wj[5], wk[5];
+    double out = 0.0;
+    int ii, jj, kk;
+
+    prj_z4c_amr_prolong_axis_weights(pi, prj_z4c_fine_index_odd(fi),
+        &ibase, &ni, wi);
+    prj_z4c_amr_prolong_axis_weights(pj, prj_z4c_fine_index_odd(fj),
+        &jbase, &nj, wj);
+    prj_z4c_amr_prolong_axis_weights(pk, prj_z4c_fine_index_odd(fk),
+        &kbase, &nk, wk);
+    for (ii = 0; ii < ni; ++ii) {
+        for (jj = 0; jj < nj; ++jj) {
+            for (kk = 0; kk < nk; ++kk) {
+                out += wi[ii] * wj[jj] * wk[kk] *
+                    prj_z4c_get(src, var, ibase + ii, jbase + jj, kbase + kk);
+            }
+        }
+    }
+    return out;
+#else
+    double target[3];
+    int ai = i + slot->recv_loc_start_z4c[0];
+    int aj = j + slot->recv_loc_start_z4c[1];
+    int ak = k + slot->recv_loc_start_z4c[2];
+
+    target[0] = (ai % 2 == 0) ? -0.25 : 0.25;
+    target[1] = (aj % 2 == 0) ? -0.25 : 0.25;
+    target[2] = (ak % 2 == 0) ? -0.25 : 0.25;
+    return prj_z4c_prolong_value(src, var,
+        i / 2 + slot->send_loc_start_z4c[0],
+        j / 2 + slot->send_loc_start_z4c[1],
+        k / 2 + slot->send_loc_start_z4c[2], target);
+#endif
+}
+
+static double prj_z4c_amr_restrict_slot_value(const double *src,
+    const prj_neighbor *slot, int var, int i, int j, int k)
+{
+    return prj_z4c_amr_restrict_value(src, var,
+        i + slot->send_loc_start_z4c[0] / 2,
+        j + slot->send_loc_start_z4c[1] / 2,
+        k + slot->send_loc_start_z4c[2] / 2);
+}
+
 static int prj_z4c_fill_kind_from_rel_level(int rel_level)
 {
     if (rel_level == 0) {
@@ -1516,23 +1579,9 @@ static double prj_z4c_sample_slot_value(const double *src, const prj_neighbor *s
             k + slot->send_loc_start_z4c[2]);
     }
     if (slot->rel_level < 0) {
-        return prj_z4c_restrict_value(src, var,
-            i + slot->send_loc_start_z4c[0] / 2,
-            j + slot->send_loc_start_z4c[1] / 2,
-            k + slot->send_loc_start_z4c[2] / 2);
+        return prj_z4c_amr_restrict_slot_value(src, slot, var, i, j, k);
     } else {
-        double target[3];
-        int ai = i + slot->recv_loc_start_z4c[0];
-        int aj = j + slot->recv_loc_start_z4c[1];
-        int ak = k + slot->recv_loc_start_z4c[2];
-
-        target[0] = (ai % 2 == 0) ? -0.25 : 0.25;
-        target[1] = (aj % 2 == 0) ? -0.25 : 0.25;
-        target[2] = (ak % 2 == 0) ? -0.25 : 0.25;
-        return prj_z4c_prolong_value(src, var,
-            i / 2 + slot->send_loc_start_z4c[0],
-            j / 2 + slot->send_loc_start_z4c[1],
-            k / 2 + slot->send_loc_start_z4c[2], target);
+        return prj_z4c_amr_prolong_slot_value(src, slot, var, i, j, k);
     }
 }
 

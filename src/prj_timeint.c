@@ -537,8 +537,10 @@ static void prj_timeint_rad_freq_flux_apply(const prj_mesh *mesh,
 {
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        PRJ_SUBTIMER_START("sub_rad_freq_grm1");
         prj_rad_freq_flux_apply_gr_m1(rad, mesh, block, z4c_stage, W_state,
             u, i, j, k, dt, observer_time_derivative);
+        PRJ_SUBTIMER_STOP("sub_rad_freq_grm1");
         return;
     }
 #else
@@ -546,7 +548,9 @@ static void prj_timeint_rad_freq_flux_apply(const prj_mesh *mesh,
     (void)z4c_stage;
     (void)observer_time_derivative;
 #endif
+    PRJ_SUBTIMER_START("sub_rad_freq_sr");
     prj_rad_freq_flux_apply(rad, block, W_state, u, i, j, k, lapse, dt);
+    PRJ_SUBTIMER_STOP("sub_rad_freq_sr");
 }
 
 static void prj_timeint_zero_observer_time_derivative(
@@ -2254,14 +2258,18 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     (void)coord;
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_flux_send");
+    PRJ_SUBTIMER_START("sub_flux_send_local_blocks");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(mpi, block)) {
+            PRJ_SUBTIMER_START("sub_flux_send_block_update");
             prj_flux_update(eos, rad, mesh, block, block->W_mhd, block->eosvar,
                 block->flux, 0);
+            PRJ_SUBTIMER_STOP("sub_flux_send_block_update");
         }
     }
+    PRJ_SUBTIMER_STOP("sub_flux_send_local_blocks");
     PRJ_SUBTIMER_START("sub_riemann_flux_send");
     prj_riemann_flux_send(mesh, mpi);
     PRJ_SUBTIMER_STOP("sub_riemann_flux_send");
@@ -2297,6 +2305,7 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_src_cell_update");
+    PRJ_SUBTIMER_START("sub_src_cell_local_blocks");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -2305,10 +2314,13 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
             int j;
             int k;
 
+            PRJ_SUBTIMER_START("sub_src_cell_block_src");
             PRJ_SUBTIMER_START("sub_cell_src_update");
             prj_src_update(eos, rad, grav, mesh, block, 0, block->W_mhd, block->W_rad,
                 block->mhd_rhs, block->rad_rhs);
             PRJ_SUBTIMER_STOP("sub_cell_src_update");
+            PRJ_SUBTIMER_STOP("sub_src_cell_block_src");
+            PRJ_SUBTIMER_START("sub_src_cell_block_cells");
             PRJ_SUBTIMER_START("sub_cell_essprk_step_update");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
@@ -2320,8 +2332,10 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
                 }
             }
             PRJ_SUBTIMER_STOP("sub_cell_essprk_step_update");
+            PRJ_SUBTIMER_STOP("sub_src_cell_block_cells");
         }
     }
+    PRJ_SUBTIMER_STOP("sub_src_cell_local_blocks");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {

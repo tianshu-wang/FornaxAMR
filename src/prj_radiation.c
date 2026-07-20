@@ -4031,6 +4031,7 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
         block->v_riemann[2] == 0) {
         return;
     }
+    PRJ_SUBTIMER_START("sub_freq_grm1_geom");
     if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, ic, jc, kc, &geom)) {
         fprintf(stderr,
             "prj_rad_freq_flux_apply_gr_m1: failed to load Z4c geometry at cell (%d,%d,%d)\n",
@@ -4039,14 +4040,17 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     }
     W_mhd = prj_block_mhd_stage_const(block, z4c_stage);
     dt_geom = dt * geom.alpha * geom.sqrt_gamma;
+    PRJ_SUBTIMER_STOP("sub_freq_grm1_geom");
     if (dt_geom == 0.0) {
         return;
     }
 
+    PRJ_SUBTIMER_START("sub_freq_grm1_setup");
     prj_rad_gr_m1_cell_dvcon_dx(block, ic, jc, kc, dvcon_dx);
     prj_rad_gr_m1_freq_base_closure_ctx(&geom, W_mhd, dvcon_dx, ic, jc, kc,
         &base_closure);
     prj_rad_gr_m1_prepare_side(&base_closure, &pside);
+    PRJ_SUBTIMER_STOP("sub_freq_grm1_setup");
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         double Eg[PRJ_NEGROUP];
@@ -4076,6 +4080,7 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             prj_rad_gr_m1_pressure_data pdata;
             double fbar;
             double Acon = 0.0;
+            int cache_hit;
 
             if (dnu <= 0.0) {
                 fprintf(stderr,
@@ -4090,21 +4095,30 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
 
             closure = base_closure;
+            PRJ_SUBTIMER_START("sub_freq_grm1_prepare_pressure");
             closure.opacity = prj_rad_gr_m1_cell_opacity(block, ic, jc, kc,
                 field, g);
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g], Fcov,
                 &pdata);
+            PRJ_SUBTIMER_STOP("sub_freq_grm1_prepare_pressure");
             /* frequency_drifts (via decompose_m2) needs the full pdata, so
              * prepare_pressure must run; but the geometric source term already
              * solved the identical closure this stage, so reuse its (P, fbar)
              * and skip the expensive implicit root-find on a cache hit. */
-            if (!prj_rad_gr_m1_closure_cache_get(block, W_state, z4c_stage,
+            PRJ_SUBTIMER_START("sub_freq_grm1_cache_get");
+            cache_hit = prj_rad_gr_m1_closure_cache_get(block, W_state, z4c_stage,
                     (ic * PRJ_BLOCK_SIZE + jc) * PRJ_BLOCK_SIZE + kc,
-                    field * PRJ_NEGROUP + g, Pg[g], &fbar)) {
+                    field * PRJ_NEGROUP + g, Pg[g], &fbar);
+            PRJ_SUBTIMER_STOP("sub_freq_grm1_cache_get");
+            if (!cache_hit) {
+                PRJ_SUBTIMER_START("sub_freq_grm1_pressure_solve");
                 prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
+                PRJ_SUBTIMER_STOP("sub_freq_grm1_pressure_solve");
             }
+            PRJ_SUBTIMER_START("sub_freq_grm1_drifts");
             prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &geom,
                 observer_time_derivative, &Acon, Mq_cov[g]);
+            PRJ_SUBTIMER_STOP("sub_freq_grm1_drifts");
             Acon_spec[g] = Acon * inv_dnu[g];
             for (a = 0; a < 3; ++a) {
                 Mq_spec[g][a] = Mq_cov[g][a] * inv_dnu[g];
@@ -4112,6 +4126,7 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             energy_available[g] = u[PRJ_CONS_RAD_E(field, g)];
         }
 
+        PRJ_SUBTIMER_START("sub_freq_grm1_faces");
         for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
             double face_drift = Acon_spec[gf - 1] + Acon_spec[gf];
             int gu = face_drift >= 0.0 ? gf : gf - 1;
@@ -4122,11 +4137,13 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                 momentum_face[gf][a] += nu * Mq_spec[gu][a];
             }
         }
+        PRJ_SUBTIMER_STOP("sub_freq_grm1_faces");
 
         {
             double outgoing[PRJ_NEGROUP] = {0.0};
             double theta[PRJ_NEGROUP];
 
+            PRJ_SUBTIMER_START("sub_freq_grm1_limiter");
             for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
                 if (energy_face[gf] > 0.0) {
                     outgoing[gf] += energy_face[gf];
@@ -4153,8 +4170,10 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                     momentum_face[gf][a] *= factor;
                 }
             }
+            PRJ_SUBTIMER_STOP("sub_freq_grm1_limiter");
         }
 
+        PRJ_SUBTIMER_START("sub_freq_grm1_apply");
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             u[PRJ_CONS_RAD_E(field, g)] += dt_geom *
                 (energy_face[g + 1] - energy_face[g]);
@@ -4165,6 +4184,7 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             u[PRJ_CONS_RAD_F3(field, g)] += dt_geom *
                 (momentum_face[g + 1][2] - momentum_face[g][2]);
         }
+        PRJ_SUBTIMER_STOP("sub_freq_grm1_apply");
     }
 }
 
@@ -4280,6 +4300,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
         dt == 0.0 || !prj_eos_full_dynamic_gr_enabled(mesh)) {
         return;
     }
+    PRJ_SUBTIMER_START("sub_matter_grm1_geom");
     if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
         fprintf(stderr,
             "prj_rad_gr_m1_matter_update: failed to load Z4c geometry at cell (%d,%d,%d)\n",
@@ -4287,10 +4308,12 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
         exit(1);
     }
     dt_lapse = dt * geom.alpha;
+    PRJ_SUBTIMER_STOP("sub_matter_grm1_geom");
     if (dt_lapse == 0.0) {
         return;
     }
 
+    PRJ_SUBTIMER_START("sub_matter_grm1_prim_eos");
     prj_rad_gr_m1_clamp_conserved_cell(&geom, u);
     prj_eos_cell_cons2prim(eos, mesh, block, z4c_stage, i, j, k, u, W,
         PRJ_EOS_CTX_MAIN);
@@ -4298,9 +4321,12 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     eint = W[PRJ_PRIM_EINT];
     prj_eos_rey(eos, rho, eint, W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
     T = eos_q[PRJ_EOS_TEMPERATURE];
+    PRJ_SUBTIMER_STOP("sub_matter_grm1_prim_eos");
+    PRJ_SUBTIMER_START("sub_matter_grm1_setup");
     prj_rad_gr_m1_cell_dvcon_dx(block, i, j, k, dvcon_dx);
     prj_rad_gr_m1_source_base_closure_ctx(&geom, W, dvcon_dx, &base_closure);
     prj_rad_gr_m1_prepare_side(&base_closure, &pside);
+    PRJ_SUBTIMER_STOP("sub_matter_grm1_setup");
 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         tmp[v] = 0.0;
@@ -4329,6 +4355,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             Fcov[0] = u[PRJ_CONS_RAD_F1(field, group)] / geom.sqrt_gamma;
             Fcov[1] = u[PRJ_CONS_RAD_F2(field, group)] / geom.sqrt_gamma;
             Fcov[2] = u[PRJ_CONS_RAD_F3(field, group)] / geom.sqrt_gamma;
+            PRJ_SUBTIMER_START("sub_matter_grm1_pressure");
             prj_rad_gr_m1_clamp_ef(&geom, &E, Fcov);
 
             closure = base_closure;
@@ -4337,9 +4364,13 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, E, Fcov,
                 &pdata);
             prj_rad_gr_m1_pressure_implicit(&pdata, P, 0);
+            PRJ_SUBTIMER_STOP("sub_matter_grm1_pressure");
+            PRJ_SUBTIMER_START("sub_matter_grm1_decompose");
             prj_rad_gr_m1_decompose_m2(&pdata, P, &J, H, L, ucon, ucov,
                 hcon, hcov);
+            PRJ_SUBTIMER_STOP("sub_matter_grm1_decompose");
 
+            PRJ_SUBTIMER_START("sub_matter_grm1_pack");
             J_old[idx] = J;
             for (v = 0; v < 4; ++v) {
                 H_old[idx][v] = H[v];
@@ -4353,16 +4384,24 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             tmp[PRJ_CONS_RAD_F1(field, group)] = PRJ_CLIGHT * H[1];
             tmp[PRJ_CONS_RAD_F2(field, group)] = PRJ_CLIGHT * H[2];
             tmp[PRJ_CONS_RAD_F3(field, group)] = PRJ_CLIGHT * H[3];
+            PRJ_SUBTIMER_STOP("sub_matter_grm1_pack");
         }
     }
 
+    PRJ_SUBTIMER_START("sub_matter_grm1_inel");
     prj_rad_eleinel_step(rad, eos, tmp, dt_lapse, T);
     prj_rad_nucinel_step(rad, eos, tmp, dt_lapse, T);
+    PRJ_SUBTIMER_STOP("sub_matter_grm1_inel");
+    PRJ_SUBTIMER_START("sub_matter_grm1_energy");
     prj_rad_energy_update(rad, eos, tmp, dt_lapse, 1.0, &T, kappa);
+    PRJ_SUBTIMER_STOP("sub_matter_grm1_energy");
     Ye_final = tmp[PRJ_CONS_RHO] > 0.0 ?
         tmp[PRJ_CONS_YE] / tmp[PRJ_CONS_RHO] : W[PRJ_PRIM_YE];
+    PRJ_SUBTIMER_START("sub_matter_grm1_opac");
     prj_rad3_opac_lookup(rad, rho, T, Ye_final, 0, sigma, delta, 0);
+    PRJ_SUBTIMER_STOP("sub_matter_grm1_opac");
 
+    PRJ_SUBTIMER_START("sub_matter_grm1_apply");
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -4412,6 +4451,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     u[PRJ_CONS_MOM3] -= total_dF[2] * RAD_SCALE /
         (PRJ_CLIGHT * PRJ_CLIGHT);
     u[PRJ_CONS_YE] = u[PRJ_CONS_RHO] * Ye_final;
+    PRJ_SUBTIMER_STOP("sub_matter_grm1_apply");
 
     /* This source solve freezes the frame velocity while coupling radiation
      * and matter.  A future fully implicit GR-M1 source solve should include
