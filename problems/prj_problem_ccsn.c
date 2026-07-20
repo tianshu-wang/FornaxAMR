@@ -574,6 +574,17 @@ static void prj_ccsn_fill_mesh(prj_sim *sim, const prj_mpi *mpi, const prj_ccsn_
     }
 }
 
+/* prj_ccsn_fill_mesh fills primitive/conserved values in ghost cells too, and
+ * full-GR prim2cons reads Z4c geometry there. After AMR creates or migrates
+ * blocks, refresh Z4c ghosts before rebuilding the CCSN matter state. */
+static void prj_ccsn_fill_metric_ghosts(prj_sim *sim, prj_mpi *mpi)
+{
+    if (sim == 0 || !prj_z4c_runtime_enabled(&sim->mesh)) {
+        return;
+    }
+    prj_z4c_finalize_stage(&sim->mesh, mpi, &sim->bc, 0);
+}
+
 static void prj_ccsn_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_ccsn_profile *profile)
 {
     unsigned long long prev_sig;
@@ -606,6 +617,7 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_ccsn_p
             r_min_domain, r_max_domain) == 0);
     }
 
+    prj_ccsn_fill_metric_ghosts(sim, mpi);
     prj_ccsn_fill_mesh(sim, mpi, profile);
     prj_eos_fill_mesh(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);
 #if PRJ_USE_GRAVITY
@@ -645,6 +657,7 @@ static void prj_ccsn_initialize_amr(prj_sim *sim, prj_mpi *mpi, const prj_ccsn_p
             prj_gravity_rebuild_grid(sim, mpi);
         }
     #endif
+        prj_ccsn_fill_metric_ghosts(sim, mpi);
         prj_ccsn_fill_mesh(sim, mpi, profile);
 
         prj_eos_fill_active_cells(&sim->mesh, &sim->eos, mpi, 1, PRJ_EOS_CTX_MAIN);

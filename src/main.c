@@ -599,6 +599,11 @@ int main(int argc, char *argv[])
                 PRJ_SUBTIMER_START("sub_amr_post_eos_active");
                 prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
                 PRJ_SUBTIMER_STOP("sub_amr_post_eos_active");
+                if (prj_z4c_runtime_enabled(&sim.mesh)) {
+                    PRJ_SUBTIMER_START("sub_amr_post_z4c");
+                    prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
+                    PRJ_SUBTIMER_STOP("sub_amr_post_z4c");
+                }
                 PRJ_SUBTIMER_START("sub_amr_post_ghost");
                 prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0,
                     &sim.eos, 0, &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
@@ -609,11 +614,6 @@ int main(int argc, char *argv[])
                 PRJ_SUBTIMER_START("sub_amr_post_opac_halo");
                 prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
                 PRJ_SUBTIMER_STOP("sub_amr_post_opac_halo");
-                if (prj_z4c_runtime_enabled(&sim.mesh)) {
-                    PRJ_SUBTIMER_START("sub_amr_post_z4c");
-                    prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
-                    PRJ_SUBTIMER_STOP("sub_amr_post_z4c");
-                }
             #if PRJ_USE_GRAVITY
                 if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
                     PRJ_SUBTIMER_START("sub_amr_post_grav");
