@@ -81,15 +81,6 @@ typedef double prj_table_real;
 #ifndef PRJ_INCLUDE_RADIATION_VISCOSITY
 #define PRJ_INCLUDE_RADIATION_VISCOSITY 1
 #endif
-/* Guard for the truncated-Neumann closure solve (see prj_rad_gr_m1_pressure_data).
- * The velocity coupling matrix N = thick_w*base_coef has ||N||_inf bounded by
- * 1.5*base_row_absmax; when that bound is below this threshold the series
- * I+N+N^2+... converges geometrically and a handful of terms reach machine
- * precision, so we take the cheap branch-free path instead of Gaussian
- * elimination. Above it (relativistic cells) we fall back to the full solve. */
-#ifndef PRJ_RAD_GR_M1_NEUMANN_MAXNORM
-#define PRJ_RAD_GR_M1_NEUMANN_MAXNORM 1.0e-2
-#endif
 /* Convergence tolerance for the fluid-frame flux-factor root-find (Newton and
  * the Illinois fallback): |g(fbar)| and the Illinois bracket width. */
 #ifndef PRJ_RAD_GR_M1_FBAR_TOL

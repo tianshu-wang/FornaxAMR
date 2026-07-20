@@ -1392,58 +1392,32 @@ static const int prj_rad_gr_m1_sym_j[6] = {0, 1, 2, 1, 2, 2};
 typedef struct prj_rad_gr_m1_pressure_data {
     const prj_rad *rad;
     const prj_rad_gr_m1_closure_ctx *ctx;
+    const prj_rad_gr_m1_side_data *side;
     double E;
-    double Fcov[3];
-    double Fcon[3];
     double Fhat_con[3];
     double Pthin[3][3];
-    double A0[3][3];
-    double vcon[3];
-    double vcov[3];
-    double u_cov[3];
-    double h_mix[3][3];
     double H0[3];
-    double Hcoef[3][6];
-    double Jcoef[6];
-    double wlor;
     double J0;
-    double beta2;
     double f_euler;
-    /* fbar-independent pieces of the 6x6 closure system, precomputed once per
-     * solve so each root-finding evaluation (Newton or the Illinois fallback)
-     * only rescales by the scalars thin_w/thick_w instead of rebuilding
-     * A0/H0/vcon products every iteration. Evaluation order matches the inline
-     * expressions it replaces so the result is bit-identical (no -ffast-math
-     * reassociation). */
-    double base_coef[6][6];
-    double Pthin_sym[6];
-    double Prad_sym[6];
     /* Closed-form optically-thick pressure tensor P_TH^{ij} (Shibata et al.
      * eqs 6.17-6.19 with viscosity, or 29-31 without). Built once per group in
      * prepare_pressure; the per-fbar closure is then the explicit blend
      * P = thin_w*Pthin + thick_w*Pthick with no linear solve. */
     double Pthick[3][3];
-    /* Max row-sum of |base_coef|. The per-fbar system is (I - thick_w*base_coef)
-     * P = rhs; base_coef carries the fluid-velocity coupling and scales as
-     * O(v^2/c^2), so for non-relativistic flows this matrix is I minus a tiny
-     * perturbation. When |thick_w|*base_row_absmax is safely < 1 the inverse is
-     * evaluated as a truncated Neumann series (a few branch-free 6x6 mat-vecs)
-     * instead of a full Gaussian elimination; decided once per group here so the
-     * per-iteration solve carries no norm/branch overhead. */
-    double base_row_absmax;
 } prj_rad_gr_m1_pressure_data;
 
 #if PRJ_INCLUDE_RADIATION_VISCOSITY
 /* Per-side kinematics + shear for the GR M1 closure. Depends only on the fluid
  * velocity and the face geometry (NOT on E/F or opacity), so it is identical
  * for every energy group of a face side. Split out of prepare_pressure so the
- * interface flux can build it once per side instead of once per group; the
- * arithmetic (including operand order for the A0/h_mix/Jcoef/Hcoef terms) is
- * unchanged, so prepare_pressure below reproduces the old result bit-for-bit. */
+ * interface flux can build it once per side instead of once per group. */
 void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
     prj_rad_gr_m1_side_data *side)
 {
     double beta2;
+    double h_mix[3][3];
+    double divu;
+    double sigma2;
     int a;
     int b;
     int m;
@@ -1472,15 +1446,12 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
     }
 
     prj_rad_gr_m1_shear(ctx, side->vcon, side->vcov, side->wlor,
-        side->sigma_con, &side->divu, &side->sigma2);
+        side->sigma_con, &divu, &sigma2);
     side->lbar_by_shear = prj_rad_gr_m1_lbar_by_shear(
-        side->wlor * side->wlor * side->beta2, side->sigma2);
+        side->wlor * side->wlor * side->beta2, sigma2);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
-            side->A0_kin[a][b] =
-                (ctx->gamma_inv[a][b] + 4.0 * side->vcon[a] * side->vcon[b]) /
-                    3.0;
-            side->h_mix[a][b] = (a == b ? 1.0 : 0.0) +
+            h_mix[a][b] = (a == b ? 1.0 : 0.0) +
                 side->wlor * side->wlor * side->vcon[a] * side->vcov[b];
         }
     }
@@ -1492,49 +1463,21 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
         side->Jcoef[m] = side->u_cov[p] * side->u_cov[q] *
             (p == q ? 1.0 : 2.0);
         for (a = 0; a < 3; ++a) {
-            side->Hcoef[a][m] = -side->h_mix[a][p] * side->u_cov[q];
+            side->Hcoef[a][m] = -h_mix[a][p] * side->u_cov[q];
             if (p != q) {
-                side->Hcoef[a][m] -= side->h_mix[a][q] * side->u_cov[p];
+                side->Hcoef[a][m] -= h_mix[a][q] * side->u_cov[p];
             }
         }
-    }
-
-    /* Velocity/metric-only parts of the closure coefficient matrix (see the
-     * struct comment). base_coef_kin is the A0_kin + Hcoef*vcon contribution;
-     * sigma_jcoef isolates the shear part that prepare_pressure scales by lbar.
-     * Row sums (of |.|) bound ||base_coef||_inf for the Neumann guard. */
-    for (m = 0; m < 6; ++m) {
-        int i = prj_rad_gr_m1_sym_i[m];
-        int j = prj_rad_gr_m1_sym_j[m];
-        double kin_row = 0.0;
-        double sig_row = 0.0;
-        int n;
-
-        for (n = 0; n < 6; ++n) {
-            double kin = side->A0_kin[i][j] * side->Jcoef[n] +
-                side->Hcoef[i][n] * side->vcon[j] +
-                side->Hcoef[j][n] * side->vcon[i];
-            double sig = side->sigma_con[i][j] * side->Jcoef[n];
-
-            side->base_coef_kin[m][n] = kin;
-            side->sigma_jcoef[m][n] = sig;
-            kin_row += fabs(kin);
-            sig_row += fabs(sig);
-        }
-        side->base_kin_rowsum[m] = kin_row;
-        side->sigma_jcoef_rowsum[m] = sig_row;
     }
 }
 #else /* !PRJ_INCLUDE_RADIATION_VISCOSITY */
 /* Inviscid per-side kinematics for the GR M1 closure: identical to the viscous
- * prepare_side above but with the radiation shear-viscosity machinery removed
- * (no shear tensor, no mean-free-path length, no sigma_jcoef). With the
- * -(4 lbar/15) sigma term gone, base_coef == base_coef_kin, so only that piece
- * is built here and its row sum is the exact ||base_coef||_inf. */
+ * prepare_side above but with the radiation shear-viscosity machinery removed. */
 void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
     prj_rad_gr_m1_side_data *side)
 {
     double beta2;
+    double h_mix[3][3];
     int a;
     int b;
     int m;
@@ -1564,10 +1507,7 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
 
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
-            side->A0_kin[a][b] =
-                (ctx->gamma_inv[a][b] + 4.0 * side->vcon[a] * side->vcon[b]) /
-                    3.0;
-            side->h_mix[a][b] = (a == b ? 1.0 : 0.0) +
+            h_mix[a][b] = (a == b ? 1.0 : 0.0) +
                 side->wlor * side->wlor * side->vcon[a] * side->vcov[b];
         }
     }
@@ -1579,28 +1519,11 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
         side->Jcoef[m] = side->u_cov[p] * side->u_cov[q] *
             (p == q ? 1.0 : 2.0);
         for (a = 0; a < 3; ++a) {
-            side->Hcoef[a][m] = -side->h_mix[a][p] * side->u_cov[q];
+            side->Hcoef[a][m] = -h_mix[a][p] * side->u_cov[q];
             if (p != q) {
-                side->Hcoef[a][m] -= side->h_mix[a][q] * side->u_cov[p];
+                side->Hcoef[a][m] -= h_mix[a][q] * side->u_cov[p];
             }
         }
-    }
-
-    for (m = 0; m < 6; ++m) {
-        int i = prj_rad_gr_m1_sym_i[m];
-        int j = prj_rad_gr_m1_sym_j[m];
-        double kin_row = 0.0;
-        int n;
-
-        for (n = 0; n < 6; ++n) {
-            double kin = side->A0_kin[i][j] * side->Jcoef[n] +
-                side->Hcoef[i][n] * side->vcon[j] +
-                side->Hcoef[j][n] * side->vcon[i];
-
-            side->base_coef_kin[m][n] = kin;
-            kin_row += fabs(kin);
-        }
-        side->base_kin_rowsum[m] = kin_row;
     }
 }
 #endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
@@ -1622,6 +1545,8 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
     prj_rad_gr_m1_pressure_data *data)
 {
+    double Fcov[3];
+    double Fcon[3];
     double F2;
     double Fmag;
     double cE;
@@ -1631,22 +1556,21 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
     double lbar;
     int a;
     int b;
-    int m;
 
-    memset(data, 0, sizeof(*data));
     data->rad = rad;
     data->ctx = ctx;
+    data->side = side;
     if (!isfinite(E) || E < 0.0) {
         E = 0.0;
     }
     data->E = E;
     for (a = 0; a < 3; ++a) {
-        data->Fcov[a] = isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
+        Fcov[a] = isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
     }
-    prj_rad_gr_m1_raise_vec_ctx(ctx, data->Fcov, data->Fcon);
+    prj_rad_gr_m1_raise_vec_ctx(ctx, Fcov, Fcon);
     F2 = 0.0;
     for (a = 0; a < 3; ++a) {
-        F2 += data->Fcov[a] * data->Fcon[a];
+        F2 += Fcov[a] * Fcon[a];
     }
     if (!isfinite(F2) || F2 < 0.0) {
         F2 = 0.0;
@@ -1657,8 +1581,8 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         double scale = cE / Fmag;
 
         for (a = 0; a < 3; ++a) {
-            data->Fcov[a] *= scale;
-            data->Fcon[a] *= scale;
+            Fcov[a] *= scale;
+            Fcon[a] *= scale;
         }
         F2 *= scale * scale;
         Fmag = cE;
@@ -1668,49 +1592,37 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         data->f_euler = 1.0;
     }
 
-    memset(data->Pthin, 0, sizeof(data->Pthin));
     if (E > 0.0 && F2 > 0.0) {
         for (a = 0; a < 3; ++a) {
             for (b = 0; b < 3; ++b) {
-                data->Pthin[a][b] = E * data->Fcon[a] * data->Fcon[b] / F2;
+                data->Pthin[a][b] = E * Fcon[a] * Fcon[b] / F2;
+            }
+        }
+    } else {
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                data->Pthin[a][b] = 0.0;
             }
         }
     }
 
-    /* Per-side kinematics were computed once in prj_rad_gr_m1_prepare_side. */
     for (a = 0; a < 3; ++a) {
-        data->vcon[a] = side->vcon[a];
-        data->vcov[a] = side->vcov[a];
-        data->u_cov[a] = side->u_cov[a];
-        data->Fhat_con[a] = data->Fcon[a] / PRJ_CLIGHT;
-    }
-    data->wlor = side->wlor;
-    data->beta2 = side->beta2;
-    memcpy(data->h_mix, side->h_mix, sizeof(data->h_mix));
-    memcpy(data->Jcoef, side->Jcoef, sizeof(data->Jcoef));
-    memcpy(data->Hcoef, side->Hcoef, sizeof(data->Hcoef));
-
-    lbar = prj_rad_gr_m1_lbar_from_side(ctx, side);
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            data->A0[a][b] = side->A0_kin[a][b] -
-                (4.0 * lbar / 15.0) * side->sigma_con[a][b];
-        }
+        data->Fhat_con[a] = Fcon[a] / PRJ_CLIGHT;
     }
 
     FdotV = 0.0;
     for (a = 0; a < 3; ++a) {
-        FdotV += data->Fhat_con[a] * data->vcov[a];
+        FdotV += data->Fhat_con[a] * side->vcov[a];
     }
-    Fdotu = data->wlor * FdotV;
-    data->J0 = E * data->wlor * data->wlor - 2.0 * data->wlor * Fdotu;
-    Q0 = E * data->wlor - Fdotu;
+    Fdotu = side->wlor * FdotV;
+    data->J0 = E * side->wlor * side->wlor - 2.0 * side->wlor * Fdotu;
+    Q0 = E * side->wlor - Fdotu;
     for (a = 0; a < 3; ++a) {
-        double h_n = -data->wlor * data->wlor * data->vcon[a];
+        double h_n = -side->wlor * side->wlor * side->vcon[a];
         double h_F = data->Fhat_con[a] +
-            data->wlor * data->wlor * data->vcon[a] * FdotV;
+            side->wlor * side->wlor * side->vcon[a] * FdotV;
 
-        data->H0[a] = Q0 * h_n + data->wlor * h_F;
+        data->H0[a] = Q0 * h_n + side->wlor * h_F;
     }
 
     /* Closed-form optically-thick pressure tensor (eqs 6.17-6.19); the per-fbar
@@ -1719,66 +1631,24 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         double Fhat_cov[3];
 
         for (a = 0; a < 3; ++a) {
-            Fhat_cov[a] = data->Fcov[a] / PRJ_CLIGHT;
+            Fhat_cov[a] = Fcov[a] / PRJ_CLIGHT;
         }
+        lbar = prj_rad_gr_m1_lbar_from_side(ctx, side);
         prj_rad_gr_m1_pressure_thick(ctx, side, lbar, E, data->Fhat_con,
             Fhat_cov, data->Pthick);
-    }
-
-    /* Precompute the fbar-independent RHS terms (symmetric-storage Pthin/Prad).
-     * The coefficient matrix itself is assembled just below from the per-side
-     * pieces. */
-    for (m = 0; m < 6; ++m) {
-        int i = prj_rad_gr_m1_sym_i[m];
-        int j = prj_rad_gr_m1_sym_j[m];
-
-        data->Pthin_sym[m] = data->Pthin[i][j];
-        data->Prad_sym[m] = data->A0[i][j] * data->J0 +
-            data->H0[i] * data->vcon[j] +
-            data->H0[j] * data->vcon[i];
-    }
-
-    /* base_coef = base_coef_kin - (4 lbar/15) * sigma_jcoef. Both matrices are
-     * velocity/metric-only (E/F-independent) and were built once per side in
-     * prepare_side; here only the scalar lbar (opacity-dependent, hence per
-     * group) recombines them, replacing the full 6x6 triple-product build. The
-     * distributed multiply rounds differently than the old fused form, so the
-     * result matches to rounding (~1e-16), not bit-for-bit. */
-    {
-        double clbar = (4.0 * lbar / 15.0);
-
-        data->base_row_absmax = 0.0;
-        for (m = 0; m < 6; ++m) {
-            int n;
-
-            for (n = 0; n < 6; ++n) {
-                data->base_coef[m][n] = side->base_coef_kin[m][n] -
-                    clbar * side->sigma_jcoef[m][n];
-            }
-            /* Upper bound on the row sum of |base_coef| via the triangle
-             * inequality; conservative for the Neumann guard (may fall back to
-             * the full solve slightly more often, never less safely). */
-            {
-                double row = side->base_kin_rowsum[m] +
-                    fabs(clbar) * side->sigma_jcoef_rowsum[m];
-
-                if (row > data->base_row_absmax) {
-                    data->base_row_absmax = row;
-                }
-            }
-        }
     }
 }
 #else /* !PRJ_INCLUDE_RADIATION_VISCOSITY */
 /* Inviscid closure assembly + E/F -> fluid-frame J/H conversion: identical to
  * the viscous prepare_pressure above but with the radiation-viscosity term
- * dropped. A0 == A0_kin (no lbar, no shear), so Prad and the coefficient matrix
- * carry no mean-free-path dependence, and base_coef == base_coef_kin. */
+ * dropped. */
 static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
     prj_rad_gr_m1_pressure_data *data)
 {
+    double Fcov[3];
+    double Fcon[3];
     double F2;
     double Fmag;
     double cE;
@@ -1787,22 +1657,21 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
     double Q0;
     int a;
     int b;
-    int m;
 
-    memset(data, 0, sizeof(*data));
     data->rad = rad;
     data->ctx = ctx;
+    data->side = side;
     if (!isfinite(E) || E < 0.0) {
         E = 0.0;
     }
     data->E = E;
     for (a = 0; a < 3; ++a) {
-        data->Fcov[a] = isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
+        Fcov[a] = isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
     }
-    prj_rad_gr_m1_raise_vec_ctx(ctx, data->Fcov, data->Fcon);
+    prj_rad_gr_m1_raise_vec_ctx(ctx, Fcov, Fcon);
     F2 = 0.0;
     for (a = 0; a < 3; ++a) {
-        F2 += data->Fcov[a] * data->Fcon[a];
+        F2 += Fcov[a] * Fcon[a];
     }
     if (!isfinite(F2) || F2 < 0.0) {
         F2 = 0.0;
@@ -1813,8 +1682,8 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         double scale = cE / Fmag;
 
         for (a = 0; a < 3; ++a) {
-            data->Fcov[a] *= scale;
-            data->Fcon[a] *= scale;
+            Fcov[a] *= scale;
+            Fcon[a] *= scale;
         }
         F2 *= scale * scale;
         Fmag = cE;
@@ -1824,48 +1693,37 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         data->f_euler = 1.0;
     }
 
-    memset(data->Pthin, 0, sizeof(data->Pthin));
     if (E > 0.0 && F2 > 0.0) {
         for (a = 0; a < 3; ++a) {
             for (b = 0; b < 3; ++b) {
-                data->Pthin[a][b] = E * data->Fcon[a] * data->Fcon[b] / F2;
+                data->Pthin[a][b] = E * Fcon[a] * Fcon[b] / F2;
+            }
+        }
+    } else {
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                data->Pthin[a][b] = 0.0;
             }
         }
     }
 
-    /* Per-side kinematics were computed once in prj_rad_gr_m1_prepare_side. */
     for (a = 0; a < 3; ++a) {
-        data->vcon[a] = side->vcon[a];
-        data->vcov[a] = side->vcov[a];
-        data->u_cov[a] = side->u_cov[a];
-        data->Fhat_con[a] = data->Fcon[a] / PRJ_CLIGHT;
-    }
-    data->wlor = side->wlor;
-    data->beta2 = side->beta2;
-    memcpy(data->h_mix, side->h_mix, sizeof(data->h_mix));
-    memcpy(data->Jcoef, side->Jcoef, sizeof(data->Jcoef));
-    memcpy(data->Hcoef, side->Hcoef, sizeof(data->Hcoef));
-
-    /* No radiation viscosity: A0 is the pure kinematic Eddington tensor. */
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            data->A0[a][b] = side->A0_kin[a][b];
-        }
+        data->Fhat_con[a] = Fcon[a] / PRJ_CLIGHT;
     }
 
     FdotV = 0.0;
     for (a = 0; a < 3; ++a) {
-        FdotV += data->Fhat_con[a] * data->vcov[a];
+        FdotV += data->Fhat_con[a] * side->vcov[a];
     }
-    Fdotu = data->wlor * FdotV;
-    data->J0 = E * data->wlor * data->wlor - 2.0 * data->wlor * Fdotu;
-    Q0 = E * data->wlor - Fdotu;
+    Fdotu = side->wlor * FdotV;
+    data->J0 = E * side->wlor * side->wlor - 2.0 * side->wlor * Fdotu;
+    Q0 = E * side->wlor - Fdotu;
     for (a = 0; a < 3; ++a) {
-        double h_n = -data->wlor * data->wlor * data->vcon[a];
+        double h_n = -side->wlor * side->wlor * side->vcon[a];
         double h_F = data->Fhat_con[a] +
-            data->wlor * data->wlor * data->vcon[a] * FdotV;
+            side->wlor * side->wlor * side->vcon[a] * FdotV;
 
-        data->H0[a] = Q0 * h_n + data->wlor * h_F;
+        data->H0[a] = Q0 * h_n + side->wlor * h_F;
     }
 
     /* Closed-form optically-thick pressure tensor (eqs 29-31); the per-fbar
@@ -1874,34 +1732,10 @@ static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
         double Fhat_cov[3];
 
         for (a = 0; a < 3; ++a) {
-            Fhat_cov[a] = data->Fcov[a] / PRJ_CLIGHT;
+            Fhat_cov[a] = Fcov[a] / PRJ_CLIGHT;
         }
         prj_rad_gr_m1_pressure_thick(ctx, side, E, data->Fhat_con,
             Fhat_cov, data->Pthick);
-    }
-
-    for (m = 0; m < 6; ++m) {
-        int i = prj_rad_gr_m1_sym_i[m];
-        int j = prj_rad_gr_m1_sym_j[m];
-
-        data->Pthin_sym[m] = data->Pthin[i][j];
-        data->Prad_sym[m] = data->A0[i][j] * data->J0 +
-            data->H0[i] * data->vcon[j] +
-            data->H0[j] * data->vcon[i];
-    }
-
-    /* base_coef == base_coef_kin (no viscosity); base_kin_rowsum is then the
-     * exact row-sum bound on ||base_coef||_inf for the Neumann guard. */
-    data->base_row_absmax = 0.0;
-    for (m = 0; m < 6; ++m) {
-        int n;
-
-        for (n = 0; n < 6; ++n) {
-            data->base_coef[m][n] = side->base_coef_kin[m][n];
-        }
-        if (side->base_kin_rowsum[m] > data->base_row_absmax) {
-            data->base_row_absmax = side->base_kin_rowsum[m];
-        }
     }
 }
 #endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
@@ -2058,6 +1892,7 @@ static double prj_rad_gr_m1_derived_fbar(
     const prj_rad_gr_m1_pressure_data *data, const double P[3][3])
 {
     const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
+    const prj_rad_gr_m1_side_data *side = data->side;
     double R0;
     double Rcon[3];
     double J;
@@ -2070,23 +1905,23 @@ static double prj_rad_gr_m1_derived_fbar(
      * M^{00}=E, M^{0i}=F^i/c, M^{ij}=P^{ij}.  Eq. 6.24 then uses
      * h_{alpha gamma} R^alpha R^gamma / J^2 with
      * R^alpha=M^{alpha beta}u_beta and J=M^{alpha beta}u_alpha u_beta. */
-    R0 = -data->E * data->wlor;
+    R0 = -data->E * side->wlor;
     J = data->J0;
     for (a = 0; a < 3; ++a) {
-        R0 += data->Fhat_con[a] * data->u_cov[a];
-        Rcon[a] = -data->wlor * data->Fhat_con[a];
+        R0 += data->Fhat_con[a] * side->u_cov[a];
+        Rcon[a] = -side->wlor * data->Fhat_con[a];
         for (b = 0; b < 3; ++b) {
-            Rcon[a] += P[a][b] * data->u_cov[b];
-            J += P[a][b] * data->u_cov[a] * data->u_cov[b];
+            Rcon[a] += P[a][b] * side->u_cov[b];
+            J += P[a][b] * side->u_cov[a] * side->u_cov[b];
         }
     }
 
-    numerator = (data->wlor * data->wlor - 1.0) * R0 * R0;
+    numerator = (side->wlor * side->wlor - 1.0) * R0 * R0;
     for (a = 0; a < 3; ++a) {
-        numerator += -2.0 * data->wlor * data->u_cov[a] * R0 * Rcon[a];
+        numerator += -2.0 * side->wlor * side->u_cov[a] * R0 * Rcon[a];
         for (b = 0; b < 3; ++b) {
             numerator += (ctx->gamma[a][b] +
-                data->u_cov[a] * data->u_cov[b]) * Rcon[a] * Rcon[b];
+                side->u_cov[a] * side->u_cov[b]) * Rcon[a] * Rcon[b];
         }
     }
     if (!isfinite(numerator) || numerator < 0.0) {
@@ -2194,7 +2029,7 @@ static void prj_rad_gr_m1_pressure_implicit(
     double hi = 1.0;
     int iter;
 
-    if (data->beta2 < PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA *
+    if (data->side->beta2 < PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA *
             PRJ_RAD_GR_M1_EULERIAN_FBAR_BETA) {
         prj_rad_gr_m1_pressure_for_fbar(data, data->f_euler, P);
         if (fbar_out != 0) {
@@ -2392,6 +2227,7 @@ static void prj_rad_gr_m1_decompose_m2(
     double ucov[4], double hcon[4][4], double hcov[4][4])
 {
     const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
+    const prj_rad_gr_m1_side_data *side = data->side;
     double M2[4][4];
     double J = data->J0;
     int a;
@@ -2412,7 +2248,7 @@ static void prj_rad_gr_m1_decompose_m2(
         int i = prj_rad_gr_m1_sym_i[m];
         int j = prj_rad_gr_m1_sym_j[m];
 
-        J += data->Jcoef[m] * P[i][j];
+        J += side->Jcoef[m] * P[i][j];
     }
     *J_out = J;
 
@@ -2423,21 +2259,21 @@ static void prj_rad_gr_m1_decompose_m2(
             int i = prj_rad_gr_m1_sym_i[m];
             int j = prj_rad_gr_m1_sym_j[m];
 
-            H[a + 1] += data->Hcoef[a][m] * P[i][j];
+            H[a + 1] += side->Hcoef[a][m] * P[i][j];
         }
-        H[0] += data->u_cov[a] * H[a + 1];
+        H[0] += side->u_cov[a] * H[a + 1];
     }
-    if (data->wlor > 0.0) {
-        H[0] /= data->wlor;
+    if (side->wlor > 0.0) {
+        H[0] /= side->wlor;
     } else {
         H[0] = 0.0;
     }
 
-    ucon[0] = data->wlor;
-    ucov[0] = -data->wlor;
+    ucon[0] = side->wlor;
+    ucov[0] = -side->wlor;
     for (a = 0; a < 3; ++a) {
-        ucon[a + 1] = data->wlor * data->vcon[a];
-        ucov[a + 1] = data->u_cov[a];
+        ucon[a + 1] = side->wlor * side->vcon[a];
+        ucov[a + 1] = side->u_cov[a];
     }
 
     memset(hcon, 0, 16 * sizeof(double));
@@ -2506,6 +2342,7 @@ static void prj_rad_gr_m1_frequency_drifts(
     double momentum_drift_cov[3])
 {
     const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
+    const prj_rad_gr_m1_side_data *side = data->side;
     double J;
     double H[4];
     double L[4][4];
@@ -2622,16 +2459,16 @@ static void prj_rad_gr_m1_frequency_drifts(
 
         for (a = 0; a < 3; ++a) {
             for (b = 0; b < 3; ++b) {
-                dv2 += ctx->dgamma[d][a][b] * data->vcon[a] *
-                    data->vcon[b] +
-                    2.0 * ctx->gamma[a][b] * data->vcon[a] *
+                dv2 += ctx->dgamma[d][a][b] * side->vcon[a] *
+                    side->vcon[b] +
+                    2.0 * ctx->gamma[a][b] * side->vcon[a] *
                     ctx->dvdx[d][b];
             }
         }
-        dLam[d] = 0.5 * data->wlor * data->wlor * data->wlor * dv2;
+        dLam[d] = 0.5 * side->wlor * side->wlor * side->wlor * dv2;
         for (k = 0; k < 3; ++k) {
-            dLv[d][k] = dLam[d] * data->vcon[k] +
-                data->wlor * ctx->dvdx[d][k];
+            dLv[d][k] = dLam[d] * side->vcon[k] +
+                side->wlor * ctx->dvdx[d][k];
         }
     }
     for (d = 0; d < 3; ++d) {
@@ -2667,11 +2504,11 @@ static void prj_rad_gr_m1_frequency_drifts(
     Rn = 0.0;
     On = M3[0][0][0] * nDLam;
     for (i = 0; i < 3; ++i) {
-        Rn += (M3[0][0][0] * data->vcon[i] - M3[0][0][i + 1]) *
+        Rn += (M3[0][0][0] * side->vcon[i] - M3[0][0][i + 1]) *
             geom->dalpha[i] * inv_alpha;
         On += M3[0][0][i + 1] * dLam[i];
         for (k = 0; k < 3; ++k) {
-            Rn -= Ycov[k] * data->vcon[i] * geom->dbeta[i][k] * inv_alpha;
+            Rn -= Ycov[k] * side->vcon[i] * geom->dbeta[i][k] * inv_alpha;
             On -= Xmix[k][i] * dLv[i][k];
         }
     }
@@ -2682,11 +2519,11 @@ static void prj_rad_gr_m1_frequency_drifts(
 
             Rn += Xki * ctx->K_dd[k][i];
             for (m = 0; m < 3; ++m) {
-                Rn -= 0.5 * Xki * data->vcon[m] * ctx->dgamma[m][k][i];
+                Rn -= 0.5 * Xki * side->vcon[m] * ctx->dgamma[m][k][i];
             }
         }
     }
-    Rn *= data->wlor;
+    Rn *= side->wlor;
     if (energy_drift != 0) {
         *energy_drift = -PRJ_CLIGHT * (Rn + On);
     }
@@ -2708,11 +2545,11 @@ static void prj_rad_gr_m1_frequency_drifts(
             }
         }
         for (i = 0; i < 3; ++i) {
-            Rg += (Ycov[j] * data->vcon[i] - Xmix[j][i]) *
+            Rg += (Ycov[j] * side->vcon[i] - Xmix[j][i]) *
                 geom->dalpha[i] * inv_alpha;
             Og += Xmix[j][i] * dLam[i];
             for (k = 0; k < 3; ++k) {
-                Rg -= Xcov[j][k] * data->vcon[i] * geom->dbeta[i][k] *
+                Rg -= Xcov[j][k] * side->vcon[i] * geom->dbeta[i][k] *
                     inv_alpha;
             }
         }
@@ -2722,12 +2559,12 @@ static void prj_rad_gr_m1_frequency_drifts(
                 Rg += Wmix[k][i] * ctx->K_dd[k][i];
                 Og -= Wmix[k][i] * dLv_cov[i][k];
                 for (m = 0; m < 3; ++m) {
-                    Rg -= 0.5 * Wmix[k][i] * data->vcon[m] *
+                    Rg -= 0.5 * Wmix[k][i] * side->vcon[m] *
                         ctx->dgamma[m][k][i];
                 }
             }
         }
-        Rg *= data->wlor;
+        Rg *= side->wlor;
         /* One PRJ_CLIGHT for gradient units, one to convert the F/c legs of
          * M3 back to the evolved physical flux F_j. */
         momentum_drift_cov[j] = -PRJ_CLIGHT * PRJ_CLIGHT * (Rg + Og);
