@@ -2492,18 +2492,17 @@ static void prj_rad_gr_m1_decompose_m2(
  * d_i beta^k, d_m gamma_ki and K_ij, so the spectral gravitational redshift
  * is complete here.  The observer-acceleration terms O (Eqs. 147/150)
  * involve n^mu d_mu = (d_t - beta^i d_i)/alpha of the Lorentz factor W and
- * of W v^k; the -beta^i d_i part is included, while the d_t part is dropped
- * because stage-time fluid derivatives are not available at this point in
- * the update.  That truncation vanishes for stationary flow and is the only
- * remaining incompleteness of this term.  (The energy-INTEGRATED budget is
- * unaffected either way: the geometric sources in prj_src_gr_m1_z4c act on
- * every group, and this bin redistribution telescopes to zero.)  The same
- * d_t truncation still applies to the shear tensor used by the
- * radiation-viscosity closure (prj_rad_gr_m1_shear), an O(v) correction to
+ * of W v^k; RK2/eSSPRK callers provide the d_t pieces through the
+ * observer_time_derivative array, while other paths pass zeros.  (The
+ * energy-INTEGRATED budget is unaffected either way: the geometric sources in
+ * prj_src_gr_m1_z4c act on every group, and this bin redistribution telescopes
+ * to zero.)  The same d_t truncation still applies to the shear tensor used by
+ * the radiation-viscosity closure (prj_rad_gr_m1_shear), an O(v) correction to
  * an already O(lbar) term. */
 static void prj_rad_gr_m1_frequency_drifts(
     const prj_rad_gr_m1_pressure_data *data, const double P[3][3],
-    double fbar, const prj_z4c_hydro_geom *geom, double *energy_drift,
+    double fbar, const prj_z4c_hydro_geom *geom,
+    const double observer_time_derivative[4], double *energy_drift,
     double momentum_drift_cov[3])
 {
     const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
@@ -2644,16 +2643,23 @@ static void prj_rad_gr_m1_frequency_drifts(
         }
     }
     inv_alpha = 1.0 / geom->alpha;
-    /* n^mu d_mu = (d_t - beta^i d_i)/alpha; d_t dropped (see comment). */
-    nDLam = 0.0;
+    /* n^mu d_mu = (d_t - beta^i d_i)/alpha.  The supplied d_t terms are per
+     * second; divide by c to match the spatial-gradient 1/cm units here. */
+    nDLam = observer_time_derivative != 0 &&
+        isfinite(observer_time_derivative[0]) ?
+        observer_time_derivative[0] / PRJ_CLIGHT : 0.0;
     for (i = 0; i < 3; ++i) {
-        nDLam -= geom->beta[i] * inv_alpha * dLam[i];
+        nDLam -= geom->beta[i] * dLam[i];
     }
+    nDLam *= inv_alpha;
     for (k = 0; k < 3; ++k) {
-        nDLv[k] = 0.0;
+        nDLv[k] = observer_time_derivative != 0 &&
+            isfinite(observer_time_derivative[1 + k]) ?
+            observer_time_derivative[1 + k] / PRJ_CLIGHT : 0.0;
         for (i = 0; i < 3; ++i) {
-            nDLv[k] -= geom->beta[i] * inv_alpha * dLv[i][k];
+            nDLv[k] -= geom->beta[i] * dLv[i][k];
         }
+        nDLv[k] *= inv_alpha;
     }
 
     /* Energy projection: R_n (Eq. 146) and O_n (Eq. 147), without the
@@ -4170,7 +4176,8 @@ static void prj_rad_gr_m1_freq_base_closure_ctx(const prj_z4c_hydro_geom *geom,
 
 void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     const prj_block *block, int z4c_stage, const double *W_state, double *u,
-    int ic, int jc, int kc, double dt)
+    int ic, int jc, int kc, double dt,
+    const double observer_time_derivative[4])
 {
     double dvcon_dx[3][3];
     prj_z4c_hydro_geom geom;
@@ -4260,7 +4267,7 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                 prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
             }
             prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &geom,
-                &Acon, Mq_cov[g]);
+                observer_time_derivative, &Acon, Mq_cov[g]);
             Acon_spec[g] = Acon * inv_dnu[g];
             for (a = 0; a < 3; ++a) {
                 Mq_spec[g][a] = Mq_cov[g][a] * inv_dnu[g];

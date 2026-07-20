@@ -1085,6 +1085,7 @@ static void check_gr_m1_frequency_third_moment_rest_frame_case(
     double expected_energy_face[PRJ_NEGROUP + 1] = {0.0};
     double expected_momentum_face[PRJ_NEGROUP + 1][3] = {{0.0}};
     double dt = 1.0;
+    double observer_time_derivative[4] = {0.0, 0.0, 0.0, 0.0};
     int field;
     int group;
     int gf;
@@ -1182,7 +1183,7 @@ static void check_gr_m1_frequency_third_moment_rest_frame_case(
     }
 
     prj_rad_freq_flux_apply_gr_m1(&rad, &mesh, block, 0, block->W_rad, u,
-        i, j, k, dt);
+        i, j, k, dt, observer_time_derivative);
     snprintf(name, sizeof(name), "GR frequency energy drift %s",
         expect_upper_donor ? "positive" : "negative");
     assert_close(name, u[PRJ_CONS_RAD_E(0, gtest)],
@@ -1238,6 +1239,7 @@ static void check_gr_m1_frequency_redshift_case(double slope_scale,
     double expected_energy_face[PRJ_NEGROUP + 1] = {0.0};
     double expected_momentum_face[PRJ_NEGROUP + 1][3] = {{0.0}};
     double dt = 1.0;
+    double observer_time_derivative[4] = {0.0, 0.0, 0.0, 0.0};
     int field;
     int group;
     int gf;
@@ -1342,7 +1344,7 @@ static void check_gr_m1_frequency_redshift_case(double slope_scale,
     }
 
     prj_rad_freq_flux_apply_gr_m1(&rad, &mesh, block, 0, block->W_rad, u,
-        i, j, k, dt);
+        i, j, k, dt, observer_time_derivative);
     snprintf(name, sizeof(name), "GR redshift energy drift %s",
         expect_upper_donor ? "positive" : "negative");
     assert_close(name, u[PRJ_CONS_RAD_E(0, gtest)],
