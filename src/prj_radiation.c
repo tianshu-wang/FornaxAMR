@@ -1956,6 +1956,53 @@ static void prj_rad_gr_m1_pressure_thick(const prj_rad_gr_m1_closure_ctx *ctx,
 }
 #endif /* PRJ_INCLUDE_RADIATION_VISCOSITY */
 
+static void prj_rad_gr_m1_prepare_pressure_data_from_cache(
+    const prj_rad *rad, const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_rad_gr_m1_side_data *side, double E,
+    const double Fcov_in[3], double J0, const double H0[3],
+    prj_rad_gr_m1_pressure_data *data)
+{
+    double Fcov[3];
+    double Fcon[3];
+    double F2 = 0.0;
+    double Fmag;
+    double cE;
+    int a;
+
+    memset(data, 0, sizeof(*data));
+    data->rad = rad;
+    data->ctx = ctx;
+    data->side = side;
+    if (!isfinite(E) || E < 0.0) {
+        E = 0.0;
+    }
+    data->E = E;
+    for (a = 0; a < 3; ++a) {
+        Fcov[a] = Fcov_in != 0 && isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
+    }
+    prj_rad_gr_m1_raise_vec_ctx(ctx, Fcov, Fcon);
+    for (a = 0; a < 3; ++a) {
+        F2 += Fcov[a] * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * E;
+    if (Fmag > cE && Fmag > 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            Fcon[a] *= scale;
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        data->Fhat_con[a] = Fcon[a] / PRJ_CLIGHT;
+        data->H0[a] = H0 != 0 ? H0[a] : 0.0;
+    }
+    data->J0 = J0;
+}
+
 static void prj_rad_gr_m1_pressure_for_fbar(
     const prj_rad_gr_m1_pressure_data *data, double fbar, double P[3][3])
 {
@@ -2704,31 +2751,50 @@ void prj_rad_gr_m1_pressure_fbar(const prj_rad *rad,
     }
     prj_rad_gr_m1_prepare_side(ctx, &side);
     prj_rad_gr_m1_pressure_fbar_cached(rad, ctx, &side, E, Fcov_in, P,
-        fbar_out);
+        fbar_out, 0, 0);
 }
 
 void prj_rad_gr_m1_pressure_fbar_cached(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov_in[3],
-    double P[3][3], double *fbar_out)
+    double P[3][3], double *fbar_out, double *J0_out, double H0_out[3])
 {
     prj_rad_gr_m1_pressure_data data;
+    int a;
 
     if (fbar_out != 0) {
         *fbar_out = 0.0;
+    }
+    if (J0_out != 0) {
+        *J0_out = 0.0;
+    }
+    if (H0_out != 0) {
+        for (a = 0; a < 3; ++a) {
+            H0_out[a] = 0.0;
+        }
     }
     if (P == 0 || ctx == 0 || side == 0 || Fcov_in == 0) {
         return;
     }
     prj_rad_gr_m1_prepare_pressure(rad, ctx, side, E, Fcov_in, &data);
     prj_rad_gr_m1_pressure_implicit(&data, P, fbar_out);
+    if (J0_out != 0) {
+        *J0_out = data.J0;
+    }
+    if (H0_out != 0) {
+        for (a = 0; a < 3; ++a) {
+            H0_out[a] = data.H0[a];
+        }
+    }
 }
 
-/* --- Cell-centered closure (P, fbar) cache, shared source -> frequency flux --- */
+/* --- Cell-centered radiation closure cache, shared source -> frequency flux --- */
 #define PRJ_CLCACHE_NCELL (PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE * PRJ_BLOCK_SIZE)
 #define PRJ_CLCACHE_NGRP (PRJ_NRAD * PRJ_NEGROUP)
 static double g_clcache_P[PRJ_CLCACHE_NCELL][PRJ_CLCACHE_NGRP][3][3];
 static double g_clcache_fbar[PRJ_CLCACHE_NCELL][PRJ_CLCACHE_NGRP];
+static double g_clcache_J0[PRJ_CLCACHE_NCELL][PRJ_CLCACHE_NGRP];
+static double g_clcache_H0[PRJ_CLCACHE_NCELL][PRJ_CLCACHE_NGRP][3];
 static const void *g_clcache_block;
 static const void *g_clcache_wrad;
 static int g_clcache_stage = -1;
@@ -2744,19 +2810,28 @@ void prj_rad_gr_m1_closure_cache_begin(const void *block, const void *wrad,
 }
 
 void prj_rad_gr_m1_closure_cache_put(int active_cell, int grp,
-    const double P[3][3], double fbar)
+    const double P[3][3], double fbar, double J0, const double H0[3])
 {
+    int a;
+
     if (!g_clcache_valid || active_cell < 0 ||
         active_cell >= PRJ_CLCACHE_NCELL || grp < 0 || grp >= PRJ_CLCACHE_NGRP) {
         return;
     }
     memcpy(g_clcache_P[active_cell][grp], P, 9 * sizeof(double));
     g_clcache_fbar[active_cell][grp] = fbar;
+    g_clcache_J0[active_cell][grp] = J0;
+    for (a = 0; a < 3; ++a) {
+        g_clcache_H0[active_cell][grp][a] = H0 != 0 ? H0[a] : 0.0;
+    }
 }
 
 int prj_rad_gr_m1_closure_cache_get(const void *block, const void *wrad,
-    int stage, int active_cell, int grp, double P[3][3], double *fbar_out)
+    int stage, int active_cell, int grp, double P[3][3], double *fbar_out,
+    double *J0_out, double H0_out[3])
 {
+    int a;
+
     if (!g_clcache_valid || block != g_clcache_block ||
         wrad != g_clcache_wrad || stage != g_clcache_stage) {
         return 0;
@@ -2768,6 +2843,14 @@ int prj_rad_gr_m1_closure_cache_get(const void *block, const void *wrad,
     memcpy(P, g_clcache_P[active_cell][grp], 9 * sizeof(double));
     if (fbar_out != 0) {
         *fbar_out = g_clcache_fbar[active_cell][grp];
+    }
+    if (J0_out != 0) {
+        *J0_out = g_clcache_J0[active_cell][grp];
+    }
+    if (H0_out != 0) {
+        for (a = 0; a < 3; ++a) {
+            H0_out[a] = g_clcache_H0[active_cell][grp][a];
+        }
     }
     return 1;
 }
@@ -4149,6 +4232,8 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             prj_rad_gr_m1_closure_ctx closure;
             prj_rad_gr_m1_pressure_data pdata;
             double fbar;
+            double J0_cache;
+            double H0_cache[3];
             double Acon = 0.0;
             int cache_hit;
 
@@ -4164,19 +4249,24 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             Fcov[1] = W_state[WIDX(PRJ_RAD_PRIM_F2(field, g), ic, jc, kc)];
             Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
 
-            closure = base_closure;
-            closure.opacity = prj_rad_gr_m1_cell_opacity(block, ic, jc, kc,
-                field, g);
-            prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g], Fcov,
-                &pdata);
-            /* frequency_drifts (via decompose_m2) needs the full pdata, so
-             * prepare_pressure must run; but the geometric source term already
-             * solved the identical closure this stage, so reuse its (P, fbar)
-             * and skip the expensive implicit root-find on a cache hit. */
+            /* The source pass already solved the identical cell-centered
+             * radiation closure this stage. On a cache hit, restore the
+             * radiation-only pieces frequency_drifts needs and rebuild only the
+             * cheap E/Fhat part from W_state. */
             cache_hit = prj_rad_gr_m1_closure_cache_get(block, W_state, z4c_stage,
                     (ic * PRJ_BLOCK_SIZE + jc) * PRJ_BLOCK_SIZE + kc,
-                    field * PRJ_NEGROUP + g, Pg[g], &fbar);
-            if (!cache_hit) {
+                    field * PRJ_NEGROUP + g, Pg[g], &fbar, &J0_cache,
+                    H0_cache);
+            if (cache_hit) {
+                prj_rad_gr_m1_prepare_pressure_data_from_cache(rad,
+                    &base_closure, &pside, Eg[g], Fcov, J0_cache, H0_cache,
+                    &pdata);
+            } else {
+                closure = base_closure;
+                closure.opacity = prj_rad_gr_m1_cell_opacity(block, ic, jc, kc,
+                    field, g);
+                prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g],
+                    Fcov, &pdata);
                 prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
             }
             prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &geom,

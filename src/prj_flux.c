@@ -1018,23 +1018,6 @@ static void prj_flux_gr_face_geom_from_cells(const prj_z4c_hydro_geom *gl,
     }
 }
 
-#if !PRJ_MHD
-static int prj_flux_gr_face_geom(const prj_mesh *mesh, const prj_block *block,
-    int stage, int dir, int il, int jl, int kl, int ir, int jr, int kr,
-    prj_z4c_hydro_geom *geom)
-{
-    prj_z4c_hydro_geom gl;
-    prj_z4c_hydro_geom gr;
-
-    if (!prj_z4c_load_hydro_geom(mesh, block, stage, il, jl, kl, &gl) ||
-        !prj_z4c_load_hydro_geom(mesh, block, stage, ir, jr, kr, &gr)) {
-        return 0;
-    }
-    prj_flux_gr_face_geom_from_cells(&gl, &gr, dir, geom);
-    return 1;
-}
-#endif /* !PRJ_MHD */
-
 static int prj_flux_gr_face_geom_cached(const prj_z4c_hydro_geom *cell_geom,
     int dir, int il, int jl, int kl, int ir, int jr, int kr,
     prj_z4c_hydro_geom *geom)
@@ -1125,14 +1108,13 @@ static void prj_flux_gr_hydro_state_flux(prj_eos *eos, const prj_block *block,
     *speed = fabs(vn) + geom->alpha * cs * sqrt(gnn_inv);
 }
 
-static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
-    const prj_block *block, const double *W_block, const double *eosvar,
-    int z4c_stage, int dir, int i, int j, int k, int il, int jl, int kl,
-    int ir, int jr, int kr, const double *WL, const double *WR,
-    double pL, double pR, double gL, double gR, double *Fl,
+static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_block *block,
+    const double *W_block, const double *eosvar, int z4c_stage,
+    const prj_z4c_hydro_geom *geom, int dir, int i, int j, int k,
+    int il, int jl, int kl, int ir, int jr, int kr, const double *WL,
+    const double *WR, double pL, double pR, double gL, double gR, double *Fl,
     double v_face_loc[3])
 {
-    prj_z4c_hydro_geom geom;
     double UL[PRJ_NVAR_CONS];
     double UR[PRJ_NVAR_CONS];
     double FL[PRJ_NVAR_CONS];
@@ -1142,14 +1124,10 @@ static void prj_flux_gr_hydro_hll(prj_eos *eos, const prj_mesh *mesh,
     double smax;
     int v;
 
-    if (!prj_flux_gr_face_geom(mesh, block, z4c_stage, dir,
-            il, jl, kl, ir, jr, kr, &geom)) {
-        prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
-    }
     prj_flux_gr_hydro_state_flux(eos, block, W_block, eosvar, z4c_stage,
-        &geom, WL, pL, gL, UL, FL, &sL, dir, i, j, k, "left", il, jl, kl);
+        geom, WL, pL, gL, UL, FL, &sL, dir, i, j, k, "left", il, jl, kl);
     prj_flux_gr_hydro_state_flux(eos, block, W_block, eosvar, z4c_stage,
-        &geom, WR, pR, gR, UR, FR, &sR, dir, i, j, k, "right", ir, jr, kr);
+        geom, WR, pR, gR, UR, FR, &sR, dir, i, j, k, "right", ir, jr, kr);
     smax = fmax(sL, sR);
     if (!isfinite(smax)) {
         prj_flux_gr_fail("wavespeed", PRJ_EOS_GR_BAD_STATE, dir, i, j, k);
@@ -1526,7 +1504,7 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag);
 
     prj_rad_gr_m1_pressure_fbar_cached(rad, closure, side, E, Fcov, Pcon,
-        &fbar);
+        &fbar, 0, 0);
 
     U[0] = geom->sqrt_gamma * E;
     F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
@@ -1984,6 +1962,10 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                     int ir;
                     int jr;
                     int kr;
+#if PRJ_DYNAMIC_GR
+                    prj_z4c_hydro_geom gr_face_geom;
+                    int gr_face_geom_ready_for_face = 0;
+#endif
 
                     double v_face_loc[3] = {0.0, 0.0, 0.0};
                     double deltau;
@@ -1991,6 +1973,16 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                     double deltaw;
 
                     prj_flux_face_cells(dir, i, j, k, &il, &jl, &kl, &ir, &jr, &kr);
+#if PRJ_DYNAMIC_GR
+                    if (full_dynamic_gr) {
+                        if (!gr_cell_geom_ready ||
+                            !prj_flux_gr_face_geom_cached(gr_cell_geom, dir,
+                                il, jl, kl, ir, jr, kr, &gr_face_geom)) {
+                            prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
+                        }
+                        gr_face_geom_ready_for_face = 1;
+                    }
+#endif
 
 #if PRJ_MHD
                     deltau = 0.0;
@@ -2011,17 +2003,13 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                         bn = bf_dir[FACE_IDX(dir, i, j, k)];
 #if PRJ_DYNAMIC_GR
                         if (full_dynamic_gr) {
-                            prj_z4c_hydro_geom geom;
-
-                            if (!gr_cell_geom_ready ||
-                                !prj_flux_gr_face_geom_cached(gr_cell_geom, dir,
-                                    il, jl, kl, ir, jr, kr, &geom)) {
+                            if (!gr_face_geom_ready_for_face) {
                                 prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
                             }
                             prj_riemann_gr_hlld(WL, WR, pL, pR, gL, gR,
-                                eos, (const double (*)[3])geom.gamma,
-                                geom.sqrt_gamma, geom.alpha,
-                                geom.beta, bn, Fl, v_face_loc, &bv1, &bv2,
+                                eos, (const double (*)[3])gr_face_geom.gamma,
+                                gr_face_geom.sqrt_gamma, gr_face_geom.alpha,
+                                gr_face_geom.beta, bn, Fl, v_face_loc, &bv1, &bv2,
                                 deltau, deltav, deltaw);
                         } else
 #endif
@@ -2037,10 +2025,13 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
 #else
 #if PRJ_DYNAMIC_GR
                     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-                        prj_flux_gr_hydro_hll(eos, mesh, block,
+                        if (!gr_face_geom_ready_for_face) {
+                            prj_flux_gr_fail("geometry load", -1, dir, i, j, k);
+                        }
+                        prj_flux_gr_hydro_hll(eos, block,
                             W, eosvar, prj_stage_slot_from_bf_arg(use_bf1),
-                            dir, i, j, k, il, jl, kl, ir, jr, kr, WL, WR,
-                            pL, pR, gL, gR, Fl, v_face_loc);
+                            &gr_face_geom, dir, i, j, k, il, jl, kl, ir, jr,
+                            kr, WL, WR, pL, pR, gL, gR, Fl, v_face_loc);
                     } else
 #endif
                     prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl,
@@ -2082,16 +2073,12 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
 
 #if PRJ_DYNAMIC_GR
                         if (full_dynamic_gr) {
-                            prj_z4c_hydro_geom geom;
-
-                            if (!gr_cell_geom_ready ||
-                                !prj_flux_gr_face_geom_cached(gr_cell_geom, dir,
-                                    il, jl, kl, ir, jr, kr, &geom)) {
+                            if (!gr_face_geom_ready_for_face) {
                                 prj_flux_gr_fail("radiation geometry load", -1,
                                     dir, i, j, k);
                             }
                             prj_flux_gr_m1(rad, WL, WR, W, dir,
-                                il, jl, kl, ir, jr, kr, &geom, chi_face,
+                                il, jl, kl, ir, jr, kr, &gr_face_geom, chi_face,
                                 block->dx, Fl);
                         } else
 #endif

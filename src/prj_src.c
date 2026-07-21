@@ -605,12 +605,16 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
                             i, j, k, field, group);
                         {
                             double fbar_cache;
+                            double J0_cache;
+                            double H0_cache[3];
 
                             prj_rad_gr_m1_pressure_fbar_cached(rad, &closure,
-                                &pside, E, Fcov, Pcon, &fbar_cache);
+                                &pside, E, Fcov, Pcon, &fbar_cache,
+                                &J0_cache, H0_cache);
                             prj_rad_gr_m1_closure_cache_put(
                                 (i * PRJ_BLOCK_SIZE + j) * PRJ_BLOCK_SIZE + k,
-                                field * PRJ_NEGROUP + group, Pcon, fbar_cache);
+                                field * PRJ_NEGROUP + group, Pcon, fbar_cache,
+                                J0_cache, H0_cache);
                         }
 
                         /* Eq. 3.37/3.38 are written with c=1.  PRJ stores

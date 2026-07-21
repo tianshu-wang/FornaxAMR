@@ -644,7 +644,9 @@ static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
 
         /* Radiation matter-coupling momentum changes are neglected here:
          * matter coupling is applied after the frequency-space divergence in
-         * the per-cell radiation update. */
+         * the per-cell radiation update. The recovery below reads only the
+         * leading PRJ_NVAR_MHD_CONS slots, so callers do not need to preserve
+         * any radiation entries for u_before/u_after. */
         if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k,
                 &zgeom)) {
             return;
@@ -877,7 +879,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_MHD && PRJ_NRAD > 0
     double *bf_dst[3];
     double u[PRJ_NVAR_CONS];
-    double u_before[PRJ_NVAR_CONS];
+    double u_before[PRJ_NVAR_MHD_CONS];
     double observer_time_derivative[4];
     int d;
     int field;
@@ -890,7 +892,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 
     prj_timeint_cell_cons_from_prim_mhd_rad(eos, mesh, block, 0,
         block->W_mhd, block->W_rad, i, j, k, u);
-    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+    for (v = 0; v < PRJ_NVAR_MHD_CONS; ++v) {
         u_before[v] = u[v];
     }
     prj_timeint_update_dt_src_values(mesh, grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
