@@ -48,8 +48,8 @@ void prj_z4c_init_params(prj_z4c_params *params)
     params->chi_div_floor = -1000.0;
     params->chi_min_floor = 1.0e-12;
     params->floor_chi = 1;
-    params->diss = 0.3;
-    params->damp_kappa1_inv_cm = 1.0e-6;
+    params->diss = 0.5;
+    params->damp_kappa1_inv_cm = 2.0e-7;
     params->damp_kappa2 = 0.0;
     params->lapse_harmonicf = 1.0;
     params->lapse_harmonic = 0.0;
@@ -63,7 +63,7 @@ void prj_z4c_init_params(prj_z4c_params *params)
     params->shift_advect = 1.0;
     params->shift_alpha2Gamma = 0.0;
     params->shift_H = 0.0;
-    params->shift_eta_inv_cm = 1.0e-6;
+    params->shift_eta_inv_cm = 7e-6;
     params->puncture_mass_cm = 1.0;
     params->puncture_center_cm[0] = 0.0;
     params->puncture_center_cm[1] = 0.0;
@@ -884,6 +884,22 @@ double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double 
                     }
                 }
             }
+        }
+    }
+    if (isfinite(mesh->z4c_params.damp_kappa1_inv_cm) &&
+        mesh->z4c_params.damp_kappa1_inv_cm > 0.0) {
+        double dt_damp = cfl / (PRJ_CLIGHT * mesh->z4c_params.damp_kappa1_inv_cm);
+
+        if (dt_damp < dt_min) {
+            dt_min = dt_damp;
+        }
+    }
+    if (isfinite(mesh->z4c_params.shift_eta_inv_cm) &&
+        mesh->z4c_params.shift_eta_inv_cm > 0.0) {
+        double dt_shift = cfl / (PRJ_CLIGHT * mesh->z4c_params.shift_eta_inv_cm);
+
+        if (dt_shift < dt_min) {
+            dt_min = dt_shift;
         }
     }
     return prj_mpi_min_dt(mpi, dt_min);

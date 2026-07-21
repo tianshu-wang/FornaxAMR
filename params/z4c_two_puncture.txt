@@ -19,12 +19,12 @@ max_blocks = 2048
 use_multipole_gravity = 0
 use_full_dynamic_gr = 0
 z4c_lapse_oplog = 1.0
-z4c_shift_eta_inv_cm = 2.0
-z4c_diss = 0.1
+z4c_shift_eta_inv_cm = 7e-6
+z4c_diss = 0.5
 z4c_chi_div_floor = 1.0e-5
 z4c_floor_chi = 1
 z4c_chi_min_floor = 1.0e-8
-z4c_damp_kappa1_inv_cm = 0.0
+z4c_damp_kappa1_inv_cm = 2.0e-7
 z4c_damp_kappa2 = 0.01
 
 z4c_puncture_half_separation_cm = 3.257

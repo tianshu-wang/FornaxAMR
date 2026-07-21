@@ -75,7 +75,7 @@ z4c_floor_chi = 1
 z4c_chi_min_floor = 1.0e-8
 
 # Kreiss-Oliger dissipation on the Z4c fields.
-z4c_diss = 0.3
+z4c_diss = 0.5
 
 # Moving-puncture gauge (1+log lapse + Gamma-driver shift). Dimensional damping
 # parameters are in geometric cm and likely need tuning for the collapse scale.
@@ -83,9 +83,9 @@ z4c_lapse_oplog = 2.0
 z4c_lapse_advect = 1.0
 z4c_shift_Gamma = 1.0
 z4c_shift_advect = 1.0
-z4c_shift_eta_inv_cm = 1.0e-6
+z4c_shift_eta_inv_cm = 7e-6
 
-# Constraint damping (Z4c kappa1/kappa2); kappa1 on at the ~10 km scale (1e-6
-# /cm), kappa2 off. Tune upward if constraint violations grow.
-z4c_damp_kappa1_inv_cm = 1.0e-6
+# Constraint damping (Z4c kappa1/kappa2); kappa1 on at a mild collapse-scale
+# value, kappa2 off. Tune upward if constraint violations grow.
+z4c_damp_kappa1_inv_cm = 2.0e-7
 z4c_damp_kappa2 = 0.0
