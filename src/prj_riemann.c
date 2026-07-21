@@ -446,7 +446,7 @@ void prj_riemann_hlld(const double *WL, const double *WR,
  * collapses when the normal field is dynamically negligible, leaving no
  * constructible pressure root. Detect it by magnetization B_n^2/ptot rather
  * than raw |B_n|, and route such faces to HLLE. */
-#define PRJ_GR_HLLD_BN2_DEGEN 1.0e-14
+#define PRJ_GR_HLLD_BN2_DEGEN 1.0e-10
 
 enum prj_gr_hlld_q {
     PRJ_GRQ_D = 0,

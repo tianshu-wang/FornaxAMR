@@ -22,9 +22,11 @@ where the optically-thick tensor Pthick is the closed form of eqs (29)-(31)
 (fluid-frame isotropy, valid only without radiation viscosity).  fbar is then
 root-found so derived_fbar( P(fbar) ) == fbar.
 
-It tabulates the resulting Eddington factor chi = chi_closure(fbar) over a
-(NF x NMU x NBETA) grid and writes it in a plain-text format that C99 can parse
-with fscanf.
+It tabulates the residual fbar - f, where f is the Eulerian flux factor, and
+the resulting Eddington factor chi = chi_closure(fbar) over a
+(NF x NMU x NBETA) grid and writes them in a plain-text format that C99 can
+parse with fscanf.  Storing fbar - f makes the beta=0 slab exactly small and
+interpolates the smooth correction rather than the leading Eulerian flux.
 
 The closure function chi(xi) is pluggable; the equation being solved uses it too.
 "Levermore" is provided as the default and matches prj_rad_m1_chi_exact() in the
@@ -109,9 +111,9 @@ def solve_slab(f, mu, beta, chi_fn, n_bisect=80):
     """Solve the closure for a slab of cells sharing beta.
 
     f, mu are 1-D arrays of equal length N (already broadcast for this beta).
-    Returns chi (N,) = chi_fn(fbar) at the self-consistent fbar.  The pressure
-    is the explicit M1 blend of the thin closure and the closed-form optically
-    -thick tensor (eqs 29-31) -- no per-cell linear solve.
+    Returns (fbar, chi) at the self-consistent fluid-frame flux factor.  The
+    pressure is the explicit M1 blend of the thin closure and the closed-form
+    optically-thick tensor (eqs 29-31) -- no per-cell linear solve.
     """
     N = f.shape[0]
     E = np.ones(N)
@@ -168,7 +170,7 @@ def solve_slab(f, mu, beta, chi_fn, n_bisect=80):
         lo = np.where(right, mid, lo)
         hi = np.where(right, hi, mid)
     fbar = 0.5 * (lo + hi)
-    return chi_fn(fbar)
+    return fbar, chi_fn(fbar)
 
 
 # --------------------------------------------------------------------------
@@ -183,21 +185,24 @@ def build_grids(nf, nmu, nbeta_log, beta_min, beta_max):
 
 def build_table(f_grid, mu_grid, beta_grid, chi_fn, verbose=True):
     nf, nmu, nbeta = len(f_grid), len(mu_grid), len(beta_grid)
-    table = np.empty((nf, nmu, nbeta))
+    fbar_table = np.empty((nf, nmu, nbeta))
+    chi_table = np.empty((nf, nmu, nbeta))
     ff, mm = np.meshgrid(f_grid, mu_grid, indexing="ij")
     ff, mm = ff.ravel(), mm.ravel()
     for ib, beta in enumerate(beta_grid):
-        chi = solve_slab(ff, mm, beta, chi_fn)
-        table[:, :, ib] = chi.reshape(nf, nmu)
+        fbar, chi = solve_slab(ff, mm, beta, chi_fn)
+        fbar_table[:, :, ib] = fbar.reshape(nf, nmu)
+        chi_table[:, :, ib] = chi.reshape(nf, nmu)
         if verbose:
             sys.stderr.write("\r  beta %3d/%3d (=%.4g)" % (ib + 1, nbeta, beta))
             sys.stderr.flush()
     if verbose:
         sys.stderr.write("\n")
-    return table
+    return fbar_table, chi_table
 
 
-def write_table(path, closure_name, f_grid, mu_grid, beta_grid, table):
+def write_table(path, closure_name, f_grid, mu_grid, beta_grid,
+                fbar_table, chi_table):
     """Plain-text, C99-fscanf-friendly.  Layout (whitespace separated tokens):
 
         magic/version line
@@ -205,10 +210,18 @@ def write_table(path, closure_name, f_grid, mu_grid, beta_grid, table):
         'f_grid'    then nf doubles
         'mu_grid'   then nmu doubles
         'beta_grid' then nbeta doubles
-        'chi_data'  then nf*nmu*nbeta doubles, C row-major with beta fastest:
-                    idx = (if*nmu + imu)*nbeta + ibeta
+        'fbar_minus_f_data' then nf*nmu*nbeta doubles
+        'chi_data'          then nf*nmu*nbeta doubles
+
+        fbar is reconstructed as:
+            fbar = f_grid[if] + fbar_minus_f_data[idx]
+
+        Both data arrays are C row-major with beta fastest:
+            idx = (if*nmu + imu)*nbeta + ibeta
     """
-    nf, nmu, nbeta = table.shape
+    nf, nmu, nbeta = chi_table.shape
+    if fbar_table.shape != chi_table.shape:
+        raise ValueError("fbar_table and chi_table shapes differ")
 
     def dump(fh, arr):
         flat = np.asarray(arr).ravel()
@@ -216,18 +229,22 @@ def write_table(path, closure_name, f_grid, mu_grid, beta_grid, table):
             fh.write(" ".join("%.17g" % v for v in flat[i:i + 8]))
             fh.write("\n")
 
+    fbar_minus_f_table = fbar_table - f_grid[:, None, None]
+
     with open(path, "w") as fh:
-        fh.write("FORNAX_M1_CLOSURE_TABLE 1\n")
+        fh.write("FORNAX_M1_CLOSURE_TABLE 3\n")
         fh.write("closure %s\n" % closure_name)
         fh.write("ndim 3\n")
         fh.write("nf %d\n" % nf)
         fh.write("nmu %d\n" % nmu)
         fh.write("nbeta %d\n" % nbeta)
-        fh.write("layout chi[(if*nmu+imu)*nbeta+ibeta]  # ibeta fastest\n")
+        fh.write("fbar_storage fbar_minus_f\n")
+        fh.write("layout data[(if*nmu+imu)*nbeta+ibeta]  # ibeta fastest\n")
         fh.write("f_grid\n"); dump(fh, f_grid)
         fh.write("mu_grid\n"); dump(fh, mu_grid)
         fh.write("beta_grid\n"); dump(fh, beta_grid)
-        fh.write("chi_data\n"); dump(fh, table)
+        fh.write("fbar_minus_f_data\n"); dump(fh, fbar_minus_f_table)
+        fh.write("chi_data\n"); dump(fh, chi_table)
 
 
 def main():
@@ -250,14 +267,24 @@ def main():
                      "(1 beta=0 row + %d log-spaced)\n"
                      % (args.closure, len(f_grid), len(mu_grid),
                         len(beta_grid), args.nbeta))
-    table = build_table(f_grid, mu_grid, beta_grid, chi_fn)
+    fbar_table, chi_table = build_table(f_grid, mu_grid, beta_grid, chi_fn)
 
-    # sanity: at beta=0 the fluid frame is the Eulerian frame, so chi == chi(f).
-    err = np.max(np.abs(table[:, :, 0] - chi_fn(f_grid)[:, None]))
-    sys.stderr.write("beta=0 consistency  max|chi - chi(f)| = %.3e\n" % err)
-    sys.stderr.write("chi range [%.6f, %.6f]\n" % (table.min(), table.max()))
+    # sanity: at beta=0 the fluid frame is the Eulerian frame, so fbar == f and
+    # chi == chi(f).
+    err_fbar = np.max(np.abs(fbar_table[:, :, 0] - f_grid[:, None]))
+    err_chi = np.max(np.abs(chi_table[:, :, 0] - chi_fn(f_grid)[:, None]))
+    sys.stderr.write("beta=0 consistency  max|fbar - f| = %.3e\n" % err_fbar)
+    sys.stderr.write("beta=0 consistency  max|chi - chi(f)| = %.3e\n" % err_chi)
+    sys.stderr.write("fbar range [%.6f, %.6f]\n" %
+                     (fbar_table.min(), fbar_table.max()))
+    fbar_minus_f_table = fbar_table - f_grid[:, None, None]
+    sys.stderr.write("(fbar - f) range [%.6f, %.6f]\n" %
+                     (fbar_minus_f_table.min(), fbar_minus_f_table.max()))
+    sys.stderr.write("chi range [%.6f, %.6f]\n" %
+                     (chi_table.min(), chi_table.max()))
 
-    write_table(args.output, args.closure, f_grid, mu_grid, beta_grid, table)
+    write_table(args.output, args.closure, f_grid, mu_grid, beta_grid,
+                fbar_table, chi_table)
     sys.stderr.write("wrote %s\n" % args.output)
 
 
