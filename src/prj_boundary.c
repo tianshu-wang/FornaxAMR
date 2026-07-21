@@ -1140,22 +1140,18 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
     (void)rad;
     (void)timer_scope;
 
-    PRJ_SUBTIMER_START("sub_ghost_phys_face");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_FACE_ONLY);
         }
     }
-    PRJ_SUBTIMER_STOP("sub_ghost_phys_face");
 #if PRJ_MHD
-    PRJ_SUBTIMER_START("sub_ghost_mhd_pre");
     prj_boundary_init_face_fidelity(mesh, mpi);
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
         }
     }
-    PRJ_SUBTIMER_STOP("sub_ghost_mhd_pre");
 #else
     (void)use_bf1;
     (void)eos;
@@ -1168,24 +1164,18 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * reads only active cells; the local copies write only ghost zones, so
          * the two never touch the same memory. The wait completes the exchange
          * after the local work is done. */
-        PRJ_SUBTIMER_START("sub_ghost_post");
         prj_mpi_post_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
-        PRJ_SUBTIMER_STOP("sub_ghost_post");
-        PRJ_SUBTIMER_START("sub_ghost_send");
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
                 prj_boundary_send(mesh, mpi, &mesh->blocks[i], stage, fill_kind);
             }
         }
-        PRJ_SUBTIMER_STOP("sub_ghost_send");
 #if PRJ_MHD
-        PRJ_SUBTIMER_START("sub_ghost_send_bf");
         for (i = 0; i < mesh->nblocks; ++i) {
             if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
                 prj_boundary_send_bf(mesh, mpi, &mesh->blocks[i], use_bf1, fill_kind);
             }
         }
-        PRJ_SUBTIMER_STOP("sub_ghost_send_bf");
 #endif
 #if PRJ_USE_GRAVITY
         /* Overlap the gravity radial reduce/integrate with the in-flight
@@ -1196,10 +1186,8 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * allreduces inside the reduce progress the posted Isend/Irecv. */
         if (grav != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL &&
             !prj_eos_full_dynamic_gr_enabled(mesh)) {
-            PRJ_SUBTIMER_START("sub_ghost_grav");
             prj_gravity_monopole_reduce(mesh, grav, rad, mpi, stage);
             prj_gravity_monopole_integrate(mesh, grav, mpi);
-            PRJ_SUBTIMER_STOP("sub_ghost_grav");
         }
 #endif
         /* Transport opacity for active cells overlaps the same-level exchange
@@ -1207,23 +1195,16 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
          * writes the active region of kappa_cell/sigma_cell. The 1-ghost halo
          * is filled by the caller after eos_fill_mesh. */
         if (rad != 0 && fill_kind == PRJ_BOUNDARY_FILL_SAME_LEVEL) {
-            PRJ_SUBTIMER_START("sub_ghost_opac");
             prj_flux_fill_transport_opacity_active(mesh, rad, mpi, stage);
-            PRJ_SUBTIMER_STOP("sub_ghost_opac");
         }
-        PRJ_SUBTIMER_START("sub_ghost_wait");
         prj_mpi_wait_ghosts_and_bf(mesh, mpi, stage, fill_kind, use_bf1);
-        PRJ_SUBTIMER_STOP("sub_ghost_wait");
     }
-    PRJ_SUBTIMER_START("sub_ghost_phys_all");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical(mesh, bc, &mesh->blocks[i], stage, PRJ_BOUNDARY_PHYS_EDGE_CORNER);
         }
     }
-    PRJ_SUBTIMER_STOP("sub_ghost_phys_all");
 #if PRJ_MHD
-    PRJ_SUBTIMER_START("sub_ghost_mhd_post");
     for (i = 0; i < mesh->nblocks; ++i) {
         if (prj_boundary_active_block(mpi, &mesh->blocks[i])) {
             prj_boundary_physical_bf(mesh, bc, &mesh->blocks[i], use_bf1);
@@ -1234,6 +1215,5 @@ void prj_boundary_fill_ghosts_and_bf(prj_mesh *mesh, prj_mpi *mpi, const prj_bc 
             prj_mhd_bf2bc_all_mesh(eos, mesh, &mesh->blocks[i], use_bf1);
         }
     }
-    PRJ_SUBTIMER_STOP("sub_ghost_mhd_post");
 #endif
 }

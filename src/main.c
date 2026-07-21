@@ -571,55 +571,35 @@ int main(int argc, char *argv[])
              * mesh/density/x_com are unchanged since, so no pre-tag rebuild is
              * needed here; the post-adapt rebuild below handles grid changes. */
             double E_injected_before = sim.eos.E_injected;
-            PRJ_SUBTIMER_START("sub_amr_adapt_total");
             int block_changed = prj_amr_adapt(&sim.mesh, &sim.eos, &mpi);
-            PRJ_SUBTIMER_STOP("sub_amr_adapt_total");
             if (mpi.rank == 0 && sim.eos.E_injected != E_injected_before) {
                 fprintf(stderr, "E_injected changed after amr_adapt: %.6e -> %.6e (delta=%.6e)\n",
                     E_injected_before, sim.eos.E_injected, sim.eos.E_injected - E_injected_before);
             }
             if (block_changed) {
-                PRJ_SUBTIMER_START("sub_amr_rebalance");
                 prj_mpi_rebalance(&sim.mesh, &mpi);
-                PRJ_SUBTIMER_STOP("sub_amr_rebalance");
 #if PRJ_USE_GRAVITY
                 if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
-                    PRJ_SUBTIMER_START("sub_amr_rebuild_grav");
                     prj_gravity_rebuild_grid(&sim, &mpi);
-                    PRJ_SUBTIMER_STOP("sub_amr_rebuild_grav");
                 }
 #endif
             }
             if (block_changed) {
 #if PRJ_USE_RADIATION_FSA && PRJ_USE_RADIAL_FRAME_FSA
-                PRJ_SUBTIMER_START("sub_amr_fsa_geometry");
                 prj_rad_fsa_refresh_mesh_geometry(&sim.rad, &sim.mesh, &mpi);
-                PRJ_SUBTIMER_STOP("sub_amr_fsa_geometry");
 #endif
-                PRJ_SUBTIMER_START("sub_amr_post_eos_active");
                 prj_eos_fill_active_cells(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
-                PRJ_SUBTIMER_STOP("sub_amr_post_eos_active");
                 if (prj_z4c_runtime_enabled(&sim.mesh)) {
-                    PRJ_SUBTIMER_START("sub_amr_post_z4c");
                     prj_z4c_finalize_stage(&sim.mesh, &mpi, &sim.bc, 0);
-                    PRJ_SUBTIMER_STOP("sub_amr_post_z4c");
                 }
-                PRJ_SUBTIMER_START("sub_amr_post_ghost");
                 prj_boundary_fill_ghosts_and_bf(&sim.mesh, &mpi, &sim.bc, 1, 0,
                     &sim.eos, 0, &sim.rad, PRJ_BOUNDARY_TIMER_SCOPE_NONE);
-                PRJ_SUBTIMER_STOP("sub_amr_post_ghost");
-                PRJ_SUBTIMER_START("sub_amr_post_eos_mesh");
                 prj_eos_fill_mesh(&sim.mesh, &sim.eos, &mpi, 1, PRJ_EOS_CTX_AMR);
-                PRJ_SUBTIMER_STOP("sub_amr_post_eos_mesh");
-                PRJ_SUBTIMER_START("sub_amr_post_opac_halo");
                 prj_flux_fill_transport_opacity_halo(&sim.mesh, &sim.rad, &mpi, 1);
-                PRJ_SUBTIMER_STOP("sub_amr_post_opac_halo");
             #if PRJ_USE_GRAVITY
                 if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
-                    PRJ_SUBTIMER_START("sub_amr_post_grav");
                     prj_gravity_monopole_reduce(&sim.mesh, &sim.grav, &sim.rad, &mpi, 1);
                     prj_gravity_monopole_integrate(&sim.mesh, &sim.grav, &mpi);
-                    PRJ_SUBTIMER_STOP("sub_amr_post_grav");
                 }
             #endif
             }

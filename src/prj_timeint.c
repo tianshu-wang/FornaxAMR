@@ -537,10 +537,8 @@ static void prj_timeint_rad_freq_flux_apply(const prj_mesh *mesh,
 {
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-        PRJ_SUBTIMER_START("sub_rad_freq_grm1");
         prj_rad_freq_flux_apply_gr_m1(rad, mesh, block, z4c_stage, W_state,
             u, i, j, k, dt, observer_time_derivative);
-        PRJ_SUBTIMER_STOP("sub_rad_freq_grm1");
         return;
     }
 #else
@@ -548,9 +546,7 @@ static void prj_timeint_rad_freq_flux_apply(const prj_mesh *mesh,
     (void)z4c_stage;
     (void)observer_time_derivative;
 #endif
-    PRJ_SUBTIMER_START("sub_rad_freq_sr");
     prj_rad_freq_flux_apply(rad, block, W_state, u, i, j, k, lapse, dt);
-    PRJ_SUBTIMER_STOP("sub_rad_freq_sr");
 }
 
 static void prj_timeint_zero_observer_time_derivative(
@@ -892,17 +888,13 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         bf_dst[d] = prj_block_bf_stage(block, d, use_bf1 != 0 ? 1 : 0);
     }
 
-    PRJ_SUBTIMER_START("sub_cell_cons_from_prim");
     prj_timeint_cell_cons_from_prim_mhd_rad(eos, mesh, block, 0,
         block->W_mhd, block->W_rad, i, j, k, u);
-    PRJ_SUBTIMER_STOP("sub_cell_cons_from_prim");
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u_before[v] = u[v];
     }
-    PRJ_SUBTIMER_START("sub_cell_dt_src");
     prj_timeint_update_dt_src_values(mesh, grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
         u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
-    PRJ_SUBTIMER_STOP("sub_cell_dt_src");
 
 #define PRJ_STAGE1_UPDATE(v) do { \
         int vv = (v); \
@@ -910,7 +902,6 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
             prj_timeint_flux_div_var(block, vv, i, j, k)); \
     } while (0)
 
-    PRJ_SUBTIMER_START("sub_cell_flux_src_update");
     PRJ_STAGE1_UPDATE(PRJ_CONS_RHO);
     PRJ_STAGE1_UPDATE(PRJ_CONS_MOM1);
     PRJ_STAGE1_UPDATE(PRJ_CONS_MOM2);
@@ -934,13 +925,10 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
         }
     }
-    PRJ_SUBTIMER_STOP("sub_cell_flux_src_update");
 
 #undef PRJ_STAGE1_UPDATE
 
-    PRJ_SUBTIMER_START("sub_cell_mhd_set_b");
     prj_timeint_mhd_set_cons_b_from_bf(block, bf_dst, i, j, k, u);
-    PRJ_SUBTIMER_STOP("sub_cell_mhd_set_b");
     prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 0,
         i, j, k, u_before, u, dt, observer_time_derivative);
     {
@@ -950,68 +938,42 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 #endif
 
-        PRJ_SUBTIMER_START("sub_cell_radiation");
 #if PRJ_USE_RADIATION_FSA
         /* Discard unphysical negative-J undershoots before the radiation update;
            no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
         prj_rad_fsa_clamp_intensities(u);
 #endif
-        PRJ_SUBTIMER_START("sub_rad_freq_flux");
         prj_timeint_rad_freq_flux_apply(mesh, block, 0, rad, block->W_rad,
             u, i, j, k, lapse_cell, dt, observer_time_derivative);
-        PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
-        PRJ_SUBTIMER_START("sub_rad_ang_flux");
         prj_rad_ang_flux_apply(rad, block, block->W_rad, u, i, j, k, lapse_cell, dt);
-        PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
 #if PRJ_USE_RADIATION_FSA
-        PRJ_SUBTIMER_START("sub_rad_inel");
         prj_rad_inel_fsa(rad, block, i, j, k, eos, u, dt, T_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_inel");
-        PRJ_SUBTIMER_START("sub_rad_energy_momentum");
         prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u, dt, lapse_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
 #if DO_FFC
-        PRJ_SUBTIMER_START("sub_rad_ffc");
         prj_rad_ffc_fsa(rad, u, dt);
-        PRJ_SUBTIMER_STOP("sub_rad_ffc");
 #endif
 #else
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block,
                 prj_stage_slot_from_bf_arg(use_bf1), u, i, j, k, dt, &T_cell);
-            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
         } else {
 #endif
-        PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_eleinel");
-        PRJ_SUBTIMER_START("sub_rad_nucinel");
         prj_rad_nucinel_step(rad, eos, u, dt, T_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_nucinel");
-        PRJ_SUBTIMER_START("sub_rad_energy");
         prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell, kappa);
-        PRJ_SUBTIMER_STOP("sub_rad_energy");
-        PRJ_SUBTIMER_START("sub_rad_momentum");
         prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell, kappa);
-        PRJ_SUBTIMER_STOP("sub_rad_momentum");
 #if PRJ_DYNAMIC_GR
         }
 #endif
 #endif
-        PRJ_SUBTIMER_STOP("sub_cell_radiation");
     }
     if (prj_z4c_runtime_enabled(mesh)) {
-        PRJ_SUBTIMER_START("sub_cell_z4c_linear");
         prj_z4c_update_linear_cell(block, prj_stage_slot_from_bf_arg(use_bf1),
             0, 1.0, 0, 0.0, 0, dtau_cm, i, j, k);
-        PRJ_SUBTIMER_STOP("sub_cell_z4c_linear");
     }
-    PRJ_SUBTIMER_START("sub_cell_store");
     prj_timeint_store_mhd_rad_cell(eos, mesh, block,
         prj_stage_slot_from_bf_arg(use_bf1), Wdst, Wdst_rad, i, j, k, u);
-    PRJ_SUBTIMER_STOP("sub_cell_store");
 #else
     double w[PRJ_NVAR_PRIM];
     double u[PRJ_NVAR_CONS];
@@ -1019,16 +981,10 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     double fluxdiv[PRJ_NVAR_CONS];
     int v;
 
-    PRJ_SUBTIMER_START("sub_cu_fluxdiv");
     prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
-    PRJ_SUBTIMER_STOP("sub_cu_fluxdiv");
     prj_timeint_cell_prim(block->W_mhd, i, j, k, w);
-    PRJ_SUBTIMER_START("sub_cu_prim2cons");
     prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, w, u, PRJ_EOS_CTX_MAIN);
-    PRJ_SUBTIMER_STOP("sub_cu_prim2cons");
-    PRJ_SUBTIMER_START("sub_cu_dt_src");
     prj_timeint_update_dt_src(mesh, grav, block, u, i, j, k, mpi, dt_src);
-    PRJ_SUBTIMER_STOP("sub_cu_dt_src");
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u1[v] = u[v] + dt * (prj_block_rhs_value_const(block, v, i, j, k) + fluxdiv[v]);
     }
@@ -1095,15 +1051,11 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
      * point-update is pointwise, so mutating this cell's slot never disturbs
      * another cell's still-g^n densitization. See prj_z4c_update_linear_cell. */
     if (prj_z4c_runtime_enabled(mesh)) {
-        PRJ_SUBTIMER_START("sub_cu_z4c_linear");
         prj_z4c_update_linear_cell(block, prj_stage_slot_from_bf_arg(use_bf1),
             0, 1.0, 0, 0.0, 0, dtau_cm, i, j, k);
-        PRJ_SUBTIMER_STOP("sub_cu_z4c_linear");
     }
-    PRJ_SUBTIMER_START("sub_cu_cons2prim");
     prj_eos_cell_cons2prim(eos, mesh, block,
         prj_stage_slot_from_bf_arg(use_bf1), i, j, k, u1, w, PRJ_EOS_CTX_MAIN);
-    PRJ_SUBTIMER_STOP("sub_cu_cons2prim");
     prj_timeint_cell_prim_store(Wdst, i, j, k, w);
 #endif
 }
@@ -1149,23 +1101,16 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         double fluxdiv[PRJ_NVAR_CONS];
         int v;
 
-        PRJ_SUBTIMER_START("sub_cu_fluxdiv");
         prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
-        PRJ_SUBTIMER_STOP("sub_cu_fluxdiv");
-        PRJ_SUBTIMER_START("sub_cell_cons_from_prim");
         prj_timeint_cell_prim(block->W_mhd, i, j, k, w);
         prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, w, u0,
             PRJ_EOS_CTX_MAIN);
         prj_timeint_cell_prim(W_stage1, i, j, k, w);
         prj_eos_cell_prim2cons(eos, mesh, block, 1, i, j, k, w, u1,
             PRJ_EOS_CTX_MAIN);
-        PRJ_SUBTIMER_STOP("sub_cell_cons_from_prim");
-        PRJ_SUBTIMER_START("sub_cell_dt_src");
         prj_timeint_update_dt_src_values(mesh, grav, block,
             u0[PRJ_CONS_RHO], u0[PRJ_CONS_MOM1], u0[PRJ_CONS_MOM2],
             u0[PRJ_CONS_MOM3], u0[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
-        PRJ_SUBTIMER_STOP("sub_cell_dt_src");
-        PRJ_SUBTIMER_START("sub_cell_flux_src_update");
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
             u_trial[v] = u1[v] + dt *
                 (prj_block_rhs_value_const(block, v, i, j, k) +
@@ -1173,39 +1118,25 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
             u[v] = 0.5 * u0[v] + 0.5 *
                 u_trial[v];
         }
-        PRJ_SUBTIMER_STOP("sub_cell_flux_src_update");
-        PRJ_SUBTIMER_START("sub_cell_mhd_set_b");
         prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
-        PRJ_SUBTIMER_STOP("sub_cell_mhd_set_b");
         prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 1,
             i, j, k, u1, u_trial, dt, observer_time_derivative);
         {
             double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
             double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
 
-            PRJ_SUBTIMER_START("sub_cell_radiation");
-            PRJ_SUBTIMER_START("sub_rad_freq_flux");
             prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, W_rad_stage1,
                 u, i, j, k, lapse_cell, 0.5 * dt,
                 observer_time_derivative);
-            PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
-            PRJ_SUBTIMER_START("sub_rad_ang_flux");
             prj_rad_ang_flux_apply(rad, block, W_rad_stage1, u, i, j, k,
                 lapse_cell, 0.5 * dt);
-            PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
 #if PRJ_USE_RADIATION_FSA
             prj_rad_fsa_clamp_intensities(u);
-            PRJ_SUBTIMER_START("sub_rad_inel");
             prj_rad_inel_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, T_cell);
-            PRJ_SUBTIMER_STOP("sub_rad_inel");
-            PRJ_SUBTIMER_START("sub_rad_energy_momentum");
             prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u,
                 0.5 * dt, lapse_cell);
-            PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
 #if DO_FFC
-            PRJ_SUBTIMER_START("sub_rad_ffc");
             prj_rad_ffc_fsa(rad, u, 0.5 * dt);
-            PRJ_SUBTIMER_STOP("sub_rad_ffc");
 #endif
 #else
             /* Full-GR M1 matter coupling: this block is already gated on
@@ -1213,36 +1144,25 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
              * unconditionally here. Stage 1 and the non-MHD stage-2 paths call
              * this; omitting it here left the coupled GRMHD+M1 RK2 step applying
              * the matter back-reaction only once per step. */
-            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
                 i, j, k, 0.5 * dt, &T_cell);
-            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
 #endif
-            PRJ_SUBTIMER_STOP("sub_cell_radiation");
         }
         if (prj_z4c_runtime_enabled(mesh)) {
-            PRJ_SUBTIMER_START("sub_cell_z4c_linear");
             prj_z4c_update_linear_cell(block, 0, 0, 0.5, 1, 0.5, 0,
                 0.5 * dtau_cm, i, j, k);
-            PRJ_SUBTIMER_STOP("sub_cell_z4c_linear");
         }
-        PRJ_SUBTIMER_START("sub_cell_store");
         prj_timeint_store_mhd_rad_cell(eos, mesh, block, 0,
             block->W_mhd, block->W_rad, i, j, k, u);
-        PRJ_SUBTIMER_STOP("sub_cell_store");
         return;
     }
 #endif
-    PRJ_SUBTIMER_START("sub_cell_cons_from_prim");
     prj_timeint_mhd_hydro_cons_from_prim(block->W_mhd, i, j, k,
         &rho0, &mom10, &mom20, &mom30, &etot0, &ye0, &b10, &b20, &b30);
     prj_timeint_mhd_hydro_cons_from_prim(W_stage1, i, j, k,
         &rho1, &mom11, &mom21, &mom31, &etot1, &ye1, &b11, &b21, &b31);
-    PRJ_SUBTIMER_STOP("sub_cell_cons_from_prim");
-    PRJ_SUBTIMER_START("sub_cell_dt_src");
     prj_timeint_update_dt_src_values(mesh, grav, block, rho0, mom10, mom20, mom30, etot0,
         i, j, k, mpi, dt_src);
-    PRJ_SUBTIMER_STOP("sub_cell_dt_src");
 
 #define PRJ_STAGE2_UPDATE(v, u0v, u1v) do { \
         int vv = (v); \
@@ -1251,7 +1171,6 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
                 prj_timeint_flux_div_var(block, vv, i, j, k))); \
     } while (0)
 
-    PRJ_SUBTIMER_START("sub_cell_flux_src_update");
     PRJ_STAGE2_UPDATE(PRJ_CONS_RHO, rho0, rho1);
     PRJ_STAGE2_UPDATE(PRJ_CONS_MOM1, mom10, mom11);
     PRJ_STAGE2_UPDATE(PRJ_CONS_MOM2, mom20, mom21);
@@ -1283,7 +1202,6 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
         }
     }
-    PRJ_SUBTIMER_STOP("sub_cell_flux_src_update");
 
 #undef PRJ_STAGE2_UPDATE
 
@@ -1293,9 +1211,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
     (void)b11;
     (void)b21;
     (void)b31;
-    PRJ_SUBTIMER_START("sub_cell_mhd_set_b");
     prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
-    PRJ_SUBTIMER_STOP("sub_cell_mhd_set_b");
     {
         double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
@@ -1305,69 +1221,43 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
 
         prj_timeint_zero_observer_time_derivative(observer_time_derivative);
-        PRJ_SUBTIMER_START("sub_cell_radiation");
 #if PRJ_USE_RADIATION_FSA
         /* Discard unphysical negative-J undershoots before the radiation update;
            no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
         prj_rad_fsa_clamp_intensities(u);
 #endif
-        PRJ_SUBTIMER_START("sub_rad_freq_flux");
         prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, W_rad_stage1,
             u, i, j, k, lapse_cell, 0.5 * dt,
             observer_time_derivative);
-        PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
-        PRJ_SUBTIMER_START("sub_rad_ang_flux");
         prj_rad_ang_flux_apply(rad, block, W_rad_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
-        PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
 #if PRJ_USE_RADIATION_FSA
-        PRJ_SUBTIMER_START("sub_rad_inel");
         prj_rad_inel_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, T_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_inel");
-        PRJ_SUBTIMER_START("sub_rad_energy_momentum");
         prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, lapse_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
 #if DO_FFC
-        PRJ_SUBTIMER_START("sub_rad_ffc");
         prj_rad_ffc_fsa(rad, u, 0.5 * dt);
-        PRJ_SUBTIMER_STOP("sub_rad_ffc");
 #endif
 #else
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
                 i, j, k, 0.5 * dt, &T_cell);
-            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
         } else {
 #endif
-        PRJ_SUBTIMER_START("sub_rad_eleinel");
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_eleinel");
-        PRJ_SUBTIMER_START("sub_rad_nucinel");
         prj_rad_nucinel_step(rad, eos, u, 0.5 * dt, T_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_nucinel");
-        PRJ_SUBTIMER_START("sub_rad_energy");
         prj_rad_energy_update(rad, eos, u, 0.5 * dt, lapse_cell, &T_cell, kappa);
-        PRJ_SUBTIMER_STOP("sub_rad_energy");
-        PRJ_SUBTIMER_START("sub_rad_momentum");
         prj_rad_momentum_update(rad, eos, u, 0.5 * dt, lapse_cell, T_cell, kappa);
-        PRJ_SUBTIMER_STOP("sub_rad_momentum");
 #if PRJ_DYNAMIC_GR
         }
 #endif
 #endif
-        PRJ_SUBTIMER_STOP("sub_cell_radiation");
     }
     if (prj_z4c_runtime_enabled(mesh)) {
-        PRJ_SUBTIMER_START("sub_cell_z4c_linear");
         prj_z4c_update_linear_cell(block, 0, 0, 0.5, 1, 0.5, 0,
             0.5 * dtau_cm, i, j, k);
-        PRJ_SUBTIMER_STOP("sub_cell_z4c_linear");
     }
-    PRJ_SUBTIMER_START("sub_cell_store");
     prj_timeint_store_mhd_rad_cell(eos, mesh, block, 0,
         block->W_mhd, block->W_rad, i, j, k, u);
-    PRJ_SUBTIMER_STOP("sub_cell_store");
 #else
     double w[PRJ_NVAR_PRIM];
     double u[PRJ_NVAR_CONS];
@@ -1785,34 +1675,22 @@ static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
        no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
     prj_rad_fsa_clamp_intensities(u1);
 #endif
-    PRJ_SUBTIMER_START("sub_rad_freq_flux");
     prj_timeint_rad_freq_flux_apply(mesh, block, stage, rad, W_rad_stage,
         u1, i, j, k, lapse_cell, dt, observer_time_derivative);
-    PRJ_SUBTIMER_STOP("sub_rad_freq_flux");
-    PRJ_SUBTIMER_START("sub_rad_ang_flux");
     prj_rad_ang_flux_apply(rad, block, W_rad_stage, u1, i, j, k, lapse_cell, dt);
-    PRJ_SUBTIMER_STOP("sub_rad_ang_flux");
 #if PRJ_USE_RADIATION_M1 || PRJ_USE_RADIATION_FSA
     T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
 #if PRJ_USE_RADIATION_FSA
-    PRJ_SUBTIMER_START("sub_rad_inel");
     prj_rad_inel_fsa(rad, block, i, j, k, eos, u1, dt, T_cell);
-    PRJ_SUBTIMER_STOP("sub_rad_inel");
 #else
 #if PRJ_DYNAMIC_GR
     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-        PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
         prj_rad_gr_m1_matter_update(rad, eos, mesh, block, stage, u1,
             i, j, k, dt, &T_cell);
-        PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
     } else {
 #endif
-    PRJ_SUBTIMER_START("sub_rad_eleinel");
     prj_rad_eleinel_step(rad, eos, u1, dt, T_cell);
-    PRJ_SUBTIMER_STOP("sub_rad_eleinel");
-    PRJ_SUBTIMER_START("sub_rad_nucinel");
     prj_rad_nucinel_step(rad, eos, u1, dt, T_cell);
-    PRJ_SUBTIMER_STOP("sub_rad_nucinel");
 #if PRJ_DYNAMIC_GR
     }
 #endif
@@ -2258,21 +2136,15 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     (void)coord;
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_flux_send");
-    PRJ_SUBTIMER_START("sub_flux_send_local_blocks");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
         if (prj_timeint_local_block(mpi, block)) {
-            PRJ_SUBTIMER_START("sub_flux_send_block_update");
             prj_flux_update(eos, rad, mesh, block, block->W_mhd, block->eosvar,
                 block->flux, 0);
-            PRJ_SUBTIMER_STOP("sub_flux_send_block_update");
         }
     }
-    PRJ_SUBTIMER_STOP("sub_flux_send_local_blocks");
-    PRJ_SUBTIMER_START("sub_riemann_flux_send");
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_SUBTIMER_STOP("sub_riemann_flux_send");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_flux_send");
 
 #if PRJ_MHD
@@ -2305,7 +2177,6 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_src_cell_update");
-    PRJ_SUBTIMER_START("sub_src_cell_local_blocks");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -2314,14 +2185,8 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
             int j;
             int k;
 
-            PRJ_SUBTIMER_START("sub_src_cell_block_src");
-            PRJ_SUBTIMER_START("sub_cell_src_update");
             prj_src_update(eos, rad, grav, mesh, block, 0, block->W_mhd, block->W_rad,
                 block->mhd_rhs, block->rad_rhs);
-            PRJ_SUBTIMER_STOP("sub_cell_src_update");
-            PRJ_SUBTIMER_STOP("sub_src_cell_block_src");
-            PRJ_SUBTIMER_START("sub_src_cell_block_cells");
-            PRJ_SUBTIMER_START("sub_cell_essprk_step_update");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -2331,11 +2196,8 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
                     }
                 }
             }
-            PRJ_SUBTIMER_STOP("sub_cell_essprk_step_update");
-            PRJ_SUBTIMER_STOP("sub_src_cell_block_cells");
         }
     }
-    PRJ_SUBTIMER_STOP("sub_src_cell_local_blocks");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_src_cell_update");
 
     if (prj_z4c_runtime_enabled(mesh)) {
@@ -2530,9 +2392,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                 block->flux, 0);
         }
     }
-    PRJ_SUBTIMER_START("sub_riemann_flux_send");
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_SUBTIMER_STOP("sub_riemann_flux_send");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_flux_send");
 
 #if PRJ_MHD
@@ -2560,12 +2420,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
 
-        PRJ_SUBTIMER_START("sub_z4c_rhs");
         prj_z4c_compute_rhs(mesh, mpi, rad, 0, 0, tau_cm);
-        PRJ_SUBTIMER_STOP("sub_z4c_rhs");
-        PRJ_SUBTIMER_START("sub_z4c_sommerfeld");
         prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
-        PRJ_SUBTIMER_STOP("sub_z4c_sommerfeld");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_src_cell_update");
@@ -2577,11 +2433,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int j;
             int k;
 
-            PRJ_SUBTIMER_START("sub_cell_src_update");
             prj_src_update(eos, rad, grav, mesh, block, 0, block->W_mhd, block->W_rad,
                 block->mhd_rhs, block->rad_rhs);
-            PRJ_SUBTIMER_STOP("sub_cell_src_update");
-            PRJ_SUBTIMER_START("sub_cell_stage1_update");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -2592,7 +2445,6 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     }
                 }
             }
-            PRJ_SUBTIMER_STOP("sub_cell_stage1_update");
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_src_cell_update");
@@ -2600,9 +2452,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         /* Z4c slot 1 was advanced in place, per cell, inside the update loop
          * above (fused with the hydro recovery); only enforce + fill ghosts. */
-        PRJ_SUBTIMER_START("sub_z4c_finalize");
         prj_z4c_finalize_stage(mesh, mpi, bc, 1);
-        PRJ_SUBTIMER_STOP("sub_z4c_finalize");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_eos_fill_active");
@@ -2656,9 +2506,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                 block->eosvar, block->flux, 1);
         }
     }
-    PRJ_SUBTIMER_START("sub_riemann_flux_send");
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_SUBTIMER_STOP("sub_riemann_flux_send");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_flux_send");
 
 #if PRJ_MHD
@@ -2686,12 +2534,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         double tau_cm = PRJ_CLIGHT * mesh->time_seconds;
 
-        PRJ_SUBTIMER_START("sub_z4c_rhs");
         prj_z4c_compute_rhs(mesh, mpi, rad, 1, 0, tau_cm);
-        PRJ_SUBTIMER_STOP("sub_z4c_rhs");
-        PRJ_SUBTIMER_START("sub_z4c_sommerfeld");
         prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 1, 0);
-        PRJ_SUBTIMER_STOP("sub_z4c_sommerfeld");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_src_cell_update");
@@ -2703,11 +2547,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int j;
             int k;
 
-            PRJ_SUBTIMER_START("sub_cell_src_update");
             prj_src_update(eos, rad, grav, mesh, block, 1, prj_block_mhd_stage(block, 1),
                 prj_block_rad_stage(block, 1), block->mhd_rhs, block->rad_rhs);
-            PRJ_SUBTIMER_STOP("sub_cell_src_update");
-            PRJ_SUBTIMER_START("sub_cell_stage2_update");
             for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
                 for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                     for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -2716,7 +2557,6 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     }
                 }
             }
-            PRJ_SUBTIMER_STOP("sub_cell_stage2_update");
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_src_cell_update");
@@ -2724,9 +2564,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
     if (prj_z4c_runtime_enabled(mesh)) {
         /* Final geometry slot 0 (g^{n+1}) was advanced in place, per cell,
          * inside the update loop above; only enforce + fill ghosts here. */
-        PRJ_SUBTIMER_START("sub_z4c_finalize");
         prj_z4c_finalize_stage(mesh, mpi, bc, 0);
-        PRJ_SUBTIMER_STOP("sub_z4c_finalize");
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_eos_fill_active");
@@ -2796,9 +2634,7 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                 block->eosvar, block->flux, stage);
         }
     }
-    PRJ_SUBTIMER_START("sub_riemann_flux_send");
     prj_riemann_flux_send(mesh, mpi);
-    PRJ_SUBTIMER_STOP("sub_riemann_flux_send");
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_step_ex_flux_send");
 
 #if PRJ_MHD
@@ -2842,11 +2678,8 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
         if (W_stage == 0 || deriv == 0) {
             prj_timeint_imex_fail("prj_timeint_step_ex: missing derivative storage");
         }
-        PRJ_SUBTIMER_START("sub_cell_src_update");
         prj_src_update(eos, rad, grav, mesh, block, stage, W_stage, W_rad_stage,
             block->mhd_rhs, block->rad_rhs);
-        PRJ_SUBTIMER_STOP("sub_cell_src_update");
-        PRJ_SUBTIMER_START("sub_cell_ex_deriv");
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -2872,7 +2705,6 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                 }
             }
         }
-        PRJ_SUBTIMER_STOP("sub_cell_ex_deriv");
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "imex_step_ex_src_deriv");
 #else
@@ -2940,37 +2772,27 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                     if (dt_implicit != 0.0) {
                         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
 #if PRJ_USE_RADIATION_FSA
-                        PRJ_SUBTIMER_START("sub_rad_energy_momentum");
                         prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u1,
                             dt_implicit, lapse_cell);
-                        PRJ_SUBTIMER_STOP("sub_rad_energy_momentum");
 #if DO_FFC
-                        PRJ_SUBTIMER_START("sub_rad_ffc");
                         prj_rad_ffc_fsa(rad, u1, dt_implicit);
-                        PRJ_SUBTIMER_STOP("sub_rad_ffc");
 #endif
 #else
 #if PRJ_DYNAMIC_GR
                         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
                             double T_cell = 0.0;
 
-                            PRJ_SUBTIMER_START("sub_rad_gr_m1_source");
                             prj_rad_gr_m1_matter_update(rad, eos, mesh, block, stage,
                                 u1, i, j, k, dt_implicit, &T_cell);
-                            PRJ_SUBTIMER_STOP("sub_rad_gr_m1_source");
                         } else {
 #endif
                         double T_cell = 0.0;
                         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 
-                        PRJ_SUBTIMER_START("sub_rad_energy");
                         prj_rad_energy_update(rad, eos, u1, dt_implicit, lapse_cell,
                             &T_cell, kappa);
-                        PRJ_SUBTIMER_STOP("sub_rad_energy");
-                        PRJ_SUBTIMER_START("sub_rad_momentum");
                         prj_rad_momentum_update(rad, eos, u1, dt_implicit, lapse_cell,
                             T_cell, kappa);
-                        PRJ_SUBTIMER_STOP("sub_rad_momentum");
 #if PRJ_DYNAMIC_GR
                         }
 #endif

@@ -1404,6 +1404,20 @@ typedef struct prj_rad_gr_m1_pressure_data {
      * prepare_pressure; the per-fbar closure is then the explicit blend
      * P = thin_w*Pthin + thick_w*Pthick with no linear solve. */
     double Pthick[3][3];
+    /* Closure-residual polynomial coefficients, computed lazily only when the
+     * implicit flux-factor solver is needed. They let the solvers evaluate
+     * derived_fbar(f) = sqrt(N)/|J| from scalars instead of rebuilding and
+     * contracting the full 3x3 pressure tensor at every residual.
+     * Because P(chi) = A + chi*B is affine in the Eddington factor chi, the
+     * fluid-frame flux^2 N and energy J are exactly
+     *   N(chi) = n0 + n1*chi + n2*chi^2      (quadratic)
+     *   J(chi) = j0 + j1*chi                 (affine; j1 = O(v^2/c^2))
+     * See prj_rad_gr_m1_pressure_residual_coeffs / prj_rad_gr_m1_derived_fbar. */
+    double n0;
+    double n1;
+    double n2;
+    double j0;
+    double j1;
 } prj_rad_gr_m1_pressure_data;
 
 #if PRJ_INCLUDE_RADIATION_VISCOSITY
@@ -1538,6 +1552,87 @@ static void prj_rad_gr_m1_pressure_thick(const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, double E,
     const double Fhat_con[3], const double Fhat_cov[3], double P[3][3]);
 #endif
+
+/* Reduce the closure residual g(f) = derived_fbar(P(f)) - f to scalar polynomial
+ * coefficients, computed only if the implicit flux-factor solver is used.
+ *
+ * P(chi) = thin_w*Pthin + thick_w*Pthick with thin_w = 1.5*chi - 0.5,
+ * thick_w = 1.5 - 1.5*chi, so P is affine in the Eddington factor:
+ *   P(chi) = A + chi*B,  A = -0.5*Pthin + 1.5*Pthick,  B = 1.5*(Pthin - Pthick).
+ * derived_fbar (see below) forms, with u = side->u_cov, w = side->wlor and
+ * R0 = -E*w + Fhat_con.u (chi-independent):
+ *   Rcon(chi) = Rc0 + chi*Rc1,  Rc0 = -w*Fhat_con + A.u,  Rc1 = B.u
+ *   J(chi)    = J0 + P(chi):uu                      = j0 + j1*chi
+ *   N(chi)    = (w^2-1)R0^2 - 2w R0 (u.Rcon)
+ *               + (gamma + u(x)u):Rcon(x)Rcon        = n0 + n1*chi + n2*chi^2
+ * All five coefficients depend only on the fixed state (E, F, v, geometry), so
+ * every Newton/Illinois residual becomes a quadratic/affine scalar eval instead
+ * of a fresh 3x3 tensor blend + double contraction. Bit-for-bit this differs
+ * from the tensor path only by floating-point summation order (well within the
+ * 1e-6 root tolerance). */
+static void prj_rad_gr_m1_pressure_residual_coeffs(
+    const prj_rad_gr_m1_closure_ctx *ctx, const prj_rad_gr_m1_side_data *side,
+    prj_rad_gr_m1_pressure_data *data)
+{
+    const double *u = side->u_cov;
+    const double w = side->wlor;
+    double A[3][3];
+    double B[3][3];
+    double Rc0[3];
+    double Rc1[3];
+    double R0;
+    double uRc0 = 0.0;
+    double uRc1 = 0.0;
+    double GRc0Rc0 = 0.0;
+    double GRc0Rc1 = 0.0;
+    double GRc1Rc1 = 0.0;
+    int a;
+    int b;
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            A[a][b] = -0.5 * data->Pthin[a][b] + 1.5 * data->Pthick[a][b];
+            B[a][b] = 1.5 * (data->Pthin[a][b] - data->Pthick[a][b]);
+        }
+    }
+
+    data->j0 = data->J0;
+    data->j1 = 0.0;
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            data->j0 += A[a][b] * u[a] * u[b];
+            data->j1 += B[a][b] * u[a] * u[b];
+        }
+    }
+
+    R0 = -data->E * w;
+    for (a = 0; a < 3; ++a) {
+        R0 += data->Fhat_con[a] * u[a];
+    }
+    for (a = 0; a < 3; ++a) {
+        Rc0[a] = -w * data->Fhat_con[a];
+        Rc1[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            Rc0[a] += A[a][b] * u[b];
+            Rc1[a] += B[a][b] * u[b];
+        }
+        uRc0 += u[a] * Rc0[a];
+        uRc1 += u[a] * Rc1[a];
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            double G = ctx->gamma[a][b] + u[a] * u[b];
+
+            GRc0Rc0 += G * Rc0[a] * Rc0[b];
+            GRc0Rc1 += G * Rc0[a] * Rc1[b];
+            GRc1Rc1 += G * Rc1[a] * Rc1[b];
+        }
+    }
+
+    data->n0 = (w * w - 1.0) * R0 * R0 - 2.0 * w * R0 * uRc0 + GRc0Rc0;
+    data->n1 = -2.0 * w * R0 * uRc1 + 2.0 * GRc0Rc1;
+    data->n2 = GRc1Rc1;
+}
 
 #if PRJ_INCLUDE_RADIATION_VISCOSITY
 static void prj_rad_gr_m1_prepare_pressure(const prj_rad *rad,
@@ -1888,57 +1983,52 @@ static void prj_rad_gr_m1_pressure_for_fbar(
     }
 }
 
-static double prj_rad_gr_m1_derived_fbar(
-    const prj_rad_gr_m1_pressure_data *data, const double P[3][3])
+/* The fluid-frame flux factor is derived_fbar = sqrt(N)/|J|, evaluated in the
+ * local Eulerian-normal frame (M^{00}=E, M^{0i}=F^i/c, M^{ij}=P^{ij}; Eq. 6.24:
+ * fbar^2 = h_{alpha gamma} R^alpha R^gamma / J^2 with R^alpha = M^{alpha beta}
+ * u_beta and J = M^{alpha beta} u_alpha u_beta). Since P(chi) is affine in the
+ * Eddington factor, N and J are the polynomials whose coefficients
+ * prj_rad_gr_m1_pressure_residual_coeffs lazily computes when the implicit
+ * solver is used; the evaluator below reads them off directly rather than
+ * contracting the full tensor. */
+
+/* derived_fbar evaluated directly from the prepared residual coefficients
+ * (prj_rad_gr_m1_pressure_residual_coeffs): given the flux factor f it forms
+ * chi = chi(f), then N = n0 + n1*chi + n2*chi^2 and J = j0 + j1*chi, and returns
+ * sqrt(N)/|J| with the identical clamping/guards as the tensor-based
+ * prj_rad_gr_m1_derived_fbar. This is the residual used by every solver path so
+ * no intermediate 3x3 pressure tensor is built or contracted during iteration --
+ * only the accepted f rebuilds the full tensor (via pressure_for_fbar) for the
+ * physical output. */
+static double prj_rad_gr_m1_derived_fbar_of_f(
+    const prj_rad_gr_m1_pressure_data *data, double fbar)
 {
-    const prj_rad_gr_m1_closure_ctx *ctx = data->ctx;
-    const prj_rad_gr_m1_side_data *side = data->side;
-    double R0;
-    double Rcon[3];
-    double J;
-    double numerator;
+    double chi;
+    double N;
     double denom;
-    int a;
-    int b;
 
-    /* Eq. 3.29 is evaluated in the local Eulerian-normal frame:
-     * M^{00}=E, M^{0i}=F^i/c, M^{ij}=P^{ij}.  Eq. 6.24 then uses
-     * h_{alpha gamma} R^alpha R^gamma / J^2 with
-     * R^alpha=M^{alpha beta}u_beta and J=M^{alpha beta}u_alpha u_beta. */
-    R0 = -data->E * side->wlor;
-    J = data->J0;
-    for (a = 0; a < 3; ++a) {
-        R0 += data->Fhat_con[a] * side->u_cov[a];
-        Rcon[a] = -side->wlor * data->Fhat_con[a];
-        for (b = 0; b < 3; ++b) {
-            Rcon[a] += P[a][b] * side->u_cov[b];
-            J += P[a][b] * side->u_cov[a] * side->u_cov[b];
-        }
+    if (!isfinite(fbar) || fbar < 0.0) {
+        fbar = 0.0;
+    } else if (fbar > 1.0) {
+        fbar = 1.0;
     }
-
-    numerator = (side->wlor * side->wlor - 1.0) * R0 * R0;
-    for (a = 0; a < 3; ++a) {
-        numerator += -2.0 * side->wlor * side->u_cov[a] * R0 * Rcon[a];
-        for (b = 0; b < 3; ++b) {
-            numerator += (ctx->gamma[a][b] +
-                side->u_cov[a] * side->u_cov[b]) * Rcon[a] * Rcon[b];
-        }
+    chi = prj_rad_m1_chi(data->rad, fbar);
+    N = data->n0 + chi * (data->n1 + chi * data->n2);
+    if (!isfinite(N) || N < 0.0) {
+        N = 0.0;
     }
-    if (!isfinite(numerator) || numerator < 0.0) {
-        numerator = 0.0;
-    }
-    denom = fabs(J);
+    denom = fabs(data->j0 + chi * data->j1);
     if (!isfinite(denom) || denom <= 0.0) {
         return 0.0;
     }
-    numerator = sqrt(numerator) / denom;
-    if (!isfinite(numerator) || numerator < 0.0) {
+    N = sqrt(N) / denom;
+    if (!isfinite(N) || N < 0.0) {
         return 0.0;
     }
-    if (numerator > 1.0) {
+    if (N > 1.0) {
         return 1.0;
     }
-    return numerator;
+    return N;
 }
 
 /* Newton-Raphson attempt on g(fbar) = derived_fbar(P(fbar)) - fbar. There is no
@@ -1965,8 +2055,6 @@ static int prj_rad_gr_m1_pressure_newton(
     }
 
     for (iter = 0; iter < 15; ++iter) {
-        double Pf[3][3];
-        double Ph[3][3];
         double fderiv;
         double g;
         double h;
@@ -1975,11 +2063,10 @@ static int prj_rad_gr_m1_pressure_newton(
         double deriv;
         double fnew;
 
-        prj_rad_gr_m1_pressure_for_fbar(data, f, Pf);
-        fderiv = prj_rad_gr_m1_derived_fbar(data, Pf);
+        fderiv = prj_rad_gr_m1_derived_fbar_of_f(data, f);
         g = fderiv - f;
         if (fabs(g) < tol) {
-            memcpy(P, Pf, 9 * sizeof(double));
+            prj_rad_gr_m1_pressure_for_fbar(data, f, P);
             if (fbar_out != 0) {
                 *fbar_out = fderiv;
             }
@@ -1991,8 +2078,7 @@ static int prj_rad_gr_m1_pressure_newton(
         if (fh > 1.0) {
             fh = f - h;
         }
-        prj_rad_gr_m1_pressure_for_fbar(data, fh, Ph);
-        gh = prj_rad_gr_m1_derived_fbar(data, Ph) - fh;
+        gh = prj_rad_gr_m1_derived_fbar_of_f(data, fh) - fh;
 
         deriv = (gh - g) / (fh - f);
         if (!isfinite(deriv) || fabs(deriv) < 1.0e-12) {
@@ -2013,12 +2099,9 @@ static int prj_rad_gr_m1_pressure_newton(
 }
 
 static void prj_rad_gr_m1_pressure_implicit(
-    const prj_rad_gr_m1_pressure_data *data, double P[3][3],
+    prj_rad_gr_m1_pressure_data *data, double P[3][3],
     double *fbar_out)
 {
-    double Plo[3][3];
-    double Phi[3][3];
-    double Pmid[3][3];
     double flo;
     double fhi;
     double fmid;
@@ -2038,6 +2121,8 @@ static void prj_rad_gr_m1_pressure_implicit(
         return;
     }
 
+    prj_rad_gr_m1_pressure_residual_coeffs(data->ctx, data->side, data);
+
     /* Fast path: Newton-Raphson seeded from the Eulerian closure. On success it
      * fills P / fbar_out and returns; on any failure it leaves P untouched and
      * we drop through to the Illinois bracketing, which is guaranteed to bracket
@@ -2055,15 +2140,13 @@ static void prj_rad_gr_m1_pressure_implicit(
      * Physically equivalent to that bracket, not bit-identical. */
     {
         double fe = data->f_euler;
-        double Pe[3][3];
         double fe_derived;
         double ge;
 
-        prj_rad_gr_m1_pressure_for_fbar(data, fe, Pe);
-        fe_derived = prj_rad_gr_m1_derived_fbar(data, Pe);
+        fe_derived = prj_rad_gr_m1_derived_fbar_of_f(data, fe);
         ge = fe_derived - fe;
         if (fabs(ge) < PRJ_RAD_GR_M1_FBAR_TOL) {
-            memcpy(P, Pe, 9 * sizeof(double));
+            prj_rad_gr_m1_pressure_for_fbar(data, fe, P);
             if (fbar_out != 0) {
                 *fbar_out = fe_derived;
             }
@@ -2071,11 +2154,10 @@ static void prj_rad_gr_m1_pressure_implicit(
         }
         if (ge > 0.0) {
             /* root in (fe, hi]; confirm the hi=1 endpoint has g < 0 */
-            prj_rad_gr_m1_pressure_for_fbar(data, hi, Phi);
-            fhi = prj_rad_gr_m1_derived_fbar(data, Phi);
+            fhi = prj_rad_gr_m1_derived_fbar_of_f(data, hi);
             ghi = fhi - hi;
             if (fabs(ghi) < PRJ_RAD_GR_M1_FBAR_TOL) {
-                memcpy(P, Phi, 9 * sizeof(double));
+                prj_rad_gr_m1_pressure_for_fbar(data, hi, P);
                 if (fbar_out != 0) {
                     *fbar_out = fhi;
                 }
@@ -2084,16 +2166,14 @@ static void prj_rad_gr_m1_pressure_implicit(
             if (ghi < 0.0) {
                 lo = fe;
                 glo = ge;
-                memcpy(Plo, Pe, 9 * sizeof(double));
                 goto illinois;
             }
         } else {
             /* root in [lo, fe); confirm the lo=0 endpoint has g > 0 */
-            prj_rad_gr_m1_pressure_for_fbar(data, lo, Plo);
-            flo = prj_rad_gr_m1_derived_fbar(data, Plo);
+            flo = prj_rad_gr_m1_derived_fbar_of_f(data, lo);
             glo = flo - lo;
             if (fabs(glo) < PRJ_RAD_GR_M1_FBAR_TOL) {
-                memcpy(P, Plo, 9 * sizeof(double));
+                prj_rad_gr_m1_pressure_for_fbar(data, lo, P);
                 if (fbar_out != 0) {
                     *fbar_out = flo;
                 }
@@ -2102,7 +2182,6 @@ static void prj_rad_gr_m1_pressure_implicit(
             if (glo > 0.0) {
                 hi = fe;
                 ghi = ge;
-                memcpy(Phi, Pe, 9 * sizeof(double));
                 goto illinois;
             }
         }
@@ -2111,22 +2190,20 @@ static void prj_rad_gr_m1_pressure_implicit(
         hi = 1.0;
     }
 
-    prj_rad_gr_m1_pressure_for_fbar(data, lo, Plo);
-    flo = prj_rad_gr_m1_derived_fbar(data, Plo);
+    flo = prj_rad_gr_m1_derived_fbar_of_f(data, lo);
     glo = flo - lo;
     if (fabs(glo) < PRJ_RAD_GR_M1_FBAR_TOL) {
-        memcpy(P, Plo, 9 * sizeof(double));
+        prj_rad_gr_m1_pressure_for_fbar(data, lo, P);
         if (fbar_out != 0) {
             *fbar_out = flo;
         }
         return;
     }
 
-    prj_rad_gr_m1_pressure_for_fbar(data, hi, Phi);
-    fhi = prj_rad_gr_m1_derived_fbar(data, Phi);
+    fhi = prj_rad_gr_m1_derived_fbar_of_f(data, hi);
     ghi = fhi - hi;
     if (fabs(ghi) < PRJ_RAD_GR_M1_FBAR_TOL) {
-        memcpy(P, Phi, 9 * sizeof(double));
+        prj_rad_gr_m1_pressure_for_fbar(data, hi, P);
         if (fbar_out != 0) {
             *fbar_out = fhi;
         }
@@ -2135,12 +2212,12 @@ static void prj_rad_gr_m1_pressure_implicit(
 
     if (glo < 0.0 || ghi > 0.0) {
         if (fabs(glo) <= fabs(ghi)) {
-            memcpy(P, Plo, 9 * sizeof(double));
+            prj_rad_gr_m1_pressure_for_fbar(data, lo, P);
             if (fbar_out != 0) {
                 *fbar_out = flo;
             }
         } else {
-            memcpy(P, Phi, 9 * sizeof(double));
+            prj_rad_gr_m1_pressure_for_fbar(data, hi, P);
             if (fbar_out != 0) {
                 *fbar_out = fhi;
             }
@@ -2177,11 +2254,10 @@ illinois:
                 mid = 0.5 * (lo + hi);
             }
 
-            prj_rad_gr_m1_pressure_for_fbar(data, mid, Pmid);
-            fmid = prj_rad_gr_m1_derived_fbar(data, Pmid);
+            fmid = prj_rad_gr_m1_derived_fbar_of_f(data, mid);
             gmid = fmid - mid;
             if (fabs(gmid) < PRJ_RAD_GR_M1_FBAR_TOL || hi - lo < PRJ_RAD_GR_M1_FBAR_TOL) {
-                memcpy(P, Pmid, 9 * sizeof(double));
+                prj_rad_gr_m1_pressure_for_fbar(data, mid, P);
                 if (fbar_out != 0) {
                     *fbar_out = fmid;
                 }
@@ -2191,7 +2267,6 @@ illinois:
                 /* Same sign as glo: root lies in [mid, hi]; advance lo. */
                 lo = mid;
                 glo = gmid;
-                memcpy(Plo, Pmid, 9 * sizeof(double));
                 if (side == 1) {
                     ghi *= 0.5;   /* hi retained again -> down-weight it */
                 }
@@ -2200,7 +2275,6 @@ illinois:
                 /* Same sign as ghi: root lies in [lo, mid]; advance hi. */
                 hi = mid;
                 ghi = gmid;
-                memcpy(Phi, Pmid, 9 * sizeof(double));
                 if (side == -1) {
                     glo *= 0.5;   /* lo retained again -> down-weight it */
                 }
@@ -4031,7 +4105,6 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
         block->v_riemann[2] == 0) {
         return;
     }
-    PRJ_SUBTIMER_START("sub_freq_grm1_geom");
     if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, ic, jc, kc, &geom)) {
         fprintf(stderr,
             "prj_rad_freq_flux_apply_gr_m1: failed to load Z4c geometry at cell (%d,%d,%d)\n",
@@ -4040,17 +4113,14 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     }
     W_mhd = prj_block_mhd_stage_const(block, z4c_stage);
     dt_geom = dt * geom.alpha * geom.sqrt_gamma;
-    PRJ_SUBTIMER_STOP("sub_freq_grm1_geom");
     if (dt_geom == 0.0) {
         return;
     }
 
-    PRJ_SUBTIMER_START("sub_freq_grm1_setup");
     prj_rad_gr_m1_cell_dvcon_dx(block, ic, jc, kc, dvcon_dx);
     prj_rad_gr_m1_freq_base_closure_ctx(&geom, W_mhd, dvcon_dx, ic, jc, kc,
         &base_closure);
     prj_rad_gr_m1_prepare_side(&base_closure, &pside);
-    PRJ_SUBTIMER_STOP("sub_freq_grm1_setup");
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         double Eg[PRJ_NEGROUP];
@@ -4095,30 +4165,22 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
 
             closure = base_closure;
-            PRJ_SUBTIMER_START("sub_freq_grm1_prepare_pressure");
             closure.opacity = prj_rad_gr_m1_cell_opacity(block, ic, jc, kc,
                 field, g);
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, Eg[g], Fcov,
                 &pdata);
-            PRJ_SUBTIMER_STOP("sub_freq_grm1_prepare_pressure");
             /* frequency_drifts (via decompose_m2) needs the full pdata, so
              * prepare_pressure must run; but the geometric source term already
              * solved the identical closure this stage, so reuse its (P, fbar)
              * and skip the expensive implicit root-find on a cache hit. */
-            PRJ_SUBTIMER_START("sub_freq_grm1_cache_get");
             cache_hit = prj_rad_gr_m1_closure_cache_get(block, W_state, z4c_stage,
                     (ic * PRJ_BLOCK_SIZE + jc) * PRJ_BLOCK_SIZE + kc,
                     field * PRJ_NEGROUP + g, Pg[g], &fbar);
-            PRJ_SUBTIMER_STOP("sub_freq_grm1_cache_get");
             if (!cache_hit) {
-                PRJ_SUBTIMER_START("sub_freq_grm1_pressure_solve");
                 prj_rad_gr_m1_pressure_implicit(&pdata, Pg[g], &fbar);
-                PRJ_SUBTIMER_STOP("sub_freq_grm1_pressure_solve");
             }
-            PRJ_SUBTIMER_START("sub_freq_grm1_drifts");
             prj_rad_gr_m1_frequency_drifts(&pdata, Pg[g], fbar, &geom,
                 observer_time_derivative, &Acon, Mq_cov[g]);
-            PRJ_SUBTIMER_STOP("sub_freq_grm1_drifts");
             Acon_spec[g] = Acon * inv_dnu[g];
             for (a = 0; a < 3; ++a) {
                 Mq_spec[g][a] = Mq_cov[g][a] * inv_dnu[g];
@@ -4126,7 +4188,6 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             energy_available[g] = u[PRJ_CONS_RAD_E(field, g)];
         }
 
-        PRJ_SUBTIMER_START("sub_freq_grm1_faces");
         for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
             double face_drift = Acon_spec[gf - 1] + Acon_spec[gf];
             int gu = face_drift >= 0.0 ? gf : gf - 1;
@@ -4137,13 +4198,11 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                 momentum_face[gf][a] += nu * Mq_spec[gu][a];
             }
         }
-        PRJ_SUBTIMER_STOP("sub_freq_grm1_faces");
 
         {
             double outgoing[PRJ_NEGROUP] = {0.0};
             double theta[PRJ_NEGROUP];
 
-            PRJ_SUBTIMER_START("sub_freq_grm1_limiter");
             for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
                 if (energy_face[gf] > 0.0) {
                     outgoing[gf] += energy_face[gf];
@@ -4170,10 +4229,8 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                     momentum_face[gf][a] *= factor;
                 }
             }
-            PRJ_SUBTIMER_STOP("sub_freq_grm1_limiter");
         }
 
-        PRJ_SUBTIMER_START("sub_freq_grm1_apply");
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             u[PRJ_CONS_RAD_E(field, g)] += dt_geom *
                 (energy_face[g + 1] - energy_face[g]);
@@ -4184,7 +4241,6 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             u[PRJ_CONS_RAD_F3(field, g)] += dt_geom *
                 (momentum_face[g + 1][2] - momentum_face[g][2]);
         }
-        PRJ_SUBTIMER_STOP("sub_freq_grm1_apply");
     }
 }
 
@@ -4300,7 +4356,6 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
         dt == 0.0 || !prj_eos_full_dynamic_gr_enabled(mesh)) {
         return;
     }
-    PRJ_SUBTIMER_START("sub_matter_grm1_geom");
     if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
         fprintf(stderr,
             "prj_rad_gr_m1_matter_update: failed to load Z4c geometry at cell (%d,%d,%d)\n",
@@ -4308,12 +4363,10 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
         exit(1);
     }
     dt_lapse = dt * geom.alpha;
-    PRJ_SUBTIMER_STOP("sub_matter_grm1_geom");
     if (dt_lapse == 0.0) {
         return;
     }
 
-    PRJ_SUBTIMER_START("sub_matter_grm1_prim_eos");
     prj_rad_gr_m1_clamp_conserved_cell(&geom, u);
     prj_eos_cell_cons2prim(eos, mesh, block, z4c_stage, i, j, k, u, W,
         PRJ_EOS_CTX_MAIN);
@@ -4321,12 +4374,9 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     eint = W[PRJ_PRIM_EINT];
     prj_eos_rey(eos, rho, eint, W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
     T = eos_q[PRJ_EOS_TEMPERATURE];
-    PRJ_SUBTIMER_STOP("sub_matter_grm1_prim_eos");
-    PRJ_SUBTIMER_START("sub_matter_grm1_setup");
     prj_rad_gr_m1_cell_dvcon_dx(block, i, j, k, dvcon_dx);
     prj_rad_gr_m1_source_base_closure_ctx(&geom, W, dvcon_dx, &base_closure);
     prj_rad_gr_m1_prepare_side(&base_closure, &pside);
-    PRJ_SUBTIMER_STOP("sub_matter_grm1_setup");
 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         tmp[v] = 0.0;
@@ -4355,7 +4405,6 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             Fcov[0] = u[PRJ_CONS_RAD_F1(field, group)] / geom.sqrt_gamma;
             Fcov[1] = u[PRJ_CONS_RAD_F2(field, group)] / geom.sqrt_gamma;
             Fcov[2] = u[PRJ_CONS_RAD_F3(field, group)] / geom.sqrt_gamma;
-            PRJ_SUBTIMER_START("sub_matter_grm1_pressure");
             prj_rad_gr_m1_clamp_ef(&geom, &E, Fcov);
 
             closure = base_closure;
@@ -4364,13 +4413,9 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             prj_rad_gr_m1_prepare_pressure(rad, &closure, &pside, E, Fcov,
                 &pdata);
             prj_rad_gr_m1_pressure_implicit(&pdata, P, 0);
-            PRJ_SUBTIMER_STOP("sub_matter_grm1_pressure");
-            PRJ_SUBTIMER_START("sub_matter_grm1_decompose");
             prj_rad_gr_m1_decompose_m2(&pdata, P, &J, H, L, ucon, ucov,
                 hcon, hcov);
-            PRJ_SUBTIMER_STOP("sub_matter_grm1_decompose");
 
-            PRJ_SUBTIMER_START("sub_matter_grm1_pack");
             J_old[idx] = J;
             for (v = 0; v < 4; ++v) {
                 H_old[idx][v] = H[v];
@@ -4384,24 +4429,16 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             tmp[PRJ_CONS_RAD_F1(field, group)] = PRJ_CLIGHT * H[1];
             tmp[PRJ_CONS_RAD_F2(field, group)] = PRJ_CLIGHT * H[2];
             tmp[PRJ_CONS_RAD_F3(field, group)] = PRJ_CLIGHT * H[3];
-            PRJ_SUBTIMER_STOP("sub_matter_grm1_pack");
         }
     }
 
-    PRJ_SUBTIMER_START("sub_matter_grm1_inel");
     prj_rad_eleinel_step(rad, eos, tmp, dt_lapse, T);
     prj_rad_nucinel_step(rad, eos, tmp, dt_lapse, T);
-    PRJ_SUBTIMER_STOP("sub_matter_grm1_inel");
-    PRJ_SUBTIMER_START("sub_matter_grm1_energy");
     prj_rad_energy_update(rad, eos, tmp, dt_lapse, 1.0, &T, kappa);
-    PRJ_SUBTIMER_STOP("sub_matter_grm1_energy");
     Ye_final = tmp[PRJ_CONS_RHO] > 0.0 ?
         tmp[PRJ_CONS_YE] / tmp[PRJ_CONS_RHO] : W[PRJ_PRIM_YE];
-    PRJ_SUBTIMER_START("sub_matter_grm1_opac");
     prj_rad3_opac_lookup(rad, rho, T, Ye_final, 0, sigma, delta, 0);
-    PRJ_SUBTIMER_STOP("sub_matter_grm1_opac");
 
-    PRJ_SUBTIMER_START("sub_matter_grm1_apply");
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -4451,7 +4488,6 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     u[PRJ_CONS_MOM3] -= total_dF[2] * RAD_SCALE /
         (PRJ_CLIGHT * PRJ_CLIGHT);
     u[PRJ_CONS_YE] = u[PRJ_CONS_RHO] * Ye_final;
-    PRJ_SUBTIMER_STOP("sub_matter_grm1_apply");
 
     /* This source solve freezes the frame velocity while coupling radiation
      * and matter.  A future fully implicit GR-M1 source solve should include

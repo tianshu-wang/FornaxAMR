@@ -1571,15 +1571,12 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
     }
-    PRJ_SUBTIMER_START("sub_flux_grm1_setup");
     have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
         dx, dvdx_face);
     prj_flux_gr_m1_closure_ctx(geom, WL, 0.0, dvdx_face, have_dvdx, &closureL);
     prj_flux_gr_m1_closure_ctx(geom, WR, 0.0, dvdx_face, have_dvdx, &closureR);
     prj_rad_gr_m1_prepare_side(&closureL, &sideL);
     prj_rad_gr_m1_prepare_side(&closureR, &sideR);
-    PRJ_SUBTIMER_STOP("sub_flux_grm1_setup");
-    PRJ_SUBTIMER_START("sub_flux_grm1_groups");
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -1608,14 +1605,11 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             closureL.opacity = chi_ext;
             closureR.opacity = chi_ext;
 
-            PRJ_SUBTIMER_START("sub_flux_grm1_state_pair");
             prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &closureL,
                 &sideL, UL, FphysL, &lamL_min, &lamL_max);
             prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &closureR,
                 &sideR, UR, FphysR, &lamR_min, &lamR_max);
-            PRJ_SUBTIMER_STOP("sub_flux_grm1_state_pair");
 
-            PRJ_SUBTIMER_START("sub_flux_grm1_hlle");
             sL = lamL_min < lamR_min ? lamL_min : lamR_min;
             sR = lamL_max > lamR_max ? lamL_max : lamR_max;
             if (sL > 0.0) {
@@ -1650,10 +1644,8 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
                     inv_denom +
                     (1.0 - eps2) * 0.5 * (FphysL[1 + q] + FphysR[1 + q]);
             }
-            PRJ_SUBTIMER_STOP("sub_flux_grm1_hlle");
         }
     }
-    PRJ_SUBTIMER_STOP("sub_flux_grm1_groups");
 }
 #endif
 #endif
@@ -1942,11 +1934,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
 #endif
 
         /* Variable-outermost reconstruction pass over the block. */
-        PRJ_SUBTIMER_START("sub_flux_reconstruct");
         prj_flux_reconstruct_block(W, eosvar, dir,
             istart, iend, jstart, jend, kstart, kend,
             WL_block, WR_block, pL_block, pR_block, gL_block, gR_block);
-        PRJ_SUBTIMER_STOP("sub_flux_reconstruct");
 
         for (i = istart; i <= iend; ++i) {
             for (j = jstart; j <= jend; ++j) {
@@ -1957,7 +1947,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                  * in the block buffers (k is the fastest IDX axis), so each
                  * variable streams sequentially instead of striding 13.8 KB per
                  * face as the old per-face gather did. */
-                PRJ_SUBTIMER_START("sub_flux_gather");
                 {
                     size_t base = (size_t)LIDX(i, j, kstart);
                     int v;
@@ -1979,7 +1968,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                         gRp[kk] = gR_block[base + kk];
                     }
                 }
-                PRJ_SUBTIMER_STOP("sub_flux_gather");
 
                 for (k = kstart; k <= kend; ++k) {
                     int kk = k - kstart;
@@ -2009,12 +1997,9 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                     deltav = 0.0;
                     deltaw = 0.0;
 #else
-                    PRJ_SUBTIMER_START("sub_flux_veldelta");
                     prj_flux_velocity_deltas(W, dir, il, jl, kl, ir, jr, kr,
                         &deltau, &deltav, &deltaw);
-                    PRJ_SUBTIMER_STOP("sub_flux_veldelta");
 #endif
-                    PRJ_SUBTIMER_START("sub_flux_riemann");
 #if PRJ_MHD
                     {
                         double *bf_dir = prj_block_bf_stage(block, dir,
@@ -2061,19 +2046,15 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                     prj_riemann_hllc(WL, WR, pL, pR, gL, gR, eos, Fl,
                         v_face_loc, deltau, deltav, deltaw);
 #endif
-                    PRJ_SUBTIMER_STOP("sub_flux_riemann");
                     prj_flux_store_face_velocity(block, dir, i, j, k, v_face_loc);
 #if PRJ_NRAD > 0
-                    PRJ_SUBTIMER_START("sub_flux_rad");
                     if (prj_flux_rad_face_needed(dir, i, j, k)) {
 #if PRJ_USE_RADIATION_FSA
                         double lapse_face = 0.5 *
                             (block->lapse[IDX(il, jl, kl)] + block->lapse[IDX(ir, jr, kr)]);
 
-                        PRJ_SUBTIMER_START("sub_flux_rad_fsa");
                         prj_rad_flux_fsa(rad, block, WL, WR, lapse_face, dir,
                             v_face_loc[0], il, jl, kl, ir, jr, kr, Fl);
-                        PRJ_SUBTIMER_STOP("sub_flux_rad_fsa");
 #else
                         double dx_dir;
                         double chi_face[PRJ_NRAD * PRJ_NEGROUP];
@@ -2087,7 +2068,6 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                         int idx;
                         dx_dir = block->dx[dir];
 
-                        PRJ_SUBTIMER_START("sub_flux_rad_chi_face");
                         for (idx = 0; idx < PRJ_NRAD * PRJ_NEGROUP; ++idx) {
                             double kL = kappa_L[idx];
                             double kR = kappa_R[idx];
@@ -2099,25 +2079,20 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                             double s_face = s_sum > 0.0 ? 2.0 * sL_o * sR_o / s_sum : 0.0;
                             chi_face[idx] = k_face + s_face;
                         }
-                        PRJ_SUBTIMER_STOP("sub_flux_rad_chi_face");
 
 #if PRJ_DYNAMIC_GR
                         if (full_dynamic_gr) {
                             prj_z4c_hydro_geom geom;
 
-                            PRJ_SUBTIMER_START("sub_flux_rad_geom");
                             if (!gr_cell_geom_ready ||
                                 !prj_flux_gr_face_geom_cached(gr_cell_geom, dir,
                                     il, jl, kl, ir, jr, kr, &geom)) {
                                 prj_flux_gr_fail("radiation geometry load", -1,
                                     dir, i, j, k);
                             }
-                            PRJ_SUBTIMER_STOP("sub_flux_rad_geom");
-                            PRJ_SUBTIMER_START("sub_flux_rad_grm1");
                             prj_flux_gr_m1(rad, WL, WR, W, dir,
                                 il, jl, kl, ir, jr, kr, &geom, chi_face,
                                 block->dx, Fl);
-                            PRJ_SUBTIMER_STOP("sub_flux_rad_grm1");
                         } else
 #endif
                         {
@@ -2125,10 +2100,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                                 (block->lapse[IDX(il, jl, kl)] +
                                     block->lapse[IDX(ir, jr, kr)]);
 
-                            PRJ_SUBTIMER_START("sub_flux_rad_m1");
                             prj_rad_flux(rad, WL, WR, lapse_face, chi_face,
                                 dx_dir, v_face_loc[0], Fl);
-                            PRJ_SUBTIMER_STOP("sub_flux_rad_m1");
                         }
 #endif
                     }
@@ -2136,11 +2109,8 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                      * radiation flux divergence never reads them, and the store
                      * (prj_flux_store_local_flux) gates the radiation copy on the
                      * same prj_flux_rad_face_needed() predicate. */
-                    PRJ_SUBTIMER_STOP("sub_flux_rad");
 #endif
-                    PRJ_SUBTIMER_START("sub_flux_store");
                     prj_flux_store_local_flux(flux[dir], dir, i, j, k, Fl);
-                    PRJ_SUBTIMER_STOP("sub_flux_store");
                 }
             }
         }
