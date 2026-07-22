@@ -67,29 +67,39 @@ typedef struct prj_rad_gr_m1_closure_ctx {
     double K_dd[3][3];
     double vcon[3];
     double dvdx[3][3];
-    double opacity;
-    int have_shear;
 } prj_rad_gr_m1_closure_ctx;
 
-/* Per-side (velocity + geometry) kinematics for the GR M1 closure. These are
- * invariant across all energy groups of a face side, so callers that solve the
- * closure for many groups at one point (e.g. the interface flux) build this
- * once with prj_rad_gr_m1_prepare_side and pass it to the _cached solve,
- * hoisting the expensive shear/Christoffel work out of the per-group loop. */
+/* Per-side fluid kinematics for GR M1 moment projections. These are invariant
+ * across all energy groups of a face side, so callers that need the same frame
+ * repeatedly build this once with prj_rad_gr_m1_prepare_side and pass it to the
+ * _cached helpers. */
 typedef struct prj_rad_gr_m1_side_data {
     double vcon[3];
     double vcov[3];
     double u_cov[3];
     double wlor;
     double beta2;
-    double sigma_con[3][3];
-    double Jcoef[6];
-    double Hcoef[3][6];
-    double lbar_by_shear;
 } prj_rad_gr_m1_side_data;
 
 void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
     prj_rad_gr_m1_side_data *side);
+
+/* Build R^{alpha beta} from Eulerian moments using paper Eqs. (2), (4),
+ * (9), and (10). `Fcon` is the physical contravariant lab-frame flux; the
+ * stress-tensor time-space leg is F^i/c internally. The implementation
+ * substitutes out E_R and u_R^alpha, so the null/free-streaming limit remains
+ * finite. */
+int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
+    double alpha, double E, const double Fcon[3], double Rcon[4][4]);
+
+/* Contract the third radiation moment with the velocity gradient,
+ * drift^alpha = M^{alpha beta gamma} u_{beta;gamma}.  The third moment is not
+ * materialized; the contraction is formed from J, H^alpha, L^{alpha beta}, and
+ * the analytic Levermore closure.  `ucon`, `Rcon`, and `ducov` are in the same
+ * basis as g_ab/g^ab. */
+int prj_rad_grm1_freq_drift(const double g_cov[4][4],
+    const double g_con[4][4], const double ucon[4],
+    const double Rcon[4][4], const double ducov[4][4], double drift[4]);
 
 void prj_rad_gr_m1_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov[3],
@@ -109,20 +119,6 @@ void prj_rad_gr_m1_pressure_fbar_cached(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov[3],
     double P[3][3], double *fbar_out, double *J0_out, double H0_out[3]);
-
-/* Cell-centered closure cache. The GR geometric source term and the frequency
- * flux term solve the identical cell-centered radiation closure (same W_rad,
- * geometry, opacity) within one block/stage; the source populates this cache
- * and the frequency flux reuses P, fbar, J0, and H0. Guarded by a
- * (block, wrad, stage) tag so a stale/absent entry simply forces a recompute --
- * never a wrong reuse. */
-void prj_rad_gr_m1_closure_cache_begin(const void *block, const void *wrad,
-    int stage);
-void prj_rad_gr_m1_closure_cache_put(int active_cell, int grp,
-    const double P[3][3], double fbar, double J0, const double H0[3]);
-int prj_rad_gr_m1_closure_cache_get(const void *block, const void *wrad,
-    int stage, int active_cell, int grp, double P[3][3], double *fbar_out,
-    double *J0_out, double H0_out[3]);
 #endif
 #if PRJ_NRAD > 0
 void prj_rad_m1_wavespeeds(double E, double F1, double F2, double F3,

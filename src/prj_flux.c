@@ -1175,32 +1175,13 @@ static double prj_flux_gr_m1_chi_exact(double f)
 
 static double prj_flux_gr_m1_chi(const prj_rad *rad, double f)
 {
-    double scaled;
-    double w;
-    double chi;
-    int idx;
-
+    (void)rad;
     if (!isfinite(f) || f <= 0.0) {
         f = 0.0;
     } else if (f > 1.0) {
         f = 1.0;
     }
-    if (rad == 0 || !isfinite(rad->chi[0]) || !isfinite(rad->chi[NCLOSURE]) ||
-        rad->chi[0] <= 0.0 || rad->chi[NCLOSURE] <= 0.0) {
-        return prj_flux_gr_m1_chi_exact(f);
-    }
-    if (f <= 0.0) {
-        return rad->chi[0];
-    }
-    if (f >= 1.0) {
-        return rad->chi[NCLOSURE];
-    }
-
-    scaled = f * (double)NCLOSURE;
-    idx = (int)scaled;
-    w = scaled - (double)idx;
-    chi = rad->chi[idx] + w * (rad->chi[idx + 1] - rad->chi[idx]);
-    return isfinite(chi) ? chi : prj_flux_gr_m1_chi_exact(f);
+    return prj_flux_gr_m1_chi_exact(f);
 }
 
 static void prj_flux_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
@@ -1324,6 +1305,9 @@ static void prj_flux_gr_m1_wavespeeds(const prj_rad *rad,
     *smax = PRJ_CLIGHT * lambda_r;
 }
 
+#if 0
+/* Legacy face-gradient support for the removed implicit GR M1 pressure
+ * closure. Active transport builds R^{ab} analytically at each face state. */
 static int prj_flux_gr_m1_cell_in_storage(int i, int j, int k)
 {
     return i >= -PRJ_NGHOST && i < PRJ_BLOCK_SIZE + PRJ_NGHOST &&
@@ -1436,14 +1420,13 @@ static int prj_flux_gr_m1_face_dvdx(const double *W_block, int dir,
     }
     return 1;
 }
+#endif
 
 static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
-    const double *W, double opacity, const double dvdx[3][3], int have_dvdx,
-    prj_rad_gr_m1_closure_ctx *ctx)
+    const double *W, prj_rad_gr_m1_closure_ctx *ctx)
 {
     int a;
     int b;
-    int d;
 
     memset(ctx, 0, sizeof(*ctx));
     for (a = 0; a < 3; ++a) {
@@ -1451,31 +1434,64 @@ static void prj_flux_gr_m1_closure_ctx(const prj_z4c_hydro_geom *geom,
         for (b = 0; b < 3; ++b) {
             ctx->gamma[a][b] = geom->gamma[a][b];
             ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
-            ctx->K_dd[a][b] = geom->K_dd[a][b];
-            for (d = 0; d < 3; ++d) {
-                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
-            }
         }
     }
-    if (have_dvdx && dvdx != 0) {
-        for (d = 0; d < 3; ++d) {
-            for (a = 0; a < 3; ++a) {
-                ctx->dvdx[d][a] = dvdx[d][a];
-            }
-        }
-    }
-    ctx->opacity = opacity;
-    /* Face transport carries the full velocity-gradient tensor: normal row from
-     * the across-face difference and tangential rows from the averaged
-     * cell-centred transverse stencils (prj_flux_gr_m1_face_dvdx). */
-    ctx->have_shear = have_dvdx;
 }
 
-/* Per-group state flux for one side of a face. The closure context (metric,
- * dgamma, dvdx, vcon) is invariant across all (field, group) pairs of this
- * side, so it is built once by the caller and passed in with only ctx->opacity
- * refreshed per group; this hoists a memset + ~54-double geometry copy out of
- * the NRAD*NEGROUP inner loop (bit-identical result). */
+static void prj_flux_gr_m1_metric4(const prj_z4c_hydro_geom *geom,
+    double g_cov[4][4], double g_con[4][4])
+{
+    double beta_cov[3] = {0.0, 0.0, 0.0};
+    double beta2 = 0.0;
+    double inv_alpha2;
+    int a;
+    int b;
+
+    memset(g_cov, 0, 16 * sizeof(double));
+    memset(g_con, 0, 16 * sizeof(double));
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            beta_cov[a] += geom->gamma[a][b] * geom->beta[b];
+        }
+        beta2 += beta_cov[a] * geom->beta[a];
+    }
+
+    g_cov[0][0] = -geom->alpha * geom->alpha + beta2;
+    for (a = 0; a < 3; ++a) {
+        g_cov[0][a + 1] = beta_cov[a];
+        g_cov[a + 1][0] = beta_cov[a];
+        for (b = 0; b < 3; ++b) {
+            g_cov[a + 1][b + 1] = geom->gamma[a][b];
+        }
+    }
+
+    inv_alpha2 = 1.0 / (geom->alpha * geom->alpha);
+    g_con[0][0] = -inv_alpha2;
+    for (a = 0; a < 3; ++a) {
+        g_con[0][a + 1] = geom->beta[a] * inv_alpha2;
+        g_con[a + 1][0] = g_con[0][a + 1];
+        for (b = 0; b < 3; ++b) {
+            g_con[a + 1][b + 1] = geom->gamma_inv[a][b] -
+                geom->beta[a] * geom->beta[b] * inv_alpha2;
+        }
+    }
+}
+
+static double prj_flux_gr_m1_R_mixed(const double Rcon[4][4],
+    const double g_cov[4][4], int up, int down)
+{
+    double mixed = 0.0;
+    int a;
+
+    for (a = 0; a < 4; ++a) {
+        mixed += Rcon[up][a] * g_cov[a][down];
+    }
+    return mixed;
+}
+
+/* Per-group state flux for one side of a face. The metric/velocity context is
+ * invariant across all (field, group) pairs of this side, so it is built once
+ * by the caller and reused through the NRAD*NEGROUP inner loop. */
 static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
     const prj_rad_gr_m1_closure_ctx *closure,
@@ -1490,6 +1506,10 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     double Pcon[3][3];
     double Fmag;
     double fbar = 0.0;
+    double g_cov[4][4];
+    double g_con[4][4];
+    double Rcon[4][4];
+    int have_R = 0;
     int i;
 
     E = W[PRJ_PRIM_RAD_E(field, group)];
@@ -1506,19 +1526,40 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     prj_rad_gr_m1_pressure_fbar_cached(rad, closure, side, E, Fcov, Pcon,
         &fbar, 0, 0);
 
-    U[0] = geom->sqrt_gamma * E;
-    F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
-        c * geom->beta[0] * E);
-    for (i = 0; i < 3; ++i) {
-        double Pn_i = 0.0;
-        int a;
+    prj_flux_gr_m1_metric4(geom, g_cov, g_con);
+    have_R = prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon, Rcon);
 
-        U[1 + i] = geom->sqrt_gamma * Fcov[i];
-        for (a = 0; a < 3; ++a) {
-            Pn_i += geom->gamma[i][a] * Pcon[0][a];
+    if (have_R) {
+        double alpha_sqrt_gamma = geom->alpha * geom->sqrt_gamma;
+
+        /* Eqs. (19)-(20) of the paper, converted to the code's explicit-c
+         * Eulerian moments.  The energy equation uses the code's normal-frame
+         * flux sign convention, equivalent to substituting paper Eq. (2):
+         * F_E = c alpha^2 sqrt(gamma) R^{01}.  Momentum fluxes are
+         * F_{F_j} = c^2 sqrt(-g) R^1_j. */
+        U[0] = geom->sqrt_gamma * geom->alpha * geom->alpha * Rcon[0][0];
+        F[0] = c * geom->alpha * alpha_sqrt_gamma * Rcon[0][1];
+        for (i = 0; i < 3; ++i) {
+            U[1 + i] = c * alpha_sqrt_gamma *
+                prj_flux_gr_m1_R_mixed(Rcon, g_cov, 0, i + 1);
+            F[1 + i] = c2 * alpha_sqrt_gamma *
+                prj_flux_gr_m1_R_mixed(Rcon, g_cov, 1, i + 1);
         }
-        F[1 + i] = geom->sqrt_gamma *
-            (geom->alpha * c2 * Pn_i - c * geom->beta[0] * Fcov[i]);
+    } else {
+        U[0] = geom->sqrt_gamma * E;
+        F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
+            c * geom->beta[0] * E);
+        for (i = 0; i < 3; ++i) {
+            double Pn_i = 0.0;
+            int a;
+
+            U[1 + i] = geom->sqrt_gamma * Fcov[i];
+            for (a = 0; a < 3; ++a) {
+                Pn_i += geom->gamma[i][a] * Pcon[0][a];
+            }
+            F[1 + i] = geom->sqrt_gamma *
+                (geom->alpha * c2 * Pn_i - c * geom->beta[0] * Fcov[i]);
+        }
     }
 
     prj_flux_gr_m1_wavespeeds(rad, geom, side, Fcon, Fmag, fbar, smin, smax);
@@ -1530,29 +1571,29 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
     const prj_z4c_hydro_geom *geom, const double *chi_face, const double *dx,
     double *flux)
 {
-    double dvdx_face[3][3];
     double dx_dir = dx != 0 ? dx[dir] : 0.0;
-    int have_dvdx;
     int field;
     int group;
-    /* Closure context is invariant across (field, group) for each side of the
-     * face; build it once here (opacity refreshed per group below) instead of
-     * rebuilding it in every prj_flux_gr_m1_state_flux call. */
+    /* Metric/velocity context is invariant across (field, group) for each side
+     * of the face, so build it once here and reuse it in each state flux. */
     prj_rad_gr_m1_closure_ctx closureL;
     prj_rad_gr_m1_closure_ctx closureR;
-    /* Per-side velocity/geometry kinematics (shear, Christoffel, ...) are
-     * invariant across all NRAD*NEGROUP groups, so build them once per side
-     * here and reuse in every prj_rad_gr_m1_pressure_fbar_cached call below. */
+    /* Per-side fluid kinematics are likewise group-invariant. */
     prj_rad_gr_m1_side_data sideL;
     prj_rad_gr_m1_side_data sideR;
 
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
     }
-    have_dvdx = prj_flux_gr_m1_face_dvdx(W_block, dir, il, jl, kl, ir, jr, kr,
-        dx, dvdx_face);
-    prj_flux_gr_m1_closure_ctx(geom, WL, 0.0, dvdx_face, have_dvdx, &closureL);
-    prj_flux_gr_m1_closure_ctx(geom, WR, 0.0, dvdx_face, have_dvdx, &closureR);
+    (void)W_block;
+    (void)il;
+    (void)jl;
+    (void)kl;
+    (void)ir;
+    (void)jr;
+    (void)kr;
+    prj_flux_gr_m1_closure_ctx(geom, WL, &closureL);
+    prj_flux_gr_m1_closure_ctx(geom, WR, &closureR);
     prj_rad_gr_m1_prepare_side(&closureL, &sideL);
     prj_rad_gr_m1_prepare_side(&closureR, &sideR);
     for (field = 0; field < PRJ_NRAD; ++field) {
@@ -1580,9 +1621,6 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             if (!isfinite(chi_ext) || chi_ext < 0.0) {
                 chi_ext = 0.0;
             }
-            closureL.opacity = chi_ext;
-            closureR.opacity = chi_ext;
-
             prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &closureL,
                 &sideL, UL, FphysL, &lamL_min, &lamL_max);
             prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &closureR,

@@ -445,100 +445,59 @@ static void prj_src_gr_hydro_z4c(prj_eos *eos, const prj_mesh *mesh,
 }
 
 #if PRJ_USE_RADIATION_M1
-static void prj_src_gr_m1_dvdx(const prj_block *block, int i, int j, int k,
-    double dvdx[3][3], int *have_dvdx)
-{
-    double inv_dx[3];
-    int jdir;
-    int icomp;
-
-    memset(dvdx, 0, 9 * sizeof(double));
-    *have_dvdx = 0;
-    if (block == 0 || block->v_riemann[0] == 0 || block->v_riemann[1] == 0 ||
-        block->v_riemann[2] == 0) {
-        return;
-    }
-    inv_dx[0] = 1.0 / block->dx[0];
-    inv_dx[1] = 1.0 / block->dx[1];
-    inv_dx[2] = 1.0 / block->dx[2];
-    for (jdir = 0; jdir < 3; ++jdir) {
-        for (icomp = 0; icomp < 3; ++icomp) {
-            int il = i;
-            int jl = j;
-            int kl = k;
-            int ir = i;
-            int jr = j;
-            int kr = k;
-            double vL;
-            double vR;
-
-            if (jdir == X1DIR) {
-                ir = i + 1;
-            } else if (jdir == X2DIR) {
-                jr = j + 1;
-            } else {
-                kr = k + 1;
-            }
-            vL = block->v_riemann[jdir][VRIDX(icomp, il, jl, kl)];
-            vR = block->v_riemann[jdir][VRIDX(icomp, ir, jr, kr)];
-            dvdx[jdir][icomp] = (vR - vL) * inv_dx[jdir] / PRJ_CLIGHT;
-        }
-    }
-    *have_dvdx = 1;
-}
-
-static double prj_src_gr_m1_cell_opacity(const prj_block *block,
-    int i, int j, int k, int field, int group)
-{
-    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
-    const int op_idx = field * PRJ_NEGROUP + group;
-    const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
-    double opacity = 0.0;
-
-    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
-        double kappa = block->kappa_cell[op_off];
-        double sigma = block->sigma_cell[op_off];
-
-        if (isfinite(kappa) && kappa > 0.0) {
-            opacity += kappa;
-        }
-        if (isfinite(sigma) && sigma > 0.0) {
-            opacity += sigma;
-        }
-    }
-    return opacity;
-}
-
-static void prj_src_gr_m1_base_closure_ctx(const prj_z4c_hydro_geom *geom,
-    const double *W_mhd, const double dvdx[3][3], int have_dvdx,
-    int i, int j, int k, prj_rad_gr_m1_closure_ctx *ctx)
+static void prj_src_gr_m1_normal_metric(const prj_z4c_hydro_geom *geom,
+    double g_cov[4][4], double g_con[4][4])
 {
     int a;
     int b;
-    int d;
 
-    memset(ctx, 0, sizeof(*ctx));
+    memset(g_cov, 0, 16 * sizeof(double));
+    memset(g_con, 0, 16 * sizeof(double));
+    g_cov[0][0] = -1.0;
+    g_con[0][0] = -1.0;
     for (a = 0; a < 3; ++a) {
-        ctx->vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
-            PRJ_CLIGHT : 0.0;
         for (b = 0; b < 3; ++b) {
-            ctx->gamma[a][b] = geom->gamma[a][b];
-            ctx->gamma_inv[a][b] = geom->gamma_inv[a][b];
-            ctx->K_dd[a][b] = geom->K_dd[a][b];
-            for (d = 0; d < 3; ++d) {
-                ctx->dgamma[d][a][b] = geom->dgamma[d][a][b];
-            }
+            g_cov[a + 1][b + 1] = geom->gamma[a][b];
+            g_con[a + 1][b + 1] = geom->gamma_inv[a][b];
         }
     }
-    if (dvdx != 0) {
-        for (d = 0; d < 3; ++d) {
-            for (a = 0; a < 3; ++a) {
-                ctx->dvdx[d][a] = dvdx[d][a];
-            }
+}
+
+static void prj_src_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
+    double *E, double Fcov[3], double Fcon[3])
+{
+    double F2 = 0.0;
+    double Fmag;
+    double cE;
+    int a;
+    int b;
+
+    if (!isfinite(*E) || *E < 0.0) {
+        *E = 0.0;
+    }
+    for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcov[a])) {
+            Fcov[a] = 0.0;
+        }
+        Fcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
+        }
+        F2 += Fcov[a] * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * *E;
+    if (Fmag > cE && Fmag > 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            Fcov[a] *= scale;
+            Fcon[a] *= scale;
         }
     }
-    ctx->opacity = 0.0;
-    ctx->have_shear = have_dvdx;
 }
 
 static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
@@ -549,38 +508,31 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
     int j;
     int k;
 
+    (void)W_mhd;
     if (!prj_eos_full_dynamic_gr_enabled(mesh) || rad == 0 || block == 0 ||
         block->id < 0 || block->active != 1 || W_rad == 0 || rad_rhs == 0) {
         return;
     }
-    /* Publish the cell-centered closure so the frequency-flux term (same stage,
-     * same W_rad, same geometry/opacity) can reuse it instead of re-solving. */
-    prj_rad_gr_m1_closure_cache_begin(block, W_rad, z4c_stage);
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                 prj_z4c_hydro_geom geom;
-                double dvdx[3][3];
-                int have_dvdx;
-                prj_rad_gr_m1_closure_ctx base_closure;
-                prj_rad_gr_m1_side_data pside;
+                double g_cov[4][4];
+                double g_con[4][4];
                 int field;
                 int group;
 
                 if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
                     prj_src_gr_fail("radiation geometry load", -1, i, j, k);
                 }
-                prj_src_gr_m1_dvdx(block, i, j, k, dvdx, &have_dvdx);
-                prj_src_gr_m1_base_closure_ctx(&geom, W_mhd, dvdx, have_dvdx,
-                    i, j, k, &base_closure);
-                prj_rad_gr_m1_prepare_side(&base_closure, &pside);
+                prj_src_gr_m1_normal_metric(&geom, g_cov, g_con);
                 for (field = 0; field < PRJ_NRAD; ++field) {
                     for (group = 0; group < PRJ_NEGROUP; ++group) {
                         double E;
                         double Fcov[3];
                         double Fcon[3];
                         double Pcon[3][3];
-                        prj_rad_gr_m1_closure_ctx closure;
+                        double Rcon[4][4];
                         double energy_src = 0.0;
                         double c = PRJ_CLIGHT;
                         double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
@@ -593,28 +545,20 @@ static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
                         Fcov[1] = W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)];
                         Fcov[2] = W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)];
 
-                        for (a = 0; a < 3; ++a) {
-                            Fcon[a] = 0.0;
-                            for (b = 0; b < 3; ++b) {
-                                Fcon[a] += geom.gamma_inv[a][b] * Fcov[b];
+                        prj_src_gr_m1_limit_state(&geom, &E, Fcov, Fcon);
+                        if (prj_rad_grm1_build_R(g_cov, g_con, 1.0, E,
+                                Fcon, Rcon)) {
+                            for (a = 0; a < 3; ++a) {
+                                for (b = 0; b < 3; ++b) {
+                                    Pcon[a][b] = Rcon[a + 1][b + 1];
+                                }
                             }
-                        }
-
-                        closure = base_closure;
-                        closure.opacity = prj_src_gr_m1_cell_opacity(block,
-                            i, j, k, field, group);
-                        {
-                            double fbar_cache;
-                            double J0_cache;
-                            double H0_cache[3];
-
-                            prj_rad_gr_m1_pressure_fbar_cached(rad, &closure,
-                                &pside, E, Fcov, Pcon, &fbar_cache,
-                                &J0_cache, H0_cache);
-                            prj_rad_gr_m1_closure_cache_put(
-                                (i * PRJ_BLOCK_SIZE + j) * PRJ_BLOCK_SIZE + k,
-                                field * PRJ_NEGROUP + group, Pcon, fbar_cache,
-                                J0_cache, H0_cache);
+                        } else {
+                            for (a = 0; a < 3; ++a) {
+                                for (b = 0; b < 3; ++b) {
+                                    Pcon[a][b] = 0.0;
+                                }
+                            }
                         }
 
                         /* Eq. 3.37/3.38 are written with c=1.  PRJ stores

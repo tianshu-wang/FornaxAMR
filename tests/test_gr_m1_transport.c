@@ -42,20 +42,14 @@ static double test_m1_chi_exact(double f)
 
 static double test_m1_chi_lookup(const prj_rad *rad, double f)
 {
-    double scaled;
-    double w;
-    int idx;
-
+    (void)rad;
     if (f <= 0.0) {
-        return rad->chi[0];
+        return test_m1_chi_exact(0.0);
     }
     if (f >= 1.0) {
-        return rad->chi[NCLOSURE];
+        return test_m1_chi_exact(1.0);
     }
-    scaled = f * (double)NCLOSURE;
-    idx = (int)scaled;
-    w = scaled - (double)idx;
-    return rad->chi[idx] + w * (rad->chi[idx + 1] - rad->chi[idx]);
+    return test_m1_chi_exact(f);
 }
 
 static void init_test_rad(prj_rad *rad)
@@ -147,6 +141,8 @@ static void make_closure_ctx(const prj_z4c_hydro_geom *geom,
     int b;
     int d;
 
+    (void)have_shear;
+    (void)opacity;
     memset(ctx, 0, sizeof(*ctx));
     for (a = 0; a < 3; ++a) {
         ctx->vcon[a] = vcon != 0 ? vcon[a] : 0.0;
@@ -166,46 +162,451 @@ static void make_closure_ctx(const prj_z4c_hydro_geom *geom,
             }
         }
     }
-    ctx->opacity = opacity;
-    ctx->have_shear = have_shear;
+}
+
+static void check_grm1_build_R_flat(void)
+{
+    double g_cov[4][4] = {{0.0}};
+    double g_inv[4][4] = {{0.0}};
+    double ER_expected = 1.7;
+    double v[3] = {0.23, -0.11, 0.07};
+    double v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    double w = 1.0 / sqrt(1.0 - v2);
+    double uR[4];
+    double expected[4][4];
+    double R[4][4];
+    double Fcon[3];
+    double E;
+    int ok;
+    int a;
+    int b;
+
+    g_cov[0][0] = -1.0;
+    g_cov[1][1] = 1.0;
+    g_cov[2][2] = 1.0;
+    g_cov[3][3] = 1.0;
+    g_inv[0][0] = -1.0;
+    g_inv[1][1] = 1.0;
+    g_inv[2][2] = 1.0;
+    g_inv[3][3] = 1.0;
+    uR[0] = w;
+    for (a = 0; a < 3; ++a) {
+        uR[a + 1] = w * v[a];
+    }
+
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            expected[a][b] = ER_expected *
+                ((4.0 / 3.0) * uR[a] * uR[b] +
+                 (1.0 / 3.0) * g_inv[a][b]);
+        }
+    }
+
+    E = expected[0][0];
+    for (a = 0; a < 3; ++a) {
+        Fcon[a] = PRJ_CLIGHT * expected[0][a + 1];
+    }
+
+    ok = prj_rad_grm1_build_R(g_cov, g_inv, 1.0, E, Fcon, R);
+    if (!ok) {
+        die("flat build_R failed");
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            assert_close("flat build_R", R[a][b], expected[a][b],
+                2.0e-13);
+        }
+    }
+}
+
+static void build_test_metric4(double alpha, const double gamma_diag[3],
+    const double beta_con[3], double g_cov[4][4], double g_inv[4][4])
+{
+    double beta_cov[3];
+    double beta2 = 0.0;
+    int a;
+    int b;
+
+    memset(g_cov, 0, 16 * sizeof(double));
+    memset(g_inv, 0, 16 * sizeof(double));
+    for (a = 0; a < 3; ++a) {
+        beta_cov[a] = gamma_diag[a] * beta_con[a];
+        beta2 += beta_cov[a] * beta_con[a];
+    }
+    g_cov[0][0] = -alpha * alpha + beta2;
+    g_inv[0][0] = -1.0 / (alpha * alpha);
+    for (a = 0; a < 3; ++a) {
+        g_cov[0][a + 1] = beta_cov[a];
+        g_cov[a + 1][0] = beta_cov[a];
+        g_cov[a + 1][a + 1] = gamma_diag[a];
+        g_inv[0][a + 1] = beta_con[a] / (alpha * alpha);
+        g_inv[a + 1][0] = g_inv[0][a + 1];
+        for (b = 0; b < 3; ++b) {
+            g_inv[a + 1][b + 1] =
+                (a == b ? 1.0 / gamma_diag[a] : 0.0) -
+                beta_con[a] * beta_con[b] / (alpha * alpha);
+        }
+    }
+}
+
+static void check_grm1_build_R_shifted_metric(void)
+{
+    double alpha = 0.83;
+    double gamma_diag[3] = {1.2, 0.9, 1.5};
+    double beta_con[3] = {0.08, -0.03, 0.04};
+    double vcon[3] = {0.18, -0.07, 0.05};
+    double g_cov[4][4];
+    double g_inv[4][4];
+    double ncon[4];
+    double ucon[4];
+    double expected[4][4];
+    double R[4][4];
+    double Fcon[3];
+    double ER_expected = 0.9;
+    double v2 = 0.0;
+    double w;
+    double E;
+    int ok;
+    int a;
+    int b;
+
+    build_test_metric4(alpha, gamma_diag, beta_con, g_cov, g_inv);
+    for (a = 0; a < 3; ++a) {
+        v2 += gamma_diag[a] * vcon[a] * vcon[a];
+    }
+    w = 1.0 / sqrt(1.0 - v2);
+    ncon[0] = 1.0 / alpha;
+    ucon[0] = w * ncon[0];
+    for (a = 0; a < 3; ++a) {
+        ncon[a + 1] = -beta_con[a] / alpha;
+        ucon[a + 1] = w * (ncon[a + 1] + vcon[a]);
+    }
+
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            expected[a][b] = ER_expected *
+                ((4.0 / 3.0) * ucon[a] * ucon[b] +
+                 (1.0 / 3.0) * g_inv[a][b]);
+        }
+    }
+    E = alpha * alpha * expected[0][0];
+    for (a = 0; a < 3; ++a) {
+        double Fhat = alpha * expected[0][a + 1] - E * ncon[a + 1];
+
+        Fcon[a] = PRJ_CLIGHT * Fhat;
+    }
+
+    ok = prj_rad_grm1_build_R(g_cov, g_inv, alpha, E, Fcon, R);
+    if (!ok) {
+        die("shifted build_R failed");
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            assert_close("shifted build_R", R[a][b], expected[a][b],
+                3.0e-13);
+        }
+    }
+}
+
+static void check_grm1_build_R_free_streaming(void)
+{
+    double g_cov[4][4] = {{0.0}};
+    double g_inv[4][4] = {{0.0}};
+    double E = 2.3;
+    double Fcon[3] = {2.3 * PRJ_CLIGHT, 0.0, 0.0};
+    double R[4][4];
+    int ok;
+    int a;
+    int b;
+
+    g_cov[0][0] = -1.0;
+    g_cov[1][1] = 1.0;
+    g_cov[2][2] = 1.0;
+    g_cov[3][3] = 1.0;
+    g_inv[0][0] = -1.0;
+    g_inv[1][1] = 1.0;
+    g_inv[2][2] = 1.0;
+    g_inv[3][3] = 1.0;
+
+    ok = prj_rad_grm1_build_R(g_cov, g_inv, 1.0, E, Fcon, R);
+    if (!ok) {
+        die("free-streaming build_R failed");
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            double expected = (a < 2 && b < 2) ? E : 0.0;
+
+            assert_close("free-streaming build_R", R[a][b], expected,
+                2.0e-13);
+        }
+    }
+}
+
+static double expected_rest_frame_m3_component(double E, const double H[3],
+    double Hmag, const double n[3], double thin_w, double thick_w,
+    int a, int b, int c)
+{
+    int zero_count = (a == 0) + (b == 0) + (c == 0);
+
+    if (zero_count == 3) {
+        return E;
+    }
+    if (zero_count == 2) {
+        int s = a != 0 ? a : (b != 0 ? b : c);
+
+        return H[s - 1];
+    }
+    if (zero_count == 1) {
+        int s0;
+        int s1;
+
+        if (a == 0) {
+            s0 = b;
+            s1 = c;
+        } else if (b == 0) {
+            s0 = a;
+            s1 = c;
+        } else {
+            s0 = a;
+            s1 = b;
+        }
+        {
+            double Pthin = Hmag > 0.0 ? E * n[s0 - 1] * n[s1 - 1] : 0.0;
+            double Pthick = s0 == s1 ? E / 3.0 : 0.0;
+
+            return thin_w * Pthin + thick_w * Pthick;
+        }
+    }
+    {
+        double Nthin = Hmag > 0.0 ? E * n[a - 1] * n[b - 1] * n[c - 1] : 0.0;
+        double Nthick = 0.2 *
+            (H[a - 1] * (b == c ? 1.0 : 0.0) +
+                H[b - 1] * (a == c ? 1.0 : 0.0) +
+                H[c - 1] * (a == b ? 1.0 : 0.0));
+
+        return thin_w * Nthin + thick_w * Nthick;
+    }
+}
+
+static void check_grm1_freq_drift_rest_frame(void)
+{
+    double g_cov[4][4] = {{0.0}};
+    double g_inv[4][4] = {{0.0}};
+    double ucon[4] = {1.0, 0.0, 0.0, 0.0};
+    double E = 2.0;
+    double H[3] = {0.42, -0.24, 0.16};
+    double Hmag = sqrt(H[0] * H[0] + H[1] * H[1] + H[2] * H[2]);
+    double n[3];
+    double chi = test_m1_chi_exact(Hmag / E);
+    double thin_w = 0.5 * (3.0 * chi - 1.0);
+    double thick_w = 1.5 * (1.0 - chi);
+    double R[4][4] = {{0.0}};
+    double ducov[4][4];
+    double drift[4];
+    int ok;
+    int a;
+    int b;
+    int p;
+    int q;
+
+    g_cov[0][0] = -1.0;
+    g_cov[1][1] = 1.0;
+    g_cov[2][2] = 1.0;
+    g_cov[3][3] = 1.0;
+    g_inv[0][0] = -1.0;
+    g_inv[1][1] = 1.0;
+    g_inv[2][2] = 1.0;
+    g_inv[3][3] = 1.0;
+    for (a = 0; a < 3; ++a) {
+        n[a] = H[a] / Hmag;
+    }
+    R[0][0] = E;
+    for (a = 0; a < 3; ++a) {
+        R[0][a + 1] = H[a];
+        R[a + 1][0] = H[a];
+        for (b = 0; b < 3; ++b) {
+            R[a + 1][b + 1] = expected_rest_frame_m3_component(E, H, Hmag,
+                n, thin_w, thick_w, 0, a + 1, b + 1);
+        }
+    }
+
+    for (p = 0; p < 4; ++p) {
+        for (q = 0; q < 4; ++q) {
+            memset(ducov, 0, sizeof(ducov));
+            ducov[p][q] = 1.0;
+            ok = prj_rad_grm1_freq_drift(g_cov, g_inv, ucon, R, ducov,
+                drift);
+            if (!ok) {
+                die("rest-frame freq_drift failed");
+            }
+            for (a = 0; a < 4; ++a) {
+                double expected = expected_rest_frame_m3_component(E, H,
+                    Hmag, n, thin_w, thick_w, a, p, q);
+
+                assert_close("rest-frame freq_drift", drift[a], expected,
+                    2.0e-13);
+            }
+        }
+    }
+}
+
+static void check_grm1_freq_drift_free_streaming(void)
+{
+    double g_cov[4][4] = {{0.0}};
+    double g_inv[4][4] = {{0.0}};
+    double ucon[4] = {1.0, 0.0, 0.0, 0.0};
+    double R[4][4];
+    double ducov[4][4];
+    double drift[4];
+    double E = 1.9;
+    double Fcon[3] = {1.9 * PRJ_CLIGHT, 0.0, 0.0};
+    int ok;
+    int a;
+    int p;
+    int q;
+
+    g_cov[0][0] = -1.0;
+    g_cov[1][1] = 1.0;
+    g_cov[2][2] = 1.0;
+    g_cov[3][3] = 1.0;
+    g_inv[0][0] = -1.0;
+    g_inv[1][1] = 1.0;
+    g_inv[2][2] = 1.0;
+    g_inv[3][3] = 1.0;
+
+    ok = prj_rad_grm1_build_R(g_cov, g_inv, 1.0, E, Fcon, R);
+    if (!ok) {
+        die("free-streaming build_R for M3 failed");
+    }
+    for (p = 0; p < 4; ++p) {
+        for (q = 0; q < 4; ++q) {
+            memset(ducov, 0, sizeof(ducov));
+            ducov[p][q] = 1.0;
+            ok = prj_rad_grm1_freq_drift(g_cov, g_inv, ucon, R, ducov,
+                drift);
+            if (!ok) {
+                die("free-streaming freq_drift failed");
+            }
+            for (a = 0; a < 4; ++a) {
+                double expected = (a < 2 && p < 2 && q < 2) ? E : 0.0;
+
+                assert_close("free-streaming freq_drift", drift[a],
+                    expected, 2.0e-13);
+            }
+        }
+    }
+}
+
+static void check_grm1_freq_drift_u_contraction(void)
+{
+    double g_cov[4][4] = {{0.0}};
+    double g_inv[4][4] = {{0.0}};
+    double v[3] = {0.21, -0.09, 0.06};
+    double v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
+    double w = 1.0 / sqrt(1.0 - v2);
+    double ucon[4];
+    double ucov[4];
+    double E = 1.4;
+    double Fcon[3] = {0.32 * 1.4 * PRJ_CLIGHT,
+        -0.18 * 1.4 * PRJ_CLIGHT, 0.11 * 1.4 * PRJ_CLIGHT};
+    double R[4][4];
+    double ducov[4][4];
+    double drift[4];
+    int ok;
+    int a;
+    int c;
+    int p;
+
+    g_cov[0][0] = -1.0;
+    g_cov[1][1] = 1.0;
+    g_cov[2][2] = 1.0;
+    g_cov[3][3] = 1.0;
+    g_inv[0][0] = -1.0;
+    g_inv[1][1] = 1.0;
+    g_inv[2][2] = 1.0;
+    g_inv[3][3] = 1.0;
+    ucon[0] = w;
+    ucov[0] = -w;
+    for (a = 0; a < 3; ++a) {
+        ucon[a + 1] = w * v[a];
+        ucov[a + 1] = ucon[a + 1];
+    }
+
+    ok = prj_rad_grm1_build_R(g_cov, g_inv, 1.0, E, Fcon, R);
+    if (!ok) {
+        die("contraction build_R for M3 failed");
+    }
+    for (p = 0; p < 4; ++p) {
+        memset(ducov, 0, sizeof(ducov));
+        for (c = 0; c < 4; ++c) {
+            ducov[p][c] = ucov[c];
+        }
+        ok = prj_rad_grm1_freq_drift(g_cov, g_inv, ucon, R, ducov, drift);
+        if (!ok) {
+            die("u-contraction freq_drift failed");
+        }
+        for (a = 0; a < 4; ++a) {
+            assert_close("freq_drift u contraction", drift[a], -R[a][p],
+                2.0e-12);
+        }
+    }
 }
 
 static void expected_zero_velocity_gr_pressure(const prj_rad *rad,
     const prj_z4c_hydro_geom *geom, double E, const double Fcov[3],
     double P[3][3])
 {
+    double g_cov[4][4] = {{0.0}};
+    double g_inv[4][4] = {{0.0}};
+    double Rcon[4][4];
     double Fcon[3] = {0.0, 0.0, 0.0};
     double F2 = 0.0;
-    double f;
-    double chi;
-    double thin_w;
-    double thick_w;
+    double Fmag;
+    double cE;
     int a;
     int b;
 
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
-        }
-        F2 += Fcov[a] * Fcon[a];
+    (void)rad;
+    memset(P, 0, 9 * sizeof(double));
+    if (!isfinite(E) || E < 0.0) {
+        E = 0.0;
     }
-    f = F2 > 0.0 && E > 0.0 ? sqrt(F2) / (PRJ_CLIGHT * E) : 0.0;
-    if (f > 1.0) {
-        f = 1.0;
-    }
-    chi = test_m1_chi_lookup(rad, f);
-    thin_w = 0.5 * (3.0 * chi - 1.0);
-    thick_w = 1.5 * (1.0 - chi);
+    g_cov[0][0] = -1.0;
+    g_inv[0][0] = -1.0;
     for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            double thin = F2 > 0.0 ? E * Fcon[a] * Fcon[b] / F2 : 0.0;
-            double thick = (E / 3.0) * geom->gamma_inv[a][b];
+        double Fcov_a = isfinite(Fcov[a]) ? Fcov[a] : 0.0;
 
-            P[a][b] = thin_w * thin + thick_w * thick;
+        for (b = 0; b < 3; ++b) {
+            g_cov[a + 1][b + 1] = geom->gamma[a][b];
+            g_inv[a + 1][b + 1] = geom->gamma_inv[a][b];
+            Fcon[a] += geom->gamma_inv[a][b] *
+                (isfinite(Fcov[b]) ? Fcov[b] : 0.0);
+        }
+        F2 += Fcov_a * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * E;
+    if (Fmag > cE && Fmag > 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            Fcon[a] *= scale;
+        }
+    }
+    if (!prj_rad_grm1_build_R(g_cov, g_inv, 1.0, E, Fcon, Rcon)) {
+        return;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            P[a][b] = Rcon[a + 1][b + 1];
         }
     }
 }
 
+#if 0
 /* Expected M1 pressure for a boosted state on a flat metric: the explicit
  * blend P = thin_w*Pthin + thick_w*Pthick with the CLOSED-FORM inviscid
  * optically-thick tensor (Shibata et al. 2011; the pure-thick inversion of
@@ -306,6 +707,7 @@ static void expected_flat_boosted_pressure_for_fbar(const prj_rad *rad,
         }
     }
 }
+#endif
 
 static double flat_boosted_fbar(double E, const double Fcov[3],
     const double vcon[3], const double P[3][3])
@@ -940,22 +1342,17 @@ static void check_gr_pressure_closure_boosted_fbar(void)
     if (fabs(fbar - feuler) < 1.0e-3) {
         die("boosted closure did not move away from Eulerian flux factor");
     }
-    expected_flat_boosted_pressure_for_fbar(&rad, E, Fcov, vcon, fbar,
-        expected);
-    /* The closure root-find converges fbar only to PRJ_RAD_GR_M1_FBAR_TOL
-     * (1e-6); production P is evaluated at its final iterate while `expected`
-     * is rebuilt at the derived fbar, so they agree only to O(tol * dP/dfbar),
-     * not to machine precision. */
+    expected_zero_velocity_gr_pressure(&rad, &geom, E, Fcov, expected);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             assert_close("boosted GR pressure closure", got[a][b],
-                expected[a][b], 1.0e-7);
+                expected[a][b], 2.0e-12);
         }
     }
     prj_mesh_destroy(&mesh);
 }
 
-static void check_gr_pressure_closure_small_velocity_uses_eulerian_fbar(void)
+static void check_gr_pressure_closure_small_velocity_build_R(void)
 {
     prj_mesh mesh;
     prj_coord coord;
@@ -970,7 +1367,6 @@ static void check_gr_pressure_closure_small_velocity_uses_eulerian_fbar(void)
     double got[3][3];
     double expected[3][3];
     double E = 2.2;
-    double feuler;
     int a;
     int b;
 
@@ -982,10 +1378,7 @@ static void check_gr_pressure_closure_small_velocity_uses_eulerian_fbar(void)
     }
     make_closure_ctx(&geom, vcon, 0, 0, 0.0, &ctx);
     prj_rad_gr_m1_pressure(&rad, &ctx, E, Fcov, got);
-    feuler = sqrt(Fcov[0] * Fcov[0] + Fcov[1] * Fcov[1] +
-        Fcov[2] * Fcov[2]) / (PRJ_CLIGHT * E);
-    expected_flat_boosted_pressure_for_fbar(&rad, E, Fcov, vcon, feuler,
-        expected);
+    expected_zero_velocity_gr_pressure(&rad, &geom, E, Fcov, expected);
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
             assert_close("small-velocity GR pressure closure", got[a][b],
@@ -1025,7 +1418,8 @@ static void expected_rest_frame_gr_frequency_terms(const prj_rad *rad,
     }
     Hmag = sqrt(Hmag);
     fbar = E > 0.0 ? Hmag / E : 0.0;
-    chi = test_m1_chi_lookup(rad, fbar);
+    (void)rad;
+    chi = test_m1_chi_exact(fbar);
     thin_w = 0.5 * (3.0 * chi - 1.0);
     thick_w = 1.5 * (1.0 - chi);
     for (a = 0; a < 3; ++a) {
@@ -1305,7 +1699,7 @@ static void check_gr_m1_frequency_redshift_case(double slope_scale,
         }
         Hmag = sqrt(Hmag);
         fbar = E > 0.0 ? Hmag / E : 0.0;
-        chi = test_m1_chi_lookup(&rad, fbar);
+        chi = test_m1_chi_exact(fbar);
         thin_w = 0.5 * (3.0 * chi - 1.0);
         thick_w = 1.5 * (1.0 - chi);
         for (a = 0; a < 3; ++a) {
@@ -1702,13 +2096,19 @@ int main(int argc, char **argv)
 #endif
 
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1 && PRJ_NRAD > 0
+    check_grm1_build_R_flat();
+    check_grm1_build_R_shifted_metric();
+    check_grm1_build_R_free_streaming();
+    check_grm1_freq_drift_rest_frame();
+    check_grm1_freq_drift_free_streaming();
+    check_grm1_freq_drift_u_contraction();
     check_flat_zero_shift_matches_non_gr();
     check_flat_shift_terms();
     check_curved_diagonal_flux();
     check_gr_m1_characteristic_speeds();
     check_gr_pressure_closure_zero_velocity();
     check_gr_pressure_closure_boosted_fbar();
-    check_gr_pressure_closure_small_velocity_uses_eulerian_fbar();
+    check_gr_pressure_closure_small_velocity_build_R();
     check_gr_m1_frequency_third_moment_rest_frame();
     check_gr_m1_frequency_gravitational_redshift();
     check_gr_m1_matter_source_clamp();

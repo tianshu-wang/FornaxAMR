@@ -1869,13 +1869,13 @@ static void prj_z4c_rad_gr_m1_closure_ctx(const prj_block *block,
     const prj_z4c_hydro_geom *geom, const double *W_mhd, int i, int j, int k,
     int field, int group, prj_rad_gr_m1_closure_ctx *ctx)
 {
-    const size_t stride = (size_t)PRJ_NRAD * (size_t)PRJ_NEGROUP;
-    const int op_idx = field * PRJ_NEGROUP + group;
-    const size_t op_off = (size_t)IDX(i, j, k) * stride + (size_t)op_idx;
     int a;
     int b;
     int d;
 
+    (void)block;
+    (void)field;
+    (void)group;
     memset(ctx, 0, sizeof(*ctx));
     for (a = 0; a < 3; ++a) {
         ctx->vcon[a] = W_mhd != 0 ? W_mhd[WIDX(PRJ_PRIM_V1 + a, i, j, k)] /
@@ -1889,19 +1889,6 @@ static void prj_z4c_rad_gr_m1_closure_ctx(const prj_block *block,
             }
         }
     }
-    ctx->opacity = 0.0;
-    if (block != 0 && block->kappa_cell != 0 && block->sigma_cell != 0) {
-        double kappa = block->kappa_cell[op_off];
-        double sigma = block->sigma_cell[op_off];
-
-        if (isfinite(kappa) && kappa > 0.0) {
-            ctx->opacity += kappa;
-        }
-        if (isfinite(sigma) && sigma > 0.0) {
-            ctx->opacity += sigma;
-        }
-    }
-    ctx->have_shear = 0;
 }
 #endif
 
