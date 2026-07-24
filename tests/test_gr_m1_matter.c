@@ -220,6 +220,65 @@ static void set_diag_geom(prj_z4c_hydro_geom *geom, double alpha,
     }
 }
 
+static void init_matter_test_mesh(prj_mesh *mesh, prj_coord *coord)
+{
+    memset(mesh, 0, sizeof(*mesh));
+    memset(coord, 0, sizeof(*coord));
+    prj_z4c_init_params(&mesh->z4c_params);
+    mesh->use_full_dynamic_gr = 1;
+    coord->x1min = 0.0;
+    coord->x1max = (double)PRJ_BLOCK_SIZE;
+    coord->x2min = 0.0;
+    coord->x2max = (double)PRJ_BLOCK_SIZE;
+    coord->x3min = 0.0;
+    coord->x3max = (double)PRJ_BLOCK_SIZE;
+    if (prj_mesh_init(mesh, 1, 1, 1, 0, coord, 0) != 0) {
+        die("matter mesh init failed");
+    }
+}
+
+static void set_uniform_z4c(prj_block *block, double alpha,
+    const double beta[3], const double gamma_diag[3])
+{
+    double *z = prj_block_z4c_stage(block, 0);
+    int i;
+    int j;
+    int k;
+
+    if (z == 0) {
+        die("missing z4c storage");
+    }
+    for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+        for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+            for (k = -PRJ_NGHOST_Z4C;
+                 k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
+                z[Z4CIDX(PRJ_Z4C_CHI, i, j, k)] = 1.0;
+                z[Z4CIDX(PRJ_Z4C_GXX, i, j, k)] = gamma_diag[0];
+                z[Z4CIDX(PRJ_Z4C_GXY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GXZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GYY, i, j, k)] = gamma_diag[1];
+                z[Z4CIDX(PRJ_Z4C_GYZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GZZ, i, j, k)] = gamma_diag[2];
+                z[Z4CIDX(PRJ_Z4C_KHAT, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AXZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AYY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AYZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_AZZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMX, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMY, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_GAMZ, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_THETA, i, j, k)] = 0.0;
+                z[Z4CIDX(PRJ_Z4C_ALPHA, i, j, k)] = alpha;
+                z[Z4CIDX(PRJ_Z4C_BETAX, i, j, k)] = beta[0];
+                z[Z4CIDX(PRJ_Z4C_BETAY, i, j, k)] = beta[1];
+                z[Z4CIDX(PRJ_Z4C_BETAZ, i, j, k)] = beta[2];
+            }
+        }
+    }
+}
+
 static void set_flat_prim(double *W, double rho, const double v[3],
     double eint, double ye, double E, const double Fcov[3])
 {
@@ -706,6 +765,118 @@ static void check_gr_m1_implicit_solve_zero_momentum_floor(void)
     prj_rad3_opac_free(&rad);
 }
 
+static void check_gr_m1_matter_update_overwrites_solution(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_eos eos;
+    prj_rad rad;
+    prj_z4c_hydro_geom geom;
+    double beta[3] = {0.015, -0.01, 0.006};
+    double gamma_diag[3] = {1.08, 0.94, 1.13};
+    double P_root[TEST_GR_M1_RESIDUAL_NP];
+    double u_old[PRJ_NVAR_CONS];
+    double u_update[PRJ_NVAR_CONS];
+    double resid[PRJ_NVAR_CONS];
+    double u_expected[PRJ_NVAR_CONS];
+    double final_temperature = -1.0;
+    double dt = 1.0e-6;
+    int ic = PRJ_BLOCK_SIZE / 2;
+    int v;
+
+    init_matter_test_mesh(&mesh, &coord);
+    set_uniform_z4c(&mesh.blocks[0], 0.94, beta, gamma_diag);
+    if (!prj_z4c_load_hydro_geom(&mesh, &mesh.blocks[0], 0, ic, ic, ic,
+            &geom)) {
+        die("matter update geometry load failed");
+    }
+    init_real_test_eos(&eos);
+    init_real_test_rad(&rad);
+    rad.implicit_err_tol = 1.0e-8;
+    rad.maxiter = 30;
+    set_gr_m1_jacobian_test_p(P_root);
+    make_gr_m1_exact_old_from_p(&rad, &eos, &geom, P_root, dt, u_old);
+    if (!prj_rad_gr_m1_residual_test_wrapper(&rad, &eos, &geom, u_old,
+            P_root, dt, resid, u_expected)) {
+        die("matter update expected state failed");
+    }
+    check_gr_m1_solver_converged("matter update expected state", u_old,
+        resid, rad.implicit_err_tol);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_update[v] = u_old[v];
+    }
+
+    prj_rad_gr_m1_matter_update(&rad, &eos, &mesh, &mesh.blocks[0], 0,
+        u_update, ic, ic, ic, dt, &final_temperature);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        assert_close("matter update overwritten conserved", u_update[v],
+            u_expected[v], 1.0e-6);
+    }
+    assert_close("matter update final temperature", final_temperature,
+        P_root[4], 1.0e-6);
+    prj_rad3_opac_free(&rad);
+}
+
+static void check_gr_m1_matter_update_clamps_flux(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_eos eos;
+    prj_rad rad;
+    prj_z4c_hydro_geom geom;
+    double beta[3] = {0.0, 0.0, 0.0};
+    double gamma_diag[3] = {1.0, 1.0, 1.0};
+    double vzero[3] = {0.0, 0.0, 0.0};
+    double Fcov[3];
+    double W[PRJ_NVAR_PRIM];
+    double u[PRJ_NVAR_CONS];
+    double u_initial[PRJ_NVAR_CONS];
+    double eos_q[PRJ_EOS_NQUANT];
+    double final_temperature = -1.0;
+    double E = 1.2;
+    int ic = PRJ_BLOCK_SIZE / 2;
+    int v;
+
+    init_matter_test_mesh(&mesh, &coord);
+    set_uniform_z4c(&mesh.blocks[0], 1.0, beta, gamma_diag);
+    if (!prj_z4c_load_hydro_geom(&mesh, &mesh.blocks[0], 0, ic, ic, ic,
+            &geom)) {
+        die("matter clamp geometry load failed");
+    }
+    init_test_eos(&eos);
+    init_source_test_rad_full(&rad, 0.0, 0.0, 0.0, 0.0, 0.0);
+    rad.implicit_err_tol = 1.0e-8;
+    rad.maxiter = 30;
+    Fcov[0] = 2.0 * PRJ_CLIGHT * E;
+    Fcov[1] = 0.0;
+    Fcov[2] = 0.0;
+    set_flat_prim(W, 1.0, vzero, 1.5, 0.2, E, Fcov);
+    prim2cons_or_die(&eos, &geom, W, u);
+    prj_eos_rey(&eos, W[PRJ_PRIM_RHO], W[PRJ_PRIM_EINT],
+        W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_initial[v] = u[v];
+    }
+
+    prj_rad_gr_m1_matter_update(&rad, &eos, &mesh, &mesh.blocks[0], 0,
+        u, ic, ic, ic, 0.0, &final_temperature);
+    assert_close("matter clamp radiation E", u[PRJ_CONS_RAD_E(0, 0)],
+        u_initial[PRJ_CONS_RAD_E(0, 0)], 1.0e-12);
+    assert_close("matter clamp radiation F1", u[PRJ_CONS_RAD_F1(0, 0)],
+        PRJ_CLIGHT * E, 1.0e-12);
+    assert_close("matter clamp radiation F2", u[PRJ_CONS_RAD_F2(0, 0)],
+        0.0, 1.0e-12);
+    assert_close("matter clamp radiation F3", u[PRJ_CONS_RAD_F3(0, 0)],
+        0.0, 1.0e-12);
+    for (v = 0; v < PRJ_NVAR_MHD_CONS; ++v) {
+        assert_close("matter clamp hydro unchanged", u[v], u_initial[v],
+            1.0e-12);
+    }
+    assert_close("matter clamp final temperature", final_temperature,
+        eos_q[PRJ_EOS_TEMPERATURE], 1.0e-12);
+    prj_rad3_opac_free(&rad);
+}
+
 static void check_gr_m1_residual_rest_energy_matches_non_gr(void)
 {
     prj_eos eos;
@@ -1001,6 +1172,8 @@ int main(int argc, char **argv)
     check_gr_m1_residual_jacobian_fd();
     check_gr_m1_implicit_solve_real_tables();
     check_gr_m1_implicit_solve_zero_momentum_floor();
+    check_gr_m1_matter_update_overwrites_solution();
+    check_gr_m1_matter_update_clamps_flux();
     check_gr_m1_implicit_solve_invalid_states();
     check_gr_m1_residual_invalid_states();
     check_gr_m1_matter_source_rest_momentum();

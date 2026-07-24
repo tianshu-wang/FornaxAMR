@@ -5776,6 +5776,205 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
     return 0;
 }
 
+static int prj_rad_gr_m1_moments_to_p(const prj_z4c_hydro_geom *geom,
+    const double g_cov[4][4], const double g_con[4][4], double E,
+    const double Fcov[3], double *P_group)
+{
+    double Fcon[3] = {0.0, 0.0, 0.0};
+    double F2 = 0.0;
+    double Fmag;
+    double Rcon[4][4];
+    double B;
+    double A = 0.0;
+    double G;
+    double disc;
+    double disc_scale;
+    double sqrt_disc;
+    double root_denom;
+    double iso;
+    double K[4];
+    double q0sq;
+    double q0;
+    int a;
+    int b;
+
+    if (geom == 0 || g_cov == 0 || g_con == 0 || Fcov == 0 ||
+        P_group == 0 || !isfinite(E) || E < 0.0) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcov[a])) {
+            return 0;
+        }
+        for (b = 0; b < 3; ++b) {
+            Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        F2 += Fcov[a] * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        return 0;
+    }
+    Fmag = sqrt(F2);
+    if (E == 0.0) {
+        if (Fmag != 0.0) {
+            return 0;
+        }
+        P_group[0] = 0.0;
+        P_group[1] = 0.0;
+        P_group[2] = 0.0;
+        P_group[3] = 0.0;
+        return 1;
+    }
+    if (Fmag > PRJ_CLIGHT * E && Fmag > 0.0) {
+        double scale = PRJ_CLIGHT * E / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            Fcon[a] *= scale;
+        }
+    }
+    if (!prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon, Rcon)) {
+        return 0;
+    }
+
+    B = Rcon[0][0];
+    if (!isfinite(B) || B < 0.0) {
+        return 0;
+    }
+    if (B == 0.0) {
+        P_group[0] = 0.0;
+        P_group[1] = 0.0;
+        P_group[2] = 0.0;
+        P_group[3] = 0.0;
+        return 1;
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            A += g_cov[a][b] * Rcon[0][a] * Rcon[0][b];
+        }
+    }
+    G = g_con[0][0];
+    disc_scale = fmax(B * B, fabs(3.0 * G * A));
+    if (disc_scale <= 0.0) {
+        disc_scale = 1.0;
+    }
+    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
+        A = 0.0;
+    }
+    disc = B * B + 3.0 * G * A;
+    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
+        return 0;
+    }
+    if (disc < 0.0) {
+        disc = 0.0;
+    }
+    sqrt_disc = sqrt(disc);
+    root_denom = B + sqrt_disc;
+    if (!isfinite(root_denom) || root_denom <= 0.0) {
+        return 0;
+    }
+    iso = -A / root_denom;
+    if (!isfinite(iso) || iso < -1.0e-12 * E) {
+        return 0;
+    }
+    if (iso < 0.0) {
+        iso = 0.0;
+    }
+    P_group[0] = 3.0 * iso;
+
+    for (a = 0; a < 4; ++a) {
+        K[a] = Rcon[0][a] - iso * g_con[0][a];
+    }
+    q0sq = 0.75 * K[0];
+    if (!isfinite(q0sq) || q0sq < -1.0e-12 * fmax(B, 1.0)) {
+        return 0;
+    }
+    if (q0sq <= 0.0) {
+        for (a = 1; a < 4; ++a) {
+            if (fabs(K[a]) > 1.0e-10 * fmax(B, 1.0)) {
+                return 0;
+            }
+            P_group[a] = 0.0;
+        }
+        return 1;
+    }
+    q0 = sqrt(q0sq);
+    for (a = 1; a < 4; ++a) {
+        P_group[a] = 0.75 * K[a] / q0;
+        if (!isfinite(P_group[a])) {
+            return 0;
+        }
+    }
+    {
+        double q_check[4];
+
+        q_check[0] = 0.0;
+        q_check[1] = P_group[1];
+        q_check[2] = P_group[2];
+        q_check[3] = P_group[3];
+        if (!prj_rad_gr_m1_q0_from_er_qi(g_cov, P_group[0], q_check)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int prj_rad_gr_m1_clamp_fluxes_for_solve(
+    const prj_z4c_hydro_geom *geom, double *u)
+{
+    int field;
+    int group;
+    int a;
+    int b;
+
+    if (geom == 0 || u == 0) {
+        return 0;
+    }
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int eidx = PRJ_CONS_RAD_E(field, group);
+            int fidx = PRJ_CONS_RAD_F1(field, group);
+            double E = u[eidx];
+            double F2 = 0.0;
+            double cE;
+
+            if (!isfinite(E)) {
+                return 0;
+            }
+            for (a = 0; a < 3; ++a) {
+                if (!isfinite(u[fidx + a])) {
+                    return 0;
+                }
+                for (b = 0; b < 3; ++b) {
+                    F2 += geom->gamma_inv[a][b] * u[fidx + a] *
+                        u[fidx + b];
+                }
+            }
+            if (!isfinite(F2) || F2 < 0.0) {
+                return 0;
+            }
+            if (E <= 0.0) {
+                u[fidx] = 0.0;
+                u[fidx + 1] = 0.0;
+                u[fidx + 2] = 0.0;
+                continue;
+            }
+            /* The physical M1 bound is |F|/c <= E.  The evolved F_i stores
+             * the explicit c, so the stored conserved bound is |F| <= c E. */
+            cE = PRJ_CLIGHT * E;
+            if (F2 > cE * cE && F2 > 0.0) {
+                double scale = cE / sqrt(F2);
+
+                u[fidx] *= scale;
+                u[fidx + 1] *= scale;
+                u[fidx + 2] *= scale;
+            }
+        }
+    }
+    return 1;
+}
+
 int prj_rad_gr_m1_residual_test_wrapper(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
     double dt, double *resid, double *u_new_out)
@@ -5805,6 +6004,93 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     const prj_mesh *mesh, const prj_block *block, int z4c_stage, double *u,
     int i, int j, int k, double dt, double *final_temperature)
 {
+#if PRJ_NRAD > 0
+    prj_z4c_hydro_geom geom;
+    prj_eos_gr_geom eos_geom;
+    double g_cov[4][4];
+    double g_con[4][4];
+    double u_old[PRJ_NVAR_CONS];
+    double u_new[PRJ_NVAR_CONS];
+    double W[PRJ_NVAR_PRIM];
+    double P[PRJ_RAD_GR_M1_NP];
+    double resid[PRJ_NVAR_CONS];
+    double eos_q[PRJ_EOS_NQUANT];
+    int field;
+    int group;
+    int a;
+    int b;
+    int v;
+
+    if (rad == 0 || eos == 0 || mesh == 0 || block == 0 || u == 0 ||
+        !isfinite(dt) ||
+        !prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
+        return;
+    }
+    if (!prj_rad_gr_m1_clamp_fluxes_for_solve(&geom, u)) {
+        return;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            eos_geom.gamma[a][b] = geom.gamma[a][b];
+        }
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_old[v] = u[v];
+    }
+    if (prj_eos_gr_cons2prim(eos, &eos_geom, u_old, W,
+            PRJ_EOS_CTX_MAIN) != PRJ_EOS_GR_OK) {
+        return;
+    }
+    if (!isfinite(W[PRJ_PRIM_RHO]) || W[PRJ_PRIM_RHO] <= 0.0 ||
+        !isfinite(W[PRJ_PRIM_EINT]) || W[PRJ_PRIM_EINT] < 0.0 ||
+        !isfinite(W[PRJ_PRIM_YE])) {
+        return;
+    }
+    prj_eos_rey(eos, W[PRJ_PRIM_RHO], W[PRJ_PRIM_EINT],
+        W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
+    if (!isfinite(eos_q[PRJ_EOS_TEMPERATURE]) ||
+        eos_q[PRJ_EOS_TEMPERATURE] <= 0.0) {
+        return;
+    }
+    if (final_temperature != 0) {
+        *final_temperature = eos_q[PRJ_EOS_TEMPERATURE];
+    }
+
+    P[0] = W[PRJ_PRIM_RHO];
+    P[1] = W[PRJ_PRIM_V1];
+    P[2] = W[PRJ_PRIM_V2];
+    P[3] = W[PRJ_PRIM_V3];
+    P[4] = eos_q[PRJ_EOS_TEMPERATURE];
+    P[5] = W[PRJ_PRIM_YE];
+
+    prj_rad_gr_m1_metric4_from_geom(&geom, g_cov, g_con);
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * idx;
+            double Fcov[3];
+
+            Fcov[0] = W[PRJ_PRIM_RAD_F1(field, group)];
+            Fcov[1] = W[PRJ_PRIM_RAD_F2(field, group)];
+            Fcov[2] = W[PRJ_PRIM_RAD_F3(field, group)];
+            if (!prj_rad_gr_m1_moments_to_p(&geom, g_cov, g_con,
+                    W[PRJ_PRIM_RAD_E(field, group)], Fcov, &P[pidx])) {
+                return;
+            }
+        }
+    }
+
+    if (!prj_rad_gr_m1_implicit_solve(rad, eos, &geom, u_old, dt, P, resid,
+            u_new)) {
+        return;
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u[v] = u_new[v];
+    }
+    if (final_temperature != 0) {
+        *final_temperature = P[4];
+    }
+#else
     (void)rad;
     (void)eos;
     (void)mesh;
@@ -5816,6 +6102,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     (void)k;
     (void)dt;
     (void)final_temperature;
+#endif
 }
 #endif
 
