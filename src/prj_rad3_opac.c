@@ -668,4 +668,145 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
     }
 }
 
+void prj_rad3_opac_lookup_derivs(const prj_rad *rad, double rho, double temp,
+    double ye, double *kappa, double *sigma, double *delta, double *eta,
+    double *dkappa_drho, double *dkappa_dT, double *dkappa_dYe,
+    double *dsigma_drho, double *dsigma_dT, double *dsigma_dYe,
+    double *ddelta_drho, double *ddelta_dT, double *ddelta_dYe,
+    double *deta_drho, double *deta_dT, double *deta_dYe)
+{
+    int nromax = rad->nromax;
+    int ntmax = rad->ntmax;
+    int nyemax = rad->nyemax;
+    double rl = log(rho);
+    double tl = log(temp);
+    double ye_c = ye;
+    double tl_c = tl;
+    double deltar;
+    double deltat;
+    double deltaye;
+    int jr;
+    int jt;
+    int jye;
+    double dri;
+    double dti;
+    double dyei;
+    double inv_dlnrho;
+    double inv_dlnT;
+    double inv_dYe;
+    double inv_rho;
+    double inv_T;
+    size_t corner[8];
+    double factor;
+    int nu;
+    int ng;
+
+    if (ye_c > rad->yemax) ye_c = rad->yemax;
+    if (ye_c < rad->yemin) ye_c = rad->yemin;
+    if (tl_c > rad->log_tmax) tl_c = rad->log_tmax;
+    if (tl_c < rad->log_tmin) tl_c = rad->log_tmin;
+
+    deltar = (rl - rad->log_romin) * rad->inv_logrho_span *
+        (double)(nromax - 1);
+    deltat = (tl_c - rad->log_tmin) * rad->inv_logtemp_span *
+        (double)(ntmax - 1);
+    deltaye = (ye_c - rad->yemin) * rad->inv_ye_span *
+        (double)(nyemax - 1);
+
+    jr = (int)deltar;
+    jt = (int)deltat;
+    jye = (int)deltaye;
+    if (jr < 0) jr = 0;
+    if (jr > nromax - 2) jr = nromax - 2;
+    if (jt < 0) jt = 0;
+    if (jt > ntmax - 2) jt = ntmax - 2;
+    if (jye < 0) jye = 0;
+    if (jye > nyemax - 2) jye = nyemax - 2;
+
+    dri = deltar - (double)jr;
+    if (dri < 0.0) dri = 0.0;
+    dti = deltat - (double)jt;
+    if (dti < 0.0) dti = 0.0;
+    dyei = deltaye - (double)jye;
+    inv_dlnrho = rad->inv_logrho_span * (double)(nromax - 1);
+    inv_dlnT = rad->inv_logtemp_span * (double)(ntmax - 1);
+    inv_dYe = rad->inv_ye_span * (double)(nyemax - 1);
+    inv_rho = 1.0 / rho;
+    inv_T = 1.0 / temp;
+
+    corner[0] = OPAC_CELL_IDX(jr,     jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[1] = OPAC_CELL_IDX(jr + 1, jt,     jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[2] = OPAC_CELL_IDX(jr,     jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[3] = OPAC_CELL_IDX(jr + 1, jt + 1, jye,     PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[4] = OPAC_CELL_IDX(jr,     jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[5] = OPAC_CELL_IDX(jr + 1, jt,     jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[6] = OPAC_CELL_IDX(jr,     jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    corner[7] = OPAC_CELL_IDX(jr + 1, jt + 1, jye + 1, PRJ_NEGROUP, nromax, ntmax, nyemax);
+    factor = 4.0 * M_PI / PRJ_MEV_TO_ERG / RAD_SCALE;
+
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        const prj_table_real *absopac = rad->absopac[nu];
+        const prj_table_real *scaopac = rad->scaopac[nu];
+        const prj_table_real *emis = rad->emis[nu];
+        const prj_table_real *sdelta = rad->sdelta[nu];
+
+        for (ng = 0; ng < PRJ_NEGROUP; ++ng) {
+            size_t base = (size_t)nu * (size_t)PRJ_NEGROUP + (size_t)ng;
+            double v[8];
+            double df_dr;
+            double df_dt;
+            double df_dy;
+            double raw;
+
+#define LOAD_OPAC_CORNERS(ARR) \
+            do { \
+                v[0] = (ARR)[corner[0] + (size_t)ng]; \
+                v[1] = (ARR)[corner[1] + (size_t)ng]; \
+                v[2] = (ARR)[corner[2] + (size_t)ng]; \
+                v[3] = (ARR)[corner[3] + (size_t)ng]; \
+                v[4] = (ARR)[corner[4] + (size_t)ng]; \
+                v[5] = (ARR)[corner[5] + (size_t)ng]; \
+                v[6] = (ARR)[corner[6] + (size_t)ng]; \
+                v[7] = (ARR)[corner[7] + (size_t)ng]; \
+            } while (0)
+
+            LOAD_OPAC_CORNERS(absopac);
+            raw = prj_trilinear_with_deriv(v, dri, dti, dyei,
+                &df_dr, &df_dt, &df_dy);
+            kappa[base] = exp(raw + rl);
+            dkappa_drho[base] = kappa[base] *
+                (1.0 + df_dr * inv_dlnrho) * inv_rho;
+            dkappa_dT[base] = kappa[base] * df_dt * inv_dlnT * inv_T;
+            dkappa_dYe[base] = kappa[base] * df_dy * inv_dYe;
+
+            LOAD_OPAC_CORNERS(scaopac);
+            raw = prj_trilinear_with_deriv(v, dri, dti, dyei,
+                &df_dr, &df_dt, &df_dy);
+            sigma[base] = exp(raw + rl);
+            dsigma_drho[base] = sigma[base] *
+                (1.0 + df_dr * inv_dlnrho) * inv_rho;
+            dsigma_dT[base] = sigma[base] * df_dt * inv_dlnT * inv_T;
+            dsigma_dYe[base] = sigma[base] * df_dy * inv_dYe;
+
+            LOAD_OPAC_CORNERS(sdelta);
+            delta[base] = prj_trilinear_with_deriv(v, dri, dti, dyei,
+                &df_dr, &df_dt, &df_dy);
+            ddelta_drho[base] = df_dr * inv_dlnrho * inv_rho;
+            ddelta_dT[base] = df_dt * inv_dlnT * inv_T;
+            ddelta_dYe[base] = df_dy * inv_dYe;
+
+            LOAD_OPAC_CORNERS(emis);
+            raw = prj_trilinear_with_deriv(v, dri, dti, dyei,
+                &df_dr, &df_dt, &df_dy);
+            eta[base] = exp(raw + rl) * factor * rad->degroup_erg[nu][ng];
+            deta_drho[base] = eta[base] *
+                (1.0 + df_dr * inv_dlnrho) * inv_rho;
+            deta_dT[base] = eta[base] * df_dt * inv_dlnT * inv_T;
+            deta_dYe[base] = eta[base] * df_dy * inv_dYe;
+
+#undef LOAD_OPAC_CORNERS
+        }
+    }
+}
+
 #endif /* PRJ_NRAD > 0 */

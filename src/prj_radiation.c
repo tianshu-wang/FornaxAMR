@@ -4721,6 +4721,760 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     }
 }
 
+#if PRJ_NRAD > 0
+#define PRJ_RAD_GR_M1_NP (6 + 4 * PRJ_NRAD * PRJ_NEGROUP)
+
+static void prj_rad_gr_m1_metric4_from_geom(const prj_z4c_hydro_geom *geom,
+    double g_cov[4][4], double g_con[4][4])
+{
+    double beta_cov[3] = {0.0, 0.0, 0.0};
+    double beta2 = 0.0;
+    double inv_alpha2;
+    int a;
+    int b;
+
+    memset(g_cov, 0, 16 * sizeof(double));
+    memset(g_con, 0, 16 * sizeof(double));
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            beta_cov[a] += geom->gamma[a][b] * geom->beta[b];
+        }
+        beta2 += beta_cov[a] * geom->beta[a];
+    }
+
+    g_cov[0][0] = -geom->alpha * geom->alpha + beta2;
+    for (a = 0; a < 3; ++a) {
+        g_cov[0][a + 1] = beta_cov[a];
+        g_cov[a + 1][0] = beta_cov[a];
+        for (b = 0; b < 3; ++b) {
+            g_cov[a + 1][b + 1] = geom->gamma[a][b];
+        }
+    }
+
+    inv_alpha2 = 1.0 / (geom->alpha * geom->alpha);
+    g_con[0][0] = -inv_alpha2;
+    for (a = 0; a < 3; ++a) {
+        g_con[0][a + 1] = geom->beta[a] * inv_alpha2;
+        g_con[a + 1][0] = g_con[0][a + 1];
+        for (b = 0; b < 3; ++b) {
+            g_con[a + 1][b + 1] = geom->gamma_inv[a][b] -
+                geom->beta[a] * geom->beta[b] * inv_alpha2;
+        }
+    }
+}
+
+static void prj_rad_gr_m1_lower4(const double g_cov[4][4],
+    const double ucon[4], double ucov[4])
+{
+    int a;
+    int b;
+
+    for (a = 0; a < 4; ++a) {
+        ucov[a] = 0.0;
+        for (b = 0; b < 4; ++b) {
+            ucov[a] += g_cov[a][b] * ucon[b];
+        }
+    }
+}
+
+static double prj_rad_gr_m1_R_mixed(const double Rcon[4][4],
+    const double g_cov[4][4], int up, int down)
+{
+    double mixed = 0.0;
+    int a;
+
+    for (a = 0; a < 4; ++a) {
+        mixed += Rcon[up][a] * g_cov[a][down];
+    }
+    return mixed;
+}
+
+static int prj_rad_gr_m1_fluid_four_velocity(
+    const prj_z4c_hydro_geom *geom, const double g_cov[4][4],
+    const double *P, double ucon[4], double ucov[4])
+{
+    double vhat[3];
+    double v2 = 0.0;
+    double wlor;
+    int a;
+    int b;
+
+    if (geom->alpha <= 0.0 || !isfinite(geom->alpha)) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        vhat[a] = P[1 + a] / PRJ_CLIGHT;
+        if (!isfinite(vhat[a])) {
+            return 0;
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            v2 += geom->gamma[a][b] * vhat[a] * vhat[b];
+        }
+    }
+    if (!isfinite(v2) || v2 < 0.0 || v2 >= 1.0) {
+        return 0;
+    }
+    wlor = 1.0 / sqrt(1.0 - v2);
+    ucon[0] = wlor / geom->alpha;
+    for (a = 0; a < 3; ++a) {
+        ucon[a + 1] = wlor * (vhat[a] - geom->beta[a] / geom->alpha);
+    }
+    prj_rad_gr_m1_lower4(g_cov, ucon, ucov);
+    return 1;
+}
+
+static int prj_rad_gr_m1_q0_from_er_qi(const double g_cov[4][4],
+    double ER, double q[4])
+{
+    double A;
+    double B = 0.0;
+    double C = ER;
+    double disc;
+    double disc_scale;
+    double sqrt_disc;
+    double roots[2];
+    int i;
+    int j;
+
+    if (!isfinite(ER) || ER < 0.0) {
+        return 0;
+    }
+    for (i = 0; i < 3; ++i) {
+        if (!isfinite(q[i + 1])) {
+            return 0;
+        }
+        B += 2.0 * g_cov[0][i + 1] * q[i + 1];
+        for (j = 0; j < 3; ++j) {
+            C += g_cov[i + 1][j + 1] * q[i + 1] * q[j + 1];
+        }
+    }
+    A = g_cov[0][0];
+    if (!isfinite(A) || A == 0.0 || !isfinite(B) || !isfinite(C)) {
+        return 0;
+    }
+    if (ER == 0.0 && B == 0.0 && C == 0.0) {
+        q[0] = 0.0;
+        return 1;
+    }
+    disc = B * B - 4.0 * A * C;
+    disc_scale = fmax(B * B, fabs(4.0 * A * C));
+    if (disc_scale <= 0.0) {
+        disc_scale = 1.0;
+    }
+    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
+        return 0;
+    }
+    if (disc < 0.0) {
+        disc = 0.0;
+    }
+    sqrt_disc = sqrt(disc);
+    roots[0] = (-B + sqrt_disc) / (2.0 * A);
+    roots[1] = (-B - sqrt_disc) / (2.0 * A);
+    if (isfinite(roots[0]) && roots[0] > 0.0 &&
+        (!isfinite(roots[1]) || roots[1] <= 0.0 || roots[0] >= roots[1])) {
+        q[0] = roots[0];
+        return 1;
+    }
+    if (isfinite(roots[1]) && roots[1] > 0.0) {
+        q[0] = roots[1];
+        return 1;
+    }
+    return 0;
+}
+
+static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
+    double dt, double *resid, double *u_new_out)
+{
+    double W[PRJ_NVAR_PRIM];
+    double u_new[PRJ_NVAR_CONS];
+    double resid_tmp[PRJ_NVAR_CONS];
+    prj_eos_gr_geom eos_geom;
+    double eos_q[PRJ_EOS_NQUANT];
+    double g_cov[4][4];
+    double g_con[4][4];
+    double n_cov[4];
+    double ucon[4];
+    double ucov[4];
+    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double sigma[PRJ_NRAD * PRJ_NEGROUP];
+    double delta[PRJ_NRAD * PRJ_NEGROUP];
+    double eta[PRJ_NRAD * PRJ_NEGROUP];
+    double sum_Gn = 0.0;
+    double sum_Gu_xe = 0.0;
+    double sum_Ggamma[3] = {0.0, 0.0, 0.0};
+    double group_Gn[PRJ_NRAD * PRJ_NEGROUP];
+    double group_Ggamma[PRJ_NRAD * PRJ_NEGROUP][3];
+    int field;
+    int group;
+    int a;
+    int b;
+    int d;
+    int v;
+
+    if (resid != 0) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            resid[v] = 0.0;
+        }
+    }
+    if (u_new_out != 0) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            u_new_out[v] = 0.0;
+        }
+    }
+    if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
+        resid == 0 || !isfinite(dt) || !isfinite(geom->sqrt_gamma) ||
+        geom->sqrt_gamma <= 0.0 || !isfinite(geom->alpha) ||
+        geom->alpha <= 0.0) {
+        return 0;
+    }
+    if (!isfinite(P[0]) || P[0] <= 0.0 || !isfinite(P[4]) || P[4] <= 0.0 ||
+        !isfinite(P[5])) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            if (!isfinite(geom->gamma[a][b]) ||
+                !isfinite(geom->gamma_inv[a][b])) {
+                return 0;
+            }
+            eos_geom.gamma[a][b] = geom->gamma[a][b];
+        }
+    }
+
+    prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
+    n_cov[0] = -geom->alpha;
+    n_cov[1] = 0.0;
+    n_cov[2] = 0.0;
+    n_cov[3] = 0.0;
+    if (!prj_rad_gr_m1_fluid_four_velocity(geom, g_cov, P, ucon, ucov)) {
+        return 0;
+    }
+
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        W[v] = 0.0;
+    }
+    W[PRJ_PRIM_RHO] = P[0];
+    W[PRJ_PRIM_V1] = P[1];
+    W[PRJ_PRIM_V2] = P[2];
+    W[PRJ_PRIM_V3] = P[3];
+    W[PRJ_PRIM_YE] = P[5];
+    prj_eos_rty(eos, P[0], P[4], P[5], eos_q, PRJ_EOS_CTX_MAIN);
+    W[PRJ_PRIM_EINT] = eos_q[PRJ_EOS_EINT];
+    if (!isfinite(W[PRJ_PRIM_EINT]) || W[PRJ_PRIM_EINT] < 0.0) {
+        return 0;
+    }
+#if PRJ_MHD
+    W[PRJ_PRIM_B1] = u_old[PRJ_CONS_B1] / geom->sqrt_gamma;
+    W[PRJ_PRIM_B2] = u_old[PRJ_CONS_B2] / geom->sqrt_gamma;
+    W[PRJ_PRIM_B3] = u_old[PRJ_CONS_B3] / geom->sqrt_gamma;
+#endif
+
+    prj_rad3_opac_lookup(rad, P[0], P[4], P[5], kappa, sigma, delta, eta);
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * idx;
+            double ER = P[pidx];
+            double q[4];
+            double Rcon[4][4];
+            double R_u[4];
+            double Ruu = 0.0;
+            double Gcon[4];
+            double kappa_eff;
+            double sigma_eff;
+            double Gdotn = 0.0;
+            double Gdotu = 0.0;
+
+            q[0] = 0.0;
+            q[1] = P[pidx + 1];
+            q[2] = P[pidx + 2];
+            q[3] = P[pidx + 3];
+            if (!prj_rad_gr_m1_q0_from_er_qi(g_cov, ER, q)) {
+                return 0;
+            }
+            for (a = 0; a < 4; ++a) {
+                for (b = 0; b < 4; ++b) {
+                    Rcon[a][b] = (4.0 / 3.0) * q[a] * q[b] +
+                        (ER / 3.0) * g_con[a][b];
+                    if (!isfinite(Rcon[a][b])) {
+                        return 0;
+                    }
+                }
+            }
+
+            W[PRJ_PRIM_RAD_E(field, group)] =
+                geom->alpha * geom->alpha * Rcon[0][0];
+            W[PRJ_PRIM_RAD_F1(field, group)] =
+                PRJ_CLIGHT * geom->alpha *
+                prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 1);
+            W[PRJ_PRIM_RAD_F2(field, group)] =
+                PRJ_CLIGHT * geom->alpha *
+                prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 2);
+            W[PRJ_PRIM_RAD_F3(field, group)] =
+                PRJ_CLIGHT * geom->alpha *
+                prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 3);
+
+            for (a = 0; a < 4; ++a) {
+                R_u[a] = 0.0;
+                for (b = 0; b < 4; ++b) {
+                    R_u[a] += Rcon[a][b] * ucov[b];
+                }
+                Ruu += R_u[a] * ucov[a];
+            }
+            kappa_eff = kappa[idx];
+            sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
+            if (!isfinite(kappa_eff) || !isfinite(sigma_eff) ||
+                !isfinite(eta[idx])) {
+                return 0;
+            }
+            for (a = 0; a < 4; ++a) {
+                Gcon[a] = -(kappa_eff + sigma_eff) * R_u[a] -
+                    (sigma_eff * Ruu + eta[idx] / PRJ_CLIGHT) * ucon[a];
+                if (!isfinite(Gcon[a])) {
+                    return 0;
+                }
+                Gdotn += Gcon[a] * n_cov[a];
+                Gdotu += Gcon[a] * ucov[a];
+            }
+
+            group_Gn[idx] = Gdotn;
+            sum_Gn += Gdotn;
+            sum_Gu_xe += Gdotu * rad->x_e[field][group];
+            for (d = 0; d < 3; ++d) {
+                double Ggamma = 0.0;
+
+                for (a = 0; a < 4; ++a) {
+                    Ggamma += Gcon[a] *
+                        (g_cov[d + 1][a] + n_cov[d + 1] * n_cov[a]);
+                }
+                group_Ggamma[idx][d] = Ggamma;
+                sum_Ggamma[d] += Ggamma;
+            }
+        }
+    }
+
+    if (prj_eos_gr_prim2cons(eos, &eos_geom, W, u_new,
+            PRJ_EOS_CTX_MAIN) != PRJ_EOS_GR_OK) {
+        return 0;
+    }
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        resid_tmp[v] = u_new[v] - u_old[v];
+    }
+    resid_tmp[PRJ_CONS_ETOT] += geom->sqrt_gamma * dt *
+        RAD_SCALE * PRJ_CLIGHT * sum_Gn;
+    resid_tmp[PRJ_CONS_MOM1] -= geom->alpha * geom->sqrt_gamma * dt *
+        RAD_SCALE * sum_Ggamma[0];
+    resid_tmp[PRJ_CONS_MOM2] -= geom->alpha * geom->sqrt_gamma * dt *
+        RAD_SCALE * sum_Ggamma[1];
+    resid_tmp[PRJ_CONS_MOM3] -= geom->alpha * geom->sqrt_gamma * dt *
+        RAD_SCALE * sum_Ggamma[2];
+    resid_tmp[PRJ_CONS_YE] += geom->alpha * geom->sqrt_gamma * dt *
+        PRJ_CLIGHT * sum_Gu_xe;
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+
+            resid_tmp[PRJ_CONS_RAD_E(field, group)] -=
+                geom->alpha * geom->sqrt_gamma * dt *
+                PRJ_CLIGHT * group_Gn[idx];
+            resid_tmp[PRJ_CONS_RAD_F1(field, group)] +=
+                geom->alpha * geom->sqrt_gamma * dt *
+                PRJ_CLIGHT * PRJ_CLIGHT * group_Ggamma[idx][0];
+            resid_tmp[PRJ_CONS_RAD_F2(field, group)] +=
+                geom->alpha * geom->sqrt_gamma * dt *
+                PRJ_CLIGHT * PRJ_CLIGHT * group_Ggamma[idx][1];
+            resid_tmp[PRJ_CONS_RAD_F3(field, group)] +=
+                geom->alpha * geom->sqrt_gamma * dt *
+                PRJ_CLIGHT * PRJ_CLIGHT * group_Ggamma[idx][2];
+        }
+    }
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        resid[v] = resid_tmp[v];
+        if (u_new_out != 0) {
+            u_new_out[v] = u_new[v];
+        }
+    }
+    return 1;
+}
+
+static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
+    double dt, double *resid, double *jac, double *u_new_out)
+{
+    const int np = PRJ_RAD_GR_M1_NP;
+    double resid_local[PRJ_NVAR_CONS];
+    double g_cov[4][4];
+    double g_con[4][4];
+    double n_cov[4];
+    double ucon[4];
+    double ucov[4];
+    double ducon[4][PRJ_RAD_GR_M1_NP];
+    double ducov[4][PRJ_RAD_GR_M1_NP];
+    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double sigma[PRJ_NRAD * PRJ_NEGROUP];
+    double delta[PRJ_NRAD * PRJ_NEGROUP];
+    double eta[PRJ_NRAD * PRJ_NEGROUP];
+    double dkappa_drho[PRJ_NRAD * PRJ_NEGROUP];
+    double dkappa_dT[PRJ_NRAD * PRJ_NEGROUP];
+    double dkappa_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double dsigma_drho[PRJ_NRAD * PRJ_NEGROUP];
+    double dsigma_dT[PRJ_NRAD * PRJ_NEGROUP];
+    double dsigma_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double ddelta_drho[PRJ_NRAD * PRJ_NEGROUP];
+    double ddelta_dT[PRJ_NRAD * PRJ_NEGROUP];
+    double ddelta_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double deta_drho[PRJ_NRAD * PRJ_NEGROUP];
+    double deta_dT[PRJ_NRAD * PRJ_NEGROUP];
+    double deta_dYe[PRJ_NRAD * PRJ_NEGROUP];
+    double eint;
+    double pressure;
+    double deint_drho;
+    double deint_dT;
+    double deint_dYe;
+    double dpressure_drho;
+    double dpressure_dT;
+    double dpressure_dYe;
+    double beta_con[3];
+    double beta_cov[3] = {0.0, 0.0, 0.0};
+    double beta2 = 0.0;
+    double wlor;
+    double wlor2;
+    double wlor_m1;
+    double Bcon[3] = {0.0, 0.0, 0.0};
+    double Bcov[3] = {0.0, 0.0, 0.0};
+    double Bsq = 0.0;
+    double Bbeta = 0.0;
+    double w;
+    double D;
+    double c = PRJ_CLIGHT;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    double sqrtg;
+    int a;
+    int b;
+    int d;
+    int field;
+    int group;
+    int n;
+    int v;
+
+    if (jac != 0) {
+        for (v = 0; v < PRJ_NVAR_CONS * PRJ_RAD_GR_M1_NP; ++v) {
+            jac[v] = 0.0;
+        }
+    }
+    if (jac == 0 || !prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt,
+            resid != 0 ? resid : resid_local, u_new_out)) {
+        return 0;
+    }
+
+    sqrtg = geom->sqrt_gamma;
+    prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
+    n_cov[0] = -geom->alpha;
+    n_cov[1] = 0.0;
+    n_cov[2] = 0.0;
+    n_cov[3] = 0.0;
+    if (!prj_rad_gr_m1_fluid_four_velocity(geom, g_cov, P, ucon, ucov) ||
+        !prj_eos_rty_derivs(eos, P[0], P[4], P[5], &eint, &pressure,
+            &deint_drho, &deint_dT, &deint_dYe, &dpressure_drho,
+            &dpressure_dT, &dpressure_dYe, PRJ_EOS_CTX_MAIN)) {
+        return 0;
+    }
+    prj_rad3_opac_lookup_derivs(rad, P[0], P[4], P[5], kappa, sigma, delta,
+        eta, dkappa_drho, dkappa_dT, dkappa_dYe, dsigma_drho, dsigma_dT,
+        dsigma_dYe, ddelta_drho, ddelta_dT, ddelta_dYe, deta_drho, deta_dT,
+        deta_dYe);
+
+    memset(ducon, 0, sizeof(ducon));
+    memset(ducov, 0, sizeof(ducov));
+    for (d = 0; d < 3; ++d) {
+        beta_con[d] = P[1 + d] / c;
+    }
+    for (d = 0; d < 3; ++d) {
+        for (b = 0; b < 3; ++b) {
+            beta_cov[d] += geom->gamma[d][b] * beta_con[b];
+        }
+        beta2 += beta_cov[d] * beta_con[d];
+    }
+    if (!isfinite(beta2) || beta2 < 0.0 || beta2 >= 1.0) {
+        return 0;
+    }
+    wlor = 1.0 / sqrt(1.0 - beta2);
+    wlor2 = wlor * wlor;
+    wlor_m1 = beta2 / (sqrt(1.0 - beta2) * (1.0 + sqrt(1.0 - beta2)));
+#if PRJ_MHD
+    Bcon[0] = u_old[PRJ_CONS_B1] / sqrtg;
+    Bcon[1] = u_old[PRJ_CONS_B2] / sqrtg;
+    Bcon[2] = u_old[PRJ_CONS_B3] / sqrtg;
+#endif
+    for (d = 0; d < 3; ++d) {
+        for (b = 0; b < 3; ++b) {
+            Bcov[d] += geom->gamma[d][b] * Bcon[b];
+        }
+        Bsq += Bcov[d] * Bcon[d];
+        Bbeta += Bcov[d] * beta_con[d];
+    }
+    w = P[0] * c2 + P[0] * eint + pressure;
+    D = P[0] * wlor;
+
+    for (n = 0; n < np; ++n) {
+        double drho = n == 0 ? 1.0 : 0.0;
+        double dYe = n == 5 ? 1.0 : 0.0;
+        double dbeta_con[3] = {0.0, 0.0, 0.0};
+        double dbeta_cov[3] = {0.0, 0.0, 0.0};
+        double dbeta2 = 0.0;
+        double dwlor;
+        double dwlor2;
+        double dBbeta = 0.0;
+        double deint = 0.0;
+        double dpressure = 0.0;
+        double dw;
+        double dD;
+        double dA;
+        double dUtmp;
+
+        if (n >= 1 && n <= 3) {
+            dbeta_con[n - 1] = 1.0 / c;
+        }
+        for (d = 0; d < 3; ++d) {
+            int m;
+
+            for (m = 0; m < 3; ++m) {
+                dbeta_cov[d] += geom->gamma[d][m] * dbeta_con[m];
+            }
+            dbeta2 += dbeta_cov[d] * beta_con[d] +
+                beta_cov[d] * dbeta_con[d];
+            dBbeta += Bcov[d] * dbeta_con[d];
+        }
+        dwlor = 0.5 * wlor * wlor * wlor * dbeta2;
+        dwlor2 = 2.0 * wlor * dwlor;
+        if (n == 0) {
+            deint = deint_drho;
+            dpressure = dpressure_drho;
+        } else if (n == 4) {
+            deint = deint_dT;
+            dpressure = dpressure_dT;
+        } else if (n == 5) {
+            deint = deint_dYe;
+            dpressure = dpressure_dYe;
+        }
+        dw = drho * (c2 + eint) + P[0] * deint + dpressure;
+
+        ducon[0][n] = dwlor / geom->alpha;
+        for (d = 0; d < 3; ++d) {
+            ducon[d + 1][n] = dwlor *
+                (beta_con[d] - geom->beta[d] / geom->alpha) +
+                wlor * dbeta_con[d];
+        }
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                ducov[a][n] += g_cov[a][b] * ducon[b][n];
+            }
+        }
+
+        dD = drho * wlor + P[0] * dwlor;
+        jac[PRJ_CONS_RHO * np + n] += sqrtg * dD;
+        for (d = 0; d < 3; ++d) {
+            dUtmp = ((dw * wlor2 + w * dwlor2) * beta_cov[d] +
+                (w * wlor2 + Bsq) * dbeta_cov[d] -
+                dBbeta * Bcov[d]) / c;
+            jac[(PRJ_CONS_MOM1 + d) * np + n] += sqrtg * dUtmp;
+        }
+        dA = drho * eint + P[0] * deint + dpressure;
+        dUtmp = dA * wlor2 + (P[0] * eint + pressure) * dwlor2 +
+            c2 * (drho * wlor * wlor_m1 +
+                P[0] * (dwlor * wlor_m1 + wlor * dwlor)) -
+            dpressure - Bbeta * dBbeta;
+        if (wlor2 > 0.0) {
+            dUtmp += 0.5 * Bsq * dwlor2 / (wlor2 * wlor2);
+        }
+        jac[PRJ_CONS_ETOT * np + n] += sqrtg * dUtmp;
+        jac[PRJ_CONS_YE * np + n] += sqrtg * (dD * P[5] + D * dYe);
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * idx;
+            int er_col = pidx;
+            double ER = P[pidx];
+            double q[4];
+            double A;
+            double Bquad = 0.0;
+            double denom;
+            double Rcon[4][4];
+            double R_u[4];
+            double Ruu = 0.0;
+            double Gcon[4];
+            double kappa_eff = kappa[idx];
+            double sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
+            double kt = kappa_eff + sigma_eff;
+            double scalar;
+
+            q[0] = 0.0;
+            q[1] = P[pidx + 1];
+            q[2] = P[pidx + 2];
+            q[3] = P[pidx + 3];
+            if (!prj_rad_gr_m1_q0_from_er_qi(g_cov, ER, q)) {
+                return 0;
+            }
+            for (d = 0; d < 3; ++d) {
+                Bquad += 2.0 * g_cov[0][d + 1] * q[d + 1];
+            }
+            A = g_cov[0][0];
+            denom = 2.0 * A * q[0] + Bquad;
+            if (!isfinite(denom) || fabs(denom) < 1.0e-300) {
+                return 0;
+            }
+            for (a = 0; a < 4; ++a) {
+                R_u[a] = 0.0;
+                for (b = 0; b < 4; ++b) {
+                    Rcon[a][b] = (4.0 / 3.0) * q[a] * q[b] +
+                        (ER / 3.0) * g_con[a][b];
+                    R_u[a] += Rcon[a][b] * ucov[b];
+                }
+                Ruu += R_u[a] * ucov[a];
+            }
+            scalar = sigma_eff * Ruu + eta[idx] / c;
+            for (a = 0; a < 4; ++a) {
+                Gcon[a] = -kt * R_u[a] - scalar * ucon[a];
+            }
+
+            for (n = 0; n < np; ++n) {
+                double dER = n == er_col ? 1.0 : 0.0;
+                double dq[4] = {0.0, 0.0, 0.0, 0.0};
+                double dBquad = 0.0;
+                double dCquad = dER;
+                double dR_u[4] = {0.0, 0.0, 0.0, 0.0};
+                double dRuu = 0.0;
+                double dkappa_eff = 0.0;
+                double dsigma = 0.0;
+                double ddelta = 0.0;
+                double deta = 0.0;
+                double dsigma_eff;
+                double dkt;
+                double dscalar;
+                double dGcon[4];
+                double dGn = 0.0;
+                double dGu = 0.0;
+                double dGgamma[3] = {0.0, 0.0, 0.0};
+                double dR00;
+                double dRmixed;
+
+                if (n >= pidx + 1 && n <= pidx + 3) {
+                    dq[n - pidx] = 1.0;
+                }
+                for (d = 0; d < 3; ++d) {
+                    dBquad += 2.0 * g_cov[0][d + 1] * dq[d + 1];
+                    for (b = 0; b < 3; ++b) {
+                        dCquad += g_cov[d + 1][b + 1] *
+                            (dq[d + 1] * q[b + 1] +
+                             q[d + 1] * dq[b + 1]);
+                    }
+                }
+                dq[0] = -(q[0] * dBquad + dCquad) / denom;
+
+                if (n == 0) {
+                    dkappa_eff = dkappa_drho[idx];
+                    dsigma = dsigma_drho[idx];
+                    ddelta = ddelta_drho[idx];
+                    deta = deta_drho[idx];
+                } else if (n == 4) {
+                    dkappa_eff = dkappa_dT[idx];
+                    dsigma = dsigma_dT[idx];
+                    ddelta = ddelta_dT[idx];
+                    deta = deta_dT[idx];
+                } else if (n == 5) {
+                    dkappa_eff = dkappa_dYe[idx];
+                    dsigma = dsigma_dYe[idx];
+                    ddelta = ddelta_dYe[idx];
+                    deta = deta_dYe[idx];
+                }
+                dsigma_eff = dsigma * (1.0 - delta[idx] / 3.0) -
+                    sigma[idx] * ddelta / 3.0;
+                dkt = dkappa_eff + dsigma_eff;
+
+                dR00 = (8.0 / 3.0) * q[0] * dq[0] +
+                    (dER / 3.0) * g_con[0][0];
+                jac[PRJ_CONS_RAD_E(field, group) * np + n] +=
+                    sqrtg * geom->alpha * geom->alpha * dR00;
+                for (d = 0; d < 3; ++d) {
+                    dRmixed = 0.0;
+                    for (b = 0; b < 4; ++b) {
+                        double dR0b = (4.0 / 3.0) *
+                            (dq[0] * q[b] + q[0] * dq[b]) +
+                            (dER / 3.0) * g_con[0][b];
+
+                        dRmixed += dR0b * g_cov[b][d + 1];
+                    }
+                    jac[(PRJ_CONS_RAD_F1(field, group) + d) * np + n] +=
+                        sqrtg * c * geom->alpha * dRmixed;
+                }
+
+                for (a = 0; a < 4; ++a) {
+                    for (b = 0; b < 4; ++b) {
+                        double dRab = (4.0 / 3.0) *
+                            (dq[a] * q[b] + q[a] * dq[b]) +
+                            (dER / 3.0) * g_con[a][b];
+
+                        dR_u[a] += dRab * ucov[b] +
+                            Rcon[a][b] * ducov[b][n];
+                    }
+                    dRuu += dR_u[a] * ucov[a] + R_u[a] * ducov[a][n];
+                }
+                dscalar = dsigma_eff * Ruu + sigma_eff * dRuu + deta / c;
+                for (a = 0; a < 4; ++a) {
+                    dGcon[a] = -dkt * R_u[a] - kt * dR_u[a] -
+                        dscalar * ucon[a] - scalar * ducon[a][n];
+                    dGn += dGcon[a] * n_cov[a];
+                    dGu += dGcon[a] * ucov[a] + Gcon[a] * ducov[a][n];
+                    for (d = 0; d < 3; ++d) {
+                        dGgamma[d] += dGcon[a] * g_cov[d + 1][a];
+                    }
+                }
+
+                jac[PRJ_CONS_ETOT * np + n] += sqrtg * dt *
+                    RAD_SCALE * c * dGn;
+                for (d = 0; d < 3; ++d) {
+                    jac[(PRJ_CONS_MOM1 + d) * np + n] -=
+                        geom->alpha * sqrtg * dt * RAD_SCALE * dGgamma[d];
+                }
+                jac[PRJ_CONS_YE * np + n] += geom->alpha * sqrtg * dt *
+                    c * dGu * rad->x_e[field][group];
+                jac[PRJ_CONS_RAD_E(field, group) * np + n] -=
+                    geom->alpha * sqrtg * dt * c * dGn;
+                for (d = 0; d < 3; ++d) {
+                    jac[(PRJ_CONS_RAD_F1(field, group) + d) * np + n] +=
+                        geom->alpha * sqrtg * dt * c * c * dGgamma[d];
+                }
+            }
+        }
+    }
+
+    return 1;
+}
+
+int prj_rad_gr_m1_residual_test_wrapper(const prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
+    double dt, double *resid, double *u_new_out)
+{
+    return prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt, resid,
+        u_new_out);
+}
+
+int prj_rad_gr_m1_jacobian_test_wrapper(const prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
+    double dt, double *resid, double *jac, double *u_new_out)
+{
+    return prj_rad_gr_m1_jacobian(rad, eos, geom, u_old, P, dt, resid, jac,
+        u_new_out);
+}
+#endif
+
 void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     const prj_mesh *mesh, const prj_block *block, int z4c_stage, double *u,
     int i, int j, int k, double dt, double *final_temperature)

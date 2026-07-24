@@ -14,6 +14,12 @@ void prj_rad3_opac_free(prj_rad *rad);
 /* Any output pointer may be NULL; unrequested fields are skipped. */
 void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye,
     double *kappa, double *sigma, double *delta, double *eta);
+void prj_rad3_opac_lookup_derivs(const prj_rad *rad, double rho, double temp,
+    double ye, double *kappa, double *sigma, double *delta, double *eta,
+    double *dkappa_drho, double *dkappa_dT, double *dkappa_dYe,
+    double *dsigma_drho, double *dsigma_dT, double *dsigma_dYe,
+    double *ddelta_drho, double *ddelta_dT, double *ddelta_dYe,
+    double *deta_drho, double *deta_dT, double *deta_dYe);
 /* Implicit-solver hot path: always writes kappa, eta and their log-derivatives
  * d(ln kappa)/d(lnT), d(ln kappa)/d(Ye), d(ln eta)/d(lnT), d(ln eta)/d(Ye)
  * (no NULL checks).  The table temperature axis is natural log(T), so the lnT
