@@ -25,6 +25,9 @@ int prj_rad_gr_m1_residual_test_wrapper(const prj_rad *rad, prj_eos *eos,
 int prj_rad_gr_m1_jacobian_test_wrapper(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
     double dt, double *resid, double *jac, double *u_new_out);
+int prj_rad_gr_m1_implicit_solve_test_wrapper(const prj_rad *rad,
+    prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
+    double dt, double *P, double *resid_out, double *u_new_out);
 
 #define TEST_GR_M1_RESIDUAL_NP (6 + 4 * PRJ_NRAD * PRJ_NEGROUP)
 
@@ -343,6 +346,110 @@ static void check_residual_zero(const char *name, const double *resid,
     }
 }
 
+static double test_gr_m1_solver_norm(const double *u_old, const double *resid,
+    double threshold)
+{
+    const double vmin = 1.0e5;
+    double max_norm = 0.0;
+    double rho_scale = fabs(u_old[PRJ_CONS_RHO]);
+    double etot_scale = fabs(u_old[PRJ_CONS_ETOT]);
+    double mom2 = 0.0;
+    double mom_norm;
+    int field;
+    int group;
+    int d;
+
+    if (!isfinite(threshold) || threshold <= 0.0 ||
+        !isfinite(u_old[PRJ_CONS_YE]) || u_old[PRJ_CONS_YE] <= 0.0 ||
+        !isfinite(rho_scale) || rho_scale <= 0.0 ||
+        !isfinite(etot_scale) || etot_scale <= 0.0) {
+        return HUGE_VAL;
+    }
+
+    max_norm = fmax(max_norm, fabs(resid[PRJ_CONS_RHO]) / rho_scale);
+    max_norm = fmax(max_norm, fabs(resid[PRJ_CONS_ETOT]) / etot_scale);
+    max_norm = fmax(max_norm,
+        fabs(resid[PRJ_CONS_YE]) / u_old[PRJ_CONS_YE]);
+
+    for (d = 0; d < 3; ++d) {
+        mom2 += u_old[PRJ_CONS_MOM1 + d] *
+            u_old[PRJ_CONS_MOM1 + d];
+    }
+    if (mom2 == 0.0) {
+        mom2 = rho_scale * rho_scale * vmin * vmin;
+    }
+    mom_norm = sqrt(mom2);
+    {
+        double rmom2 = 0.0;
+
+        for (d = 0; d < 3; ++d) {
+            rmom2 += resid[PRJ_CONS_MOM1 + d] *
+                resid[PRJ_CONS_MOM1 + d];
+        }
+        max_norm = fmax(max_norm, sqrt(rmom2) / mom_norm);
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int eidx = PRJ_CONS_RAD_E(field, group);
+            int fidx = PRJ_CONS_RAD_F1(field, group);
+            double scale_e = fmax(threshold * etot_scale / RAD_SCALE,
+                fabs(u_old[eidx]));
+            double flux2 = 0.0;
+            double rflux2 = 0.0;
+            double scale_f;
+
+            max_norm = fmax(max_norm, fabs(resid[eidx]) / scale_e);
+            for (d = 0; d < 3; ++d) {
+                flux2 += u_old[fidx + d] * u_old[fidx + d];
+                rflux2 += resid[fidx + d] * resid[fidx + d];
+            }
+            scale_f = fmax(threshold * mom_norm * PRJ_CLIGHT *
+                    PRJ_CLIGHT / RAD_SCALE, sqrt(flux2));
+            max_norm = fmax(max_norm, sqrt(rflux2) / scale_f);
+        }
+    }
+
+    return max_norm;
+}
+
+static void check_gr_m1_solver_converged(const char *name,
+    const double *u_old, const double *resid, double threshold)
+{
+    double norm = test_gr_m1_solver_norm(u_old, resid, threshold);
+
+    if (!isfinite(norm) || norm >= threshold) {
+        fprintf(stderr,
+            "test_gr_m1_matter: %s solver norm %.17e threshold %.3e\n",
+            name, norm, threshold);
+        exit(1);
+    }
+}
+
+static void make_gr_m1_exact_old_from_p(const prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *P, double dt,
+    double *u_old)
+{
+    double zero[PRJ_NVAR_CONS];
+    double resid[PRJ_NVAR_CONS];
+    double u_new[PRJ_NVAR_CONS];
+    int v;
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        zero[v] = 0.0;
+    }
+    if (!prj_rad_gr_m1_residual_test_wrapper(rad, eos, geom, zero, P, dt,
+            resid, u_new)) {
+        die("exact old residual construction failed");
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_old[v] = resid[v];
+    }
+    if (u_old[PRJ_CONS_YE] <= 0.0) {
+        die("exact old construction produced nonpositive YE");
+    }
+}
+
 static void set_gr_m1_jacobian_test_p(
     double P[TEST_GR_M1_RESIDUAL_NP])
 {
@@ -368,6 +475,42 @@ static void set_gr_m1_jacobian_test_p(
             P[pidx + 1] = 0.030 * sin(2.11 * phase) * qmag;
             P[pidx + 2] = 0.024 * cos(1.67 * phase) * qmag;
             P[pidx + 3] = 0.021 * sin(0.91 * phase + 0.4) * qmag;
+        }
+    }
+}
+
+static void copy_gr_m1_p(double *dst, const double *src)
+{
+    int n;
+
+    for (n = 0; n < TEST_GR_M1_RESIDUAL_NP; ++n) {
+        dst[n] = src[n];
+    }
+}
+
+static void perturb_gr_m1_solver_guess(double *P)
+{
+    int field;
+    int group;
+
+    P[0] *= 1.0002;
+    P[1] += 2.5e5;
+    P[2] -= 1.7e5;
+    P[3] += 1.1e5;
+    P[4] *= 0.9998;
+    P[5] += 2.0e-5;
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * idx;
+            double phase = (double)(idx + 1);
+            double qscale;
+
+            P[pidx] *= 1.0 + 1.5e-4 * sin(0.43 * phase);
+            qscale = sqrt(P[pidx]);
+            P[pidx + 1] += 1.0e-4 * sin(0.71 * phase) * qscale;
+            P[pidx + 2] -= 8.0e-5 * cos(0.59 * phase) * qscale;
+            P[pidx + 3] += 7.0e-5 * sin(0.37 * phase) * qscale;
         }
     }
 }
@@ -476,6 +619,93 @@ static void check_gr_m1_residual_jacobian_fd(void)
     prj_rad3_opac_free(&rad);
 }
 
+static void check_gr_m1_implicit_solve_real_tables(void)
+{
+    prj_eos eos;
+    prj_rad rad;
+    prj_z4c_hydro_geom geom;
+    double beta[3] = {0.015, -0.01, 0.006};
+    double gamma_diag[3] = {1.08, 0.94, 1.13};
+    double P_root[TEST_GR_M1_RESIDUAL_NP];
+    double P_guess[TEST_GR_M1_RESIDUAL_NP];
+    double u_old[PRJ_NVAR_CONS];
+    double resid[PRJ_NVAR_CONS];
+    double u_new[PRJ_NVAR_CONS];
+    double dt = 1.0e-6;
+
+    init_real_test_eos(&eos);
+    init_real_test_rad(&rad);
+    rad.implicit_err_tol = 1.0e-8;
+    rad.maxiter = 30;
+    set_diag_geom(&geom, 0.94, beta, gamma_diag);
+    set_gr_m1_jacobian_test_p(P_root);
+    make_gr_m1_exact_old_from_p(&rad, &eos, &geom, P_root, dt, u_old);
+    copy_gr_m1_p(P_guess, P_root);
+    perturb_gr_m1_solver_guess(P_guess);
+
+    if (!prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_old, dt, P_guess, resid, u_new)) {
+        die("real-table implicit solve failed");
+    }
+    check_gr_m1_solver_converged("real-table implicit solve", u_old, resid,
+        rad.implicit_err_tol);
+    prj_rad3_opac_free(&rad);
+}
+
+static void check_gr_m1_implicit_solve_zero_momentum_floor(void)
+{
+    prj_eos eos;
+    prj_rad rad;
+    prj_z4c_hydro_geom geom;
+    double beta[3] = {0.0, 0.0, 0.0};
+    double gamma_diag[3] = {1.0, 1.0, 1.0};
+    double P_root[TEST_GR_M1_RESIDUAL_NP];
+    double P_guess[TEST_GR_M1_RESIDUAL_NP];
+    double u_old[PRJ_NVAR_CONS];
+    double resid[PRJ_NVAR_CONS];
+    double u_new[PRJ_NVAR_CONS];
+    double dt = 0.05;
+    int field;
+    int group;
+    int d;
+
+    init_test_eos(&eos);
+    init_source_test_rad_full(&rad, 0.0, 0.0, 0.0, 0.0, 0.0);
+    rad.implicit_err_tol = 0.0;
+    rad.maxiter = 30;
+    set_diag_geom(&geom, 1.0, beta, gamma_diag);
+    for (d = 0; d < TEST_GR_M1_RESIDUAL_NP; ++d) {
+        P_root[d] = 0.0;
+    }
+    P_root[0] = 1.0;
+    P_root[4] = 1.0;
+    P_root[5] = 0.2;
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * idx;
+
+            P_root[pidx] = 0.5 + 0.01 * (double)idx;
+        }
+    }
+    make_gr_m1_exact_old_from_p(&rad, &eos, &geom, P_root, dt, u_old);
+    if (u_old[PRJ_CONS_MOM1] != 0.0 || u_old[PRJ_CONS_MOM2] != 0.0 ||
+        u_old[PRJ_CONS_MOM3] != 0.0) {
+        die("zero-momentum floor setup has nonzero momentum");
+    }
+    copy_gr_m1_p(P_guess, P_root);
+    P_guess[1] = 2.0e2;
+    P_guess[6 + 1] = 1.0e-5 * sqrt(P_guess[6]);
+
+    if (!prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_old, dt, P_guess, resid, u_new)) {
+        die("zero-momentum implicit solve failed");
+    }
+    check_gr_m1_solver_converged("zero-momentum implicit solve", u_old,
+        resid, 1.0e-6);
+    prj_rad3_opac_free(&rad);
+}
+
 static void check_gr_m1_residual_rest_energy_matches_non_gr(void)
 {
     prj_eos eos;
@@ -517,6 +747,101 @@ static void check_gr_m1_residual_rest_energy_matches_non_gr(void)
     check_residual_zero("rest energy non-GR match", resid, 2.0e-10);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         assert_close("rest residual u_new", u_new[v], u_non_gr[v], 2.0e-12);
+    }
+    prj_rad3_opac_free(&rad);
+}
+
+static void check_gr_m1_implicit_solve_invalid_states(void)
+{
+    prj_eos eos;
+    prj_rad rad;
+    prj_z4c_hydro_geom geom;
+    prj_z4c_hydro_geom bad_geom;
+    double beta[3] = {0.0, 0.0, 0.0};
+    double gamma_diag[3] = {1.0, 1.0, 1.0};
+    double P_root[TEST_GR_M1_RESIDUAL_NP];
+    double P_bad[TEST_GR_M1_RESIDUAL_NP];
+    double u_old[PRJ_NVAR_CONS];
+    double u_bad[PRJ_NVAR_CONS];
+    double resid[PRJ_NVAR_CONS];
+    double dt = 0.05;
+    int n;
+    int field;
+    int group;
+
+    init_test_eos(&eos);
+    init_source_test_rad_full(&rad, 0.0, 0.0, 0.0, 0.0, 0.0);
+    rad.implicit_err_tol = 1.0e-8;
+    rad.maxiter = 10;
+    set_diag_geom(&geom, 1.0, beta, gamma_diag);
+    for (n = 0; n < TEST_GR_M1_RESIDUAL_NP; ++n) {
+        P_root[n] = 0.0;
+    }
+    P_root[0] = 1.0;
+    P_root[4] = 1.0;
+    P_root[5] = 0.2;
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+
+            P_root[6 + 4 * idx] = 0.5 + 0.01 * (double)idx;
+        }
+    }
+    make_gr_m1_exact_old_from_p(&rad, &eos, &geom, P_root, dt, u_old);
+    copy_gr_m1_p(P_bad, P_root);
+    if (!prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_old, dt, P_bad, resid, 0)) {
+        die("valid implicit solve rejected");
+    }
+
+    copy_gr_m1_p(P_bad, P_root);
+    P_bad[0] = 0.0;
+    if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_old, dt, P_bad, resid, 0)) {
+        die("implicit solve accepted nonpositive rho");
+    }
+    copy_gr_m1_p(P_bad, P_root);
+    P_bad[4] = 0.0;
+    if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_old, dt, P_bad, resid, 0)) {
+        die("implicit solve accepted nonpositive temperature");
+    }
+    copy_gr_m1_p(P_bad, P_root);
+    P_bad[1] = 1.01 * PRJ_CLIGHT;
+    if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_old, dt, P_bad, resid, 0)) {
+        die("implicit solve accepted superluminal velocity");
+    }
+    copy_gr_m1_p(P_bad, P_root);
+    P_bad[6] = -1.0;
+    if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_old, dt, P_bad, resid, 0)) {
+        die("implicit solve accepted negative ER");
+    }
+    copy_gr_m1_p(P_bad, P_root);
+    bad_geom = geom;
+    bad_geom.alpha = 0.1;
+    bad_geom.beta[0] = 1.0;
+    if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &bad_geom,
+            u_old, dt, P_bad, resid, 0)) {
+        die("implicit solve accepted invalid q0");
+    }
+    copy_gr_m1_p(P_bad, P_root);
+    for (n = 0; n < PRJ_NVAR_CONS; ++n) {
+        u_bad[n] = u_old[n];
+    }
+    u_bad[PRJ_CONS_YE] = 0.0;
+    if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_bad, dt, P_bad, resid, 0)) {
+        die("implicit solve accepted zero u_old YE");
+    }
+    for (n = 0; n < PRJ_NVAR_CONS; ++n) {
+        u_bad[n] = u_old[n];
+    }
+    u_bad[PRJ_CONS_YE] = -fabs(u_old[PRJ_CONS_YE]);
+    if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
+            u_bad, dt, P_bad, resid, 0)) {
+        die("implicit solve accepted negative u_old YE");
     }
     prj_rad3_opac_free(&rad);
 }
@@ -674,6 +999,9 @@ int main(int argc, char **argv)
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1 && PRJ_NRAD > 0
     check_gr_m1_residual_rest_energy_matches_non_gr();
     check_gr_m1_residual_jacobian_fd();
+    check_gr_m1_implicit_solve_real_tables();
+    check_gr_m1_implicit_solve_zero_momentum_floor();
+    check_gr_m1_implicit_solve_invalid_states();
     check_gr_m1_residual_invalid_states();
     check_gr_m1_matter_source_rest_momentum();
     printf("test_gr_m1_matter: ok\n");

@@ -4723,6 +4723,10 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
 
 #if PRJ_NRAD > 0
 #define PRJ_RAD_GR_M1_NP (6 + 4 * PRJ_NRAD * PRJ_NEGROUP)
+#define PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT 1.0e-6
+#define PRJ_RAD_GR_M1_SOLVE_MAXITER_DEFAULT 50
+#define PRJ_RAD_GR_M1_SOLVE_VMIN 1.0e5
+#define PRJ_RAD_GR_M1_LINESEARCH_MAX 16
 
 static void prj_rad_gr_m1_metric4_from_geom(const prj_z4c_hydro_geom *geom,
     double g_cov[4][4], double g_con[4][4])
@@ -5458,6 +5462,320 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
     return 1;
 }
 
+static int prj_rad_gr_m1_active_row(int eq)
+{
+    if (eq == 0) {
+        return PRJ_CONS_RHO;
+    }
+    if (eq >= 1 && eq <= 3) {
+        return PRJ_CONS_MOM1 + (eq - 1);
+    }
+    if (eq == 4) {
+        return PRJ_CONS_ETOT;
+    }
+    if (eq == 5) {
+        return PRJ_CONS_YE;
+    }
+    {
+        int idx = (eq - 6) / 4;
+        int comp = (eq - 6) % 4;
+        int field = idx / PRJ_NEGROUP;
+        int group = idx % PRJ_NEGROUP;
+
+        return PRJ_CONS_RAD_E(field, group) + comp;
+    }
+}
+
+static double prj_rad_gr_m1_residual_norm(const double *u_old,
+    const double *resid, double threshold)
+{
+    double max_norm = 0.0;
+    double rho_scale;
+    double etot_scale;
+    double mom2;
+    double mom_norm;
+    int field;
+    int group;
+    int d;
+
+    if (u_old == 0 || resid == 0 || !isfinite(threshold) ||
+        threshold <= 0.0 || !isfinite(u_old[PRJ_CONS_YE]) ||
+        u_old[PRJ_CONS_YE] <= 0.0) {
+        return HUGE_VAL;
+    }
+
+    rho_scale = fabs(u_old[PRJ_CONS_RHO]);
+    etot_scale = fabs(u_old[PRJ_CONS_ETOT]);
+    if (!isfinite(rho_scale) || rho_scale <= 0.0 ||
+        !isfinite(etot_scale) || etot_scale <= 0.0) {
+        return HUGE_VAL;
+    }
+    if (!isfinite(resid[PRJ_CONS_RHO]) ||
+        !isfinite(resid[PRJ_CONS_ETOT]) ||
+        !isfinite(resid[PRJ_CONS_YE])) {
+        return HUGE_VAL;
+    }
+
+    max_norm = fmax(max_norm, fabs(resid[PRJ_CONS_RHO]) / rho_scale);
+    max_norm = fmax(max_norm, fabs(resid[PRJ_CONS_ETOT]) / etot_scale);
+    max_norm = fmax(max_norm,
+        fabs(resid[PRJ_CONS_YE]) / u_old[PRJ_CONS_YE]);
+
+    mom2 = 0.0;
+    for (d = 0; d < 3; ++d) {
+        double mom = u_old[PRJ_CONS_MOM1 + d];
+
+        if (!isfinite(mom) || !isfinite(resid[PRJ_CONS_MOM1 + d])) {
+            return HUGE_VAL;
+        }
+        mom2 += mom * mom;
+    }
+    if (!isfinite(mom2)) {
+        return HUGE_VAL;
+    }
+    if (mom2 == 0.0) {
+        mom2 = rho_scale * rho_scale * PRJ_RAD_GR_M1_SOLVE_VMIN *
+            PRJ_RAD_GR_M1_SOLVE_VMIN;
+    }
+    mom_norm = sqrt(mom2);
+    if (!isfinite(mom_norm) || mom_norm <= 0.0) {
+        return HUGE_VAL;
+    }
+    {
+        double rmom2 = 0.0;
+
+        for (d = 0; d < 3; ++d) {
+            double r = resid[PRJ_CONS_MOM1 + d];
+
+            rmom2 += r * r;
+        }
+        max_norm = fmax(max_norm, sqrt(rmom2) / mom_norm);
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int eidx = PRJ_CONS_RAD_E(field, group);
+            int fidx = PRJ_CONS_RAD_F1(field, group);
+            double scale_e = fmax(threshold * etot_scale / RAD_SCALE,
+                fabs(u_old[eidx]));
+            double flux2 = 0.0;
+            double rflux2 = 0.0;
+            double scale_f;
+
+            if (!isfinite(u_old[eidx]) || !isfinite(resid[eidx]) ||
+                !isfinite(scale_e) || scale_e <= 0.0) {
+                return HUGE_VAL;
+            }
+            max_norm = fmax(max_norm, fabs(resid[eidx]) / scale_e);
+
+            for (d = 0; d < 3; ++d) {
+                double f = u_old[fidx + d];
+                double r = resid[fidx + d];
+
+                if (!isfinite(f) || !isfinite(r)) {
+                    return HUGE_VAL;
+                }
+                flux2 += f * f;
+                rflux2 += r * r;
+            }
+            if (!isfinite(flux2) || !isfinite(rflux2)) {
+                return HUGE_VAL;
+            }
+            scale_f = fmax(threshold * mom_norm * PRJ_CLIGHT * PRJ_CLIGHT /
+                    RAD_SCALE, sqrt(flux2));
+            if (!isfinite(scale_f) || scale_f <= 0.0) {
+                return HUGE_VAL;
+            }
+            max_norm = fmax(max_norm, sqrt(rflux2) / scale_f);
+        }
+    }
+
+    return max_norm;
+}
+
+static int prj_rad_gr_m1_solve_linear(int n,
+    double A[PRJ_RAD_GR_M1_NP][PRJ_RAD_GR_M1_NP],
+    double b[PRJ_RAD_GR_M1_NP], double x[PRJ_RAD_GR_M1_NP])
+{
+    int i;
+    int j;
+    int k;
+
+    if (n <= 0 || n > PRJ_RAD_GR_M1_NP || A == 0 || b == 0 || x == 0) {
+        return 0;
+    }
+
+    for (k = 0; k < n; ++k) {
+        int pivot = k;
+        double piv_abs = fabs(A[k][k]);
+
+        for (i = k + 1; i < n; ++i) {
+            double cand = fabs(A[i][k]);
+
+            if (cand > piv_abs) {
+                piv_abs = cand;
+                pivot = i;
+            }
+        }
+        if (!isfinite(piv_abs) || piv_abs <= 1.0e-300) {
+            return 0;
+        }
+        if (pivot != k) {
+            double tmp;
+
+            for (j = k; j < n; ++j) {
+                tmp = A[k][j];
+                A[k][j] = A[pivot][j];
+                A[pivot][j] = tmp;
+            }
+            tmp = b[k];
+            b[k] = b[pivot];
+            b[pivot] = tmp;
+        }
+        for (i = k + 1; i < n; ++i) {
+            double factor = A[i][k] / A[k][k];
+
+            if (!isfinite(factor)) {
+                return 0;
+            }
+            A[i][k] = 0.0;
+            for (j = k + 1; j < n; ++j) {
+                A[i][j] -= factor * A[k][j];
+            }
+            b[i] -= factor * b[k];
+        }
+    }
+
+    for (i = n - 1; i >= 0; --i) {
+        double sum = b[i];
+
+        for (j = i + 1; j < n; ++j) {
+            sum -= A[i][j] * x[j];
+        }
+        if (!isfinite(sum) || !isfinite(A[i][i]) ||
+            fabs(A[i][i]) <= 1.0e-300) {
+            return 0;
+        }
+        x[i] = sum / A[i][i];
+        if (!isfinite(x[i])) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *u_old, double dt, double *P,
+    double *resid_out, double *u_new_out)
+{
+    const int np = PRJ_RAD_GR_M1_NP;
+    double threshold = PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT;
+    int maxiter = PRJ_RAD_GR_M1_SOLVE_MAXITER_DEFAULT;
+    double resid[PRJ_NVAR_CONS];
+    double resid_trial[PRJ_NVAR_CONS];
+    double u_new[PRJ_NVAR_CONS];
+    double u_new_trial[PRJ_NVAR_CONS];
+    double jac[PRJ_NVAR_CONS * PRJ_RAD_GR_M1_NP];
+    double A[PRJ_RAD_GR_M1_NP][PRJ_RAD_GR_M1_NP];
+    double rhs[PRJ_RAD_GR_M1_NP];
+    double dP[PRJ_RAD_GR_M1_NP];
+    double P_trial[PRJ_RAD_GR_M1_NP];
+    int iter;
+    int eq;
+    int col;
+
+    if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
+        !isfinite(dt) || !isfinite(u_old[PRJ_CONS_YE]) ||
+        u_old[PRJ_CONS_YE] <= 0.0) {
+        return 0;
+    }
+    if (isfinite(rad->implicit_err_tol) && rad->implicit_err_tol > 0.0) {
+        threshold = rad->implicit_err_tol;
+    }
+    if (rad->maxiter > 0) {
+        maxiter = rad->maxiter;
+    }
+
+    for (iter = 0; iter < maxiter; ++iter) {
+        double norm;
+        int accepted = 0;
+        int ls;
+
+        if (!prj_rad_gr_m1_jacobian(rad, eos, geom, u_old, P, dt, resid,
+                jac, u_new)) {
+            return 0;
+        }
+        norm = prj_rad_gr_m1_residual_norm(u_old, resid, threshold);
+        if (isfinite(norm) && norm < threshold) {
+            if (resid_out != 0) {
+                memcpy(resid_out, resid, sizeof(resid));
+            }
+            if (u_new_out != 0) {
+                memcpy(u_new_out, u_new, sizeof(u_new));
+            }
+            return 1;
+        }
+        if (!isfinite(norm)) {
+            return 0;
+        }
+
+        for (eq = 0; eq < np; ++eq) {
+            int row = prj_rad_gr_m1_active_row(eq);
+
+            rhs[eq] = -resid[row];
+            for (col = 0; col < np; ++col) {
+                A[eq][col] = jac[row * np + col];
+            }
+        }
+        if (!prj_rad_gr_m1_solve_linear(np, A, rhs, dP)) {
+            return 0;
+        }
+
+        for (ls = 0; ls < PRJ_RAD_GR_M1_LINESEARCH_MAX; ++ls) {
+            double lambda = ldexp(1.0, -ls);
+            double trial_norm;
+
+            for (col = 0; col < np; ++col) {
+                P_trial[col] = P[col] + lambda * dP[col];
+            }
+            if (!prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_trial, dt,
+                    resid_trial, u_new_trial)) {
+                continue;
+            }
+            trial_norm = prj_rad_gr_m1_residual_norm(u_old, resid_trial,
+                threshold);
+            if (isfinite(trial_norm) && trial_norm < norm) {
+                memcpy(P, P_trial, (size_t)np * sizeof(double));
+                memcpy(resid, resid_trial, sizeof(resid));
+                memcpy(u_new, u_new_trial, sizeof(u_new));
+                norm = trial_norm;
+                accepted = 1;
+                break;
+            }
+        }
+        if (!accepted) {
+            return 0;
+        }
+        if (norm < threshold) {
+            if (resid_out != 0) {
+                memcpy(resid_out, resid, sizeof(resid));
+            }
+            if (u_new_out != 0) {
+                memcpy(u_new_out, u_new, sizeof(u_new));
+            }
+            return 1;
+        }
+    }
+
+    if (resid_out != 0 &&
+        prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt, resid_out,
+            u_new_out)) {
+        return 0;
+    }
+    return 0;
+}
+
 int prj_rad_gr_m1_residual_test_wrapper(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
     double dt, double *resid, double *u_new_out)
@@ -5472,6 +5790,14 @@ int prj_rad_gr_m1_jacobian_test_wrapper(const prj_rad *rad, prj_eos *eos,
 {
     return prj_rad_gr_m1_jacobian(rad, eos, geom, u_old, P, dt, resid, jac,
         u_new_out);
+}
+
+int prj_rad_gr_m1_implicit_solve_test_wrapper(const prj_rad *rad,
+    prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
+    double dt, double *P, double *resid_out, double *u_new_out)
+{
+    return prj_rad_gr_m1_implicit_solve(rad, eos, geom, u_old, dt, P,
+        resid_out, u_new_out);
 }
 #endif
 
