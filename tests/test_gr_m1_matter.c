@@ -13,6 +13,11 @@
 #define M_PI 3.14159265358979323846
 #endif
 
+#define TEST_RAD_TABLE_PARAM_FILE "../opacbin.extendT.param"
+#define TEST_RAD_TABLE_FILE       "../opacity.SFHo.juo.horo.brem1.extendedT.bin"
+#define TEST_EOS_FILE \
+    "../eos_tmp/SFHoEOS__ye__0.035_0.56_50__logT_-4.793_2.176_500__logrho_-8.699_15.5_500_extend.dat"
+
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1 && PRJ_NRAD > 0
 int prj_rad_gr_m1_residual_test_wrapper(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
@@ -64,6 +69,41 @@ static void init_test_rad(prj_rad *rad)
         double f = (double)n / (double)NCLOSURE;
 
         rad->chi[n] = test_m1_chi_exact(f);
+    }
+}
+
+static void init_real_test_rad(prj_rad *rad)
+{
+    const double emin_list[3] = {1.0, 1.0, 1.0};
+    const double emax_list[3] = {300.0, 100.0, 100.0};
+    int nu;
+
+    if (PRJ_NRAD > 3) {
+        die("real-table Jacobian test expects PRJ_NRAD <= 3");
+    }
+
+    memset(rad, 0, sizeof(*rad));
+    rad->maxiter = 50;
+    rad->implicit_err_tol = 1.0e-10;
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        rad->emin[nu] = emin_list[nu];
+        rad->emax[nu] = emax_list[nu];
+    }
+    strncpy(rad->table_param_file, TEST_RAD_TABLE_PARAM_FILE,
+        sizeof(rad->table_param_file) - 1);
+    strncpy(rad->table_file, TEST_RAD_TABLE_FILE,
+        sizeof(rad->table_file) - 1);
+    prj_rad_init(rad);
+}
+
+static void init_real_test_eos(prj_eos *eos)
+{
+    memset(eos, 0, sizeof(*eos));
+    eos->kind = PRJ_EOS_KIND_TABLE;
+    strncpy(eos->filename, TEST_EOS_FILE, sizeof(eos->filename) - 1);
+    prj_eos_init(eos, 0);
+    if (eos->table_loaded != 1) {
+        die("EOS table failed to load");
     }
 }
 
@@ -153,55 +193,6 @@ static void init_source_test_rad_full(prj_rad *rad, double kappa_value,
 static void init_source_test_rad(prj_rad *rad, double sigma_value)
 {
     init_source_test_rad_full(rad, 1.0e-300, sigma_value, 0.0, 0.0, 0.0);
-}
-
-static size_t test_opac_cell_idx(int ir, int it, int iy, int group)
-{
-    return (((((size_t)ir * 2u + (size_t)it) * 2u + (size_t)iy) *
-        (size_t)PRJ_NEGROUP) + (size_t)group);
-}
-
-static void make_source_test_rad_sloped(prj_rad *rad)
-{
-    const double eta_factor = 4.0 * M_PI / RAD_SCALE;
-    int nu;
-    int g;
-    int ir;
-    int it;
-    int iy;
-
-    init_source_test_rad_full(rad, 2.0e-37, 1.4e-37, 0.18, 3.0e-27,
-        0.08 * RAD_SCALE);
-    for (nu = 0; nu < PRJ_NRAD; ++nu) {
-        for (g = 0; g < PRJ_NEGROUP; ++g) {
-            double group_shift = 0.01 * (double)g + 0.02 * (double)nu;
-
-            for (ir = 0; ir < 2; ++ir) {
-                for (it = 0; it < 2; ++it) {
-                    for (iy = 0; iy < 2; ++iy) {
-                        size_t idx = test_opac_cell_idx(ir, it, iy, g);
-                        double r = (double)ir;
-                        double t = (double)it;
-                        double y = (double)iy;
-
-                        rad->absopac[nu][idx] = (prj_table_real)
-                            (log(2.0e-37) + group_shift +
-                             0.07 * r - 0.04 * t + 0.03 * y);
-                        rad->scaopac[nu][idx] = (prj_table_real)
-                            (log(1.4e-37) - 0.5 * group_shift -
-                             0.03 * r + 0.05 * t - 0.02 * y);
-                        rad->emis[nu][idx] = (prj_table_real)
-                            (log(3.0e-27 / eta_factor) +
-                             0.3 * group_shift + 0.02 * r +
-                             0.06 * t - 0.04 * y);
-                        rad->sdelta[nu][idx] = (prj_table_real)
-                            (0.18 + 0.01 * group_shift + 0.02 * r -
-                             0.015 * t + 0.01 * y);
-                    }
-                }
-            }
-        }
-    }
 }
 
 static void init_test_eos(prj_eos *eos)
@@ -358,23 +349,25 @@ static void set_gr_m1_jacobian_test_p(
     int field;
     int group;
 
-    P[0] = 1.17;
-    P[1] = 2.0e8;
-    P[2] = -1.1e8;
-    P[3] = 0.7e8;
-    P[4] = 1.21;
-    P[5] = 0.37;
+    P[0] = 1.0e8;
+    P[1] = 1.31e9;
+    P[2] = -8.4e8;
+    P[3] = 5.7e8;
+    P[4] = 1.0;
+    P[5] = 0.5;
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
             int pidx = 6 + 4 * idx;
-            double ER = 0.035 + 0.002 * (double)(idx + 1);
+            double phase = (double)(idx + 1);
+            double ER = 1.0 + 0.22 * sin(1.37 * phase) +
+                0.11 * cos(0.73 * phase);
             double qmag = sqrt(ER);
 
             P[pidx] = ER;
-            P[pidx + 1] = 0.018 * qmag;
-            P[pidx + 2] = -0.011 * qmag;
-            P[pidx + 3] = 0.007 * qmag;
+            P[pidx + 1] = 0.030 * sin(2.11 * phase) * qmag;
+            P[pidx + 2] = 0.024 * cos(1.67 * phase) * qmag;
+            P[pidx + 3] = 0.021 * sin(0.91 * phase + 0.4) * qmag;
         }
     }
 }
@@ -394,22 +387,43 @@ static void check_gr_m1_residual_jacobian_fd(void)
     double resm[PRJ_NVAR_CONS];
     double jac[PRJ_NVAR_CONS * TEST_GR_M1_RESIDUAL_NP];
     double u_new[PRJ_NVAR_CONS];
+    double eos_q[PRJ_EOS_NQUANT];
     prj_z4c_hydro_geom geom;
     double beta[3] = {0.015, -0.01, 0.006};
     double gamma_diag[3] = {1.08, 0.94, 1.13};
-    double vzero[3] = {0.0, 0.0, 0.0};
-    double Fcov[3] = {0.0, 0.0, 0.0};
+    double vinit[3] = {1.31e9, -8.4e8, 5.7e8};
+    double Fcov[3] = {0.07 * PRJ_CLIGHT, -0.03 * PRJ_CLIGHT,
+        0.04 * PRJ_CLIGHT};
     double dt = 0.13;
     int col;
     int row;
     int v;
+    int field;
+    int group;
 
-    init_test_eos(&eos);
-    make_source_test_rad_sloped(&rad);
+    init_real_test_eos(&eos);
+    init_real_test_rad(&rad);
     set_diag_geom(&geom, 0.94, beta, gamma_diag);
-    set_flat_prim(W, 1.0, vzero, 1.5, 0.2, 0.02, Fcov);
-    prim2cons_or_die(&eos, &geom, W, u_old);
     set_gr_m1_jacobian_test_p(P);
+    prj_eos_rty(&eos, P[0], P[4], P[5], eos_q, PRJ_EOS_CTX_MAIN);
+    set_flat_prim(W, P[0], vinit, eos_q[PRJ_EOS_EINT], P[5], 1.0, Fcov);
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            double phase = (double)(idx + 1);
+            double E = 0.9 + 0.18 * sin(0.61 * phase) +
+                0.08 * cos(1.13 * phase);
+
+            W[PRJ_PRIM_RAD_E(field, group)] = E;
+            W[PRJ_PRIM_RAD_F1(field, group)] =
+                0.045 * sin(1.19 * phase) * PRJ_CLIGHT * E;
+            W[PRJ_PRIM_RAD_F2(field, group)] =
+                0.035 * cos(0.97 * phase) * PRJ_CLIGHT * E;
+            W[PRJ_PRIM_RAD_F3(field, group)] =
+                0.030 * sin(0.53 * phase + 0.2) * PRJ_CLIGHT * E;
+        }
+    }
+    prim2cons_or_die(&eos, &geom, W, u_old);
     if (!prj_rad_gr_m1_residual_test_wrapper(&rad, &eos, &geom, u_old, P,
             dt, resid, u_ref)) {
         die("jacobian reference residual failed");
@@ -429,8 +443,11 @@ static void check_gr_m1_residual_jacobian_fd(void)
             Pp[v] = P[v];
             Pm[v] = P[v];
         }
-        if (col >= 6 && ((col - 6) % 4) == 0) {
-            h = fmin(h, 0.25 * P[col]);
+        if (col >= 6) {
+            h = 1.0e-5 * fmax(1.0, fabs(P[col]));
+            if (((col - 6) % 4) == 0) {
+                h = fmin(h, 0.25 * P[col]);
+            }
         }
         Pp[col] += h;
         Pm[col] -= h;
