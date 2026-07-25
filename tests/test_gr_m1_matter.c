@@ -51,6 +51,17 @@ static void assert_close(const char *name, double got, double expected,
     }
 }
 
+static void assert_abs_close(const char *name, double got, double expected,
+    double tol)
+{
+    if (!isfinite(got) || !isfinite(expected) || fabs(got - expected) > tol) {
+        fprintf(stderr,
+            "test_gr_m1_matter: %s got %.17e expected %.17e tol %.3e\n",
+            name, got, expected, tol);
+        exit(1);
+    }
+}
+
 static double test_m1_chi_exact(double f)
 {
     if (f <= 0.0) {
@@ -779,10 +790,14 @@ static void check_gr_m1_matter_update_overwrites_solution(void)
     double u_update[PRJ_NVAR_CONS];
     double resid[PRJ_NVAR_CONS];
     double u_expected[PRJ_NVAR_CONS];
+    double prim_update[PRJ_NVAR_PRIM];
+    double eos_q[PRJ_EOS_NQUANT];
     double final_temperature = -1.0;
     double dt = 1.0e-6;
     int ic = PRJ_BLOCK_SIZE / 2;
     int v;
+    int field;
+    int group;
 
     init_matter_test_mesh(&mesh, &coord);
     set_uniform_z4c(&mesh.blocks[0], 0.94, beta, gamma_diag);
@@ -805,12 +820,48 @@ static void check_gr_m1_matter_update_overwrites_solution(void)
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u_update[v] = u_old[v];
     }
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        prim_update[v] = -1.0;
+    }
+    prj_eos_rty(&eos, P_root[0], P_root[4], P_root[5], eos_q,
+        PRJ_EOS_CTX_MAIN);
 
     prj_rad_gr_m1_matter_update(&rad, &eos, &mesh, &mesh.blocks[0], 0,
-        u_update, ic, ic, ic, dt, &final_temperature);
+        u_update, prim_update, ic, ic, ic, dt, &final_temperature);
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         assert_close("matter update overwritten conserved", u_update[v],
             u_expected[v], 1.0e-6);
+    }
+    assert_close("matter update primitive rho", prim_update[PRJ_PRIM_RHO],
+        P_root[0], 1.0e-10);
+    assert_close("matter update primitive v1", prim_update[PRJ_PRIM_V1],
+        P_root[1], 1.0e-10);
+    assert_close("matter update primitive v2", prim_update[PRJ_PRIM_V2],
+        P_root[2], 1.0e-10);
+    assert_close("matter update primitive v3", prim_update[PRJ_PRIM_V3],
+        P_root[3], 1.0e-10);
+    assert_close("matter update primitive eint", prim_update[PRJ_PRIM_EINT],
+        eos_q[PRJ_EOS_EINT], 1.0e-10);
+    assert_close("matter update primitive Ye", prim_update[PRJ_PRIM_YE],
+        P_root[5], 1.0e-10);
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int eidx = PRJ_CONS_RAD_E(field, group);
+            int fidx = PRJ_CONS_RAD_F1(field, group);
+
+            assert_close("matter update primitive radiation E",
+                prim_update[PRJ_PRIM_RAD_E(field, group)],
+                u_expected[eidx] / geom.sqrt_gamma, 1.0e-10);
+            assert_close("matter update primitive radiation F1",
+                prim_update[PRJ_PRIM_RAD_F1(field, group)],
+                u_expected[fidx] / geom.sqrt_gamma, 1.0e-10);
+            assert_close("matter update primitive radiation F2",
+                prim_update[PRJ_PRIM_RAD_F2(field, group)],
+                u_expected[fidx + 1] / geom.sqrt_gamma, 1.0e-10);
+            assert_close("matter update primitive radiation F3",
+                prim_update[PRJ_PRIM_RAD_F3(field, group)],
+                u_expected[fidx + 2] / geom.sqrt_gamma, 1.0e-10);
+        }
     }
     assert_close("matter update final temperature", final_temperature,
         P_root[4], 1.0e-6);
@@ -831,11 +882,16 @@ static void check_gr_m1_matter_update_clamps_flux(void)
     double W[PRJ_NVAR_PRIM];
     double u[PRJ_NVAR_CONS];
     double u_initial[PRJ_NVAR_CONS];
+    double prim_update[PRJ_NVAR_PRIM];
     double eos_q[PRJ_EOS_NQUANT];
     double final_temperature = -1.0;
     double E = 1.2;
+    double E_floor = 1.0e-50;
+    double F_clamped = (1.0 - 1.0e-6) * PRJ_CLIGHT * E;
     int ic = PRJ_BLOCK_SIZE / 2;
     int v;
+    int field;
+    int group;
 
     init_matter_test_mesh(&mesh, &coord);
     set_uniform_z4c(&mesh.blocks[0], 1.0, beta, gamma_diag);
@@ -857,13 +913,16 @@ static void check_gr_m1_matter_update_clamps_flux(void)
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u_initial[v] = u[v];
     }
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        prim_update[v] = -1.0;
+    }
 
     prj_rad_gr_m1_matter_update(&rad, &eos, &mesh, &mesh.blocks[0], 0,
-        u, ic, ic, ic, 0.0, &final_temperature);
+        u, prim_update, ic, ic, ic, 0.0, &final_temperature);
     assert_close("matter clamp radiation E", u[PRJ_CONS_RAD_E(0, 0)],
         u_initial[PRJ_CONS_RAD_E(0, 0)], 1.0e-12);
     assert_close("matter clamp radiation F1", u[PRJ_CONS_RAD_F1(0, 0)],
-        PRJ_CLIGHT * E, 1.0e-12);
+        F_clamped, 1.0e-11);
     assert_close("matter clamp radiation F2", u[PRJ_CONS_RAD_F2(0, 0)],
         0.0, 1.0e-12);
     assert_close("matter clamp radiation F3", u[PRJ_CONS_RAD_F3(0, 0)],
@@ -871,6 +930,30 @@ static void check_gr_m1_matter_update_clamps_flux(void)
     for (v = 0; v < PRJ_NVAR_MHD_CONS; ++v) {
         assert_close("matter clamp hydro unchanged", u[v], u_initial[v],
             1.0e-12);
+    }
+    assert_close("matter clamp primitive rho", prim_update[PRJ_PRIM_RHO],
+        W[PRJ_PRIM_RHO], 1.0e-12);
+    assert_close("matter clamp primitive eint", prim_update[PRJ_PRIM_EINT],
+        W[PRJ_PRIM_EINT], 1.0e-12);
+    assert_close("matter clamp primitive Ye", prim_update[PRJ_PRIM_YE],
+        W[PRJ_PRIM_YE], 1.0e-12);
+    assert_close("matter clamp primitive radiation E",
+        prim_update[PRJ_PRIM_RAD_E(0, 0)], E, 1.0e-12);
+    assert_close("matter clamp primitive radiation F1",
+        prim_update[PRJ_PRIM_RAD_F1(0, 0)], F_clamped, 1.0e-11);
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            if (field == 0 && group == 0) {
+                continue;
+            }
+            assert_abs_close("matter clamp floored radiation E",
+                u[PRJ_CONS_RAD_E(field, group)], E_floor, 1.0e-60);
+            assert_abs_close("matter clamp floored primitive radiation E",
+                prim_update[PRJ_PRIM_RAD_E(field, group)], E_floor,
+                1.0e-60);
+            assert_abs_close("matter clamp floored primitive radiation F1",
+                prim_update[PRJ_PRIM_RAD_F1(field, group)], 0.0, 1.0e-60);
+        }
     }
     assert_close("matter clamp final temperature", final_temperature,
         eos_q[PRJ_EOS_TEMPERATURE], 1.0e-12);

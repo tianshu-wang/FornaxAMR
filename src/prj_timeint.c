@@ -958,7 +958,8 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block,
-                prj_stage_slot_from_bf_arg(use_bf1), u, i, j, k, dt, &T_cell);
+                prj_stage_slot_from_bf_arg(use_bf1), u, 0, i, j, k, dt,
+                &T_cell);
         } else {
 #endif
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
@@ -1031,7 +1032,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #else
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-            prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 0, u1,
+            prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 0, u1, 0,
                 i, j, k, dt, &T_cell);
         } else {
 #endif
@@ -1147,7 +1148,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
              * this; omitting it here left the coupled GRMHD+M1 RK2 step applying
              * the matter back-reaction only once per step. */
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
-                i, j, k, 0.5 * dt, &T_cell);
+                0, i, j, k, 0.5 * dt, &T_cell);
 #endif
         }
         if (prj_z4c_runtime_enabled(mesh)) {
@@ -1242,7 +1243,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
-                i, j, k, 0.5 * dt, &T_cell);
+                0, i, j, k, 0.5 * dt, &T_cell);
         } else {
 #endif
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
@@ -1312,7 +1313,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block, 1, u,
-                i, j, k, 0.5 * dt, &T_cell);
+                0, i, j, k, 0.5 * dt, &T_cell);
         } else {
 #endif
         prj_rad_eleinel_step(rad, eos, u, 0.5 * dt, T_cell);
@@ -1687,7 +1688,7 @@ static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
 #else
 #if PRJ_DYNAMIC_GR
     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-        prj_rad_gr_m1_matter_update(rad, eos, mesh, block, stage, u1,
+        prj_rad_gr_m1_matter_update(rad, eos, mesh, block, stage, u1, 0,
             i, j, k, dt, &T_cell);
     } else {
 #endif
@@ -2785,7 +2786,7 @@ void prj_timeint_step_im(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                             double T_cell = 0.0;
 
                             prj_rad_gr_m1_matter_update(rad, eos, mesh, block, stage,
-                                u1, i, j, k, dt_implicit, &T_cell);
+                                u1, 0, i, j, k, dt_implicit, &T_cell);
                         } else {
 #endif
                         double T_cell = 0.0;
