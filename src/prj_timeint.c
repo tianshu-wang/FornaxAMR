@@ -890,6 +890,8 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         bf_dst[d] = prj_block_bf_stage(block, d, use_bf1 != 0 ? 1 : 0);
     }
 
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("essprk_src_temp_cons_dt");
     prj_timeint_cell_cons_from_prim_mhd_rad(eos, mesh, block, 0,
         block->W_mhd, block->W_rad, i, j, k, u);
     for (v = 0; v < PRJ_NVAR_MHD_CONS; ++v) {
@@ -897,6 +899,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     }
     prj_timeint_update_dt_src_values(mesh, grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
         u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
+    PRJ_TIMER_CURRENT_STOP("essprk_src_temp_cons_dt");
 
 #define PRJ_STAGE1_UPDATE(v) do { \
         int vv = (v); \
@@ -904,6 +907,8 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
             prj_timeint_flux_div_var(block, vv, i, j, k)); \
     } while (0)
 
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("essprk_src_temp_flux_rhs");
     PRJ_STAGE1_UPDATE(PRJ_CONS_RHO);
     PRJ_STAGE1_UPDATE(PRJ_CONS_MOM1);
     PRJ_STAGE1_UPDATE(PRJ_CONS_MOM2);
@@ -927,12 +932,16 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
         }
     }
+    PRJ_TIMER_CURRENT_STOP("essprk_src_temp_flux_rhs");
 
 #undef PRJ_STAGE1_UPDATE
 
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("essprk_src_temp_mhd_obs");
     prj_timeint_mhd_set_cons_b_from_bf(block, bf_dst, i, j, k, u);
     prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 0,
         i, j, k, u_before, u, dt, observer_time_derivative);
+    PRJ_TIMER_CURRENT_STOP("essprk_src_temp_mhd_obs");
     {
         double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
         double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
@@ -945,9 +954,15 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
            no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
         prj_rad_fsa_clamp_intensities(u);
 #endif
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("essprk_src_temp_rad_freq");
         prj_timeint_rad_freq_flux_apply(mesh, block, 0, rad, block->W_rad,
             u, i, j, k, lapse_cell, dt, observer_time_derivative);
+        PRJ_TIMER_CURRENT_STOP("essprk_src_temp_rad_freq");
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("essprk_src_temp_rad_ang");
         prj_rad_ang_flux_apply(rad, block, block->W_rad, u, i, j, k, lapse_cell, dt);
+        PRJ_TIMER_CURRENT_STOP("essprk_src_temp_rad_ang");
 #if PRJ_USE_RADIATION_FSA
         prj_rad_inel_fsa(rad, block, i, j, k, eos, u, dt, T_cell);
         prj_rad_energy_momentum_update_fsa(rad, block, i, j, k, eos, u, dt, lapse_cell);
@@ -957,26 +972,38 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #else
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+            /* TEMP TIMER: remove after rad-matter coupling profiling. */
+            PRJ_TIMER_CURRENT_START("essprk_src_temp_rad_matter");
             prj_rad_gr_m1_matter_update(rad, eos, mesh, block,
                 prj_stage_slot_from_bf_arg(use_bf1), u, 0, i, j, k, dt,
                 &T_cell);
+            PRJ_TIMER_CURRENT_STOP("essprk_src_temp_rad_matter");
         } else {
 #endif
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("essprk_src_temp_rad_matter");
         prj_rad_eleinel_step(rad, eos, u, dt, T_cell);
         prj_rad_nucinel_step(rad, eos, u, dt, T_cell);
         prj_rad_energy_update(rad, eos, u, dt, lapse_cell, &T_cell, kappa);
         prj_rad_momentum_update(rad, eos, u, dt, lapse_cell, T_cell, kappa);
+        PRJ_TIMER_CURRENT_STOP("essprk_src_temp_rad_matter");
 #if PRJ_DYNAMIC_GR
         }
 #endif
 #endif
     }
     if (prj_z4c_runtime_enabled(mesh)) {
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("essprk_src_temp_z4c_cell");
         prj_z4c_update_linear_cell(block, prj_stage_slot_from_bf_arg(use_bf1),
             0, 1.0, 0, 0.0, 0, dtau_cm, i, j, k);
+        PRJ_TIMER_CURRENT_STOP("essprk_src_temp_z4c_cell");
     }
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("essprk_src_temp_store_cell");
     prj_timeint_store_mhd_rad_cell(eos, mesh, block,
         prj_stage_slot_from_bf_arg(use_bf1), Wdst, Wdst_rad, i, j, k, u);
+    PRJ_TIMER_CURRENT_STOP("essprk_src_temp_store_cell");
 #else
     double w[PRJ_NVAR_PRIM];
     double u[PRJ_NVAR_CONS];

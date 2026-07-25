@@ -3,6 +3,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(PRJ_ENABLE_MPI)
+#include <mpi.h>
+#endif
+
 #include "prj.h"
 
 static double prj_rad_m1_chi_exact(double f)
@@ -5192,6 +5196,7 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     int b;
     int d;
     int v;
+    int ok;
 
     if (resid != 0) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -5231,11 +5236,18 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     if (!prj_rad_gr_m1_fluid_four_velocity(geom, g_cov, P, ucon, ucov)) {
         return 0;
     }
-    if (!prj_rad_gr_m1_p_to_prim(eos, geom, g_cov, g_con, u_old, P, W)) {
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_resid_p_to_prim");
+    ok = prj_rad_gr_m1_p_to_prim(eos, geom, g_cov, g_con, u_old, P, W);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resid_p_to_prim");
+    if (!ok) {
         return 0;
     }
 
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_resid_opac");
     prj_rad3_opac_lookup(rad, P[0], P[4], P[5], kappa, sigma, delta, eta);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resid_opac");
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -5307,8 +5319,12 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
         }
     }
 
-    if (prj_eos_gr_prim2cons(eos, &eos_geom, W, u_new,
-            PRJ_EOS_CTX_MAIN) != PRJ_EOS_GR_OK) {
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_resid_prim2cons");
+    ok = prj_eos_gr_prim2cons(eos, &eos_geom, W, u_new,
+        PRJ_EOS_CTX_MAIN) == PRJ_EOS_GR_OK;
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resid_prim2cons");
+    if (!ok) {
         return 0;
     }
 
@@ -5423,6 +5439,7 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     int local_col;
     int n;
     int v;
+    int ok;
 
     if (resid != 0) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -5465,19 +5482,26 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     n_cov[1] = 0.0;
     n_cov[2] = 0.0;
     n_cov[3] = 0.0;
-    if (!prj_rad_gr_m1_fluid_four_velocity(geom, g_cov, P, ucon, ucov) ||
-        !prj_eos_rty_derivs(eos, P[0], P[4], P[5], &eint, &pressure,
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_resjac_eos_derivs");
+    ok = prj_rad_gr_m1_fluid_four_velocity(geom, g_cov, P, ucon, ucov) &&
+        prj_eos_rty_derivs(eos, P[0], P[4], P[5], &eint, &pressure,
             &deint_drho, &deint_dT, &deint_dYe, &dpressure_drho,
-            &dpressure_dT, &dpressure_dYe, PRJ_EOS_CTX_MAIN)) {
+            &dpressure_dT, &dpressure_dYe, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resjac_eos_derivs");
+    if (!ok) {
         return 0;
     }
     if (!isfinite(eint) || eint < 0.0 || !isfinite(pressure)) {
         return 0;
     }
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_resjac_opac_derivs");
     prj_rad3_opac_lookup_derivs(rad, P[0], P[4], P[5], kappa, sigma, delta,
         eta, dkappa_drho, dkappa_dT, dkappa_dYe, dsigma_drho, dsigma_dT,
         dsigma_dYe, ddelta_drho, ddelta_dT, ddelta_dYe, deta_drho, deta_dT,
         deta_dYe);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resjac_opac_derivs");
 
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
         W[v] = 0.0;
@@ -5852,8 +5876,12 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
         }
     }
 
-    if (prj_eos_gr_prim2cons(eos, &eos_geom, W, u_new,
-            PRJ_EOS_CTX_MAIN) != PRJ_EOS_GR_OK) {
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_resjac_prim2cons");
+    ok = prj_eos_gr_prim2cons(eos, &eos_geom, W, u_new,
+        PRJ_EOS_CTX_MAIN) == PRJ_EOS_GR_OK;
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resjac_prim2cons");
+    if (!ok) {
         return 0;
     }
 
@@ -5890,7 +5918,10 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
         }
     }
     if (jac != 0) {
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_resjac_dense");
         prj_rad_gr_m1_jac_blocks_to_dense(blocks, jac);
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resjac_dense");
     }
     return 1;
 }
@@ -6401,6 +6432,7 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
     double P_trial[PRJ_RAD_GR_M1_NP];
     int iter;
     int col;
+    int ok;
 
     if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
         !isfinite(dt) || !isfinite(u_old[PRJ_CONS_YE]) ||
@@ -6419,11 +6451,18 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
         int accepted = 0;
         int ls;
 
-        if (!prj_rad_gr_m1_residual_jacobian(rad, eos, geom, u_old, P, dt,
-                resid, &jac_blocks, 0, u_new)) {
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_resjac");
+        ok = prj_rad_gr_m1_residual_jacobian(rad, eos, geom, u_old, P, dt,
+            resid, &jac_blocks, 0, u_new);
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_resjac");
+        if (!ok) {
             return 0;
         }
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_norm");
         norm = prj_rad_gr_m1_residual_norm(u_old, resid, threshold);
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_norm");
         if (isfinite(norm) && norm < threshold) {
             if (resid_out != 0) {
                 memcpy(resid_out, resid, sizeof(resid));
@@ -6437,12 +6476,20 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
             return 0;
         }
 
-        if (!prj_rad_gr_m1_solve_blocks(&jac_blocks, resid, dP) &&
-            !prj_rad_gr_m1_solve_blocks_active_dense(&jac_blocks, resid,
-                dP)) {
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_linear");
+        ok = prj_rad_gr_m1_solve_blocks(&jac_blocks, resid, dP);
+        if (!ok) {
+            ok = prj_rad_gr_m1_solve_blocks_active_dense(&jac_blocks, resid,
+                dP);
+        }
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_linear");
+        if (!ok) {
             return 0;
         }
 
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_linesearch");
         for (ls = 0; ls < PRJ_RAD_GR_M1_LINESEARCH_MAX; ++ls) {
             double lambda = ldexp(1.0, -ls);
             double trial_norm;
@@ -6450,12 +6497,19 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
             for (col = 0; col < np; ++col) {
                 P_trial[col] = P[col] + lambda * dP[col];
             }
-            if (!prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_trial, dt,
-                    resid_trial, u_new_trial)) {
+            /* TEMP TIMER: remove after rad-matter coupling profiling. */
+            PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_trial_resid");
+            ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_trial, dt,
+                resid_trial, u_new_trial);
+            PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_trial_resid");
+            if (!ok) {
                 continue;
             }
+            /* TEMP TIMER: remove after rad-matter coupling profiling. */
+            PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_trial_norm");
             trial_norm = prj_rad_gr_m1_residual_norm(u_old, resid_trial,
                 threshold);
+            PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_trial_norm");
             if (isfinite(trial_norm) && trial_norm < norm) {
                 memcpy(P, P_trial, (size_t)np * sizeof(double));
                 memcpy(resid, resid_trial, sizeof(resid));
@@ -6465,7 +6519,14 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
                 break;
             }
         }
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_linesearch");
         if (!accepted) {
+            if (resid_out != 0) {
+                memcpy(resid_out, resid, sizeof(resid));
+            }
+            if (u_new_out != 0) {
+                memcpy(u_new_out, u_new, sizeof(u_new));
+            }
             return 0;
         }
         if (norm < threshold) {
@@ -6479,9 +6540,16 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
         }
     }
 
-    if (resid_out != 0 &&
-        prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt, resid_out,
-            u_new_out)) {
+    if (resid_out != 0) {
+        /* TEMP TIMER: remove after rad-matter coupling profiling. */
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_final_resid");
+        ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt, resid_out,
+            u_new_out);
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_final_resid");
+    } else {
+        ok = 0;
+    }
+    if (resid_out != 0 && ok) {
         return 0;
     }
     return 0;
@@ -6714,6 +6782,63 @@ int prj_rad_gr_m1_implicit_solve_test_wrapper(const prj_rad *rad,
     return prj_rad_gr_m1_implicit_solve(rad, eos, geom, u_old, dt, P,
         resid_out, u_new_out);
 }
+
+static void prj_rad_gr_m1_matter_abort(const char *reason,
+    const prj_rad *rad, const prj_block *block, int z4c_stage,
+    int i, int j, int k, double dt, const double *u_old,
+    const double *P, const double *resid)
+{
+    double threshold = PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT;
+    double norm = HUGE_VAL;
+
+    if (rad != 0 && isfinite(rad->implicit_err_tol) &&
+        rad->implicit_err_tol > 0.0) {
+        threshold = rad->implicit_err_tol;
+    }
+    if (u_old != 0 && resid != 0) {
+        norm = prj_rad_gr_m1_residual_norm(u_old, resid, threshold);
+    }
+
+    fprintf(stderr,
+        "prj_rad_gr_m1_matter_update: %s at block id=%d level=%d "
+        "z4c_stage=%d cell=(%d,%d,%d) dt=%.17e residual_norm=%.17e "
+        "threshold=%.17e\n",
+        reason,
+        block != 0 ? block->id : -1,
+        block != 0 ? block->level : -1,
+        z4c_stage, i, j, k, dt, norm, threshold);
+    if (P != 0) {
+        fprintf(stderr,
+            "  Newton state: rho=%.17e v=(%.17e, %.17e, %.17e) "
+            "T=%.17e Ye=%.17e\n",
+            P[0], P[1], P[2], P[3], P[4], P[5]);
+    }
+    if (resid != 0) {
+        fprintf(stderr,
+            "  residual fluid rows: rho=%.17e mom=(%.17e, %.17e, %.17e) "
+            "etot=%.17e Ye=%.17e\n",
+            resid[PRJ_CONS_RHO], resid[PRJ_CONS_MOM1],
+            resid[PRJ_CONS_MOM2], resid[PRJ_CONS_MOM3],
+            resid[PRJ_CONS_ETOT], resid[PRJ_CONS_YE]);
+    }
+    fflush(stderr);
+#if defined(PRJ_ENABLE_MPI)
+    {
+        int mpi_ready = 0;
+
+        MPI_Initialized(&mpi_ready);
+        if (mpi_ready) {
+            int finalized = 0;
+
+            MPI_Finalized(&finalized);
+            if (!finalized) {
+                MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            }
+        }
+    }
+#endif
+    exit(EXIT_FAILURE);
+}
 #endif
 
 void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
@@ -6738,13 +6863,22 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     int a;
     int b;
     int v;
+    int ok;
 
-    if (rad == 0 || eos == 0 || mesh == 0 || block == 0 || u == 0 ||
-        !isfinite(dt) ||
-        !prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_geom");
+    ok = rad != 0 && eos != 0 && mesh != 0 && block != 0 && u != 0 &&
+        isfinite(dt) &&
+        prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_geom");
+    if (!ok) {
         return;
     }
-    if (!prj_rad_gr_m1_clamp_fluxes_for_solve(&geom, u)) {
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_clamp");
+    ok = prj_rad_gr_m1_clamp_fluxes_for_solve(&geom, u);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_clamp");
+    if (!ok) {
         return;
     }
     for (a = 0; a < 3; ++a) {
@@ -6755,8 +6889,12 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u_old[v] = u[v];
     }
-    if (prj_eos_gr_cons2prim(eos, &eos_geom, u_old, W,
-            PRJ_EOS_CTX_MAIN) != PRJ_EOS_GR_OK) {
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_cons2prim");
+    ok = prj_eos_gr_cons2prim(eos, &eos_geom, u_old, W,
+        PRJ_EOS_CTX_MAIN) == PRJ_EOS_GR_OK;
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_cons2prim");
+    if (!ok) {
         return;
     }
     if (!isfinite(W[PRJ_PRIM_RHO]) || W[PRJ_PRIM_RHO] <= 0.0 ||
@@ -6764,8 +6902,11 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
         !isfinite(W[PRJ_PRIM_YE])) {
         return;
     }
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_eos_rey");
     prj_eos_rey(eos, W[PRJ_PRIM_RHO], W[PRJ_PRIM_EINT],
         W[PRJ_PRIM_YE], eos_q, PRJ_EOS_CTX_MAIN);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_eos_rey");
     if (!isfinite(eos_q[PRJ_EOS_TEMPERATURE]) ||
         eos_q[PRJ_EOS_TEMPERATURE] <= 0.0) {
         return;
@@ -6781,6 +6922,8 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     P[4] = eos_q[PRJ_EOS_TEMPERATURE];
     P[5] = W[PRJ_PRIM_YE];
 
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_moment_pack");
     prj_rad_gr_m1_metric4_from_geom(&geom, g_cov, g_con);
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
@@ -6793,19 +6936,33 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             Fcov[2] = W[PRJ_PRIM_RAD_F3(field, group)];
             if (!prj_rad_gr_m1_moments_to_p(&geom, g_cov, g_con,
                     W[PRJ_PRIM_RAD_E(field, group)], Fcov, &P[pidx])) {
+                PRJ_TIMER_CURRENT_STOP("rad_matter_temp_moment_pack");
                 return;
             }
         }
     }
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_moment_pack");
 
-    if (!prj_rad_gr_m1_implicit_solve(rad, eos, &geom, u_old, dt, P, resid,
-            u_new)) {
-        return;
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_implicit");
+    ok = prj_rad_gr_m1_implicit_solve(rad, eos, &geom, u_old, dt, P, resid,
+        u_new);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_implicit");
+    if (!ok) {
+        prj_rad_gr_m1_matter_abort("implicit solve failed", rad, block,
+            z4c_stage, i, j, k, dt, u_old, P, resid);
     }
-    if (!prj_rad_gr_m1_p_to_prim(eos, &geom, g_cov, g_con, u_old, P,
-            W_new)) {
-        return;
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_p_to_prim");
+    ok = prj_rad_gr_m1_p_to_prim(eos, &geom, g_cov, g_con, u_old, P,
+        W_new);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_p_to_prim");
+    if (!ok) {
+        prj_rad_gr_m1_matter_abort("post-solve primitive recovery failed",
+            rad, block, z4c_stage, i, j, k, dt, u_old, P, resid);
     }
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_copy_out");
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         u[v] = u_new[v];
     }
@@ -6817,6 +6974,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     if (final_temperature != 0) {
         *final_temperature = P[4];
     }
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_copy_out");
 #else
     (void)rad;
     (void)eos;
