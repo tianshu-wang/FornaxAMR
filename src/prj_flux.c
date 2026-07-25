@@ -1535,6 +1535,62 @@ static double prj_flux_gr_m1_R_mixed(const double Rcon[4][4],
     return mixed;
 }
 
+static void prj_flux_gr_m1_build_R_fail(const prj_z4c_hydro_geom *geom,
+    const double *W, int field, int group, double E, const double Fcov[3],
+    const double Fcon[3], double Fmag)
+{
+    double cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+    double f = cE > 0.0 ? Fmag / cE : 0.0;
+
+    fprintf(stderr,
+        "GR M1 flux prj_rad_grm1_build_R failed: field=%d group=%d "
+        "E=%.17e Fcov=(%.17e, %.17e, %.17e) "
+        "Fcon=(%.17e, %.17e, %.17e) |F|/(cE)=%.17e "
+        "alpha=%.17e beta=(%.17e, %.17e, %.17e) sqrt_gamma=%.17e "
+        "rho=%.17e v=(%.17e, %.17e, %.17e)\n",
+        field, group, E, Fcov[0], Fcov[1], Fcov[2],
+        Fcon[0], Fcon[1], Fcon[2], f,
+        geom != 0 ? geom->alpha : 0.0,
+        geom != 0 ? geom->beta[0] : 0.0,
+        geom != 0 ? geom->beta[1] : 0.0,
+        geom != 0 ? geom->beta[2] : 0.0,
+        geom != 0 ? geom->sqrt_gamma : 0.0,
+        W != 0 ? W[PRJ_PRIM_RHO] : 0.0,
+        W != 0 ? W[PRJ_PRIM_V1] : 0.0,
+        W != 0 ? W[PRJ_PRIM_V2] : 0.0,
+        W != 0 ? W[PRJ_PRIM_V3] : 0.0);
+    fflush(stderr);
+    prj_flux_gr_abort();
+}
+
+static void prj_flux_gr_m1_fbar_fail(const prj_z4c_hydro_geom *geom,
+    const double *W, int field, int group, double E, const double Fcov[3],
+    const double Fcon[3], double Fmag)
+{
+    double cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
+    double f = cE > 0.0 ? Fmag / cE : 0.0;
+
+    fprintf(stderr,
+        "GR M1 flux prj_rad_grm1_fbar_from_R failed: field=%d group=%d "
+        "E=%.17e Fcov=(%.17e, %.17e, %.17e) "
+        "Fcon=(%.17e, %.17e, %.17e) |F|/(cE)=%.17e "
+        "alpha=%.17e beta=(%.17e, %.17e, %.17e) sqrt_gamma=%.17e "
+        "rho=%.17e v=(%.17e, %.17e, %.17e)\n",
+        field, group, E, Fcov[0], Fcov[1], Fcov[2],
+        Fcon[0], Fcon[1], Fcon[2], f,
+        geom != 0 ? geom->alpha : 0.0,
+        geom != 0 ? geom->beta[0] : 0.0,
+        geom != 0 ? geom->beta[1] : 0.0,
+        geom != 0 ? geom->beta[2] : 0.0,
+        geom != 0 ? geom->sqrt_gamma : 0.0,
+        W != 0 ? W[PRJ_PRIM_RHO] : 0.0,
+        W != 0 ? W[PRJ_PRIM_V1] : 0.0,
+        W != 0 ? W[PRJ_PRIM_V2] : 0.0,
+        W != 0 ? W[PRJ_PRIM_V3] : 0.0);
+    fflush(stderr);
+    prj_flux_gr_abort();
+}
+
 /* Per-group state flux for one side of a face. The metric/velocity context is
  * invariant across all (field, group) pairs of this side, so it is built once
  * by the caller and reused through the NRAD*NEGROUP inner loop. */
@@ -1551,13 +1607,12 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     double E;
     double Fcov[3];
     double Fcon[3];
-    double Pcon[3][3];
     double Fmag;
     double fbar = 0.0;
     double Rcon[4][4];
-    int have_R = 0;
     int i;
 
+    (void)closure;
     E = W[PRJ_PRIM_RAD_E(field, group)];
     Fcov[0] = W[PRJ_PRIM_RAD_F1(field, group)];
     Fcov[1] = W[PRJ_PRIM_RAD_F2(field, group)];
@@ -1569,9 +1624,11 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     }
     prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag);
 
-    have_R = prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon, Rcon);
-
-    if (have_R) {
+    if (!prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon, Rcon)) {
+        prj_flux_gr_m1_build_R_fail(geom, W, field, group, E, Fcov, Fcon,
+            Fmag);
+    }
+    {
         double alpha_sqrt_gamma = geom->alpha * geom->sqrt_gamma;
         double ucon[4];
 
@@ -1590,25 +1647,8 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
         }
         prj_flux_gr_m1_coord_ucon(geom, side, ucon);
         if (!prj_rad_grm1_fbar_from_R(g_cov, g_con, ucon, Rcon, &fbar)) {
-            prj_rad_gr_m1_pressure_fbar_cached(rad, closure, side, E, Fcov,
-                Pcon, &fbar, 0, 0);
-        }
-    } else {
-        prj_rad_gr_m1_pressure_fbar_cached(rad, closure, side, E, Fcov, Pcon,
-            &fbar, 0, 0);
-        U[0] = geom->sqrt_gamma * E;
-        F[0] = geom->sqrt_gamma * (geom->alpha * Fcon[0] -
-            c * geom->beta[0] * E);
-        for (i = 0; i < 3; ++i) {
-            double Pn_i = 0.0;
-            int a;
-
-            U[1 + i] = geom->sqrt_gamma * Fcov[i];
-            for (a = 0; a < 3; ++a) {
-                Pn_i += geom->gamma[i][a] * Pcon[0][a];
-            }
-            F[1 + i] = geom->sqrt_gamma *
-                (geom->alpha * c2 * Pn_i - c * geom->beta[0] * Fcov[i]);
+            prj_flux_gr_m1_fbar_fail(geom, W, field, group, E, Fcov, Fcon,
+                Fmag);
         }
     }
 

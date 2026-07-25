@@ -4838,6 +4838,90 @@ typedef struct prj_rad_gr_m1_jac_blocks {
     double rad_rad[PRJ_RAD_GR_M1_NGROUPS][PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK];
 } prj_rad_gr_m1_jac_blocks;
 
+typedef struct prj_rad_gr_m1_solve_diag {
+    int iter;
+    int maxiter;
+    int line_search_trials;
+    int invalid_trials;
+    int best_ls;
+    int block_solve_ok;
+    int dense_solve_ok;
+    int directional_check_ok;
+    int directional_row;
+    int fd_check_ok;
+    int fd_skipped_cols;
+    int fd_max_abs_row;
+    int fd_max_abs_col;
+    int fd_max_rel_row;
+    int fd_max_rel_col;
+    int dP_max_abs_col;
+    int dP_max_rel_col;
+    int linear_min_pivot_group;
+    int linear_min_pivot_k;
+    double threshold;
+    double norm;
+    double first_trial_norm;
+    double best_trial_norm;
+    double last_trial_norm;
+    double best_lambda;
+    double dP_max_abs;
+    double dP_max_rel;
+    double linear_min_pivot;
+    double linear_min_pivot_rel;
+    double directional_eps;
+    double directional_max_abs;
+    double directional_max_rel;
+    double directional_jdp_norm;
+    double directional_fd_norm;
+    double fd_max_abs;
+    double fd_max_abs_got;
+    double fd_max_abs_expected;
+    double fd_max_abs_h;
+    double fd_max_rel;
+    double fd_max_rel_got;
+    double fd_max_rel_expected;
+    double fd_max_rel_h;
+} prj_rad_gr_m1_solve_diag;
+
+static prj_rad_gr_m1_solve_diag prj_rad_gr_m1_last_solve_diag;
+
+static void prj_rad_gr_m1_solve_diag_reset(double threshold, int maxiter)
+{
+    memset(&prj_rad_gr_m1_last_solve_diag, 0,
+        sizeof(prj_rad_gr_m1_last_solve_diag));
+    prj_rad_gr_m1_last_solve_diag.iter = -1;
+    prj_rad_gr_m1_last_solve_diag.maxiter = maxiter;
+    prj_rad_gr_m1_last_solve_diag.best_ls = -1;
+    prj_rad_gr_m1_last_solve_diag.directional_row = -1;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs_row = -1;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs_col = -1;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel_row = -1;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel_col = -1;
+    prj_rad_gr_m1_last_solve_diag.dP_max_abs_col = -1;
+    prj_rad_gr_m1_last_solve_diag.dP_max_rel_col = -1;
+    prj_rad_gr_m1_last_solve_diag.linear_min_pivot_group = -1;
+    prj_rad_gr_m1_last_solve_diag.linear_min_pivot_k = -1;
+    prj_rad_gr_m1_last_solve_diag.threshold = threshold;
+    prj_rad_gr_m1_last_solve_diag.norm = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.first_trial_norm = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.best_trial_norm = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.last_trial_norm = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.best_lambda = 0.0;
+    prj_rad_gr_m1_last_solve_diag.directional_eps = 0.0;
+    prj_rad_gr_m1_last_solve_diag.directional_max_abs = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.directional_max_rel = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.directional_jdp_norm = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.directional_fd_norm = HUGE_VAL;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs_got = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs_expected = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs_h = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel_got = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel_expected = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel_h = 0.0;
+}
+
 static void prj_rad_gr_m1_metric4_from_geom(const prj_z4c_hydro_geom *geom,
     double g_cov[4][4], double g_con[4][4])
 {
@@ -6146,14 +6230,23 @@ static int prj_rad_gr_m1_solve_dense_n(int n, double *A, double *b, double *x)
 
 static int prj_rad_gr_m1_factor4(
     double A[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK],
-    int pivot[PRJ_RAD_GR_M1_NRAD_BLOCK])
+    int pivot[PRJ_RAD_GR_M1_NRAD_BLOCK], int gidx)
 {
     int i;
     int j;
     int k;
+    double block_max_abs = 0.0;
 
     if (A == 0 || pivot == 0) {
         return 0;
+    }
+    for (i = 0; i < PRJ_RAD_GR_M1_NRAD_BLOCK; ++i) {
+        for (j = 0; j < PRJ_RAD_GR_M1_NRAD_BLOCK; ++j) {
+            block_max_abs = fmax(block_max_abs, fabs(A[i][j]));
+        }
+    }
+    if (block_max_abs <= 0.0 || !isfinite(block_max_abs)) {
+        block_max_abs = 1.0;
     }
 
     for (k = 0; k < PRJ_RAD_GR_M1_NRAD_BLOCK; ++k) {
@@ -6167,6 +6260,13 @@ static int prj_rad_gr_m1_factor4(
                 piv_abs = cand;
                 p = i;
             }
+        }
+        if (piv_abs < prj_rad_gr_m1_last_solve_diag.linear_min_pivot) {
+            prj_rad_gr_m1_last_solve_diag.linear_min_pivot = piv_abs;
+            prj_rad_gr_m1_last_solve_diag.linear_min_pivot_rel =
+                piv_abs / block_max_abs;
+            prj_rad_gr_m1_last_solve_diag.linear_min_pivot_group = gidx;
+            prj_rad_gr_m1_last_solve_diag.linear_min_pivot_k = k;
         }
         if (!isfinite(piv_abs) || piv_abs <= 1.0e-300) {
             return 0;
@@ -6310,7 +6410,7 @@ static int prj_rad_gr_m1_solve_blocks(
                 B[r][c] = blocks->rad_rad[gidx][r][c];
             }
         }
-        if (!prj_rad_gr_m1_factor4(B, pivot) ||
+        if (!prj_rad_gr_m1_factor4(B, pivot, gidx) ||
             !prj_rad_gr_m1_solve4_many(B, pivot, PRJ_RAD_GR_M1_NRAD_RHS,
                 group_sol)) {
             return 0;
@@ -6416,6 +6516,198 @@ static int prj_rad_gr_m1_solve_blocks_active_dense(
     return prj_rad_gr_m1_solve_dense_n(np, A, rhs, x);
 }
 
+static void prj_rad_gr_m1_diagnose_directional_jacobian(
+    const prj_rad *rad, prj_eos *eos, const prj_z4c_hydro_geom *geom,
+    const double *u_old, const double *P, double dt, const double *resid,
+    const prj_rad_gr_m1_jac_blocks *blocks, const double *dP)
+{
+    const int np = PRJ_RAD_GR_M1_NP;
+    double jac[PRJ_NVAR_CONS * PRJ_RAD_GR_M1_NP];
+    double P_eps[PRJ_RAD_GR_M1_NP];
+    double resid_eps[PRJ_NVAR_CONS];
+    double u_eps[PRJ_NVAR_CONS];
+    double eps;
+    int attempt;
+    int col;
+    int eq;
+    int ok = 0;
+
+    if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
+        resid == 0 || blocks == 0 || dP == 0) {
+        return;
+    }
+    prj_rad_gr_m1_jac_blocks_to_dense(blocks, jac);
+    eps = 1.0e-6 / fmax(1.0, prj_rad_gr_m1_last_solve_diag.dP_max_rel);
+    eps = fmin(eps, 1.0e-7);
+    eps = fmax(eps, 1.0e-24);
+    for (attempt = 0; attempt < 8; ++attempt) {
+        for (col = 0; col < np; ++col) {
+            P_eps[col] = P[col] + eps * dP[col];
+        }
+        ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_eps, dt,
+            resid_eps, u_eps);
+        if (ok) {
+            break;
+        }
+        eps *= 0.1;
+    }
+    if (!ok) {
+        prj_rad_gr_m1_last_solve_diag.directional_check_ok = 0;
+        prj_rad_gr_m1_last_solve_diag.directional_eps = eps;
+        return;
+    }
+
+    prj_rad_gr_m1_last_solve_diag.directional_check_ok = 1;
+    prj_rad_gr_m1_last_solve_diag.directional_eps = eps;
+    prj_rad_gr_m1_last_solve_diag.directional_max_abs = 0.0;
+    prj_rad_gr_m1_last_solve_diag.directional_max_rel = 0.0;
+    prj_rad_gr_m1_last_solve_diag.directional_jdp_norm = 0.0;
+    prj_rad_gr_m1_last_solve_diag.directional_fd_norm = 0.0;
+    for (eq = 0; eq < np; ++eq) {
+        int row = prj_rad_gr_m1_active_row(eq);
+        double jdp = 0.0;
+        double fd = (resid_eps[row] - resid[row]) / eps;
+        double diff;
+        double scale;
+
+        for (col = 0; col < np; ++col) {
+            jdp += jac[(size_t)row * (size_t)np + (size_t)col] * dP[col];
+        }
+        diff = fabs(fd - jdp);
+        scale = fmax(1.0, fmax(fabs(fd), fabs(jdp)));
+        prj_rad_gr_m1_last_solve_diag.directional_jdp_norm += jdp * jdp;
+        prj_rad_gr_m1_last_solve_diag.directional_fd_norm += fd * fd;
+        if (diff > prj_rad_gr_m1_last_solve_diag.directional_max_abs) {
+            prj_rad_gr_m1_last_solve_diag.directional_max_abs = diff;
+            prj_rad_gr_m1_last_solve_diag.directional_row = row;
+        }
+        prj_rad_gr_m1_last_solve_diag.directional_max_rel =
+            fmax(prj_rad_gr_m1_last_solve_diag.directional_max_rel,
+                diff / scale);
+    }
+    prj_rad_gr_m1_last_solve_diag.directional_jdp_norm =
+        sqrt(prj_rad_gr_m1_last_solve_diag.directional_jdp_norm);
+    prj_rad_gr_m1_last_solve_diag.directional_fd_norm =
+        sqrt(prj_rad_gr_m1_last_solve_diag.directional_fd_norm);
+}
+
+static double prj_rad_gr_m1_fd_step_for_col(const double *P, int col)
+{
+    double h;
+
+    if (P == 0 || col < 0 || col >= PRJ_RAD_GR_M1_NP) {
+        return 0.0;
+    }
+    h = 1.0e-6 * fmax(1.0, fabs(P[col]));
+    if (col >= PRJ_RAD_GR_M1_NFLUID) {
+        int local = col - PRJ_RAD_GR_M1_NFLUID;
+        int comp = local % PRJ_RAD_GR_M1_NRAD_BLOCK;
+
+        h = 1.0e-5 * fmax(1.0, fabs(P[col]));
+        if (comp == 0) {
+            h = fmin(h, 0.25 * P[col]);
+        } else {
+            int pidx = col - comp;
+            double er = P[pidx];
+
+            if (isfinite(er) && er > 0.0) {
+                h = fmin(h, 1.0e-5 * sqrt(er));
+            }
+        }
+    }
+    if (!isfinite(h) || h <= 0.0) {
+        return 0.0;
+    }
+    return h;
+}
+
+static void prj_rad_gr_m1_diagnose_elementwise_jacobian(
+    const prj_rad *rad, prj_eos *eos, const prj_z4c_hydro_geom *geom,
+    const double *u_old, const double *P, double dt,
+    const prj_rad_gr_m1_jac_blocks *blocks)
+{
+    const int np = PRJ_RAD_GR_M1_NP;
+    double jac[PRJ_NVAR_CONS * PRJ_RAD_GR_M1_NP];
+    double Pp[PRJ_RAD_GR_M1_NP];
+    double Pm[PRJ_RAD_GR_M1_NP];
+    double resp[PRJ_NVAR_CONS];
+    double resm[PRJ_NVAR_CONS];
+    double u_tmp[PRJ_NVAR_CONS];
+    int col;
+    int eq;
+
+    /* TEMP DIAGNOSTIC: remove after rad-matter Jacobian debugging. */
+    if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
+        blocks == 0) {
+        return;
+    }
+    prj_rad_gr_m1_jac_blocks_to_dense(blocks, jac);
+    prj_rad_gr_m1_last_solve_diag.fd_check_ok = 1;
+    prj_rad_gr_m1_last_solve_diag.fd_skipped_cols = 0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel = 0.0;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs_row = -1;
+    prj_rad_gr_m1_last_solve_diag.fd_max_abs_col = -1;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel_row = -1;
+    prj_rad_gr_m1_last_solve_diag.fd_max_rel_col = -1;
+
+    for (col = 0; col < np; ++col) {
+        double h = prj_rad_gr_m1_fd_step_for_col(P, col);
+        int ok = 0;
+        int attempt;
+
+        for (attempt = 0; attempt < 12 && h > 0.0; ++attempt) {
+            memcpy(Pp, P, sizeof(Pp));
+            memcpy(Pm, P, sizeof(Pm));
+            Pp[col] += h;
+            Pm[col] -= h;
+            ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, Pp, dt,
+                    resp, u_tmp) &&
+                prj_rad_gr_m1_residual(rad, eos, geom, u_old, Pm, dt,
+                    resm, u_tmp);
+            if (ok) {
+                break;
+            }
+            h *= 0.1;
+        }
+        if (!ok) {
+            prj_rad_gr_m1_last_solve_diag.fd_check_ok = 0;
+            prj_rad_gr_m1_last_solve_diag.fd_skipped_cols += 1;
+            continue;
+        }
+
+        for (eq = 0; eq < np; ++eq) {
+            int row = prj_rad_gr_m1_active_row(eq);
+            double fd = (resp[row] - resm[row]) / (2.0 * h);
+            double got = jac[(size_t)row * (size_t)np + (size_t)col];
+            double diff = fabs(fd - got);
+            double scale = fmax(1.0, fmax(fabs(fd), fabs(got)));
+            double rel = diff / scale;
+
+            if (!isfinite(fd) || !isfinite(got)) {
+                prj_rad_gr_m1_last_solve_diag.fd_check_ok = 0;
+                continue;
+            }
+            if (diff > prj_rad_gr_m1_last_solve_diag.fd_max_abs) {
+                prj_rad_gr_m1_last_solve_diag.fd_max_abs = diff;
+                prj_rad_gr_m1_last_solve_diag.fd_max_abs_row = row;
+                prj_rad_gr_m1_last_solve_diag.fd_max_abs_col = col;
+                prj_rad_gr_m1_last_solve_diag.fd_max_abs_got = got;
+                prj_rad_gr_m1_last_solve_diag.fd_max_abs_expected = fd;
+                prj_rad_gr_m1_last_solve_diag.fd_max_abs_h = h;
+            }
+            if (rel > prj_rad_gr_m1_last_solve_diag.fd_max_rel) {
+                prj_rad_gr_m1_last_solve_diag.fd_max_rel = rel;
+                prj_rad_gr_m1_last_solve_diag.fd_max_rel_row = row;
+                prj_rad_gr_m1_last_solve_diag.fd_max_rel_col = col;
+                prj_rad_gr_m1_last_solve_diag.fd_max_rel_got = got;
+                prj_rad_gr_m1_last_solve_diag.fd_max_rel_expected = fd;
+                prj_rad_gr_m1_last_solve_diag.fd_max_rel_h = h;
+            }
+        }
+    }
+}
+
 static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, double dt, double *P,
     double *resid_out, double *u_new_out)
@@ -6445,11 +6737,14 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
     if (rad->maxiter > 0) {
         maxiter = rad->maxiter;
     }
+    prj_rad_gr_m1_solve_diag_reset(threshold, maxiter);
 
     for (iter = 0; iter < maxiter; ++iter) {
         double norm;
         int accepted = 0;
         int ls;
+
+        prj_rad_gr_m1_last_solve_diag.iter = iter;
 
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_resjac");
@@ -6463,6 +6758,7 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_norm");
         norm = prj_rad_gr_m1_residual_norm(u_old, resid, threshold);
         PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_norm");
+        prj_rad_gr_m1_last_solve_diag.norm = norm;
         if (isfinite(norm) && norm < threshold) {
             if (resid_out != 0) {
                 memcpy(resid_out, resid, sizeof(resid));
@@ -6478,22 +6774,53 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
 
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_linear");
+        prj_rad_gr_m1_last_solve_diag.linear_min_pivot = HUGE_VAL;
+        prj_rad_gr_m1_last_solve_diag.linear_min_pivot_rel = HUGE_VAL;
         ok = prj_rad_gr_m1_solve_blocks(&jac_blocks, resid, dP);
+        prj_rad_gr_m1_last_solve_diag.block_solve_ok = ok;
         if (!ok) {
             ok = prj_rad_gr_m1_solve_blocks_active_dense(&jac_blocks, resid,
                 dP);
+            prj_rad_gr_m1_last_solve_diag.dense_solve_ok = ok;
+        } else {
+            prj_rad_gr_m1_last_solve_diag.dense_solve_ok = 0;
         }
         PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_linear");
         if (!ok) {
             return 0;
         }
+        prj_rad_gr_m1_last_solve_diag.dP_max_abs = 0.0;
+        prj_rad_gr_m1_last_solve_diag.dP_max_rel = 0.0;
+        prj_rad_gr_m1_last_solve_diag.dP_max_abs_col = -1;
+        prj_rad_gr_m1_last_solve_diag.dP_max_rel_col = -1;
+        for (col = 0; col < np; ++col) {
+            double abs_dP = fabs(dP[col]);
+            double rel_dP = abs_dP / fmax(1.0, fabs(P[col]));
+
+            if (abs_dP > prj_rad_gr_m1_last_solve_diag.dP_max_abs) {
+                prj_rad_gr_m1_last_solve_diag.dP_max_abs = abs_dP;
+                prj_rad_gr_m1_last_solve_diag.dP_max_abs_col = col;
+            }
+            if (rel_dP > prj_rad_gr_m1_last_solve_diag.dP_max_rel) {
+                prj_rad_gr_m1_last_solve_diag.dP_max_rel = rel_dP;
+                prj_rad_gr_m1_last_solve_diag.dP_max_rel_col = col;
+            }
+        }
 
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_linesearch");
+        prj_rad_gr_m1_last_solve_diag.line_search_trials = 0;
+        prj_rad_gr_m1_last_solve_diag.invalid_trials = 0;
+        prj_rad_gr_m1_last_solve_diag.best_ls = -1;
+        prj_rad_gr_m1_last_solve_diag.first_trial_norm = HUGE_VAL;
+        prj_rad_gr_m1_last_solve_diag.best_trial_norm = HUGE_VAL;
+        prj_rad_gr_m1_last_solve_diag.last_trial_norm = HUGE_VAL;
+        prj_rad_gr_m1_last_solve_diag.best_lambda = 0.0;
         for (ls = 0; ls < PRJ_RAD_GR_M1_LINESEARCH_MAX; ++ls) {
             double lambda = ldexp(1.0, -ls);
             double trial_norm;
 
+            prj_rad_gr_m1_last_solve_diag.line_search_trials += 1;
             for (col = 0; col < np; ++col) {
                 P_trial[col] = P[col] + lambda * dP[col];
             }
@@ -6503,6 +6830,7 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
                 resid_trial, u_new_trial);
             PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_trial_resid");
             if (!ok) {
+                prj_rad_gr_m1_last_solve_diag.invalid_trials += 1;
                 continue;
             }
             /* TEMP TIMER: remove after rad-matter coupling profiling. */
@@ -6510,6 +6838,16 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
             trial_norm = prj_rad_gr_m1_residual_norm(u_old, resid_trial,
                 threshold);
             PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_trial_norm");
+            if (prj_rad_gr_m1_last_solve_diag.first_trial_norm == HUGE_VAL) {
+                prj_rad_gr_m1_last_solve_diag.first_trial_norm = trial_norm;
+            }
+            prj_rad_gr_m1_last_solve_diag.last_trial_norm = trial_norm;
+            if (isfinite(trial_norm) &&
+                trial_norm < prj_rad_gr_m1_last_solve_diag.best_trial_norm) {
+                prj_rad_gr_m1_last_solve_diag.best_trial_norm = trial_norm;
+                prj_rad_gr_m1_last_solve_diag.best_ls = ls;
+                prj_rad_gr_m1_last_solve_diag.best_lambda = lambda;
+            }
             if (isfinite(trial_norm) && trial_norm < norm) {
                 memcpy(P, P_trial, (size_t)np * sizeof(double));
                 memcpy(resid, resid_trial, sizeof(resid));
@@ -6521,6 +6859,10 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
         }
         PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_linesearch");
         if (!accepted) {
+            prj_rad_gr_m1_diagnose_directional_jacobian(rad, eos, geom,
+                u_old, P, dt, resid, &jac_blocks, dP);
+            prj_rad_gr_m1_diagnose_elementwise_jacobian(rad, eos, geom,
+                u_old, P, dt, &jac_blocks);
             if (resid_out != 0) {
                 memcpy(resid_out, resid, sizeof(resid));
             }
@@ -6786,7 +7128,8 @@ int prj_rad_gr_m1_implicit_solve_test_wrapper(const prj_rad *rad,
 static void prj_rad_gr_m1_matter_abort(const char *reason,
     const prj_rad *rad, const prj_block *block, int z4c_stage,
     int i, int j, int k, double dt, const double *u_old,
-    const double *P, const double *resid)
+    const double *P, const double *W, const prj_z4c_hydro_geom *geom,
+    const double *resid)
 {
     double threshold = PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT;
     double norm = HUGE_VAL;
@@ -6821,6 +7164,124 @@ static void prj_rad_gr_m1_matter_abort(const char *reason,
             resid[PRJ_CONS_MOM2], resid[PRJ_CONS_MOM3],
             resid[PRJ_CONS_ETOT], resid[PRJ_CONS_YE]);
     }
+    if (W != 0 && geom != 0) {
+        double beta2 = 0.0;
+        double min_E = HUGE_VAL;
+        double max_flux_factor = 0.0;
+        double min_ER = HUGE_VAL;
+        int max_flux_field = -1;
+        int max_flux_group = -1;
+        int min_E_field = -1;
+        int min_E_group = -1;
+        int field;
+        int group;
+        int a;
+        int b;
+
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                beta2 += geom->gamma[a][b] *
+                    (W[PRJ_PRIM_V1 + a] / PRJ_CLIGHT) *
+                    (W[PRJ_PRIM_V1 + b] / PRJ_CLIGHT);
+            }
+        }
+        for (field = 0; field < PRJ_NRAD; ++field) {
+            for (group = 0; group < PRJ_NEGROUP; ++group) {
+                int idx = field * PRJ_NEGROUP + group;
+                int pidx = 6 + 4 * idx;
+                double E = W[PRJ_PRIM_RAD_E(field, group)];
+                double Fcov[3];
+                double F2 = 0.0;
+                double flux_factor = HUGE_VAL;
+
+                Fcov[0] = W[PRJ_PRIM_RAD_F1(field, group)];
+                Fcov[1] = W[PRJ_PRIM_RAD_F2(field, group)];
+                Fcov[2] = W[PRJ_PRIM_RAD_F3(field, group)];
+                for (a = 0; a < 3; ++a) {
+                    for (b = 0; b < 3; ++b) {
+                        F2 += geom->gamma_inv[a][b] * Fcov[a] * Fcov[b];
+                    }
+                }
+                if (isfinite(E) && E > 0.0 && isfinite(F2) && F2 >= 0.0) {
+                    flux_factor = sqrt(F2) / (PRJ_CLIGHT * E);
+                }
+                if (E < min_E) {
+                    min_E = E;
+                    min_E_field = field;
+                    min_E_group = group;
+                }
+                if (flux_factor > max_flux_factor) {
+                    max_flux_factor = flux_factor;
+                    max_flux_field = field;
+                    max_flux_group = group;
+                }
+                if (P != 0 && P[pidx] < min_ER) {
+                    min_ER = P[pidx];
+                }
+            }
+        }
+        fprintf(stderr,
+            "  input primitive: rho=%.17e eint=%.17e Ye=%.17e "
+            "v2/c2=%.17e min_E=%.17e(F%d,g%d) max_|F|/cE=%.17e(F%d,g%d) "
+            "min_ER=%.17e\n",
+            W[PRJ_PRIM_RHO], W[PRJ_PRIM_EINT], W[PRJ_PRIM_YE],
+            beta2, min_E, min_E_field, min_E_group, max_flux_factor,
+            max_flux_field, max_flux_group, min_ER);
+    }
+    fprintf(stderr,
+        "  Newton diagnostics: iter=%d/%d block_solve_ok=%d dense_solve_ok=%d "
+        "dP_max_abs=%.17e(col=%d) dP_max_rel=%.17e(col=%d) "
+        "min_rad_block_pivot=%.17e rel=%.17e group=%d k=%d "
+        "trials=%d invalid_trials=%d first_trial_norm=%.17e "
+        "best_trial_norm=%.17e best_ls=%d best_lambda=%.17e "
+        "last_trial_norm=%.17e\n",
+        prj_rad_gr_m1_last_solve_diag.iter,
+        prj_rad_gr_m1_last_solve_diag.maxiter,
+        prj_rad_gr_m1_last_solve_diag.block_solve_ok,
+        prj_rad_gr_m1_last_solve_diag.dense_solve_ok,
+        prj_rad_gr_m1_last_solve_diag.dP_max_abs,
+        prj_rad_gr_m1_last_solve_diag.dP_max_abs_col,
+        prj_rad_gr_m1_last_solve_diag.dP_max_rel,
+        prj_rad_gr_m1_last_solve_diag.dP_max_rel_col,
+        prj_rad_gr_m1_last_solve_diag.linear_min_pivot,
+        prj_rad_gr_m1_last_solve_diag.linear_min_pivot_rel,
+        prj_rad_gr_m1_last_solve_diag.linear_min_pivot_group,
+        prj_rad_gr_m1_last_solve_diag.linear_min_pivot_k,
+        prj_rad_gr_m1_last_solve_diag.line_search_trials,
+        prj_rad_gr_m1_last_solve_diag.invalid_trials,
+        prj_rad_gr_m1_last_solve_diag.first_trial_norm,
+        prj_rad_gr_m1_last_solve_diag.best_trial_norm,
+        prj_rad_gr_m1_last_solve_diag.best_ls,
+        prj_rad_gr_m1_last_solve_diag.best_lambda,
+        prj_rad_gr_m1_last_solve_diag.last_trial_norm);
+    fprintf(stderr,
+        "  J*dP check: ok=%d eps=%.17e max_abs=%.17e max_rel=%.17e "
+        "row=%d |JdP|=%.17e |fd|=%.17e\n",
+        prj_rad_gr_m1_last_solve_diag.directional_check_ok,
+        prj_rad_gr_m1_last_solve_diag.directional_eps,
+        prj_rad_gr_m1_last_solve_diag.directional_max_abs,
+        prj_rad_gr_m1_last_solve_diag.directional_max_rel,
+        prj_rad_gr_m1_last_solve_diag.directional_row,
+        prj_rad_gr_m1_last_solve_diag.directional_jdp_norm,
+        prj_rad_gr_m1_last_solve_diag.directional_fd_norm);
+    fprintf(stderr,
+        "  FD Jacobian check: ok=%d skipped_cols=%d "
+        "max_abs=%.17e row=%d col=%d got=%.17e fd=%.17e h=%.17e "
+        "max_rel=%.17e row=%d col=%d got=%.17e fd=%.17e h=%.17e\n",
+        prj_rad_gr_m1_last_solve_diag.fd_check_ok,
+        prj_rad_gr_m1_last_solve_diag.fd_skipped_cols,
+        prj_rad_gr_m1_last_solve_diag.fd_max_abs,
+        prj_rad_gr_m1_last_solve_diag.fd_max_abs_row,
+        prj_rad_gr_m1_last_solve_diag.fd_max_abs_col,
+        prj_rad_gr_m1_last_solve_diag.fd_max_abs_got,
+        prj_rad_gr_m1_last_solve_diag.fd_max_abs_expected,
+        prj_rad_gr_m1_last_solve_diag.fd_max_abs_h,
+        prj_rad_gr_m1_last_solve_diag.fd_max_rel,
+        prj_rad_gr_m1_last_solve_diag.fd_max_rel_row,
+        prj_rad_gr_m1_last_solve_diag.fd_max_rel_col,
+        prj_rad_gr_m1_last_solve_diag.fd_max_rel_got,
+        prj_rad_gr_m1_last_solve_diag.fd_max_rel_expected,
+        prj_rad_gr_m1_last_solve_diag.fd_max_rel_h);
     fflush(stderr);
 #if defined(PRJ_ENABLE_MPI)
     {
@@ -6950,7 +7411,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_implicit");
     if (!ok) {
         prj_rad_gr_m1_matter_abort("implicit solve failed", rad, block,
-            z4c_stage, i, j, k, dt, u_old, P, resid);
+            z4c_stage, i, j, k, dt, u_old, P, W, &geom, resid);
     }
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_p_to_prim");
@@ -6959,7 +7420,8 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_p_to_prim");
     if (!ok) {
         prj_rad_gr_m1_matter_abort("post-solve primitive recovery failed",
-            rad, block, z4c_stage, i, j, k, dt, u_old, P, resid);
+            rad, block, z4c_stage, i, j, k, dt, u_old, P, W, &geom,
+            resid);
     }
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_copy_out");
