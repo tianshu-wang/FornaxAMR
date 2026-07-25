@@ -92,6 +92,12 @@ void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
 int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
     double alpha, double E, const double Fcon[3], double Rcon[4][4]);
 
+/* Recover the fluid-frame flux factor from an already-built radiation tensor.
+ * `ucon` must be the fluid four-velocity in the same basis as g_ab/g^ab/R^ab. */
+int prj_rad_grm1_fbar_from_R(const double g_cov[4][4],
+    const double g_con[4][4], const double ucon[4],
+    const double Rcon[4][4], double *fbar_out);
+
 /* Contract the third radiation moment with the velocity gradient,
  * drift^alpha = M^{alpha beta gamma} u_{beta;gamma}.  The third moment is not
  * materialized; the contraction is formed from J, H^alpha, L^{alpha beta}, and

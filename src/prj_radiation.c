@@ -1455,6 +1455,98 @@ static double prj_rad_grm1_m3_component(
         m3->thin_w * Nthin + m3->thick_w * Nthick;
 }
 
+int prj_rad_grm1_fbar_from_R(const double g_cov[4][4],
+    const double g_con[4][4], const double ucon[4],
+    const double Rcon[4][4], double *fbar_out)
+{
+    double ucov[4];
+    double H[4];
+    double J = 0.0;
+    double unorm = 0.0;
+    double Hnorm2 = 0.0;
+    double fbar;
+    int a;
+    int b;
+
+    if (fbar_out != 0) {
+        *fbar_out = 0.0;
+    }
+    if (fbar_out == 0 || g_cov == 0 || g_con == 0 || ucon == 0 ||
+        Rcon == 0) {
+        return 0;
+    }
+    for (a = 0; a < 4; ++a) {
+        if (!isfinite(ucon[a])) {
+            return 0;
+        }
+        ucov[a] = 0.0;
+        for (b = 0; b < 4; ++b) {
+            if (!isfinite(g_cov[a][b]) || !isfinite(g_con[a][b]) ||
+                !isfinite(Rcon[a][b])) {
+                return 0;
+            }
+            ucov[a] += g_cov[a][b] * ucon[b];
+        }
+        unorm += ucov[a] * ucon[a];
+    }
+    if (!isfinite(unorm) || fabs(unorm + 1.0) > 1.0e-8) {
+        return 0;
+    }
+
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            J += Rcon[a][b] * ucov[a] * ucov[b];
+        }
+    }
+    if (!isfinite(J) || J < 0.0) {
+        return 0;
+    }
+    if (J == 0.0) {
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                if (Rcon[a][b] != 0.0) {
+                    return 0;
+                }
+            }
+        }
+        return 1;
+    }
+
+    for (a = 0; a < 4; ++a) {
+        double Ru = 0.0;
+
+        for (b = 0; b < 4; ++b) {
+            Ru += Rcon[b][a] * ucov[b];
+        }
+        H[a] = -Ru - J * ucon[a];
+        if (!isfinite(H[a])) {
+            return 0;
+        }
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            double hcov = g_cov[a][b] + ucov[a] * ucov[b];
+
+            Hnorm2 += hcov * H[a] * H[b];
+        }
+    }
+    if (!isfinite(Hnorm2) || Hnorm2 < -1.0e-12 * J * J) {
+        return 0;
+    }
+    if (Hnorm2 < 0.0) {
+        Hnorm2 = 0.0;
+    }
+
+    fbar = sqrt(Hnorm2) / J;
+    if (!isfinite(fbar) || fbar < 0.0) {
+        fbar = 0.0;
+    } else if (fbar > 1.0) {
+        fbar = 1.0;
+    }
+    *fbar_out = fbar;
+    return 1;
+}
+
 int prj_rad_grm1_freq_drift(const double g_cov[4][4],
     const double g_con[4][4], const double ucon[4],
     const double Rcon[4][4], const double ducov[4][4], double drift[4])
