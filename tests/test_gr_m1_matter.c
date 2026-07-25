@@ -381,15 +381,22 @@ static void set_residual_p_from_flat_state(const double *u, double temperature,
                 if (disc < 0.0) {
                     die("flat residual P has superluminal flux");
                 }
+                double sqrt_er;
+
                 y = 0.5 * (3.0 * E - sqrt(disc));
                 P[pidx] = E - 4.0 * y / 3.0;
                 if (P[pidx] < 0.0 && P[pidx] > -1.0e-12 * E) {
                     P[pidx] = 0.0;
                 }
+                if (P[pidx] <= 0.0) {
+                    die("flat residual P has non-positive ER");
+                }
+                /* qR^i = sqrt(y) Fhat/|Fhat|; store ur^i = qR^i / sqrt(ER). */
                 qmag = sqrt(y);
+                sqrt_er = sqrt(P[pidx]);
                 inv_Fhat = 1.0 / sqrt(Fhat2);
                 for (d = 0; d < 3; ++d) {
-                    P[pidx + 1 + d] = qmag * Fhat[d] * inv_Fhat;
+                    P[pidx + 1 + d] = qmag * Fhat[d] * inv_Fhat / sqrt_er;
                 }
             } else {
                 P[pidx] = E;
@@ -539,12 +546,13 @@ static void set_gr_m1_jacobian_test_p(
             double phase = (double)(idx + 1);
             double ER = 1.0 + 0.22 * sin(1.37 * phase) +
                 0.11 * cos(0.73 * phase);
-            double qmag = sqrt(ER);
 
+            /* Newton variables now carry the radiation four-velocity ur^i
+             * directly (ur = qR / sqrt(ER)), so no sqrt(ER) scaling here. */
             P[pidx] = ER;
-            P[pidx + 1] = 0.030 * sin(2.11 * phase) * qmag;
-            P[pidx + 2] = 0.024 * cos(1.67 * phase) * qmag;
-            P[pidx + 3] = 0.021 * sin(0.91 * phase + 0.4) * qmag;
+            P[pidx + 1] = 0.030 * sin(2.11 * phase);
+            P[pidx + 2] = 0.024 * cos(1.67 * phase);
+            P[pidx + 3] = 0.021 * sin(0.91 * phase + 0.4);
         }
     }
 }
@@ -574,13 +582,12 @@ static void perturb_gr_m1_solver_guess(double *P)
             int idx = field * PRJ_NEGROUP + group;
             int pidx = 6 + 4 * idx;
             double phase = (double)(idx + 1);
-            double qscale;
 
+            /* ur^i are O(1) Newton variables; perturb them directly. */
             P[pidx] *= 1.0 + 1.5e-4 * sin(0.43 * phase);
-            qscale = sqrt(P[pidx]);
-            P[pidx + 1] += 1.0e-4 * sin(0.71 * phase) * qscale;
-            P[pidx + 2] -= 8.0e-5 * cos(0.59 * phase) * qscale;
-            P[pidx + 3] += 7.0e-5 * sin(0.37 * phase) * qscale;
+            P[pidx + 1] += 1.0e-4 * sin(0.71 * phase);
+            P[pidx + 2] -= 8.0e-5 * cos(0.59 * phase);
+            P[pidx + 3] += 7.0e-5 * sin(0.37 * phase);
         }
     }
 }
