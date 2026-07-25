@@ -4723,6 +4723,10 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
 
 #if PRJ_NRAD > 0
 #define PRJ_RAD_GR_M1_NP (6 + 4 * PRJ_NRAD * PRJ_NEGROUP)
+#define PRJ_RAD_GR_M1_NFLUID 6
+#define PRJ_RAD_GR_M1_NRAD_BLOCK 4
+#define PRJ_RAD_GR_M1_NGROUPS (PRJ_NRAD * PRJ_NEGROUP)
+#define PRJ_RAD_GR_M1_NRAD_RHS (1 + PRJ_RAD_GR_M1_NFLUID)
 #define PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT 1.0e-6
 #define PRJ_RAD_GR_M1_SOLVE_MAXITER_DEFAULT 50
 #define PRJ_RAD_GR_M1_SOLVE_VMIN 1.0e5
@@ -4730,6 +4734,13 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
  * 1.0e-25 erg cm^-3 for the default scale. */
 #define PRJ_RAD_GR_M1_SOLVE_EMIN 1.0e-50
 #define PRJ_RAD_GR_M1_LINESEARCH_MAX 16
+
+typedef struct prj_rad_gr_m1_jac_blocks {
+    double fluid[PRJ_RAD_GR_M1_NFLUID][PRJ_RAD_GR_M1_NFLUID];
+    double fluid_rad[PRJ_RAD_GR_M1_NGROUPS][PRJ_RAD_GR_M1_NFLUID][PRJ_RAD_GR_M1_NRAD_BLOCK];
+    double rad_fluid[PRJ_RAD_GR_M1_NGROUPS][PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NFLUID];
+    double rad_rad[PRJ_RAD_GR_M1_NGROUPS][PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK];
+} prj_rad_gr_m1_jac_blocks;
 
 static void prj_rad_gr_m1_metric4_from_geom(const prj_z4c_hydro_geom *geom,
     double g_cov[4][4], double g_con[4][4])
@@ -4982,6 +4993,85 @@ static int prj_rad_gr_m1_p_to_prim(prj_eos *eos,
     return 1;
 }
 
+static int prj_rad_gr_m1_fluid_row_from_index(int idx)
+{
+    if (idx == 0) {
+        return PRJ_CONS_RHO;
+    }
+    if (idx >= 1 && idx <= 3) {
+        return PRJ_CONS_MOM1 + (idx - 1);
+    }
+    if (idx == 4) {
+        return PRJ_CONS_ETOT;
+    }
+    return PRJ_CONS_YE;
+}
+
+static void prj_rad_gr_m1_jac_blocks_zero(prj_rad_gr_m1_jac_blocks *blocks)
+{
+    if (blocks != 0) {
+        memset(blocks, 0, sizeof(*blocks));
+    }
+}
+
+static void prj_rad_gr_m1_jac_blocks_to_dense(
+    const prj_rad_gr_m1_jac_blocks *blocks, double *dense)
+{
+    const int np = PRJ_RAD_GR_M1_NP;
+    int frow;
+    int fcol;
+    int gidx;
+    int r;
+    int c;
+    int v;
+
+    if (blocks == 0 || dense == 0) {
+        return;
+    }
+    for (v = 0; v < PRJ_NVAR_CONS * PRJ_RAD_GR_M1_NP; ++v) {
+        dense[v] = 0.0;
+    }
+    for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
+        int row = prj_rad_gr_m1_fluid_row_from_index(frow);
+
+        for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+            dense[(size_t)row * (size_t)np + (size_t)fcol] =
+                blocks->fluid[frow][fcol];
+        }
+    }
+    for (gidx = 0; gidx < PRJ_RAD_GR_M1_NGROUPS; ++gidx) {
+        int field = gidx / PRJ_NEGROUP;
+        int group = gidx % PRJ_NEGROUP;
+        int pidx = PRJ_RAD_GR_M1_NFLUID +
+            PRJ_RAD_GR_M1_NRAD_BLOCK * gidx;
+        int rad_row[PRJ_RAD_GR_M1_NRAD_BLOCK];
+
+        rad_row[0] = PRJ_CONS_RAD_E(field, group);
+        rad_row[1] = PRJ_CONS_RAD_F1(field, group);
+        rad_row[2] = PRJ_CONS_RAD_F2(field, group);
+        rad_row[3] = PRJ_CONS_RAD_F3(field, group);
+
+        for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
+            int row = prj_rad_gr_m1_fluid_row_from_index(frow);
+
+            for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+                dense[(size_t)row * (size_t)np + (size_t)(pidx + r)] =
+                    blocks->fluid_rad[gidx][frow][r];
+            }
+        }
+        for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+            for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+                dense[(size_t)rad_row[r] * (size_t)np + (size_t)fcol] =
+                    blocks->rad_fluid[gidx][r][fcol];
+            }
+            for (c = 0; c < PRJ_RAD_GR_M1_NRAD_BLOCK; ++c) {
+                dense[(size_t)rad_row[r] * (size_t)np +
+                    (size_t)(pidx + c)] = blocks->rad_rad[gidx][r][c];
+            }
+        }
+    }
+}
+
 static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
     double dt, double *resid, double *u_new_out)
@@ -5171,19 +5261,24 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     return 1;
 }
 
-static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
+static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
-    double dt, double *resid, double *jac, double *u_new_out)
+    double dt, double *resid, prj_rad_gr_m1_jac_blocks *blocks, double *jac,
+    double *u_new_out)
 {
-    const int np = PRJ_RAD_GR_M1_NP;
     double resid_local[PRJ_NVAR_CONS];
+    double *resid_use = resid != 0 ? resid : resid_local;
+    double W[PRJ_NVAR_PRIM];
+    double u_new[PRJ_NVAR_CONS];
+    double resid_tmp[PRJ_NVAR_CONS];
+    prj_eos_gr_geom eos_geom;
     double g_cov[4][4];
     double g_con[4][4];
     double n_cov[4];
     double ucon[4];
     double ucov[4];
-    double ducon[4][PRJ_RAD_GR_M1_NP];
-    double ducov[4][PRJ_RAD_GR_M1_NP];
+    double ducon[4][PRJ_RAD_GR_M1_NFLUID];
+    double ducov[4][PRJ_RAD_GR_M1_NFLUID];
     double kappa[PRJ_NRAD * PRJ_NEGROUP];
     double sigma[PRJ_NRAD * PRJ_NEGROUP];
     double delta[PRJ_NRAD * PRJ_NEGROUP];
@@ -5223,22 +5318,53 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
     double c = PRJ_CLIGHT;
     double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
     double sqrtg;
+    double sum_Gn = 0.0;
+    double sum_Gu_xe = 0.0;
+    double sum_Ggamma[3] = {0.0, 0.0, 0.0};
+    double group_Gn[PRJ_RAD_GR_M1_NGROUPS];
+    double group_Ggamma[PRJ_RAD_GR_M1_NGROUPS][3];
     int a;
     int b;
     int d;
     int field;
     int group;
+    int local_col;
     int n;
     int v;
 
+    if (resid != 0) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            resid[v] = 0.0;
+        }
+    }
+    if (u_new_out != 0) {
+        for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+            u_new_out[v] = 0.0;
+        }
+    }
     if (jac != 0) {
         for (v = 0; v < PRJ_NVAR_CONS * PRJ_RAD_GR_M1_NP; ++v) {
             jac[v] = 0.0;
         }
     }
-    if (jac == 0 || !prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt,
-            resid != 0 ? resid : resid_local, u_new_out)) {
+    prj_rad_gr_m1_jac_blocks_zero(blocks);
+
+    if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
+        blocks == 0 || !isfinite(dt) ||
+        !isfinite(geom->sqrt_gamma) || geom->sqrt_gamma <= 0.0 ||
+        !isfinite(geom->alpha) || geom->alpha <= 0.0 ||
+        !isfinite(P[0]) || P[0] <= 0.0 ||
+        !isfinite(P[4]) || P[4] <= 0.0 || !isfinite(P[5])) {
         return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            if (!isfinite(geom->gamma[a][b]) ||
+                !isfinite(geom->gamma_inv[a][b])) {
+                return 0;
+            }
+            eos_geom.gamma[a][b] = geom->gamma[a][b];
+        }
     }
 
     sqrtg = geom->sqrt_gamma;
@@ -5253,10 +5379,28 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
             &dpressure_dT, &dpressure_dYe, PRJ_EOS_CTX_MAIN)) {
         return 0;
     }
+    if (!isfinite(eint) || eint < 0.0 || !isfinite(pressure)) {
+        return 0;
+    }
     prj_rad3_opac_lookup_derivs(rad, P[0], P[4], P[5], kappa, sigma, delta,
         eta, dkappa_drho, dkappa_dT, dkappa_dYe, dsigma_drho, dsigma_dT,
         dsigma_dYe, ddelta_drho, ddelta_dT, ddelta_dYe, deta_drho, deta_dT,
         deta_dYe);
+
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        W[v] = 0.0;
+    }
+    W[PRJ_PRIM_RHO] = P[0];
+    W[PRJ_PRIM_V1] = P[1];
+    W[PRJ_PRIM_V2] = P[2];
+    W[PRJ_PRIM_V3] = P[3];
+    W[PRJ_PRIM_EINT] = eint;
+    W[PRJ_PRIM_YE] = P[5];
+#if PRJ_MHD
+    W[PRJ_PRIM_B1] = u_old[PRJ_CONS_B1] / sqrtg;
+    W[PRJ_PRIM_B2] = u_old[PRJ_CONS_B2] / sqrtg;
+    W[PRJ_PRIM_B3] = u_old[PRJ_CONS_B3] / sqrtg;
+#endif
 
     memset(ducon, 0, sizeof(ducon));
     memset(ducov, 0, sizeof(ducov));
@@ -5290,7 +5434,7 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
     w = P[0] * c2 + P[0] * eint + pressure;
     D = P[0] * wlor;
 
-    for (n = 0; n < np; ++n) {
+    for (n = 0; n < PRJ_RAD_GR_M1_NFLUID; ++n) {
         double drho = n == 0 ? 1.0 : 0.0;
         double dYe = n == 5 ? 1.0 : 0.0;
         double dbeta_con[3] = {0.0, 0.0, 0.0};
@@ -5346,12 +5490,12 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
         }
 
         dD = drho * wlor + P[0] * dwlor;
-        jac[PRJ_CONS_RHO * np + n] += sqrtg * dD;
+        blocks->fluid[0][n] += sqrtg * dD;
         for (d = 0; d < 3; ++d) {
             dUtmp = ((dw * wlor2 + w * dwlor2) * beta_cov[d] +
                 (w * wlor2 + Bsq) * dbeta_cov[d] -
                 dBbeta * Bcov[d]) / c;
-            jac[(PRJ_CONS_MOM1 + d) * np + n] += sqrtg * dUtmp;
+            blocks->fluid[1 + d][n] += sqrtg * dUtmp;
         }
         dA = drho * eint + P[0] * deint + dpressure;
         dUtmp = dA * wlor2 + (P[0] * eint + pressure) * dwlor2 +
@@ -5361,8 +5505,8 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
         if (wlor2 > 0.0) {
             dUtmp += 0.5 * Bsq * dwlor2 / (wlor2 * wlor2);
         }
-        jac[PRJ_CONS_ETOT * np + n] += sqrtg * dUtmp;
-        jac[PRJ_CONS_YE * np + n] += sqrtg * (dD * P[5] + D * dYe);
+        blocks->fluid[4][n] += sqrtg * dUtmp;
+        blocks->fluid[5][n] += sqrtg * (dD * P[5] + D * dYe);
     }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
@@ -5383,6 +5527,8 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
             double sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
             double kt = kappa_eff + sigma_eff;
             double scalar;
+            double Gdotn = 0.0;
+            double Gdotu = 0.0;
 
             q[0] = 0.0;
             q[1] = P[pidx + 1];
@@ -5409,11 +5555,56 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
                 Ruu += R_u[a] * ucov[a];
             }
             scalar = sigma_eff * Ruu + eta[idx] / c;
+            if (!isfinite(kappa_eff) || !isfinite(sigma_eff) ||
+                !isfinite(eta[idx]) || !isfinite(scalar)) {
+                return 0;
+            }
             for (a = 0; a < 4; ++a) {
                 Gcon[a] = -kt * R_u[a] - scalar * ucon[a];
+                if (!isfinite(Gcon[a])) {
+                    return 0;
+                }
+                Gdotn += Gcon[a] * n_cov[a];
+                Gdotu += Gcon[a] * ucov[a];
             }
 
-            for (n = 0; n < np; ++n) {
+            W[PRJ_PRIM_RAD_E(field, group)] =
+                geom->alpha * geom->alpha * Rcon[0][0];
+            W[PRJ_PRIM_RAD_F1(field, group)] =
+                c * geom->alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 1);
+            W[PRJ_PRIM_RAD_F2(field, group)] =
+                c * geom->alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 2);
+            W[PRJ_PRIM_RAD_F3(field, group)] =
+                c * geom->alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 3);
+            if (!isfinite(W[PRJ_PRIM_RAD_E(field, group)]) ||
+                !isfinite(W[PRJ_PRIM_RAD_F1(field, group)]) ||
+                !isfinite(W[PRJ_PRIM_RAD_F2(field, group)]) ||
+                !isfinite(W[PRJ_PRIM_RAD_F3(field, group)])) {
+                return 0;
+            }
+
+            group_Gn[idx] = Gdotn;
+            sum_Gn += Gdotn;
+            sum_Gu_xe += Gdotu * rad->x_e[field][group];
+            for (d = 0; d < 3; ++d) {
+                double Ggamma = 0.0;
+
+                for (a = 0; a < 4; ++a) {
+                    Ggamma += Gcon[a] *
+                        (g_cov[d + 1][a] + n_cov[d + 1] * n_cov[a]);
+                }
+                group_Ggamma[idx][d] = Ggamma;
+                sum_Ggamma[d] += Ggamma;
+            }
+
+            for (local_col = 0; local_col < PRJ_RAD_GR_M1_NFLUID + PRJ_RAD_GR_M1_NRAD_BLOCK;
+                 ++local_col) {
+                int is_fluid_col = local_col < PRJ_RAD_GR_M1_NFLUID;
+                int block_col = is_fluid_col ?
+                    local_col : local_col - PRJ_RAD_GR_M1_NFLUID;
+
+                n = local_col < PRJ_RAD_GR_M1_NFLUID ?
+                    local_col : pidx + local_col - PRJ_RAD_GR_M1_NFLUID;
                 double dER = n == er_col ? 1.0 : 0.0;
                 double dq[4] = {0.0, 0.0, 0.0, 0.0};
                 double dBquad = 0.0;
@@ -5469,8 +5660,13 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
 
                 dR00 = (8.0 / 3.0) * q[0] * dq[0] +
                     (dER / 3.0) * g_con[0][0];
-                jac[PRJ_CONS_RAD_E(field, group) * np + n] +=
-                    sqrtg * geom->alpha * geom->alpha * dR00;
+                if (is_fluid_col) {
+                    blocks->rad_fluid[idx][0][block_col] +=
+                        sqrtg * geom->alpha * geom->alpha * dR00;
+                } else {
+                    blocks->rad_rad[idx][0][block_col] +=
+                        sqrtg * geom->alpha * geom->alpha * dR00;
+                }
                 for (d = 0; d < 3; ++d) {
                     dRmixed = 0.0;
                     for (b = 0; b < 4; ++b) {
@@ -5480,51 +5676,144 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
 
                         dRmixed += dR0b * g_cov[b][d + 1];
                     }
-                    jac[(PRJ_CONS_RAD_F1(field, group) + d) * np + n] +=
-                        sqrtg * c * geom->alpha * dRmixed;
+                    if (is_fluid_col) {
+                        blocks->rad_fluid[idx][1 + d][block_col] +=
+                            sqrtg * c * geom->alpha * dRmixed;
+                    } else {
+                        blocks->rad_rad[idx][1 + d][block_col] +=
+                            sqrtg * c * geom->alpha * dRmixed;
+                    }
                 }
 
                 for (a = 0; a < 4; ++a) {
+                    double ducov_an = is_fluid_col ?
+                        ducov[a][block_col] : 0.0;
+
                     for (b = 0; b < 4; ++b) {
                         double dRab = (4.0 / 3.0) *
                             (dq[a] * q[b] + q[a] * dq[b]) +
                             (dER / 3.0) * g_con[a][b];
+                        double ducov_bn = is_fluid_col ?
+                            ducov[b][block_col] : 0.0;
 
                         dR_u[a] += dRab * ucov[b] +
-                            Rcon[a][b] * ducov[b][n];
+                            Rcon[a][b] * ducov_bn;
                     }
-                    dRuu += dR_u[a] * ucov[a] + R_u[a] * ducov[a][n];
+                    dRuu += dR_u[a] * ucov[a] + R_u[a] * ducov_an;
                 }
                 dscalar = dsigma_eff * Ruu + sigma_eff * dRuu + deta / c;
                 for (a = 0; a < 4; ++a) {
+                    double ducon_an = is_fluid_col ?
+                        ducon[a][block_col] : 0.0;
+                    double ducov_an = is_fluid_col ?
+                        ducov[a][block_col] : 0.0;
+
                     dGcon[a] = -dkt * R_u[a] - kt * dR_u[a] -
-                        dscalar * ucon[a] - scalar * ducon[a][n];
+                        dscalar * ucon[a] - scalar * ducon_an;
                     dGn += dGcon[a] * n_cov[a];
-                    dGu += dGcon[a] * ucov[a] + Gcon[a] * ducov[a][n];
+                    dGu += dGcon[a] * ucov[a] + Gcon[a] * ducov_an;
                     for (d = 0; d < 3; ++d) {
                         dGgamma[d] += dGcon[a] * g_cov[d + 1][a];
                     }
                 }
 
-                jac[PRJ_CONS_ETOT * np + n] += sqrtg * dt *
-                    RAD_SCALE * c * dGn;
-                for (d = 0; d < 3; ++d) {
-                    jac[(PRJ_CONS_MOM1 + d) * np + n] -=
-                        geom->alpha * sqrtg * dt * RAD_SCALE * dGgamma[d];
+                if (is_fluid_col) {
+                    blocks->fluid[4][block_col] +=
+                        sqrtg * dt * RAD_SCALE * c * dGn;
+                } else {
+                    blocks->fluid_rad[idx][4][block_col] +=
+                        sqrtg * dt * RAD_SCALE * c * dGn;
                 }
-                jac[PRJ_CONS_YE * np + n] += geom->alpha * sqrtg * dt *
-                    c * dGu * rad->x_e[field][group];
-                jac[PRJ_CONS_RAD_E(field, group) * np + n] -=
-                    geom->alpha * sqrtg * dt * c * dGn;
                 for (d = 0; d < 3; ++d) {
-                    jac[(PRJ_CONS_RAD_F1(field, group) + d) * np + n] +=
-                        geom->alpha * sqrtg * dt * c * c * dGgamma[d];
+                    if (is_fluid_col) {
+                        blocks->fluid[1 + d][block_col] -=
+                            geom->alpha * sqrtg * dt * RAD_SCALE *
+                            dGgamma[d];
+                    } else {
+                        blocks->fluid_rad[idx][1 + d][block_col] -=
+                            geom->alpha * sqrtg * dt * RAD_SCALE *
+                            dGgamma[d];
+                    }
+                }
+                if (is_fluid_col) {
+                    blocks->fluid[5][block_col] += geom->alpha * sqrtg *
+                        dt * c * dGu * rad->x_e[field][group];
+                    blocks->rad_fluid[idx][0][block_col] -=
+                        geom->alpha * sqrtg * dt * c * dGn;
+                } else {
+                    blocks->fluid_rad[idx][5][block_col] +=
+                        geom->alpha * sqrtg * dt * c * dGu *
+                        rad->x_e[field][group];
+                    blocks->rad_rad[idx][0][block_col] -=
+                        geom->alpha * sqrtg * dt * c * dGn;
+                }
+                for (d = 0; d < 3; ++d) {
+                    if (is_fluid_col) {
+                        blocks->rad_fluid[idx][1 + d][block_col] +=
+                            geom->alpha * sqrtg * dt * c * c * dGgamma[d];
+                    } else {
+                        blocks->rad_rad[idx][1 + d][block_col] +=
+                            geom->alpha * sqrtg * dt * c * c * dGgamma[d];
+                    }
                 }
             }
         }
     }
 
+    if (prj_eos_gr_prim2cons(eos, &eos_geom, W, u_new,
+            PRJ_EOS_CTX_MAIN) != PRJ_EOS_GR_OK) {
+        return 0;
+    }
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        resid_tmp[v] = u_new[v] - u_old[v];
+    }
+    resid_tmp[PRJ_CONS_ETOT] += sqrtg * dt * RAD_SCALE * c * sum_Gn;
+    resid_tmp[PRJ_CONS_MOM1] -= geom->alpha * sqrtg * dt *
+        RAD_SCALE * sum_Ggamma[0];
+    resid_tmp[PRJ_CONS_MOM2] -= geom->alpha * sqrtg * dt *
+        RAD_SCALE * sum_Ggamma[1];
+    resid_tmp[PRJ_CONS_MOM3] -= geom->alpha * sqrtg * dt *
+        RAD_SCALE * sum_Ggamma[2];
+    resid_tmp[PRJ_CONS_YE] += geom->alpha * sqrtg * dt * c * sum_Gu_xe;
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+
+            resid_tmp[PRJ_CONS_RAD_E(field, group)] -=
+                geom->alpha * sqrtg * dt * c * group_Gn[idx];
+            resid_tmp[PRJ_CONS_RAD_F1(field, group)] +=
+                geom->alpha * sqrtg * dt * c * c * group_Ggamma[idx][0];
+            resid_tmp[PRJ_CONS_RAD_F2(field, group)] +=
+                geom->alpha * sqrtg * dt * c * c * group_Ggamma[idx][1];
+            resid_tmp[PRJ_CONS_RAD_F3(field, group)] +=
+                geom->alpha * sqrtg * dt * c * c * group_Ggamma[idx][2];
+        }
+    }
+
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        resid_use[v] = resid_tmp[v];
+        if (u_new_out != 0) {
+            u_new_out[v] = u_new[v];
+        }
+    }
+    if (jac != 0) {
+        prj_rad_gr_m1_jac_blocks_to_dense(blocks, jac);
+    }
     return 1;
+}
+
+static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
+    double dt, double *resid, double *jac, double *u_new_out)
+{
+    prj_rad_gr_m1_jac_blocks blocks;
+
+    if (jac == 0) {
+        return 0;
+    }
+    return prj_rad_gr_m1_residual_jacobian(rad, eos, geom, u_old, P, dt,
+        resid, &blocks, jac, u_new_out);
 }
 
 static int prj_rad_gr_m1_active_row(int eq)
@@ -5658,24 +5947,22 @@ static double prj_rad_gr_m1_residual_norm(const double *u_old,
     return max_norm;
 }
 
-static int prj_rad_gr_m1_solve_linear(int n,
-    double A[PRJ_RAD_GR_M1_NP][PRJ_RAD_GR_M1_NP],
-    double b[PRJ_RAD_GR_M1_NP], double x[PRJ_RAD_GR_M1_NP])
+static int prj_rad_gr_m1_solve_dense_n(int n, double *A, double *b, double *x)
 {
     int i;
     int j;
     int k;
 
-    if (n <= 0 || n > PRJ_RAD_GR_M1_NP || A == 0 || b == 0 || x == 0) {
+    if (n <= 0 || A == 0 || b == 0 || x == 0) {
         return 0;
     }
 
     for (k = 0; k < n; ++k) {
         int pivot = k;
-        double piv_abs = fabs(A[k][k]);
+        double piv_abs = fabs(A[(size_t)k * (size_t)n + (size_t)k]);
 
         for (i = k + 1; i < n; ++i) {
-            double cand = fabs(A[i][k]);
+            double cand = fabs(A[(size_t)i * (size_t)n + (size_t)k]);
 
             if (cand > piv_abs) {
                 piv_abs = cand;
@@ -5689,23 +5976,26 @@ static int prj_rad_gr_m1_solve_linear(int n,
             double tmp;
 
             for (j = k; j < n; ++j) {
-                tmp = A[k][j];
-                A[k][j] = A[pivot][j];
-                A[pivot][j] = tmp;
+                tmp = A[(size_t)k * (size_t)n + (size_t)j];
+                A[(size_t)k * (size_t)n + (size_t)j] =
+                    A[(size_t)pivot * (size_t)n + (size_t)j];
+                A[(size_t)pivot * (size_t)n + (size_t)j] = tmp;
             }
             tmp = b[k];
             b[k] = b[pivot];
             b[pivot] = tmp;
         }
         for (i = k + 1; i < n; ++i) {
-            double factor = A[i][k] / A[k][k];
+            double factor = A[(size_t)i * (size_t)n + (size_t)k] /
+                A[(size_t)k * (size_t)n + (size_t)k];
 
             if (!isfinite(factor)) {
                 return 0;
             }
-            A[i][k] = 0.0;
+            A[(size_t)i * (size_t)n + (size_t)k] = 0.0;
             for (j = k + 1; j < n; ++j) {
-                A[i][j] -= factor * A[k][j];
+                A[(size_t)i * (size_t)n + (size_t)j] -=
+                    factor * A[(size_t)k * (size_t)n + (size_t)j];
             }
             b[i] -= factor * b[k];
         }
@@ -5715,19 +6005,292 @@ static int prj_rad_gr_m1_solve_linear(int n,
         double sum = b[i];
 
         for (j = i + 1; j < n; ++j) {
-            sum -= A[i][j] * x[j];
+            sum -= A[(size_t)i * (size_t)n + (size_t)j] * x[j];
         }
-        if (!isfinite(sum) || !isfinite(A[i][i]) ||
-            fabs(A[i][i]) <= 1.0e-300) {
+        if (!isfinite(sum) ||
+            !isfinite(A[(size_t)i * (size_t)n + (size_t)i]) ||
+            fabs(A[(size_t)i * (size_t)n + (size_t)i]) <= 1.0e-300) {
             return 0;
         }
-        x[i] = sum / A[i][i];
+        x[i] = sum / A[(size_t)i * (size_t)n + (size_t)i];
         if (!isfinite(x[i])) {
             return 0;
         }
     }
 
     return 1;
+}
+
+static int prj_rad_gr_m1_factor4(
+    double A[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK],
+    int pivot[PRJ_RAD_GR_M1_NRAD_BLOCK])
+{
+    int i;
+    int j;
+    int k;
+
+    if (A == 0 || pivot == 0) {
+        return 0;
+    }
+
+    for (k = 0; k < PRJ_RAD_GR_M1_NRAD_BLOCK; ++k) {
+        int p = k;
+        double piv_abs = fabs(A[k][k]);
+
+        for (i = k + 1; i < PRJ_RAD_GR_M1_NRAD_BLOCK; ++i) {
+            double cand = fabs(A[i][k]);
+
+            if (cand > piv_abs) {
+                piv_abs = cand;
+                p = i;
+            }
+        }
+        if (!isfinite(piv_abs) || piv_abs <= 1.0e-300) {
+            return 0;
+        }
+        pivot[k] = p;
+        if (p != k) {
+            for (j = 0; j < PRJ_RAD_GR_M1_NRAD_BLOCK; ++j) {
+                double tmp = A[k][j];
+
+                A[k][j] = A[p][j];
+                A[p][j] = tmp;
+            }
+        }
+        for (i = k + 1; i < PRJ_RAD_GR_M1_NRAD_BLOCK; ++i) {
+            double factor = A[i][k] / A[k][k];
+
+            if (!isfinite(factor)) {
+                return 0;
+            }
+            A[i][k] = factor;
+            for (j = k + 1; j < PRJ_RAD_GR_M1_NRAD_BLOCK; ++j) {
+                A[i][j] -= factor * A[k][j];
+            }
+        }
+    }
+    return 1;
+}
+
+static int prj_rad_gr_m1_solve4_many(
+    const double A[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK],
+    const int pivot[PRJ_RAD_GR_M1_NRAD_BLOCK], int nrhs,
+    double rhs[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_RHS])
+{
+    int col;
+    int i;
+    int j;
+    int k;
+
+    if (A == 0 || pivot == 0 || rhs == 0 || nrhs <= 0 ||
+        nrhs > PRJ_RAD_GR_M1_NRAD_RHS) {
+        return 0;
+    }
+
+    for (k = 0; k < PRJ_RAD_GR_M1_NRAD_BLOCK; ++k) {
+        if (pivot[k] != k) {
+            for (col = 0; col < nrhs; ++col) {
+                double tmp = rhs[k][col];
+
+                rhs[k][col] = rhs[pivot[k]][col];
+                rhs[pivot[k]][col] = tmp;
+            }
+        }
+    }
+
+    for (i = 0; i < PRJ_RAD_GR_M1_NRAD_BLOCK; ++i) {
+        for (col = 0; col < nrhs; ++col) {
+            double sum = rhs[i][col];
+
+            for (j = 0; j < i; ++j) {
+                sum -= A[i][j] * rhs[j][col];
+            }
+            if (!isfinite(sum)) {
+                return 0;
+            }
+            rhs[i][col] = sum;
+        }
+    }
+
+    for (i = PRJ_RAD_GR_M1_NRAD_BLOCK - 1; i >= 0; --i) {
+        double diag = A[i][i];
+
+        if (!isfinite(diag) || fabs(diag) <= 1.0e-300) {
+            return 0;
+        }
+        for (col = 0; col < nrhs; ++col) {
+            double sum = rhs[i][col];
+
+            for (j = i + 1; j < PRJ_RAD_GR_M1_NRAD_BLOCK; ++j) {
+                sum -= A[i][j] * rhs[j][col];
+            }
+            rhs[i][col] = sum / diag;
+            if (!isfinite(rhs[i][col])) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int prj_rad_gr_m1_solve_blocks(
+    const prj_rad_gr_m1_jac_blocks *restrict blocks,
+    const double *restrict resid, double *restrict x)
+{
+    /* The Newton matrix couples all groups through the six fluid columns, while
+     * each radiation group owns an independent 4x4 block.  Eliminate those
+     * group blocks and solve the resulting 6x6 Schur complement. */
+    double schur[PRJ_RAD_GR_M1_NFLUID * PRJ_RAD_GR_M1_NFLUID];
+    double rhs_s[PRJ_RAD_GR_M1_NFLUID];
+    double fluid_x[PRJ_RAD_GR_M1_NFLUID];
+    double rad_rhs_sol[PRJ_RAD_GR_M1_NGROUPS][PRJ_RAD_GR_M1_NRAD_BLOCK];
+    double rad_fluid_sol[PRJ_RAD_GR_M1_NGROUPS][PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NFLUID];
+    int frow;
+    int fcol;
+    int gidx;
+    int r;
+    int c;
+
+    if (blocks == 0 || resid == 0 || x == 0) {
+        return 0;
+    }
+
+    for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
+        int row = prj_rad_gr_m1_active_row(frow);
+
+        rhs_s[frow] = -resid[row];
+        for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+            schur[(size_t)frow * PRJ_RAD_GR_M1_NFLUID + (size_t)fcol] =
+                blocks->fluid[frow][fcol];
+        }
+    }
+
+    for (gidx = 0; gidx < PRJ_RAD_GR_M1_NGROUPS; ++gidx) {
+        int field = gidx / PRJ_NEGROUP;
+        int group = gidx % PRJ_NEGROUP;
+        int rad_row[PRJ_RAD_GR_M1_NRAD_BLOCK];
+        double B[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK];
+        double group_sol[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_RHS];
+        int pivot[PRJ_RAD_GR_M1_NRAD_BLOCK];
+
+        rad_row[0] = PRJ_CONS_RAD_E(field, group);
+        rad_row[1] = PRJ_CONS_RAD_F1(field, group);
+        rad_row[2] = PRJ_CONS_RAD_F2(field, group);
+        rad_row[3] = PRJ_CONS_RAD_F3(field, group);
+
+        for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+            group_sol[r][0] = -resid[rad_row[r]];
+            for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+                group_sol[r][1 + fcol] = blocks->rad_fluid[gidx][r][fcol];
+            }
+            for (c = 0; c < PRJ_RAD_GR_M1_NRAD_BLOCK; ++c) {
+                B[r][c] = blocks->rad_rad[gidx][r][c];
+            }
+        }
+        if (!prj_rad_gr_m1_factor4(B, pivot) ||
+            !prj_rad_gr_m1_solve4_many(B, pivot, PRJ_RAD_GR_M1_NRAD_RHS,
+                group_sol)) {
+            return 0;
+        }
+        for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+            rad_rhs_sol[gidx][r] = group_sol[r][0];
+            for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+                rad_fluid_sol[gidx][r][fcol] = group_sol[r][1 + fcol];
+            }
+        }
+
+        for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
+            for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+                double fluid_to_rad = blocks->fluid_rad[gidx][frow][r];
+
+                rhs_s[frow] -= fluid_to_rad * rad_rhs_sol[gidx][r];
+                for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+                    schur[(size_t)frow * PRJ_RAD_GR_M1_NFLUID +
+                        (size_t)fcol] -= fluid_to_rad *
+                        rad_fluid_sol[gidx][r][fcol];
+                }
+            }
+        }
+    }
+
+    if (!prj_rad_gr_m1_solve_dense_n(PRJ_RAD_GR_M1_NFLUID, schur, rhs_s,
+            fluid_x)) {
+        return 0;
+    }
+    for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+        x[fcol] = fluid_x[fcol];
+    }
+    for (gidx = 0; gidx < PRJ_RAD_GR_M1_NGROUPS; ++gidx) {
+        int pidx = PRJ_RAD_GR_M1_NFLUID +
+            PRJ_RAD_GR_M1_NRAD_BLOCK * gidx;
+
+        for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+            double value = rad_rhs_sol[gidx][r];
+
+            for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+                value -= rad_fluid_sol[gidx][r][fcol] * fluid_x[fcol];
+            }
+            if (!isfinite(value)) {
+                return 0;
+            }
+            x[pidx + r] = value;
+        }
+    }
+    return 1;
+}
+
+static int prj_rad_gr_m1_solve_blocks_active_dense(
+    const prj_rad_gr_m1_jac_blocks *restrict blocks,
+    const double *restrict resid, double *restrict x)
+{
+    const int np = PRJ_RAD_GR_M1_NP;
+    double A[PRJ_RAD_GR_M1_NP * PRJ_RAD_GR_M1_NP];
+    double rhs[PRJ_RAD_GR_M1_NP];
+    int eq;
+    int col;
+    int gidx;
+    int r;
+    int c;
+
+    if (blocks == 0 || resid == 0 || x == 0) {
+        return 0;
+    }
+    for (eq = 0; eq < np; ++eq) {
+        rhs[eq] = -resid[prj_rad_gr_m1_active_row(eq)];
+        for (col = 0; col < np; ++col) {
+            A[(size_t)eq * (size_t)np + (size_t)col] = 0.0;
+        }
+    }
+    for (eq = 0; eq < PRJ_RAD_GR_M1_NFLUID; ++eq) {
+        for (col = 0; col < PRJ_RAD_GR_M1_NFLUID; ++col) {
+            A[(size_t)eq * (size_t)np + (size_t)col] =
+                blocks->fluid[eq][col];
+        }
+    }
+    for (gidx = 0; gidx < PRJ_RAD_GR_M1_NGROUPS; ++gidx) {
+        int pidx = PRJ_RAD_GR_M1_NFLUID +
+            PRJ_RAD_GR_M1_NRAD_BLOCK * gidx;
+
+        for (eq = 0; eq < PRJ_RAD_GR_M1_NFLUID; ++eq) {
+            for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+                A[(size_t)eq * (size_t)np + (size_t)(pidx + r)] =
+                    blocks->fluid_rad[gidx][eq][r];
+            }
+        }
+        for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+            int arow = pidx + r;
+
+            for (col = 0; col < PRJ_RAD_GR_M1_NFLUID; ++col) {
+                A[(size_t)arow * (size_t)np + (size_t)col] =
+                    blocks->rad_fluid[gidx][r][col];
+            }
+            for (c = 0; c < PRJ_RAD_GR_M1_NRAD_BLOCK; ++c) {
+                A[(size_t)arow * (size_t)np + (size_t)(pidx + c)] =
+                    blocks->rad_rad[gidx][r][c];
+            }
+        }
+    }
+    return prj_rad_gr_m1_solve_dense_n(np, A, rhs, x);
 }
 
 static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
@@ -5741,13 +6304,10 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
     double resid_trial[PRJ_NVAR_CONS];
     double u_new[PRJ_NVAR_CONS];
     double u_new_trial[PRJ_NVAR_CONS];
-    double jac[PRJ_NVAR_CONS * PRJ_RAD_GR_M1_NP];
-    double A[PRJ_RAD_GR_M1_NP][PRJ_RAD_GR_M1_NP];
-    double rhs[PRJ_RAD_GR_M1_NP];
+    prj_rad_gr_m1_jac_blocks jac_blocks;
     double dP[PRJ_RAD_GR_M1_NP];
     double P_trial[PRJ_RAD_GR_M1_NP];
     int iter;
-    int eq;
     int col;
 
     if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
@@ -5767,8 +6327,8 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
         int accepted = 0;
         int ls;
 
-        if (!prj_rad_gr_m1_jacobian(rad, eos, geom, u_old, P, dt, resid,
-                jac, u_new)) {
+        if (!prj_rad_gr_m1_residual_jacobian(rad, eos, geom, u_old, P, dt,
+                resid, &jac_blocks, 0, u_new)) {
             return 0;
         }
         norm = prj_rad_gr_m1_residual_norm(u_old, resid, threshold);
@@ -5785,15 +6345,9 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
             return 0;
         }
 
-        for (eq = 0; eq < np; ++eq) {
-            int row = prj_rad_gr_m1_active_row(eq);
-
-            rhs[eq] = -resid[row];
-            for (col = 0; col < np; ++col) {
-                A[eq][col] = jac[row * np + col];
-            }
-        }
-        if (!prj_rad_gr_m1_solve_linear(np, A, rhs, dP)) {
+        if (!prj_rad_gr_m1_solve_blocks(&jac_blocks, resid, dP) &&
+            !prj_rad_gr_m1_solve_blocks_active_dense(&jac_blocks, resid,
+                dP)) {
             return 0;
         }
 
