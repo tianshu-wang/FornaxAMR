@@ -1310,6 +1310,46 @@ int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
     return 1;
 }
 
+typedef struct prj_rad_grm1_R_jac_geom {
+    double ncon[4];
+    double T[4][4];
+    double dFcon[4][3];
+} prj_rad_grm1_R_jac_geom;
+
+static void prj_rad_grm1_R_jac_geom_init(double alpha,
+    const double g_con[4][4], const double gamma_inv[3][3],
+    prj_rad_grm1_R_jac_geom *jac_geom)
+{
+    int a;
+    int b;
+    int cc;
+
+    memset(jac_geom, 0, sizeof(*jac_geom));
+    jac_geom->ncon[0] = 1.0 / alpha;
+    for (a = 0; a < 3; ++a) {
+        jac_geom->ncon[a + 1] = -alpha * g_con[0][a + 1];
+    }
+
+    jac_geom->T[0][0] = jac_geom->ncon[0] * jac_geom->ncon[0];
+    for (a = 0; a < 3; ++a) {
+        jac_geom->T[0][a + 1] =
+            jac_geom->ncon[0] * jac_geom->ncon[a + 1];
+    }
+    for (cc = 1; cc < 4; ++cc) {
+        int jc = cc - 1;
+
+        for (a = 0; a < 3; ++a) {
+            jac_geom->T[cc][a + 1] =
+                jac_geom->ncon[0] * gamma_inv[a][jc] / PRJ_CLIGHT;
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            jac_geom->dFcon[a + 1][b] = gamma_inv[a][b];
+        }
+    }
+}
+
 /* Analytic Jacobian of the algebraic M1 closure with respect to the lab-frame
  * (Eulerian) primitives p = (E, F_1, F_2, F_3), where F_i is the covariant
  * flux (raised to F^i with the spatial inverse metric `gamma_inv`).  The tensor
@@ -1320,15 +1360,16 @@ int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
  * part reproduces build_R bit-for-bit so the residual and Jacobian linearize
  * about the same stress tensor. */
 static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
-    const double g_con[4][4], double alpha, const double gamma_inv[3][3],
-    double E, const double Fcov[3], double Rcon[4][4], double dRcon[4][4][4])
+    const double g_con[4][4], const prj_rad_grm1_R_jac_geom *jac_geom,
+    double E, const double Fcov[3], double Rcon[4][4],
+    double dRcon[4][4][4])
 {
-    double ncon[4];
     double Fcon[3];
     double R0[4];
     double R0cov[4];
-    double T[4][4];
     double K[4];
+    const double *ncon;
+    const double (*T)[4];
     double A = 0.0;
     double B;
     double G;
@@ -1345,40 +1386,31 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
     int b;
     int cc;
 
-    if (Rcon != 0) {
-        memset(Rcon, 0, 16 * sizeof(double));
-    }
-    if (dRcon != 0) {
-        memset(dRcon, 0, 64 * sizeof(double));
-    }
-    if (Rcon == 0 || dRcon == 0 || g_cov == 0 || g_con == 0 ||
-        gamma_inv == 0 || Fcov == 0 || !isfinite(alpha) || alpha <= 0.0 ||
-        !isfinite(E) || E < 0.0) {
+    if (Rcon == 0 || dRcon == 0) {
+        if (Rcon != 0) {
+            memset(Rcon, 0, 16 * sizeof(double));
+        }
+        if (dRcon != 0) {
+            memset(dRcon, 0, 64 * sizeof(double));
+        }
         return 0;
     }
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            if (!isfinite(g_cov[a][b]) || !isfinite(g_con[a][b])) {
-                return 0;
-            }
-        }
+    if (g_cov == 0 || g_con == 0 || jac_geom == 0 || Fcov == 0 ||
+        !isfinite(E) || E < 0.0) {
+        goto fail;
     }
+    ncon = jac_geom->ncon;
+    T = jac_geom->T;
     for (a = 0; a < 3; ++a) {
         if (!isfinite(Fcov[a])) {
-            return 0;
+            goto fail;
         }
-        Fcon[a] = 0.0;
-        for (b = 0; b < 3; ++b) {
-            Fcon[a] += gamma_inv[a][b] * Fcov[b];
-        }
+        Fcon[a] = jac_geom->dFcon[a + 1][0] * Fcov[0] +
+            jac_geom->dFcon[a + 1][1] * Fcov[1] +
+            jac_geom->dFcon[a + 1][2] * Fcov[2];
         if (!isfinite(Fcon[a])) {
-            return 0;
+            goto fail;
         }
-    }
-
-    ncon[0] = 1.0 / alpha;
-    for (a = 0; a < 3; ++a) {
-        ncon[a + 1] = -alpha * g_con[0][a + 1];
     }
 
     R0[0] = E * ncon[0] * ncon[0];
@@ -1389,17 +1421,18 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
 
     B = R0[0];
     if (!isfinite(B) || B < 0.0) {
-        return 0;
+        goto fail;
     }
     if (B == 0.0) {
         double dFcon[4][4] = {{0.0}};
 
+        memset(Rcon, 0, 16 * sizeof(double));
         for (a = 0; a < 3; ++a) {
             if (Fcon[a] != 0.0) {
-                return 0;
+                goto fail;
             }
             for (b = 0; b < 3; ++b) {
-                dFcon[b + 1][a] = gamma_inv[b][a];
+                dFcon[b + 1][a] = jac_geom->dFcon[b + 1][a];
             }
         }
         /* The algebraic closure has a removable 0/0 at exactly E=F=0.
@@ -1428,31 +1461,12 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
             for (a = 0; a < 4; ++a) {
                 for (b = 0; b < 4; ++b) {
                     if (!isfinite(dRcon[cc][a][b])) {
-                        memset(dRcon, 0, 64 * sizeof(double));
-                        return 0;
+                        goto fail;
                     }
                 }
             }
         }
         return 1;
-    }
-
-    /* Seeds T[c][a] = dR^{0a}/dp_c (geometry only, so constant in p). */
-    for (cc = 0; cc < 4; ++cc) {
-        for (a = 0; a < 4; ++a) {
-            T[cc][a] = 0.0;
-        }
-    }
-    T[0][0] = ncon[0] * ncon[0];
-    for (a = 0; a < 3; ++a) {
-        T[0][a + 1] = ncon[0] * ncon[a + 1];
-    }
-    for (cc = 1; cc < 4; ++cc) {
-        int jc = cc - 1;
-
-        for (a = 0; a < 3; ++a) {
-            T[cc][a + 1] = ncon[0] * gamma_inv[a][jc] / PRJ_CLIGHT;
-        }
     }
 
     for (a = 0; a < 4; ++a) {
@@ -1488,7 +1502,7 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
 
     disc = B * B + 3.0 * G * A;
     if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
-        return 0;
+        goto fail;
     }
     if (disc < 0.0) {
         disc = 0.0;
@@ -1496,15 +1510,15 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
     sqrt_disc = sqrt(disc);
     root_denom = B + sqrt_disc;
     if (!isfinite(root_denom) || root_denom <= 0.0) {
-        return 0;
+        goto fail;
     }
     iso = -A / root_denom;
     if (!isfinite(iso) || iso < 0.0) {
-        return 0;
+        goto fail;
     }
     denom = 2.0 * B + sqrt_disc;
     if (!isfinite(denom) || denom <= 0.0) {
-        return 0;
+        goto fail;
     }
     coeff = 3.0 / denom;
 
@@ -1515,8 +1529,7 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
         for (b = 0; b < 4; ++b) {
             Rcon[a][b] = coeff * K[a] * K[b] + iso * g_con[a][b];
             if (!isfinite(Rcon[a][b])) {
-                memset(Rcon, 0, 16 * sizeof(double));
-                return 0;
+                goto fail;
             }
         }
     }
@@ -1547,6 +1560,11 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
         }
     }
     return 1;
+
+fail:
+    memset(Rcon, 0, 16 * sizeof(double));
+    memset(dRcon, 0, 64 * sizeof(double));
+    return 0;
 }
 
 typedef struct prj_rad_grm1_m3_data {
@@ -5623,6 +5641,7 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     prj_eos_gr_geom eos_geom;
     double g_cov[4][4];
     double g_con[4][4];
+    prj_rad_grm1_R_jac_geom R_jac_geom;
     double n_cov[4];
     double ucon[4];
     double ucov[4];
@@ -5685,7 +5704,7 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     int d;
     int field;
     int group;
-    int local_col;
+    int block_col;
     int n;
     int v;
     int ok;
@@ -5734,6 +5753,8 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     s_gu = alpha * sqrtg * dt * c;
     s_rgg = alpha * sqrtg * dt * c * c;
     prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
+    prj_rad_grm1_R_jac_geom_init(alpha, g_con, geom->gamma_inv,
+        &R_jac_geom);
     n_cov[0] = -geom->alpha;
     n_cov[1] = 0.0;
     n_cov[2] = 0.0;
@@ -5916,8 +5937,8 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                     return 0;
                 }
             }
-            if (!prj_rad_grm1_build_R_jac(g_cov, g_con, alpha,
-                    geom->gamma_inv, E, Fcov, Rcon, dRcon)) {
+            if (!prj_rad_grm1_build_R_jac(g_cov, g_con, &R_jac_geom,
+                    E, Fcov, Rcon, dRcon)) {
                 return 0;
             }
             for (a = 0; a < 4; ++a) {
@@ -5968,61 +5989,39 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                 sum_Ggamma[d] += Ggamma;
             }
 
-            for (local_col = 0; local_col < PRJ_RAD_GR_M1_NFLUID + PRJ_RAD_GR_M1_NRAD_BLOCK;
-                 ++local_col) {
-                int is_fluid_col = local_col < PRJ_RAD_GR_M1_NFLUID;
-                int block_col = is_fluid_col ?
-                    local_col : local_col - PRJ_RAD_GR_M1_NFLUID;
+            {
+                double delta_fac = 1.0 - delta[idx] / 3.0;
+                double dsigma_eff_col[PRJ_RAD_GR_M1_NFLUID] =
+                    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+                double dkt_col[PRJ_RAD_GR_M1_NFLUID] =
+                    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+                double deta_col[PRJ_RAD_GR_M1_NFLUID] =
+                    {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
 
-                n = local_col < PRJ_RAD_GR_M1_NFLUID ?
-                    local_col : pidx + local_col - PRJ_RAD_GR_M1_NFLUID;
-                double dR_u[4] = {0.0, 0.0, 0.0, 0.0};
-                double dRuu = 0.0;
-                double dkappa_eff = 0.0;
-                double dsigma = 0.0;
-                double ddelta = 0.0;
-                double deta = 0.0;
-                double dsigma_eff;
-                double dkt;
-                double dscalar;
-                double dGcon[4];
-                double dGn = 0.0;
-                double dGu = 0.0;
-                double dGgamma[3] = {0.0, 0.0, 0.0};
+                dsigma_eff_col[0] = dsigma_drho[idx] * delta_fac -
+                    sigma[idx] * ddelta_drho[idx] / 3.0;
+                dkt_col[0] = dkappa_drho[idx] + dsigma_eff_col[0];
+                deta_col[0] = deta_drho[idx];
+                dsigma_eff_col[4] = dsigma_dT[idx] * delta_fac -
+                    sigma[idx] * ddelta_dT[idx] / 3.0;
+                dkt_col[4] = dkappa_dT[idx] + dsigma_eff_col[4];
+                deta_col[4] = deta_dT[idx];
+                dsigma_eff_col[5] = dsigma_dYe[idx] * delta_fac -
+                    sigma[idx] * ddelta_dYe[idx] / 3.0;
+                dkt_col[5] = dkappa_dYe[idx] + dsigma_eff_col[5];
+                deta_col[5] = deta_dYe[idx];
 
-                if (n == 0) {
-                    dkappa_eff = dkappa_drho[idx];
-                    dsigma = dsigma_drho[idx];
-                    ddelta = ddelta_drho[idx];
-                    deta = deta_drho[idx];
-                } else if (n == 4) {
-                    dkappa_eff = dkappa_dT[idx];
-                    dsigma = dsigma_dT[idx];
-                    ddelta = ddelta_dT[idx];
-                    deta = deta_dT[idx];
-                } else if (n == 5) {
-                    dkappa_eff = dkappa_dYe[idx];
-                    dsigma = dsigma_dYe[idx];
-                    ddelta = ddelta_dYe[idx];
-                    deta = deta_dYe[idx];
-                }
-                dsigma_eff = dsigma * (1.0 - delta[idx] / 3.0) -
-                    sigma[idx] * ddelta / 3.0;
-                dkt = dkappa_eff + dsigma_eff;
+                /* Fluid columns: R is fixed; only u^a/u_a and opacities move. */
+                for (block_col = 0; block_col < PRJ_RAD_GR_M1_NFLUID;
+                     ++block_col) {
+                    double dR_u[4] = {0.0, 0.0, 0.0, 0.0};
+                    double dRuu = 0.0;
+                    double dscalar;
+                    double dGcon[4];
+                    double dGn = 0.0;
+                    double dGu = 0.0;
+                    double dGgamma[3] = {0.0, 0.0, 0.0};
 
-                /* R^{ab} is a pure lab-frame function of the radiation moments
-                 * (E, F_i), independent of the fluid state.  For radiation
-                 * columns the closure derivative dRcon[block_col] supplies
-                 * dR_u (ducov = 0); for fluid columns dR = 0 and only the fluid
-                 * four-velocity derivatives ducov contribute. */
-                if (!is_fluid_col) {
-                    for (a = 0; a < 4; ++a) {
-                        for (b = 0; b < 4; ++b) {
-                            dR_u[a] += dRcon[block_col][a][b] * ucov[b];
-                        }
-                        dRuu += dR_u[a] * ucov[a];
-                    }
-                } else {
                     for (a = 0; a < 4; ++a) {
                         double ducov_an = ducov[a][block_col];
 
@@ -6031,49 +6030,72 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                         }
                         dRuu += dR_u[a] * ucov[a] + R_u[a] * ducov_an;
                     }
-                }
-                dscalar = dsigma_eff * Ruu + sigma_eff * dRuu + deta / c;
-                for (a = 0; a < 4; ++a) {
-                    double ducon_an = is_fluid_col ?
-                        ducon[a][block_col] : 0.0;
-                    double ducov_an = is_fluid_col ?
-                        ducov[a][block_col] : 0.0;
+                    dscalar = dsigma_eff_col[block_col] * Ruu +
+                        sigma_eff * dRuu + deta_col[block_col] / c;
+                    for (a = 0; a < 4; ++a) {
+                        double ducon_an = ducon[a][block_col];
+                        double ducov_an = ducov[a][block_col];
 
-                    dGcon[a] = -dkt * R_u[a] - kt * dR_u[a] -
-                        dscalar * ucon[a] - scalar * ducon_an;
-                    dGn += dGcon[a] * n_cov[a];
-                    dGu += dGcon[a] * ucov[a] + Gcon[a] * ducov_an;
+                        dGcon[a] = -dkt_col[block_col] * R_u[a] -
+                            kt * dR_u[a] - dscalar * ucon[a] -
+                            scalar * ducon_an;
+                        dGn += dGcon[a] * n_cov[a];
+                        dGu += dGcon[a] * ucov[a] + Gcon[a] * ducov_an;
+                        for (d = 0; d < 3; ++d) {
+                            dGgamma[d] += dGcon[a] * g_cov[d + 1][a];
+                        }
+                    }
+
+                    blocks->fluid[4][block_col] += s_gn * dGn;
                     for (d = 0; d < 3; ++d) {
-                        dGgamma[d] += dGcon[a] * g_cov[d + 1][a];
+                        blocks->fluid[1 + d][block_col] -=
+                            s_gg_f * dGgamma[d];
+                    }
+                    blocks->fluid[5][block_col] += s_gu * dGu * xe;
+                    blocks->rad_fluid[idx][0][block_col] -= s_gu * dGn;
+                    for (d = 0; d < 3; ++d) {
+                        blocks->rad_fluid[idx][1 + d][block_col] +=
+                            s_rgg * dGgamma[d];
                     }
                 }
 
-                if (is_fluid_col) {
-                    blocks->fluid[4][block_col] += s_gn * dGn;
-                } else {
+                /* Radiation columns: u^a/u_a and opacities are fixed; only the
+                 * exact algebraic M1 closure derivative contributes. */
+                for (block_col = 0; block_col < PRJ_RAD_GR_M1_NRAD_BLOCK;
+                     ++block_col) {
+                    double dR_u[4] = {0.0, 0.0, 0.0, 0.0};
+                    double dRuu = 0.0;
+                    double dscalar;
+                    double dGcon[4];
+                    double dGn = 0.0;
+                    double dGu = 0.0;
+                    double dGgamma[3] = {0.0, 0.0, 0.0};
+
+                    for (a = 0; a < 4; ++a) {
+                        for (b = 0; b < 4; ++b) {
+                            dR_u[a] += dRcon[block_col][a][b] * ucov[b];
+                        }
+                        dRuu += dR_u[a] * ucov[a];
+                    }
+                    dscalar = sigma_eff * dRuu;
+                    for (a = 0; a < 4; ++a) {
+                        dGcon[a] = -kt * dR_u[a] - dscalar * ucon[a];
+                        dGn += dGcon[a] * n_cov[a];
+                        dGu += dGcon[a] * ucov[a];
+                        for (d = 0; d < 3; ++d) {
+                            dGgamma[d] += dGcon[a] * g_cov[d + 1][a];
+                        }
+                    }
+
                     blocks->fluid_rad[idx][4][block_col] += s_gn * dGn;
-                }
-                for (d = 0; d < 3; ++d) {
-                    if (is_fluid_col) {
-                        blocks->fluid[1 + d][block_col] -=
-                            s_gg_f * dGgamma[d];
-                    } else {
+                    for (d = 0; d < 3; ++d) {
                         blocks->fluid_rad[idx][1 + d][block_col] -=
                             s_gg_f * dGgamma[d];
                     }
-                }
-                if (is_fluid_col) {
-                    blocks->fluid[5][block_col] += s_gu * dGu * xe;
-                    blocks->rad_fluid[idx][0][block_col] -= s_gu * dGn;
-                } else {
-                    blocks->fluid_rad[idx][5][block_col] += s_gu * dGu * xe;
+                    blocks->fluid_rad[idx][5][block_col] +=
+                        s_gu * dGu * xe;
                     blocks->rad_rad[idx][0][block_col] -= s_gu * dGn;
-                }
-                for (d = 0; d < 3; ++d) {
-                    if (is_fluid_col) {
-                        blocks->rad_fluid[idx][1 + d][block_col] +=
-                            s_rgg * dGgamma[d];
-                    } else {
+                    for (d = 0; d < 3; ++d) {
                         blocks->rad_rad[idx][1 + d][block_col] +=
                             s_rgg * dGgamma[d];
                     }
