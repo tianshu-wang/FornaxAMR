@@ -79,6 +79,46 @@ static inline int prj_flux_rad_face_needed(int dir, int i, int j, int k)
     }
     return i >= 0 && i < PRJ_BLOCK_SIZE && j >= 0 && j < PRJ_BLOCK_SIZE;
 }
+
+static inline int prj_flux_rad_strip_k_bounds(int dir, int i, int j,
+    int kstart, int kend, int *kk0, int *kk1)
+{
+    int k0 = kstart;
+    int k1 = kend;
+
+    if (dir == X1DIR) {
+        if (j < 0 || j >= PRJ_BLOCK_SIZE) {
+            return 0;
+        }
+        if (k0 < 0) {
+            k0 = 0;
+        }
+        if (k1 >= PRJ_BLOCK_SIZE) {
+            k1 = PRJ_BLOCK_SIZE - 1;
+        }
+    } else if (dir == X2DIR) {
+        if (i < 0 || i >= PRJ_BLOCK_SIZE) {
+            return 0;
+        }
+        if (k0 < 0) {
+            k0 = 0;
+        }
+        if (k1 >= PRJ_BLOCK_SIZE) {
+            k1 = PRJ_BLOCK_SIZE - 1;
+        }
+    } else {
+        if (i < 0 || i >= PRJ_BLOCK_SIZE ||
+            j < 0 || j >= PRJ_BLOCK_SIZE) {
+            return 0;
+        }
+    }
+    if (k0 > k1) {
+        return 0;
+    }
+    *kk0 = k0 - kstart;
+    *kk1 = k1 - kstart;
+    return 1;
+}
 #endif
 
 #if !PRJ_FLUX_RECON_MC_FASTPATH
@@ -410,18 +450,19 @@ static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
  * block-wide buffers: WL_block/WR_block use layout [local_var * PRJ_BLOCK_NCELLS
  * + IDX(i, j, k)]; the pL/pR/gL/gR buffers are indexed by IDX(i, j, k).  The
  * Riemann sweep in prj_flux_update consumes these per face. */
-#define PRJ_FLUX_RECONSTRUCT_PRIM_RANGE(FACE_CELLS, PRIM_FACE_VALUE, LV_BEGIN, LV_END) do { \
+#define PRJ_FLUX_RECONSTRUCT_PRIM_RANGE(FACE_CELLS, PRIM_FACE_VALUE, LV_BEGIN, LV_END, \
+        I_START, I_END, J_START, J_END, K_START, K_END) do { \
         int lv; \
         for (lv = (LV_BEGIN); lv < (LV_END); ++lv) { \
             int gv = gmap[lv]; \
             double *wl = &WL_block[VPLANE((size_t)lv)]; \
             double *wr = &WR_block[VPLANE((size_t)lv)]; \
             int i; \
-            for (i = istart; i <= iend; ++i) { \
+            for (i = (I_START); i <= (I_END); ++i) { \
                 int j; \
-                for (j = jstart; j <= jend; ++j) { \
+                for (j = (J_START); j <= (J_END); ++j) { \
                     int k; \
-                    for (k = kstart; k <= kend; ++k) { \
+                    for (k = (K_START); k <= (K_END); ++k) { \
                         int il; \
                         int jl; \
                         int kl; \
@@ -438,9 +479,11 @@ static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
     } while (0)
 
 #define PRJ_FLUX_RECONSTRUCT_PRIM_DIR(FACE_CELLS, HYDRO_FACE_VALUE, RADIATION_FACE_VALUE) do { \
-        PRJ_FLUX_RECONSTRUCT_PRIM_RANGE(FACE_CELLS, HYDRO_FACE_VALUE, 0, PRJ_NHYDRO); \
+        PRJ_FLUX_RECONSTRUCT_PRIM_RANGE(FACE_CELLS, HYDRO_FACE_VALUE, \
+            0, PRJ_NHYDRO, istart, iend, jstart, jend, kstart, kend); \
         PRJ_FLUX_RECONSTRUCT_PRIM_RANGE(FACE_CELLS, RADIATION_FACE_VALUE, \
-            PRJ_NHYDRO, PRJ_NVAR_PRIM); \
+            PRJ_NHYDRO, PRJ_NVAR_PRIM, \
+            ristart, riend, rjstart, rjend, rkstart, rkend); \
     } while (0)
 
 #define PRJ_FLUX_RECONSTRUCT_EOS_DIR(FACE_CELLS, EOS_FACE_VALUE) do { \
@@ -481,6 +524,7 @@ static void prj_flux_recon_var_mc(const double *src, int nc, int gv,
 
 static void prj_flux_reconstruct_block(double *W, const double *eosvar, int dir,
     int istart, int iend, int jstart, int jend, int kstart, int kend,
+    int ristart, int riend, int rjstart, int rjend, int rkstart, int rkend,
     double *WL_block, double *WR_block,
     double *pL_block, double *pR_block, double *gL_block, double *gR_block)
 {
@@ -505,7 +549,7 @@ static void prj_flux_reconstruct_block(double *W, const double *eosvar, int dir,
             prj_flux_recon_var_mc(W, PRJ_NVAR_CONS, gv,
                 &WL_block[VPLANE((size_t)lv)],
                 &WR_block[VPLANE((size_t)lv)],
-                dir, istart, iend, jstart, jend, kstart, kend, 1,
+                dir, ristart, riend, rjstart, rjend, rkstart, rkend, 1,
                 PRJ_FLUX_RECON_SRC_PRIM_STAGE);
         }
         if (eosvar != 0) {
@@ -1499,6 +1543,55 @@ static void prj_flux_gr_m1_metric4(const prj_z4c_hydro_geom *geom,
     }
 }
 
+typedef struct prj_flux_gr_m1_face_cache {
+    double g_cov[4][4];
+    double g_con[4][4];
+    double alpha;
+    double sqrt_gamma;
+    double sqrt_alpha_alpha;
+    double alpha_sqrt_gamma;
+    double c_alpha_alpha_sqrt_gamma;
+    double c_alpha_sqrt_gamma;
+    double c2_alpha_sqrt_gamma;
+    double ncon[4];
+    int metric_ok;
+} prj_flux_gr_m1_face_cache;
+
+static void prj_flux_gr_m1_face_cache_init(const prj_z4c_hydro_geom *geom,
+    prj_flux_gr_m1_face_cache *cache)
+{
+    const double c = PRJ_CLIGHT;
+    const double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    int a;
+    int b;
+
+    memset(cache, 0, sizeof(*cache));
+    cache->alpha = geom->alpha;
+    cache->sqrt_gamma = geom->sqrt_gamma;
+    cache->sqrt_alpha_alpha = (geom->sqrt_gamma * geom->alpha) * geom->alpha;
+    cache->alpha_sqrt_gamma = geom->alpha * geom->sqrt_gamma;
+    cache->c_alpha_alpha_sqrt_gamma =
+        (c * geom->alpha) * cache->alpha_sqrt_gamma;
+    cache->c_alpha_sqrt_gamma = c * cache->alpha_sqrt_gamma;
+    cache->c2_alpha_sqrt_gamma = c2 * cache->alpha_sqrt_gamma;
+    prj_flux_gr_m1_metric4(geom, cache->g_cov, cache->g_con);
+    cache->metric_ok = isfinite(cache->alpha) && cache->alpha > 0.0;
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            if (!isfinite(cache->g_cov[a][b]) ||
+                !isfinite(cache->g_con[a][b])) {
+                cache->metric_ok = 0;
+            }
+        }
+    }
+    if (cache->metric_ok) {
+        cache->ncon[0] = 1.0 / cache->alpha;
+        for (a = 0; a < 3; ++a) {
+            cache->ncon[a + 1] = -cache->alpha * cache->g_con[0][a + 1];
+        }
+    }
+}
+
 static void prj_flux_gr_m1_coord_ucon(const prj_z4c_hydro_geom *geom,
     const prj_rad_gr_m1_side_data *side, double ucon[4])
 {
@@ -1523,16 +1616,274 @@ static void prj_flux_gr_m1_coord_ucon(const prj_z4c_hydro_geom *geom,
     }
 }
 
-static double prj_flux_gr_m1_R_mixed(const double Rcon[4][4],
-    const double g_cov[4][4], int up, int down)
+typedef struct prj_flux_gr_m1_side_cache {
+    prj_rad_gr_m1_closure_ctx closure;
+    prj_rad_gr_m1_side_data side;
+    prj_flux_gr_m1_wave_cache wave;
+    double ucon[4];
+    double ucov[4];
+    double hcov[4][4];
+    int fbar_frame_ok;
+} prj_flux_gr_m1_side_cache;
+
+static void prj_flux_gr_m1_side_cache_init(const prj_z4c_hydro_geom *geom,
+    const double *W, const prj_flux_gr_m1_face_cache *face,
+    prj_flux_gr_m1_side_cache *cache)
+{
+    int a;
+    int b;
+    double unorm = 0.0;
+
+    memset(cache, 0, sizeof(*cache));
+    prj_flux_gr_m1_closure_ctx(geom, W, &cache->closure);
+    prj_rad_gr_m1_prepare_side(&cache->closure, &cache->side);
+    prj_flux_gr_m1_wave_cache_init(geom, &cache->side, &cache->wave);
+    prj_flux_gr_m1_coord_ucon(geom, &cache->side, cache->ucon);
+    cache->fbar_frame_ok = face != 0 && face->metric_ok;
+    for (a = 0; a < 4; ++a) {
+        if (!isfinite(cache->ucon[a])) {
+            cache->fbar_frame_ok = 0;
+        }
+        cache->ucov[a] = 0.0;
+        for (b = 0; b < 4; ++b) {
+            cache->ucov[a] += face->g_cov[a][b] * cache->ucon[b];
+        }
+        unorm += cache->ucov[a] * cache->ucon[a];
+    }
+    if (!isfinite(unorm) || fabs(unorm + 1.0) > 1.0e-8) {
+        cache->fbar_frame_ok = 0;
+    }
+    for (a = 0; a < 4; ++a) {
+        if (!isfinite(cache->ucov[a])) {
+            cache->fbar_frame_ok = 0;
+        }
+        for (b = 0; b < 4; ++b) {
+            cache->hcov[a][b] = face->g_cov[a][b] +
+                cache->ucov[a] * cache->ucov[b];
+        }
+    }
+}
+
+typedef struct prj_flux_gr_m1_R_eval {
+    double Rt[4];
+    double Rsp[3][3];
+} prj_flux_gr_m1_R_eval;
+
+static inline double prj_flux_gr_m1_R_eval_get(
+    const prj_flux_gr_m1_R_eval *R, int a, int b)
+{
+    if (a == 0) {
+        return R->Rt[b];
+    }
+    if (b == 0) {
+        return R->Rt[a];
+    }
+    return R->Rsp[a - 1][b - 1];
+}
+
+static int prj_flux_gr_m1_build_R_eval(
+    const prj_flux_gr_m1_face_cache *face, double E, const double Fcon[3],
+    prj_flux_gr_m1_R_eval *R)
+{
+    double R0[4];
+    double K[4];
+    double A = 0.0;
+    double B;
+    double G;
+    double disc;
+    double disc_scale;
+    double sqrt_disc;
+    double root_denom;
+    double denom;
+    double iso;
+    double coeff;
+    int a;
+    int b;
+
+    if (R == 0 || face == 0 || Fcon == 0 || !face->metric_ok ||
+        !isfinite(E) || E < 0.0) {
+        return 0;
+    }
+    memset(R, 0, sizeof(*R));
+    for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcon[a])) {
+            return 0;
+        }
+    }
+
+    R0[0] = E * face->ncon[0] * face->ncon[0];
+    for (a = 0; a < 3; ++a) {
+        R0[a + 1] = E * face->ncon[0] * face->ncon[a + 1] +
+            (Fcon[a] / PRJ_CLIGHT) * face->ncon[0];
+    }
+
+    B = R0[0];
+    if (!isfinite(B) || B < 0.0) {
+        return 0;
+    }
+    if (B == 0.0) {
+        for (a = 0; a < 3; ++a) {
+            if (Fcon[a] != 0.0) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            A += face->g_cov[a][b] * R0[a] * R0[b];
+        }
+    }
+    G = face->g_con[0][0];
+    disc_scale = fmax(B * B, fabs(3.0 * G * A));
+    if (disc_scale <= 0.0) {
+        disc_scale = 1.0;
+    }
+    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
+        A = 0.0;
+    }
+    disc = B * B + 3.0 * G * A;
+    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
+        return 0;
+    }
+    if (disc < 0.0) {
+        disc = 0.0;
+    }
+    sqrt_disc = sqrt(disc);
+    root_denom = B + sqrt_disc;
+    if (!isfinite(root_denom) || root_denom <= 0.0) {
+        return 0;
+    }
+    iso = -A / root_denom;
+    if (!isfinite(iso) || iso < 0.0) {
+        return 0;
+    }
+    denom = 2.0 * B + sqrt_disc;
+    if (!isfinite(denom) || denom <= 0.0) {
+        return 0;
+    }
+    coeff = 3.0 / denom;
+
+    for (a = 0; a < 4; ++a) {
+        K[a] = R0[a] - iso * face->g_con[0][a];
+    }
+    for (a = 0; a < 4; ++a) {
+        double row0 = coeff * K[0] * K[a] + iso * face->g_con[0][a];
+        double err;
+        double scale;
+
+        if (!isfinite(row0)) {
+            memset(R, 0, sizeof(*R));
+            return 0;
+        }
+        err = fabs(row0 - R0[a]);
+        scale = fmax(fabs(R0[a]), fabs(row0));
+        if (scale < 1.0) {
+            scale = 1.0;
+        }
+        if (err > 1.0e-10 * scale) {
+            memset(R, 0, sizeof(*R));
+            return 0;
+        }
+        R->Rt[a] = row0;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            double Rab = coeff * K[a + 1] * K[b + 1] +
+                iso * face->g_con[a + 1][b + 1];
+
+            if (!isfinite(Rab)) {
+                memset(R, 0, sizeof(*R));
+                return 0;
+            }
+            R->Rsp[a][b] = Rab;
+        }
+    }
+    return 1;
+}
+
+static double prj_flux_gr_m1_R_eval_mixed(
+    const prj_flux_gr_m1_R_eval *R, const double g_cov[4][4],
+    int up, int down)
 {
     double mixed = 0.0;
     int a;
 
     for (a = 0; a < 4; ++a) {
-        mixed += Rcon[up][a] * g_cov[a][down];
+        mixed += prj_flux_gr_m1_R_eval_get(R, up, a) * g_cov[a][down];
     }
     return mixed;
+}
+
+static int prj_flux_gr_m1_fbar_eval(
+    const prj_flux_gr_m1_side_cache *side, const prj_flux_gr_m1_R_eval *R,
+    double *fbar_out)
+{
+    double H[4];
+    double J = 0.0;
+    double Hnorm2 = 0.0;
+    double fbar;
+    int a;
+    int b;
+
+    if (fbar_out != 0) {
+        *fbar_out = 0.0;
+    }
+    if (fbar_out == 0 || side == 0 || R == 0 || !side->fbar_frame_ok) {
+        return 0;
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            J += prj_flux_gr_m1_R_eval_get(R, a, b) *
+                side->ucov[a] * side->ucov[b];
+        }
+    }
+    if (!isfinite(J) || J < 0.0) {
+        return 0;
+    }
+    if (J == 0.0) {
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                if (prj_flux_gr_m1_R_eval_get(R, a, b) != 0.0) {
+                    return 0;
+                }
+            }
+        }
+        return 1;
+    }
+
+    for (a = 0; a < 4; ++a) {
+        double Ru = 0.0;
+
+        for (b = 0; b < 4; ++b) {
+            Ru += prj_flux_gr_m1_R_eval_get(R, b, a) * side->ucov[b];
+        }
+        H[a] = -Ru - J * side->ucon[a];
+        if (!isfinite(H[a])) {
+            return 0;
+        }
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            Hnorm2 += side->hcov[a][b] * H[a] * H[b];
+        }
+    }
+    if (!isfinite(Hnorm2) || Hnorm2 < -1.0e-12 * J * J) {
+        return 0;
+    }
+    if (Hnorm2 < 0.0) {
+        Hnorm2 = 0.0;
+    }
+
+    fbar = sqrt(Hnorm2) / J;
+    if (!isfinite(fbar) || fbar < 0.0) {
+        fbar = 0.0;
+    } else if (fbar > 1.0) {
+        fbar = 1.0;
+    }
+    *fbar_out = fbar;
+    return 1;
 }
 
 static void prj_flux_gr_m1_build_R_fail(const prj_z4c_hydro_geom *geom,
@@ -1595,24 +1946,19 @@ static void prj_flux_gr_m1_fbar_fail(const prj_z4c_hydro_geom *geom,
  * invariant across all (field, group) pairs of this side, so it is built once
  * by the caller and reused through the NRAD*NEGROUP inner loop. */
 static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
-    const prj_z4c_hydro_geom *geom, const double g_cov[4][4],
-    const double g_con[4][4], const double *W, int field, int group,
-    const prj_rad_gr_m1_closure_ctx *closure,
-    const prj_rad_gr_m1_side_data *side,
-    const prj_flux_gr_m1_wave_cache *wave, double U[4], double F[4],
+    const prj_z4c_hydro_geom *geom, const double *W, int field, int group,
+    const prj_flux_gr_m1_face_cache *face,
+    const prj_flux_gr_m1_side_cache *side, double U[4], double F[4],
     double *smin, double *smax)
 {
-    const double c = PRJ_CLIGHT;
-    const double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
     double E;
     double Fcov[3];
     double Fcon[3];
     double Fmag;
     double fbar = 0.0;
-    double Rcon[4][4];
+    prj_flux_gr_m1_R_eval R;
     int i;
 
-    (void)closure;
     E = W[PRJ_PRIM_RAD_E(field, group)];
     Fcov[0] = W[PRJ_PRIM_RAD_F1(field, group)];
     Fcov[1] = W[PRJ_PRIM_RAD_F2(field, group)];
@@ -1624,35 +1970,31 @@ static void prj_flux_gr_m1_state_flux(const prj_rad *rad,
     }
     prj_flux_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag);
 
-    if (!prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon, Rcon)) {
+    if (!prj_flux_gr_m1_build_R_eval(face, E, Fcon, &R)) {
         prj_flux_gr_m1_build_R_fail(geom, W, field, group, E, Fcov, Fcon,
             Fmag);
     }
-    {
-        double alpha_sqrt_gamma = geom->alpha * geom->sqrt_gamma;
-        double ucon[4];
 
-        /* Eqs. (19)-(20) of the paper, converted to the code's explicit-c
-         * Eulerian moments.  The energy equation uses the code's normal-frame
-         * flux sign convention, equivalent to substituting paper Eq. (2):
-         * F_E = c alpha^2 sqrt(gamma) R^{01}.  Momentum fluxes are
-         * F_{F_j} = c^2 sqrt(-g) R^1_j. */
-        U[0] = geom->sqrt_gamma * geom->alpha * geom->alpha * Rcon[0][0];
-        F[0] = c * geom->alpha * alpha_sqrt_gamma * Rcon[0][1];
-        for (i = 0; i < 3; ++i) {
-            U[1 + i] = c * alpha_sqrt_gamma *
-                prj_flux_gr_m1_R_mixed(Rcon, g_cov, 0, i + 1);
-            F[1 + i] = c2 * alpha_sqrt_gamma *
-                prj_flux_gr_m1_R_mixed(Rcon, g_cov, 1, i + 1);
-        }
-        prj_flux_gr_m1_coord_ucon(geom, side, ucon);
-        if (!prj_rad_grm1_fbar_from_R(g_cov, g_con, ucon, Rcon, &fbar)) {
-            prj_flux_gr_m1_fbar_fail(geom, W, field, group, E, Fcov, Fcon,
-                Fmag);
-        }
+    /* Eqs. (19)-(20) of the paper, converted to the code's explicit-c
+     * Eulerian moments.  The energy equation uses the code's normal-frame flux
+     * sign convention, equivalent to substituting paper Eq. (2):
+     * F_E = c alpha^2 sqrt(gamma) R^{01}.  Momentum fluxes are
+     * F_{F_j} = c^2 sqrt(-g) R^1_j. */
+    U[0] = face->sqrt_alpha_alpha * prj_flux_gr_m1_R_eval_get(&R, 0, 0);
+    F[0] = face->c_alpha_alpha_sqrt_gamma *
+        prj_flux_gr_m1_R_eval_get(&R, 0, 1);
+    for (i = 0; i < 3; ++i) {
+        U[1 + i] = face->c_alpha_sqrt_gamma *
+            prj_flux_gr_m1_R_eval_mixed(&R, face->g_cov, 0, i + 1);
+        F[1 + i] = face->c2_alpha_sqrt_gamma *
+            prj_flux_gr_m1_R_eval_mixed(&R, face->g_cov, 1, i + 1);
+    }
+    if (!prj_flux_gr_m1_fbar_eval(side, &R, &fbar)) {
+        prj_flux_gr_m1_fbar_fail(geom, W, field, group, E, Fcov, Fcon,
+            Fmag);
     }
 
-    prj_flux_gr_m1_wavespeeds(rad, wave, Fcon, Fmag, fbar, smin, smax);
+    prj_flux_gr_m1_wavespeeds(rad, &side->wave, Fcon, Fmag, fbar, smin, smax);
 }
 
 static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
@@ -1664,17 +2006,9 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
     double dx_dir = dx != 0 ? dx[dir] : 0.0;
     int field;
     int group;
-    /* Metric/velocity context is invariant across (field, group) for each side
-     * of the face, so build it once here and reuse it in each state flux. */
-    prj_rad_gr_m1_closure_ctx closureL;
-    prj_rad_gr_m1_closure_ctx closureR;
-    /* Per-side fluid kinematics are likewise group-invariant. */
-    prj_rad_gr_m1_side_data sideL;
-    prj_rad_gr_m1_side_data sideR;
-    prj_flux_gr_m1_wave_cache waveL;
-    prj_flux_gr_m1_wave_cache waveR;
-    double g_cov[4][4];
-    double g_con[4][4];
+    prj_flux_gr_m1_face_cache face;
+    prj_flux_gr_m1_side_cache sideL;
+    prj_flux_gr_m1_side_cache sideR;
 
     if (rad == 0 || WL == 0 || WR == 0 || geom == 0 || flux == 0) {
         return;
@@ -1686,13 +2020,9 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
     (void)ir;
     (void)jr;
     (void)kr;
-    prj_flux_gr_m1_closure_ctx(geom, WL, &closureL);
-    prj_flux_gr_m1_closure_ctx(geom, WR, &closureR);
-    prj_rad_gr_m1_prepare_side(&closureL, &sideL);
-    prj_rad_gr_m1_prepare_side(&closureR, &sideR);
-    prj_flux_gr_m1_metric4(geom, g_cov, g_con);
-    prj_flux_gr_m1_wave_cache_init(geom, &sideL, &waveL);
-    prj_flux_gr_m1_wave_cache_init(geom, &sideR, &waveR);
+    prj_flux_gr_m1_face_cache_init(geom, &face);
+    prj_flux_gr_m1_side_cache_init(geom, WL, &face, &sideL);
+    prj_flux_gr_m1_side_cache_init(geom, WR, &face, &sideR);
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -1718,12 +2048,10 @@ static void prj_flux_gr_m1(const prj_rad *rad, const double *WL,
             if (!isfinite(chi_ext) || chi_ext < 0.0) {
                 chi_ext = 0.0;
             }
-            prj_flux_gr_m1_state_flux(rad, geom, g_cov, g_con, WL, field,
-                group, &closureL, &sideL, &waveL, UL, FphysL, &lamL_min,
-                &lamL_max);
-            prj_flux_gr_m1_state_flux(rad, geom, g_cov, g_con, WR, field,
-                group, &closureR, &sideR, &waveR, UR, FphysR, &lamR_min,
-                &lamR_max);
+            prj_flux_gr_m1_state_flux(rad, geom, WL, field, group, &face,
+                &sideL, UL, FphysL, &lamL_min, &lamL_max);
+            prj_flux_gr_m1_state_flux(rad, geom, WR, field, group, &face,
+                &sideR, UR, FphysR, &lamR_min, &lamR_max);
 
             sL = lamL_min < lamR_min ? lamL_min : lamR_min;
             sR = lamL_max > lamR_max ? lamL_max : lamR_max;
@@ -2022,6 +2350,12 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
         int jend = PRJ_BLOCK_SIZE;
         int kstart = 0;
         int kend = PRJ_BLOCK_SIZE;
+        int ristart = 0;
+        int riend = PRJ_BLOCK_SIZE;
+        int rjstart = 0;
+        int rjend = PRJ_BLOCK_SIZE;
+        int rkstart = 0;
+        int rkend = PRJ_BLOCK_SIZE;
 
 #if PRJ_MHD
         /* MHD needs one extra transverse face layer (CT/EMF reconstruction). */
@@ -2047,10 +2381,20 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
             kend = PRJ_BLOCK_SIZE - 1;
         }
 #endif
+        if (dir != X1DIR) {
+            riend = PRJ_BLOCK_SIZE - 1;
+        }
+        if (dir != X2DIR) {
+            rjend = PRJ_BLOCK_SIZE - 1;
+        }
+        if (dir != X3DIR) {
+            rkend = PRJ_BLOCK_SIZE - 1;
+        }
 
         /* Variable-outermost reconstruction pass over the block. */
         prj_flux_reconstruct_block(W, eosvar, dir,
             istart, iend, jstart, jend, kstart, kend,
+            ristart, riend, rjstart, rjend, rkstart, rkend,
             WL_block, WR_block, pL_block, pR_block, gL_block, gR_block);
 
         for (i = istart; i <= iend; ++i) {
@@ -2066,7 +2410,7 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                     size_t base = (size_t)LIDX(i, j, kstart);
                     int v;
                     int kk;
-                    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+                    for (v = 0; v < PRJ_NHYDRO; ++v) {
                         const double *src_l =
                             &WL_block[VPLANE((size_t)v) + base];
                         const double *src_r =
@@ -2076,6 +2420,30 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
                             WRp[(size_t)kk * PRJ_NVAR_PRIM + v] = src_r[kk];
                         }
                     }
+#if PRJ_NRAD > 0
+                    {
+                        int kk0;
+                        int kk1;
+
+                        if (prj_flux_rad_strip_k_bounds(dir, i, j, kstart, kend,
+                                &kk0, &kk1)) {
+                            for (v = PRJ_NHYDRO; v < PRJ_NVAR_PRIM; ++v) {
+                                const double *src_l =
+                                    &WL_block[VPLANE((size_t)v) + base + (size_t)kk0];
+                                const double *src_r =
+                                    &WR_block[VPLANE((size_t)v) + base + (size_t)kk0];
+
+                                for (kk = kk0; kk <= kk1; ++kk) {
+                                    size_t dst = (size_t)kk * PRJ_NVAR_PRIM +
+                                        (size_t)v;
+
+                                    WLp[dst] = src_l[kk - kk0];
+                                    WRp[dst] = src_r[kk - kk0];
+                                }
+                            }
+                        }
+                    }
+#endif
                     for (kk = 0; kk < strip; ++kk) {
                         pLp[kk] = pL_block[base + kk];
                         pRp[kk] = pR_block[base + kk];
