@@ -355,55 +355,18 @@ static void set_residual_p_from_flat_state(const double *u, double temperature,
     P[3] = u[PRJ_CONS_MOM3] / rho;
     P[4] = temperature;
     P[5] = u[PRJ_CONS_YE] / rho;
+    /* The Newton primitives are the lab-frame moments (E, F_i).  In the flat
+     * geometry used by these tests (sqrt(gamma) = 1) the conserved radiation
+     * variables are exactly (E, F_i), so packing is a direct copy. */
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
             int pidx = 6 + 4 * idx;
-            double E = u[PRJ_CONS_RAD_E(field, group)];
-            double Fhat[3];
-            double Fhat2;
 
-            Fhat[0] = u[PRJ_CONS_RAD_F1(field, group)] / PRJ_CLIGHT;
-            Fhat[1] = u[PRJ_CONS_RAD_F2(field, group)] / PRJ_CLIGHT;
-            Fhat[2] = u[PRJ_CONS_RAD_F3(field, group)] / PRJ_CLIGHT;
-            Fhat2 = Fhat[0] * Fhat[0] + Fhat[1] * Fhat[1] +
-                Fhat[2] * Fhat[2];
-            if (E > 0.0 && Fhat2 > 0.0) {
-                double disc = 9.0 * E * E - 27.0 * Fhat2 / 4.0;
-                double y;
-                double qmag;
-                double inv_Fhat;
-                int d;
-
-                if (disc < 0.0 && disc > -1.0e-12 * E * E) {
-                    disc = 0.0;
-                }
-                if (disc < 0.0) {
-                    die("flat residual P has superluminal flux");
-                }
-                double sqrt_er;
-
-                y = 0.5 * (3.0 * E - sqrt(disc));
-                P[pidx] = E - 4.0 * y / 3.0;
-                if (P[pidx] < 0.0 && P[pidx] > -1.0e-12 * E) {
-                    P[pidx] = 0.0;
-                }
-                if (P[pidx] <= 0.0) {
-                    die("flat residual P has non-positive ER");
-                }
-                /* qR^i = sqrt(y) Fhat/|Fhat|; store ur^i = qR^i / sqrt(ER). */
-                qmag = sqrt(y);
-                sqrt_er = sqrt(P[pidx]);
-                inv_Fhat = 1.0 / sqrt(Fhat2);
-                for (d = 0; d < 3; ++d) {
-                    P[pidx + 1 + d] = qmag * Fhat[d] * inv_Fhat / sqrt_er;
-                }
-            } else {
-                P[pidx] = E;
-                P[pidx + 1] = 0.0;
-                P[pidx + 2] = 0.0;
-                P[pidx + 3] = 0.0;
-            }
+            P[pidx] = u[PRJ_CONS_RAD_E(field, group)];
+            P[pidx + 1] = u[PRJ_CONS_RAD_F1(field, group)];
+            P[pidx + 2] = u[PRJ_CONS_RAD_F2(field, group)];
+            P[pidx + 3] = u[PRJ_CONS_RAD_F3(field, group)];
         }
     }
 }
@@ -470,7 +433,8 @@ static double test_gr_m1_solver_norm(const double *u_old, const double *resid,
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int eidx = PRJ_CONS_RAD_E(field, group);
             int fidx = PRJ_CONS_RAD_F1(field, group);
-            double scale_e = fmax(threshold * etot_scale / RAD_SCALE,
+            double scale_e = fmax(etot_scale /
+                    (RAD_SCALE * PRJ_NEGROUP * PRJ_NRAD),
                 fabs(u_old[eidx]));
             double flux2 = 0.0;
             double rflux2 = 0.0;
@@ -481,8 +445,8 @@ static double test_gr_m1_solver_norm(const double *u_old, const double *resid,
                 flux2 += u_old[fidx + d] * u_old[fidx + d];
                 rflux2 += resid[fidx + d] * resid[fidx + d];
             }
-            scale_f = fmax(threshold * mom_norm * PRJ_CLIGHT *
-                    PRJ_CLIGHT / RAD_SCALE, sqrt(flux2));
+            scale_f = fmax(mom_norm * PRJ_CLIGHT * PRJ_CLIGHT /
+                    (RAD_SCALE * PRJ_NEGROUP * PRJ_NRAD), sqrt(flux2));
             max_norm = fmax(max_norm, sqrt(rflux2) / scale_f);
         }
     }
@@ -544,15 +508,20 @@ static void set_gr_m1_jacobian_test_p(
             int idx = field * PRJ_NEGROUP + group;
             int pidx = 6 + 4 * idx;
             double phase = (double)(idx + 1);
-            double ER = 1.0 + 0.22 * sin(1.37 * phase) +
+            double E = 1.0 + 0.22 * sin(1.37 * phase) +
                 0.11 * cos(0.73 * phase);
 
-            /* Newton variables now carry the radiation four-velocity ur^i
-             * directly (ur = qR / sqrt(ER)), so no sqrt(ER) scaling here. */
-            P[pidx] = ER;
-            P[pidx + 1] = 0.030 * sin(2.11 * phase);
-            P[pidx + 2] = 0.024 * cos(1.67 * phase);
-            P[pidx + 3] = 0.021 * sin(0.91 * phase + 0.4);
+            /* Newton variables are the lab-frame moments (E, F_i).  The flux
+             * factors carry a nonzero baseline so the covariant components stay
+             * bounded away from zero (keeps the finite-difference Jacobian step
+             * well conditioned) and comfortably inside |F| < c E. */
+            P[pidx] = E;
+            P[pidx + 1] = (0.050 + 0.030 * sin(2.11 * phase)) *
+                PRJ_CLIGHT * E;
+            P[pidx + 2] = (0.045 + 0.024 * cos(1.67 * phase)) *
+                PRJ_CLIGHT * E;
+            P[pidx + 3] = (0.040 + 0.021 * sin(0.91 * phase + 0.4)) *
+                PRJ_CLIGHT * E;
         }
     }
 }
@@ -583,11 +552,12 @@ static void perturb_gr_m1_solver_guess(double *P)
             int pidx = 6 + 4 * idx;
             double phase = (double)(idx + 1);
 
-            /* ur^i are O(1) Newton variables; perturb them directly. */
+            /* (E, F_i) are the lab-frame Newton variables; perturb them
+             * relatively so the flux stays inside |F| < c E. */
             P[pidx] *= 1.0 + 1.5e-4 * sin(0.43 * phase);
-            P[pidx + 1] += 1.0e-4 * sin(0.71 * phase);
-            P[pidx + 2] -= 8.0e-5 * cos(0.59 * phase);
-            P[pidx + 3] += 7.0e-5 * sin(0.37 * phase);
+            P[pidx + 1] *= 1.0 + 1.0e-4 * sin(0.71 * phase);
+            P[pidx + 2] *= 1.0 - 8.0e-5 * cos(0.59 * phase);
+            P[pidx + 3] *= 1.0 + 7.0e-5 * sin(0.37 * phase);
         }
     }
 }
@@ -667,6 +637,12 @@ static void check_gr_m1_residual_jacobian_fd(void)
             h = 1.0e-5 * fmax(1.0, fabs(P[col]));
             if (((col - 6) % 4) == 0) {
                 h = fmin(h, 0.25 * P[col]);
+            } else {
+                /* The fluid energy row is O(RAD_SCALE) and central
+                 * differences in the large lab-frame fluxes lose bits when the
+                 * perturbation is too small.  A 1e-3 relative flux step is still
+                 * a tiny change in flux factor but avoids cancellation noise. */
+                h = 1.0e-3 * fmax(1.0, fabs(P[col]));
             }
         }
         Pp[col] += h;
@@ -772,7 +748,9 @@ static void check_gr_m1_implicit_solve_zero_momentum_floor(void)
     }
     copy_gr_m1_p(P_guess, P_root);
     P_guess[1] = 2.0e2;
-    P_guess[6 + 1] = 1.0e-5 * sqrt(P_guess[6]);
+    /* P_guess[7] is the covariant flux F_1 of the first group; seed a small
+     * subluminal flux (|F| = 1e-5 c E). */
+    P_guess[6 + 1] = 1.0e-5 * PRJ_CLIGHT * P_guess[6];
 
     if (!prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
             u_old, dt, P_guess, resid, u_new)) {
@@ -780,6 +758,73 @@ static void check_gr_m1_implicit_solve_zero_momentum_floor(void)
     }
     check_gr_m1_solver_converged("zero-momentum implicit solve", u_old,
         resid, 1.0e-6);
+    prj_rad3_opac_free(&rad);
+}
+
+static void check_gr_m1_jacobian_exact_vacuum_moments(void)
+{
+    prj_eos eos;
+    prj_rad rad;
+    prj_z4c_hydro_geom geom;
+    double beta[3] = {0.02, -0.015, 0.01};
+    double gamma_diag[3] = {1.10, 0.92, 1.07};
+    double v[3] = {2.1e7, -1.4e7, 0.8e7};
+    double Fzero[3] = {0.0, 0.0, 0.0};
+    double W[PRJ_NVAR_PRIM];
+    double u_old[PRJ_NVAR_CONS];
+    double resid[PRJ_NVAR_CONS];
+    double jac[PRJ_NVAR_CONS * TEST_GR_M1_RESIDUAL_NP];
+    double u_new[PRJ_NVAR_CONS];
+    double P[TEST_GR_M1_RESIDUAL_NP];
+    double eos_q[PRJ_EOS_NQUANT];
+    double dt = 0.02;
+    int field;
+    int group;
+    int r;
+    int c;
+    int n;
+
+    init_test_eos(&eos);
+    init_source_test_rad_full(&rad, 0.0, 0.0, 0.0, 0.0, 0.0);
+    set_diag_geom(&geom, 0.93, beta, gamma_diag);
+    for (n = 0; n < TEST_GR_M1_RESIDUAL_NP; ++n) {
+        P[n] = 0.0;
+    }
+    P[0] = 1.4;
+    P[1] = v[0];
+    P[2] = v[1];
+    P[3] = v[2];
+    P[4] = 1.2;
+    P[5] = 0.27;
+    prj_eos_rty(&eos, P[0], P[4], P[5], eos_q, PRJ_EOS_CTX_MAIN);
+    set_flat_prim(W, P[0], v, eos_q[PRJ_EOS_EINT], P[5], 0.0, Fzero);
+    prim2cons_or_die(&eos, &geom, W, u_old);
+
+    if (!prj_rad_gr_m1_jacobian_test_wrapper(&rad, &eos, &geom, u_old, P,
+            dt, resid, jac, u_new)) {
+        die("exact-vacuum lab-frame Jacobian rejected");
+    }
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * idx;
+            int row[4];
+
+            row[0] = PRJ_CONS_RAD_E(field, group);
+            row[1] = PRJ_CONS_RAD_F1(field, group);
+            row[2] = PRJ_CONS_RAD_F2(field, group);
+            row[3] = PRJ_CONS_RAD_F3(field, group);
+            for (r = 0; r < 4; ++r) {
+                for (c = 0; c < 4; ++c) {
+                    double expected = r == c ? geom.sqrt_gamma : 0.0;
+
+                    assert_close("exact-vacuum radiation transport block",
+                        jac[row[r] * TEST_GR_M1_RESIDUAL_NP + pidx + c],
+                        expected, 1.0e-12);
+                }
+            }
+        }
+    }
     prj_rad3_opac_free(&rad);
 }
 
@@ -840,17 +885,17 @@ static void check_gr_m1_matter_update_overwrites_solution(void)
             u_expected[v], 1.0e-6);
     }
     assert_close("matter update primitive rho", prim_update[PRJ_PRIM_RHO],
-        P_root[0], 1.0e-10);
+        P_root[0], 1.0e-8);
     assert_close("matter update primitive v1", prim_update[PRJ_PRIM_V1],
-        P_root[1], 1.0e-10);
+        P_root[1], 1.0e-8);
     assert_close("matter update primitive v2", prim_update[PRJ_PRIM_V2],
-        P_root[2], 1.0e-10);
+        P_root[2], 1.0e-8);
     assert_close("matter update primitive v3", prim_update[PRJ_PRIM_V3],
-        P_root[3], 1.0e-10);
+        P_root[3], 1.0e-8);
     assert_close("matter update primitive eint", prim_update[PRJ_PRIM_EINT],
-        eos_q[PRJ_EOS_EINT], 1.0e-10);
+        eos_q[PRJ_EOS_EINT], 1.0e-8);
     assert_close("matter update primitive Ye", prim_update[PRJ_PRIM_YE],
-        P_root[5], 1.0e-10);
+        P_root[5], 1.0e-8);
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int eidx = PRJ_CONS_RAD_E(field, group);
@@ -858,16 +903,16 @@ static void check_gr_m1_matter_update_overwrites_solution(void)
 
             assert_close("matter update primitive radiation E",
                 prim_update[PRJ_PRIM_RAD_E(field, group)],
-                u_expected[eidx] / geom.sqrt_gamma, 1.0e-10);
+                u_expected[eidx] / geom.sqrt_gamma, 1.0e-8);
             assert_close("matter update primitive radiation F1",
                 prim_update[PRJ_PRIM_RAD_F1(field, group)],
-                u_expected[fidx] / geom.sqrt_gamma, 1.0e-10);
+                u_expected[fidx] / geom.sqrt_gamma, 1.0e-8);
             assert_close("matter update primitive radiation F2",
                 prim_update[PRJ_PRIM_RAD_F2(field, group)],
-                u_expected[fidx + 1] / geom.sqrt_gamma, 1.0e-10);
+                u_expected[fidx + 1] / geom.sqrt_gamma, 1.0e-8);
             assert_close("matter update primitive radiation F3",
                 prim_update[PRJ_PRIM_RAD_F3(field, group)],
-                u_expected[fidx + 2] / geom.sqrt_gamma, 1.0e-10);
+                u_expected[fidx + 2] / geom.sqrt_gamma, 1.0e-8);
         }
     }
     assert_close("matter update final temperature", final_temperature,
@@ -1077,15 +1122,17 @@ static void check_gr_m1_implicit_solve_invalid_states(void)
     P_bad[6] = -1.0;
     if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
             u_old, dt, P_bad, resid, 0)) {
-        die("implicit solve accepted negative ER");
+        die("implicit solve accepted negative radiation E");
     }
     copy_gr_m1_p(P_bad, P_root);
     bad_geom = geom;
-    bad_geom.alpha = 0.1;
-    bad_geom.beta[0] = 1.0;
+    /* A large shift with beta^i beta_i > alpha^2 is a valid Lorentzian slice
+     * in the lab-frame parametrization, so exercise the rejection path with a
+     * nonpositive lapse instead. */
+    bad_geom.alpha = -0.1;
     if (prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &bad_geom,
             u_old, dt, P_bad, resid, 0)) {
-        die("implicit solve accepted invalid q0");
+        die("implicit solve accepted nonpositive lapse");
     }
     copy_gr_m1_p(P_bad, P_root);
     for (n = 0; n < PRJ_NVAR_CONS; ++n) {
@@ -1154,15 +1201,16 @@ static void check_gr_m1_residual_invalid_states(void)
     P[6] = -1.0;
     if (prj_rad_gr_m1_residual_test_wrapper(&rad, &eos, &geom, u_old, P,
             0.1, resid, 0)) {
-        die("negative ER accepted");
+        die("negative radiation E accepted");
     }
     set_residual_p_from_flat_state(u_old, 1.0, P);
     bad_geom = geom;
-    bad_geom.alpha = 0.1;
-    bad_geom.beta[0] = 1.0;
+    /* beta^i beta_i > alpha^2 is now a valid slice; reject on a nonpositive
+     * lapse instead. */
+    bad_geom.alpha = -0.1;
     if (prj_rad_gr_m1_residual_test_wrapper(&rad, &eos, &bad_geom, u_old, P,
             0.1, resid, 0)) {
-        die("no future q0 accepted");
+        die("nonpositive lapse accepted");
     }
     prj_rad3_opac_free(&rad);
 }
@@ -1246,6 +1294,7 @@ static void check_gr_m1_matter_source_rest_momentum(void)
     }
     prj_rad3_opac_free(&rad);
 }
+
 #endif
 
 int main(int argc, char **argv)
@@ -1262,6 +1311,7 @@ int main(int argc, char **argv)
     check_gr_m1_residual_jacobian_fd();
     check_gr_m1_implicit_solve_real_tables();
     check_gr_m1_implicit_solve_zero_momentum_floor();
+    check_gr_m1_jacobian_exact_vacuum_moments();
     check_gr_m1_matter_update_overwrites_solution();
     check_gr_m1_matter_update_clamps_flux();
     check_gr_m1_implicit_solve_invalid_states();

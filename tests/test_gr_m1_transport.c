@@ -64,6 +64,32 @@ static void init_test_rad(prj_rad *rad)
     }
 }
 
+/* Flat GR-vs-non-GR comparisons cross the exact GR closure with the legacy
+ * tabulated M1 closure, so choose flux factors exactly on chi(f) table nodes. */
+static void set_flat_flux_at_chi_node(double E, int node,
+    const double dir[3], double Fcov[3])
+{
+    double norm2 = dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2];
+    double norm;
+    double f;
+    double scaled;
+    int a;
+
+    if (node < 0 || node > NCLOSURE || norm2 <= 0.0 || E <= 0.0) {
+        die("invalid closure-table flux node");
+    }
+    norm = sqrt(norm2);
+    f = (double)node / (double)NCLOSURE;
+    for (a = 0; a < 3; ++a) {
+        Fcov[a] = PRJ_CLIGHT * E * f * dir[a] / norm;
+    }
+    scaled = sqrt(Fcov[0] * Fcov[0] + Fcov[1] * Fcov[1] +
+            Fcov[2] * Fcov[2]) / (PRJ_CLIGHT * E) * (double)NCLOSURE;
+    if (fabs(scaled - (double)node) > 1.0e-12 * fmax(1.0, scaled)) {
+        die("flux factor missed closure-table node");
+    }
+}
+
 static void make_closure_ctx(const prj_z4c_hydro_geom *geom,
     const double vcon[3], const double dvdx[3][3], int have_shear,
     double opacity, prj_rad_gr_m1_closure_ctx *ctx)
@@ -1023,7 +1049,8 @@ static void check_flat_zero_shift_matches_non_gr(void)
     prj_rad rad;
     double beta[3] = {0.0, 0.0, 0.0};
     double gamma_diag[3] = {1.0, 1.0, 1.0};
-    double Fcov[3] = {0.12 * PRJ_CLIGHT, -0.04 * PRJ_CLIGHT, 0.03 * PRJ_CLIGHT};
+    double Fcov[3];
+    double Fdir[3] = {12.0, -4.0, 3.0};
     double got[4];
     double expected[PRJ_NVAR_CONS] = {0.0};
     double Wface[PRJ_NVAR_PRIM] = {0.0};
@@ -1033,6 +1060,7 @@ static void check_flat_zero_shift_matches_non_gr(void)
     init_test_eos(&eos);
     init_test_rad(&rad);
     set_uniform_z4c(&mesh.blocks[0], 1.0, beta, gamma_diag);
+    set_flat_flux_at_chi_node(2.0, 13, Fdir, Fcov);
     fill_constant_state(&mesh.blocks[0], 2.0, Fcov);
     flux_at_xface(&eos, &rad, &mesh, PRJ_BLOCK_SIZE / 2, 1, 1, got);
     set_combined_rad_state(Wface, 2.0, Fcov);
@@ -1054,7 +1082,8 @@ static void check_flat_shift_terms(void)
     double beta[3] = {0.025, -0.01, 0.0};
     double gamma_diag[3] = {1.0, 1.0, 1.0};
     double E = 1.7;
-    double Fcov[3] = {0.08 * PRJ_CLIGHT, 0.05 * PRJ_CLIGHT, -0.02 * PRJ_CLIGHT};
+    double Fcov[3];
+    double Fdir[3] = {2.0, 3.0, -6.0};
     double got[4];
     double base[PRJ_NVAR_CONS] = {0.0};
     double expected[4];
@@ -1065,6 +1094,7 @@ static void check_flat_shift_terms(void)
     init_test_eos(&eos);
     init_test_rad(&rad);
     set_uniform_z4c(&mesh.blocks[0], 1.0, beta, gamma_diag);
+    set_flat_flux_at_chi_node(E, 7, Fdir, Fcov);
     fill_constant_state(&mesh.blocks[0], E, Fcov);
     flux_at_xface(&eos, &rad, &mesh, PRJ_BLOCK_SIZE / 2, 1, 1, got);
     set_combined_rad_state(Wface, E, Fcov);

@@ -1310,6 +1310,245 @@ int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
     return 1;
 }
 
+/* Analytic Jacobian of the algebraic M1 closure with respect to the lab-frame
+ * (Eulerian) primitives p = (E, F_1, F_2, F_3), where F_i is the covariant
+ * flux (raised to F^i with the spatial inverse metric `gamma_inv`).  The tensor
+ * is reconstructed exactly as prj_rad_grm1_build_R; this routine additionally
+ * propagates the derivatives through the closure scalars (see the "lab-frame
+ * (E,F_i) reparametrization" note, Section 6).  Outputs the tensor in `Rcon`
+ * and dR^{ab}/dp_c in `dRcon[c][a][b]` (c=0 is E, c=1..3 is F_1..F_3).  The R
+ * part reproduces build_R bit-for-bit so the residual and Jacobian linearize
+ * about the same stress tensor. */
+static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
+    const double g_con[4][4], double alpha, const double gamma_inv[3][3],
+    double E, const double Fcov[3], double Rcon[4][4], double dRcon[4][4][4])
+{
+    double ncon[4];
+    double Fcon[3];
+    double R0[4];
+    double R0cov[4];
+    double T[4][4];
+    double K[4];
+    double A = 0.0;
+    double B;
+    double G;
+    double disc;
+    double disc_scale;
+    double sqrt_disc;
+    double root_denom;
+    double denom;
+    double iso;
+    double coeff;
+    double dA[4] = {0.0, 0.0, 0.0, 0.0};
+    int clamp_A;
+    int a;
+    int b;
+    int cc;
+
+    if (Rcon != 0) {
+        memset(Rcon, 0, 16 * sizeof(double));
+    }
+    if (dRcon != 0) {
+        memset(dRcon, 0, 64 * sizeof(double));
+    }
+    if (Rcon == 0 || dRcon == 0 || g_cov == 0 || g_con == 0 ||
+        gamma_inv == 0 || Fcov == 0 || !isfinite(alpha) || alpha <= 0.0 ||
+        !isfinite(E) || E < 0.0) {
+        return 0;
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            if (!isfinite(g_cov[a][b]) || !isfinite(g_con[a][b])) {
+                return 0;
+            }
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcov[a])) {
+            return 0;
+        }
+        Fcon[a] = 0.0;
+        for (b = 0; b < 3; ++b) {
+            Fcon[a] += gamma_inv[a][b] * Fcov[b];
+        }
+        if (!isfinite(Fcon[a])) {
+            return 0;
+        }
+    }
+
+    ncon[0] = 1.0 / alpha;
+    for (a = 0; a < 3; ++a) {
+        ncon[a + 1] = -alpha * g_con[0][a + 1];
+    }
+
+    R0[0] = E * ncon[0] * ncon[0];
+    for (a = 0; a < 3; ++a) {
+        R0[a + 1] = E * ncon[0] * ncon[a + 1] +
+            (Fcon[a] / PRJ_CLIGHT) * ncon[0];
+    }
+
+    B = R0[0];
+    if (!isfinite(B) || B < 0.0) {
+        return 0;
+    }
+    if (B == 0.0) {
+        double dFcon[4][4] = {{0.0}};
+
+        for (a = 0; a < 3; ++a) {
+            if (Fcon[a] != 0.0) {
+                return 0;
+            }
+            for (b = 0; b < 3; ++b) {
+                dFcon[b + 1][a] = gamma_inv[b][a];
+            }
+        }
+        /* The algebraic closure has a removable 0/0 at exactly E=F=0.
+         * Use the isotropic normal-frame seed:
+         *   dR/dE = (4 n^a n^b + g^{ab})/3,
+         *   dR/dF_j = (dF^a_j n^b + n^a dF^b_j)/c.
+         */
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                dRcon[0][a][b] = ((4.0 / 3.0) * ncon[a] * ncon[b]) +
+                    (g_con[a][b] / 3.0);
+            }
+        }
+        for (cc = 1; cc < 4; ++cc) {
+            int jc = cc - 1;
+
+            for (a = 0; a < 4; ++a) {
+                for (b = 0; b < 4; ++b) {
+                    dRcon[cc][a][b] =
+                        (dFcon[a][jc] * ncon[b] +
+                         ncon[a] * dFcon[b][jc]) / PRJ_CLIGHT;
+                }
+            }
+        }
+        for (cc = 0; cc < 4; ++cc) {
+            for (a = 0; a < 4; ++a) {
+                for (b = 0; b < 4; ++b) {
+                    if (!isfinite(dRcon[cc][a][b])) {
+                        memset(dRcon, 0, 64 * sizeof(double));
+                        return 0;
+                    }
+                }
+            }
+        }
+        return 1;
+    }
+
+    /* Seeds T[c][a] = dR^{0a}/dp_c (geometry only, so constant in p). */
+    for (cc = 0; cc < 4; ++cc) {
+        for (a = 0; a < 4; ++a) {
+            T[cc][a] = 0.0;
+        }
+    }
+    T[0][0] = ncon[0] * ncon[0];
+    for (a = 0; a < 3; ++a) {
+        T[0][a + 1] = ncon[0] * ncon[a + 1];
+    }
+    for (cc = 1; cc < 4; ++cc) {
+        int jc = cc - 1;
+
+        for (a = 0; a < 3; ++a) {
+            T[cc][a + 1] = ncon[0] * gamma_inv[a][jc] / PRJ_CLIGHT;
+        }
+    }
+
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            A += g_cov[a][b] * R0[a] * R0[b];
+        }
+    }
+    for (a = 0; a < 4; ++a) {
+        R0cov[a] = 0.0;
+        for (b = 0; b < 4; ++b) {
+            R0cov[a] += g_cov[a][b] * R0[b];
+        }
+    }
+    G = g_con[0][0];
+    disc_scale = fmax(B * B, fabs(3.0 * G * A));
+    if (disc_scale <= 0.0) {
+        disc_scale = 1.0;
+    }
+    clamp_A = (A > 0.0 && A <= 1.0e-12 * disc_scale);
+    if (clamp_A) {
+        A = 0.0;
+    }
+    for (cc = 0; cc < 4; ++cc) {
+        dA[cc] = 0.0;
+        for (a = 0; a < 4; ++a) {
+            dA[cc] += R0cov[a] * T[cc][a];
+        }
+        dA[cc] *= 2.0;
+        if (clamp_A) {
+            dA[cc] = 0.0;
+        }
+    }
+
+    disc = B * B + 3.0 * G * A;
+    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
+        return 0;
+    }
+    if (disc < 0.0) {
+        disc = 0.0;
+    }
+    sqrt_disc = sqrt(disc);
+    root_denom = B + sqrt_disc;
+    if (!isfinite(root_denom) || root_denom <= 0.0) {
+        return 0;
+    }
+    iso = -A / root_denom;
+    if (!isfinite(iso) || iso < 0.0) {
+        return 0;
+    }
+    denom = 2.0 * B + sqrt_disc;
+    if (!isfinite(denom) || denom <= 0.0) {
+        return 0;
+    }
+    coeff = 3.0 / denom;
+
+    for (a = 0; a < 4; ++a) {
+        K[a] = R0[a] - iso * g_con[0][a];
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            Rcon[a][b] = coeff * K[a] * K[b] + iso * g_con[a][b];
+            if (!isfinite(Rcon[a][b])) {
+                memset(Rcon, 0, 16 * sizeof(double));
+                return 0;
+            }
+        }
+    }
+    for (a = 0; a < 4; ++a) {
+        Rcon[a][0] = Rcon[0][a];
+    }
+
+    for (cc = 0; cc < 4; ++cc) {
+        double dB = T[cc][0];
+        double dDisc = 2.0 * B * dB + 3.0 * G * dA[cc];
+        double dsqrt = sqrt_disc > 0.0 ? dDisc / (2.0 * sqrt_disc) : 0.0;
+        double droot = dB + dsqrt;
+        double diso = -(dA[cc] * root_denom - A * droot) /
+            (root_denom * root_denom);
+        double ddenom = 2.0 * dB + dsqrt;
+        double dcoeff = -3.0 * ddenom / (denom * denom);
+        double dK[4];
+
+        for (a = 0; a < 4; ++a) {
+            dK[a] = T[cc][a] - diso * g_con[0][a];
+        }
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                dRcon[cc][a][b] = dcoeff * K[a] * K[b] +
+                    coeff * (dK[a] * K[b] + K[a] * dK[b]) +
+                    diso * g_con[a][b];
+            }
+        }
+    }
+    return 1;
+}
+
 typedef struct prj_rad_grm1_m3_data {
     double ucon[4];
     double ucov[4];
@@ -4975,18 +5214,6 @@ static void prj_rad_gr_m1_lower4(const double g_cov[4][4],
     }
 }
 
-static double prj_rad_gr_m1_R_mixed(const double Rcon[4][4],
-    const double g_cov[4][4], int up, int down)
-{
-    double mixed = 0.0;
-    int a;
-
-    for (a = 0; a < 4; ++a) {
-        mixed += Rcon[up][a] * g_cov[a][down];
-    }
-    return mixed;
-}
-
 static int prj_rad_gr_m1_fluid_four_velocity(
     const prj_z4c_hydro_geom *geom, const double g_cov[4][4],
     const double *P, double ucon[4], double ucov[4])
@@ -5021,62 +5248,6 @@ static int prj_rad_gr_m1_fluid_four_velocity(
     }
     prj_rad_gr_m1_lower4(g_cov, ucon, ucov);
     return 1;
-}
-
-/* Recover the timelike component ur[0] of the radiation-rest-frame four-velocity
- * from its spatial components ur[1..3] using the normalization
- * g_{ab} ur^a ur^b = -1.  This replaces the old {ER, qR^i} parametrization
- * (qR^a = sqrt(ER) ur^a): the Newton variables now carry ur^i directly so that
- * ur is the genuine four-velocity of the radiation rest frame. */
-static int prj_rad_gr_m1_ur0_from_uri(const double g_cov[4][4], double ur[4])
-{
-    double A;
-    double B = 0.0;
-    double C = 1.0;
-    double disc;
-    double disc_scale;
-    double sqrt_disc;
-    double roots[2];
-    int i;
-    int j;
-
-    for (i = 0; i < 3; ++i) {
-        if (!isfinite(ur[i + 1])) {
-            return 0;
-        }
-        B += 2.0 * g_cov[0][i + 1] * ur[i + 1];
-        for (j = 0; j < 3; ++j) {
-            C += g_cov[i + 1][j + 1] * ur[i + 1] * ur[j + 1];
-        }
-    }
-    A = g_cov[0][0];
-    if (!isfinite(A) || A == 0.0 || !isfinite(B) || !isfinite(C)) {
-        return 0;
-    }
-    disc = B * B - 4.0 * A * C;
-    disc_scale = fmax(B * B, fabs(4.0 * A * C));
-    if (disc_scale <= 0.0) {
-        disc_scale = 1.0;
-    }
-    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
-        return 0;
-    }
-    if (disc < 0.0) {
-        disc = 0.0;
-    }
-    sqrt_disc = sqrt(disc);
-    roots[0] = (-B + sqrt_disc) / (2.0 * A);
-    roots[1] = (-B - sqrt_disc) / (2.0 * A);
-    if (isfinite(roots[0]) && roots[0] > 0.0 &&
-        (!isfinite(roots[1]) || roots[1] <= 0.0 || roots[0] >= roots[1])) {
-        ur[0] = roots[0];
-        return 1;
-    }
-    if (isfinite(roots[1]) && roots[1] > 0.0) {
-        ur[0] = roots[1];
-        return 1;
-    }
-    return 0;
 }
 
 static int prj_rad_gr_m1_p_to_prim(prj_eos *eos,
@@ -5123,54 +5294,48 @@ static int prj_rad_gr_m1_p_to_prim(prj_eos *eos,
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
             int pidx = 6 + 4 * idx;
-            double ER = P[pidx];
-            double ur[4];
+            double E = P[pidx];
+            double Fcov[3];
+            double Fcon[3];
             double Rcon[4][4];
 
-            if (!isfinite(ER) || ER < 0.0) {
+            /* Newton variables are the lab-frame (Eulerian) moments
+             * p = (E, F_i); F_i is the covariant flux stored in the primitive
+             * list.  The conserved rad rows collapse to sqrt(gamma) (E, F_i),
+             * so W carries E and F_i directly.  R^{ab} is still needed for the
+             * radiation four-force, so build it from the exact algebraic M1
+             * closure and export it for the caller (the residual). */
+            if (!isfinite(E) || E < 0.0) {
                 return 0;
             }
-            ur[0] = 0.0;
-            ur[1] = P[pidx + 1];
-            ur[2] = P[pidx + 2];
-            ur[3] = P[pidx + 3];
-            if (!prj_rad_gr_m1_ur0_from_uri(g_cov, ur)) {
+            Fcov[0] = P[pidx + 1];
+            Fcov[1] = P[pidx + 2];
+            Fcov[2] = P[pidx + 3];
+            for (a = 0; a < 3; ++a) {
+                if (!isfinite(Fcov[a])) {
+                    return 0;
+                }
+                Fcon[a] = 0.0;
+                for (b = 0; b < 3; ++b) {
+                    Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
+                }
+            }
+            if (!prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon,
+                    Rcon)) {
                 return 0;
             }
-            /* R^{ab} = ER [ (4/3) ur^a ur^b + (1/3) g^{ab} ] built directly
-             * from ER and the radiation four-velocity ur (no qR).  Optionally
-             * export it so the caller (the residual) can reuse it instead of
-             * recomputing ur/Rcon a second time. */
-            for (a = 0; a < 4; ++a) {
-                for (b = 0; b < 4; ++b) {
-                    Rcon[a][b] = ER * ((4.0 / 3.0) * ur[a] * ur[b] +
-                        (1.0 / 3.0) * g_con[a][b]);
-                    if (!isfinite(Rcon[a][b])) {
-                        return 0;
-                    }
-                    if (Rcon_out != 0) {
+            if (Rcon_out != 0) {
+                for (a = 0; a < 4; ++a) {
+                    for (b = 0; b < 4; ++b) {
                         Rcon_out[idx][a][b] = Rcon[a][b];
                     }
                 }
             }
 
-            W[PRJ_PRIM_RAD_E(field, group)] =
-                geom->alpha * geom->alpha * Rcon[0][0];
-            W[PRJ_PRIM_RAD_F1(field, group)] =
-                PRJ_CLIGHT * geom->alpha *
-                prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 1);
-            W[PRJ_PRIM_RAD_F2(field, group)] =
-                PRJ_CLIGHT * geom->alpha *
-                prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 2);
-            W[PRJ_PRIM_RAD_F3(field, group)] =
-                PRJ_CLIGHT * geom->alpha *
-                prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 3);
-            if (!isfinite(W[PRJ_PRIM_RAD_E(field, group)]) ||
-                !isfinite(W[PRJ_PRIM_RAD_F1(field, group)]) ||
-                !isfinite(W[PRJ_PRIM_RAD_F2(field, group)]) ||
-                !isfinite(W[PRJ_PRIM_RAD_F3(field, group)])) {
-                return 0;
-            }
+            W[PRJ_PRIM_RAD_E(field, group)] = E;
+            W[PRJ_PRIM_RAD_F1(field, group)] = Fcov[0];
+            W[PRJ_PRIM_RAD_F2(field, group)] = Fcov[1];
+            W[PRJ_PRIM_RAD_F3(field, group)] = Fcov[2];
         }
     }
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
@@ -5345,8 +5510,8 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
-            /* Reuse the R^{ab} that p_to_prim already built for this group
-             * (identical ER, ur, g^{ab}) instead of recomputing ur/Rcon. */
+            /* Reuse the R^{ab} that p_to_prim already built from the same
+             * lab-frame moments and geometry. */
             const double (*Rcon)[4] = Rcon_store[idx];
             double R_u[4];
             double Ruu = 0.0;
@@ -5506,8 +5671,6 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     /* Loop-invariant scale factors for the block accumulations, hoisted out of
      * the per-group/per-column loops (evaluation order preserved so the result
      * is bit-identical).  Each is a product of only function-constant terms. */
-    double s_r00;
-    double s_rmix;
     double s_gn;
     double s_gg_f;
     double s_gu;
@@ -5566,8 +5729,6 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     alpha = geom->alpha;
     /* Preserve the left-to-right evaluation order of the original inline
      * products so these hoisted factors are bit-identical to recomputing. */
-    s_r00 = sqrtg * alpha * alpha;
-    s_rmix = sqrtg * c * alpha;
     s_gn = sqrtg * dt * RAD_SCALE * c;
     s_gg_f = alpha * sqrtg * dt * RAD_SCALE;
     s_gu = alpha * sqrtg * dt * c;
@@ -5724,14 +5885,11 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
             int pidx = 6 + 4 * idx;
-            int er_col = pidx;
-            double ER = P[pidx];
+            double E = P[pidx];
             double xe = rad->x_e[field][group];
-            double ur[4];
-            double A;
-            double Bn = 0.0;
-            double denom;
+            double Fcov[3];
             double Rcon[4][4];
+            double dRcon[4][4][4];
             double R_u[4];
             double Ruu = 0.0;
             double Gcon[4];
@@ -5742,32 +5900,29 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
             double Gdotn = 0.0;
             double Gdotu = 0.0;
 
-            if (!isfinite(ER) || ER < 0.0) {
+            /* Newton variables are the lab-frame moments p = (E, F_i).  The
+             * conserved rad rows are sqrt(gamma) (E, F_i), so the transport
+             * part of the block is the constant, invertible sqrt(gamma) I
+             * (written below), the rad_fluid transport is exactly zero, and the
+             * closure derivative dR^{ab}/dp enters only the opacity source. */
+            if (!isfinite(E) || E < 0.0) {
                 return 0;
             }
-            ur[0] = 0.0;
-            ur[1] = P[pidx + 1];
-            ur[2] = P[pidx + 2];
-            ur[3] = P[pidx + 3];
-            if (!prj_rad_gr_m1_ur0_from_uri(g_cov, ur)) {
-                return 0;
-            }
-            /* Normalization quadratic g_{ab} ur^a ur^b = -1 in ur[0];
-             * denom = dF/d(ur[0]) drives implicit ur[0] derivatives below. */
+            Fcov[0] = P[pidx + 1];
+            Fcov[1] = P[pidx + 2];
+            Fcov[2] = P[pidx + 3];
             for (d = 0; d < 3; ++d) {
-                Bn += 2.0 * g_cov[0][d + 1] * ur[d + 1];
+                if (!isfinite(Fcov[d])) {
+                    return 0;
+                }
             }
-            A = g_cov[0][0];
-            denom = 2.0 * A * ur[0] + Bn;
-            if (!isfinite(denom) || fabs(denom) < 1.0e-300) {
+            if (!prj_rad_grm1_build_R_jac(g_cov, g_con, alpha,
+                    geom->gamma_inv, E, Fcov, Rcon, dRcon)) {
                 return 0;
             }
-            /* R^{ab} = ER [ (4/3) ur^a ur^b + (1/3) g^{ab} ] directly. */
             for (a = 0; a < 4; ++a) {
                 R_u[a] = 0.0;
                 for (b = 0; b < 4; ++b) {
-                    Rcon[a][b] = ER * ((4.0 / 3.0) * ur[a] * ur[b] +
-                        (1.0 / 3.0) * g_con[a][b]);
                     R_u[a] += Rcon[a][b] * ucov[b];
                 }
                 Ruu += R_u[a] * ucov[a];
@@ -5786,20 +5941,18 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                 Gdotu += Gcon[a] * ucov[a];
             }
 
-            W[PRJ_PRIM_RAD_E(field, group)] =
-                alpha * alpha * Rcon[0][0];
-            W[PRJ_PRIM_RAD_F1(field, group)] =
-                c * alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 1);
-            W[PRJ_PRIM_RAD_F2(field, group)] =
-                c * alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 2);
-            W[PRJ_PRIM_RAD_F3(field, group)] =
-                c * alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 3);
-            if (!isfinite(W[PRJ_PRIM_RAD_E(field, group)]) ||
-                !isfinite(W[PRJ_PRIM_RAD_F1(field, group)]) ||
-                !isfinite(W[PRJ_PRIM_RAD_F2(field, group)]) ||
-                !isfinite(W[PRJ_PRIM_RAD_F3(field, group)])) {
-                return 0;
-            }
+            W[PRJ_PRIM_RAD_E(field, group)] = E;
+            W[PRJ_PRIM_RAD_F1(field, group)] = Fcov[0];
+            W[PRJ_PRIM_RAD_F2(field, group)] = Fcov[1];
+            W[PRJ_PRIM_RAD_F3(field, group)] = Fcov[2];
+
+            /* Transport block: d(sqrt(gamma) E)/dE = sqrt(gamma) and
+             * d(sqrt(gamma) F_i)/dF_j = sqrt(gamma) delta_ij; no dependence on
+             * the fluid columns or the other radiation moments. */
+            blocks->rad_rad[idx][0][0] += sqrtg;
+            blocks->rad_rad[idx][1][1] += sqrtg;
+            blocks->rad_rad[idx][2][2] += sqrtg;
+            blocks->rad_rad[idx][3][3] += sqrtg;
 
             group_Gn[idx] = Gdotn;
             sum_Gn += Gdotn;
@@ -5823,10 +5976,6 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
 
                 n = local_col < PRJ_RAD_GR_M1_NFLUID ?
                     local_col : pidx + local_col - PRJ_RAD_GR_M1_NFLUID;
-                double dER = n == er_col ? 1.0 : 0.0;
-                double dur[4] = {0.0, 0.0, 0.0, 0.0};
-                double dBn = 0.0;
-                double dCn = 0.0;
                 double dR_u[4] = {0.0, 0.0, 0.0, 0.0};
                 double dRuu = 0.0;
                 double dkappa_eff = 0.0;
@@ -5840,26 +5989,6 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                 double dGn = 0.0;
                 double dGu = 0.0;
                 double dGgamma[3] = {0.0, 0.0, 0.0};
-                double dR00;
-                double dRmixed;
-
-                /* Newton variables are (ER, ur^i).  ur depends only on the
-                 * radiation spatial columns (through the -1 normalization),
-                 * not on ER or the fluid columns.  R^{ab} is differentiated
-                 * directly: dR^{ab} = dER [ (4/3) ur^a ur^b + (1/3) g^{ab} ]
-                 *                    + ER (4/3)(dur^a ur^b + ur^a dur^b). */
-                if (n >= pidx + 1 && n <= pidx + 3) {
-                    dur[n - pidx] = 1.0;
-                }
-                for (d = 0; d < 3; ++d) {
-                    dBn += 2.0 * g_cov[0][d + 1] * dur[d + 1];
-                    for (b = 0; b < 3; ++b) {
-                        dCn += g_cov[d + 1][b + 1] *
-                            (dur[d + 1] * ur[b + 1] +
-                             ur[d + 1] * dur[b + 1]);
-                    }
-                }
-                dur[0] = -(ur[0] * dBn + dCn) / denom;
 
                 if (n == 0) {
                     dkappa_eff = dkappa_drho[idx];
@@ -5881,39 +6010,15 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                     sigma[idx] * ddelta / 3.0;
                 dkt = dkappa_eff + dsigma_eff;
 
-                /* dR^{ab} is nonzero only for radiation columns (dER or dur);
-                 * for fluid columns dER=dur=0 makes it exactly 0.0, so the
-                 * dR00/dRmixed writes are += 0 and the dRab*ucov term drops --
-                 * only the fluid four-velocity derivatives ducov survive there.
-                 * Radiation columns conversely have ducov=0.  Splitting the two
-                 * cases skips the zero work and is bit-identical (x + 0.0 == x,
-                 * 0.0 * finite == 0.0). */
+                /* R^{ab} is a pure lab-frame function of the radiation moments
+                 * (E, F_i), independent of the fluid state.  For radiation
+                 * columns the closure derivative dRcon[block_col] supplies
+                 * dR_u (ducov = 0); for fluid columns dR = 0 and only the fluid
+                 * four-velocity derivatives ducov contribute. */
                 if (!is_fluid_col) {
-                    dR00 = dER * ((4.0 / 3.0) * ur[0] * ur[0] +
-                            (1.0 / 3.0) * g_con[0][0]) +
-                        ER * (8.0 / 3.0) * ur[0] * dur[0];
-                    blocks->rad_rad[idx][0][block_col] += s_r00 * dR00;
-                    for (d = 0; d < 3; ++d) {
-                        dRmixed = 0.0;
-                        for (b = 0; b < 4; ++b) {
-                            double dR0b = dER * ((4.0 / 3.0) * ur[0] * ur[b] +
-                                    (1.0 / 3.0) * g_con[0][b]) +
-                                ER * (4.0 / 3.0) *
-                                (dur[0] * ur[b] + ur[0] * dur[b]);
-
-                            dRmixed += dR0b * g_cov[b][d + 1];
-                        }
-                        blocks->rad_rad[idx][1 + d][block_col] +=
-                            s_rmix * dRmixed;
-                    }
                     for (a = 0; a < 4; ++a) {
                         for (b = 0; b < 4; ++b) {
-                            double dRab = dER * ((4.0 / 3.0) * ur[a] * ur[b] +
-                                    (1.0 / 3.0) * g_con[a][b]) +
-                                ER * (4.0 / 3.0) *
-                                (dur[a] * ur[b] + ur[a] * dur[b]);
-
-                            dR_u[a] += dRab * ucov[b];
+                            dR_u[a] += dRcon[block_col][a][b] * ucov[b];
                         }
                         dRuu += dR_u[a] * ucov[a];
                     }
@@ -6630,8 +6735,9 @@ static double prj_rad_gr_m1_fd_step_for_col(const double *P, int col)
         if (comp == 0) {
             h = fmin(h, 0.25 * P[col]);
         }
-        /* comp > 0 is a ur^i component, O(1); the plain relative step above
-         * is appropriate (no ER-scaled cap as in the old qR^i variables). */
+        /* comp == 0 is the radiation energy E (kept positive by the cap
+         * above); comp > 0 is a covariant flux component F_i for which the
+         * plain relative step is appropriate. */
     }
     if (!isfinite(h) || h <= 0.0) {
         return 0.0;
@@ -6790,34 +6896,10 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
             return 0;
         }
 
-        /* Regularize the near-singular uR^i diagonal of each radiation block.
-         * The flux (RAD_F_i) rows collapse to O(ER) as ER->0, so floor their
-         * diagonal at a fluid-energy-scaled damping
-         *   reg = c * |u_old[ETOT]| * (1e-4*threshold/(NEGROUP*NRAD))
-         *         / RAD_SCALE
-         * which carries the cE units of that diagonal.  The fluid energy is a
-         * stable O(1) scale (unlike resid_RAD_F, which self-limits, or
-         * resid_MOM, which decouples as ER->0), and the fixed magnitude keeps
-         * the uR^i step scaling ~ resid_F so Newton still settles.  The
-         * 1e-4*threshold/(NEGROUP*NRAD) factor keeps reg well below the
-         * loosened per-group radiation tolerance (~threshold*hydro/(NEGROUP*
-         * NRAD)) so it de-corrupts the ER->0 solve without capping it. */
-        {
-            double reg = PRJ_CLIGHT * fabs(u_old[PRJ_CONS_ETOT]) *
-                (1.0e-4 * threshold / (PRJ_NEGROUP * PRJ_NRAD)) / RAD_SCALE;
-            int gidx;
-            int r;
-
-            if (isfinite(reg) && reg > 0.0) {
-                for (gidx = 0; gidx < PRJ_RAD_GR_M1_NGROUPS; ++gidx) {
-                    for (r = 1; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
-                        if (jac_blocks.rad_rad[gidx][r][r] < reg) {
-                            jac_blocks.rad_rad[gidx][r][r] = reg;
-                        }
-                    }
-                }
-            }
-        }
+        /* In the lab-frame (E, F_i) parametrization the radiation transport
+         * block is the constant sqrt(gamma) I, so each per-group 4x4 block is
+         * diagonally dominant and invertible even at near-vacuum -- the old
+         * near-singular uR^i diagonal regularization is no longer needed. */
 
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_linear");
@@ -6948,152 +7030,26 @@ static int prj_rad_gr_m1_moments_to_p(const prj_z4c_hydro_geom *geom,
     const double g_cov[4][4], const double g_con[4][4], double E,
     const double Fcov[3], double *P_group)
 {
-    double Fcon[3] = {0.0, 0.0, 0.0};
-    double F2 = 0.0;
-    double Fmag;
-    double Rcon[4][4];
-    double B;
-    double A = 0.0;
-    double G;
-    double disc;
-    double disc_scale;
-    double sqrt_disc;
-    double root_denom;
-    double iso;
-    double K[4];
-    double q0sq;
-    double q0;
     int a;
-    int b;
 
-    if (geom == 0 || g_cov == 0 || g_con == 0 || Fcov == 0 ||
-        P_group == 0 || !isfinite(E) || E < 0.0) {
+    /* The Newton primitives are the lab-frame Eulerian moments (E, F_i), which
+     * are exactly the stored radiation primitives, so packing is a direct copy
+     * (fluxes are already inside the physical |F| <= c E bound by
+     * prj_rad_gr_m1_clamp_fluxes_for_solve). */
+    (void)g_cov;
+    (void)g_con;
+    if (geom == 0 || Fcov == 0 || P_group == 0 || !isfinite(E) || E < 0.0) {
         return 0;
     }
     for (a = 0; a < 3; ++a) {
         if (!isfinite(Fcov[a])) {
             return 0;
         }
-        for (b = 0; b < 3; ++b) {
-            Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
-        }
     }
-    for (a = 0; a < 3; ++a) {
-        F2 += Fcov[a] * Fcon[a];
-    }
-    if (!isfinite(F2) || F2 < 0.0) {
-        return 0;
-    }
-    Fmag = sqrt(F2);
-    if (E == 0.0) {
-        if (Fmag != 0.0) {
-            return 0;
-        }
-        P_group[0] = 0.0;
-        P_group[1] = 0.0;
-        P_group[2] = 0.0;
-        P_group[3] = 0.0;
-        return 1;
-    }
-    if (Fmag > PRJ_CLIGHT * E && Fmag > 0.0) {
-        double scale = PRJ_CLIGHT * E / Fmag;
-
-        for (a = 0; a < 3; ++a) {
-            Fcon[a] *= scale;
-        }
-    }
-    if (!prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon, Rcon)) {
-        return 0;
-    }
-
-    B = Rcon[0][0];
-    if (!isfinite(B) || B < 0.0) {
-        return 0;
-    }
-    if (B == 0.0) {
-        P_group[0] = 0.0;
-        P_group[1] = 0.0;
-        P_group[2] = 0.0;
-        P_group[3] = 0.0;
-        return 1;
-    }
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            A += g_cov[a][b] * Rcon[0][a] * Rcon[0][b];
-        }
-    }
-    G = g_con[0][0];
-    disc_scale = fmax(B * B, fabs(3.0 * G * A));
-    if (disc_scale <= 0.0) {
-        disc_scale = 1.0;
-    }
-    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
-        A = 0.0;
-    }
-    disc = B * B + 3.0 * G * A;
-    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
-        return 0;
-    }
-    if (disc < 0.0) {
-        disc = 0.0;
-    }
-    sqrt_disc = sqrt(disc);
-    root_denom = B + sqrt_disc;
-    if (!isfinite(root_denom) || root_denom <= 0.0) {
-        return 0;
-    }
-    iso = -A / root_denom;
-    if (!isfinite(iso) || iso < -1.0e-12 * E) {
-        return 0;
-    }
-    if (iso < 0.0) {
-        iso = 0.0;
-    }
-    P_group[0] = 3.0 * iso;
-
-    for (a = 0; a < 4; ++a) {
-        K[a] = Rcon[0][a] - iso * g_con[0][a];
-    }
-    q0sq = 0.75 * K[0];
-    if (!isfinite(q0sq) || q0sq < -1.0e-12 * fmax(B, 1.0)) {
-        return 0;
-    }
-    if (q0sq <= 0.0) {
-        for (a = 1; a < 4; ++a) {
-            if (fabs(K[a]) > 1.0e-10 * fmax(B, 1.0)) {
-                return 0;
-            }
-            P_group[a] = 0.0;
-        }
-        return 1;
-    }
-    q0 = sqrt(q0sq);
-    {
-        /* K gives q^i = 0.75 K^i / q0 with q^a = sqrt(ER) ur^a; store the
-         * radiation four-velocity ur^i = q^i / sqrt(ER) directly. */
-        double sqrt_er = sqrt(P_group[0]);
-
-        if (!isfinite(sqrt_er) || sqrt_er <= 0.0) {
-            return 0;
-        }
-        for (a = 1; a < 4; ++a) {
-            P_group[a] = 0.75 * K[a] / (q0 * sqrt_er);
-            if (!isfinite(P_group[a])) {
-                return 0;
-            }
-        }
-    }
-    {
-        double ur_check[4];
-
-        ur_check[0] = 0.0;
-        ur_check[1] = P_group[1];
-        ur_check[2] = P_group[2];
-        ur_check[3] = P_group[3];
-        if (!prj_rad_gr_m1_ur0_from_uri(g_cov, ur_check)) {
-            return 0;
-        }
-    }
+    P_group[0] = E;
+    P_group[1] = Fcov[0];
+    P_group[2] = Fcov[1];
+    P_group[3] = Fcov[2];
     return 1;
 }
 
@@ -7138,14 +7094,9 @@ static int prj_rad_gr_m1_clamp_fluxes_for_solve(
             }
             /* The physical M1 bound is |F|/c <= E.  The evolved F_i stores
              * the explicit c, so the stored conserved bound is |F| <= c E.
-             * The exact free-streaming boundary |F| = c E is a valid null
-             * stress tensor: ER = 0 and finite nonzero qR^a give
-             * R^{ab} = (4/3) qR^a qR^b.  It is degenerate for our
-             * {ER, ur^i} Newton variables because with qR^a = sqrt(ER) ur^a
-             * the radiation four-velocity ur^a -> infinity as ER -> 0.  Keep
-             * every state strictly inside the bound (|F|/cE <= 1 - 1e-4) so
-             * the implicit solve always sees a regular state, and bounded well
-             * away from f=1 (celerity |uR| <= ~1/(2 sqrt(1e-4)) = 50). */
+             * Keep solve inputs just inside the free-streaming boundary; the
+             * lab-frame variables remain nonsingular at vacuum, but the closure
+             * derivative is better conditioned away from f = 1. */
             cE = PRJ_CLIGHT * E;
             fmax_bound = (1.0 - 1.0e-4) * cE;
             if (F2 > fmax_bound * fmax_bound && F2 > 0.0) {
@@ -7227,7 +7178,7 @@ static void prj_rad_gr_m1_matter_abort(const char *reason,
         double beta2 = 0.0;
         double min_E = HUGE_VAL;
         double max_flux_factor = 0.0;
-        double min_ER = HUGE_VAL;
+        double min_P_E = HUGE_VAL;
         int max_flux_field = -1;
         int max_flux_group = -1;
         int min_E_field = -1;
@@ -7274,18 +7225,18 @@ static void prj_rad_gr_m1_matter_abort(const char *reason,
                     max_flux_field = field;
                     max_flux_group = group;
                 }
-                if (P != 0 && P[pidx] < min_ER) {
-                    min_ER = P[pidx];
+                if (P != 0 && P[pidx] < min_P_E) {
+                    min_P_E = P[pidx];
                 }
             }
         }
         fprintf(stderr,
             "  input primitive: rho=%.17e eint=%.17e Ye=%.17e "
             "v2/c2=%.17e min_E=%.17e(F%d,g%d) max_|F|/cE=%.17e(F%d,g%d) "
-            "min_ER=%.17e\n",
+            "min_P_E=%.17e\n",
             W[PRJ_PRIM_RHO], W[PRJ_PRIM_EINT], W[PRJ_PRIM_YE],
             beta2, min_E, min_E_field, min_E_group, max_flux_factor,
-            max_flux_field, max_flux_group, min_ER);
+            max_flux_field, max_flux_group, min_P_E);
     }
     fprintf(stderr,
         "  Newton diagnostics: iter=%d/%d block_solve_ok=%d dense_solve_ok=%d "
