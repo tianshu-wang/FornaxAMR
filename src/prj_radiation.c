@@ -5082,7 +5082,7 @@ static int prj_rad_gr_m1_ur0_from_uri(const double g_cov[4][4], double ur[4])
 static int prj_rad_gr_m1_p_to_prim(prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double g_cov[4][4],
     const double g_con[4][4], const double *u_old, const double *P,
-    double *W)
+    double *W, double Rcon_out[][4][4])
 {
     double eos_q[PRJ_EOS_NQUANT];
     int field;
@@ -5121,7 +5121,8 @@ static int prj_rad_gr_m1_p_to_prim(prj_eos *eos,
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
-            int pidx = 6 + 4 * (field * PRJ_NEGROUP + group);
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * idx;
             double ER = P[pidx];
             double ur[4];
             double Rcon[4][4];
@@ -5137,13 +5138,18 @@ static int prj_rad_gr_m1_p_to_prim(prj_eos *eos,
                 return 0;
             }
             /* R^{ab} = ER [ (4/3) ur^a ur^b + (1/3) g^{ab} ] built directly
-             * from ER and the radiation four-velocity ur (no qR). */
+             * from ER and the radiation four-velocity ur (no qR).  Optionally
+             * export it so the caller (the residual) can reuse it instead of
+             * recomputing ur/Rcon a second time. */
             for (a = 0; a < 4; ++a) {
                 for (b = 0; b < 4; ++b) {
                     Rcon[a][b] = ER * ((4.0 / 3.0) * ur[a] * ur[b] +
                         (1.0 / 3.0) * g_con[a][b]);
                     if (!isfinite(Rcon[a][b])) {
                         return 0;
+                    }
+                    if (Rcon_out != 0) {
+                        Rcon_out[idx][a][b] = Rcon[a][b];
                     }
                 }
             }
@@ -5261,6 +5267,7 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     double W[PRJ_NVAR_PRIM];
     double u_new[PRJ_NVAR_CONS];
     double resid_tmp[PRJ_NVAR_CONS];
+    double Rcon_store[PRJ_NRAD * PRJ_NEGROUP][4][4];
     prj_eos_gr_geom eos_geom;
     double g_cov[4][4];
     double g_con[4][4];
@@ -5324,7 +5331,8 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     }
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_resid_p_to_prim");
-    ok = prj_rad_gr_m1_p_to_prim(eos, geom, g_cov, g_con, u_old, P, W);
+    ok = prj_rad_gr_m1_p_to_prim(eos, geom, g_cov, g_con, u_old, P, W,
+        Rcon_store);
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_resid_p_to_prim");
     if (!ok) {
         return 0;
@@ -5337,10 +5345,9 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
-            int pidx = 6 + 4 * idx;
-            double ER = P[pidx];
-            double ur[4];
-            double Rcon[4][4];
+            /* Reuse the R^{ab} that p_to_prim already built for this group
+             * (identical ER, ur, g^{ab}) instead of recomputing ur/Rcon. */
+            const double (*Rcon)[4] = Rcon_store[idx];
             double R_u[4];
             double Ruu = 0.0;
             double Gcon[4];
@@ -5348,28 +5355,6 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
             double sigma_eff;
             double Gdotn = 0.0;
             double Gdotu = 0.0;
-
-            if (!isfinite(ER) || ER < 0.0) {
-                return 0;
-            }
-            ur[0] = 0.0;
-            ur[1] = P[pidx + 1];
-            ur[2] = P[pidx + 2];
-            ur[3] = P[pidx + 3];
-            if (!prj_rad_gr_m1_ur0_from_uri(g_cov, ur)) {
-                return 0;
-            }
-            /* R^{ab} = ER [ (4/3) ur^a ur^b + (1/3) g^{ab} ] built directly
-             * from ER and the radiation four-velocity ur (no qR). */
-            for (a = 0; a < 4; ++a) {
-                for (b = 0; b < 4; ++b) {
-                    Rcon[a][b] = ER * ((4.0 / 3.0) * ur[a] * ur[b] +
-                        (1.0 / 3.0) * g_con[a][b]);
-                    if (!isfinite(Rcon[a][b])) {
-                        return 0;
-                    }
-                }
-            }
 
             for (a = 0; a < 4; ++a) {
                 R_u[a] = 0.0;
@@ -5400,9 +5385,9 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
             for (d = 0; d < 3; ++d) {
                 double Ggamma = 0.0;
 
+                /* n_cov[d+1] == 0 (spatial), so the n_cov n_cov term drops. */
                 for (a = 0; a < 4; ++a) {
-                    Ggamma += Gcon[a] *
-                        (g_cov[d + 1][a] + n_cov[d + 1] * n_cov[a]);
+                    Ggamma += Gcon[a] * g_cov[d + 1][a];
                 }
                 group_Ggamma[idx][d] = Ggamma;
                 sum_Ggamma[d] += Ggamma;
@@ -5517,6 +5502,16 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     double c = PRJ_CLIGHT;
     double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
     double sqrtg;
+    double alpha;
+    /* Loop-invariant scale factors for the block accumulations, hoisted out of
+     * the per-group/per-column loops (evaluation order preserved so the result
+     * is bit-identical).  Each is a product of only function-constant terms. */
+    double s_r00;
+    double s_rmix;
+    double s_gn;
+    double s_gg_f;
+    double s_gu;
+    double s_rgg;
     double sum_Gn = 0.0;
     double sum_Gu_xe = 0.0;
     double sum_Ggamma[3] = {0.0, 0.0, 0.0};
@@ -5568,6 +5563,15 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     }
 
     sqrtg = geom->sqrt_gamma;
+    alpha = geom->alpha;
+    /* Preserve the left-to-right evaluation order of the original inline
+     * products so these hoisted factors are bit-identical to recomputing. */
+    s_r00 = sqrtg * alpha * alpha;
+    s_rmix = sqrtg * c * alpha;
+    s_gn = sqrtg * dt * RAD_SCALE * c;
+    s_gg_f = alpha * sqrtg * dt * RAD_SCALE;
+    s_gu = alpha * sqrtg * dt * c;
+    s_rgg = alpha * sqrtg * dt * c * c;
     prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
     n_cov[0] = -geom->alpha;
     n_cov[1] = 0.0;
@@ -5722,6 +5726,7 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
             int pidx = 6 + 4 * idx;
             int er_col = pidx;
             double ER = P[pidx];
+            double xe = rad->x_e[field][group];
             double ur[4];
             double A;
             double Bn = 0.0;
@@ -5782,13 +5787,13 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
             }
 
             W[PRJ_PRIM_RAD_E(field, group)] =
-                geom->alpha * geom->alpha * Rcon[0][0];
+                alpha * alpha * Rcon[0][0];
             W[PRJ_PRIM_RAD_F1(field, group)] =
-                c * geom->alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 1);
+                c * alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 1);
             W[PRJ_PRIM_RAD_F2(field, group)] =
-                c * geom->alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 2);
+                c * alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 2);
             W[PRJ_PRIM_RAD_F3(field, group)] =
-                c * geom->alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 3);
+                c * alpha * prj_rad_gr_m1_R_mixed(Rcon, g_cov, 0, 3);
             if (!isfinite(W[PRJ_PRIM_RAD_E(field, group)]) ||
                 !isfinite(W[PRJ_PRIM_RAD_F1(field, group)]) ||
                 !isfinite(W[PRJ_PRIM_RAD_F2(field, group)]) ||
@@ -5802,9 +5807,9 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
             for (d = 0; d < 3; ++d) {
                 double Ggamma = 0.0;
 
+                /* n_cov[d+1] == 0 (spatial), so the n_cov n_cov term drops. */
                 for (a = 0; a < 4; ++a) {
-                    Ggamma += Gcon[a] *
-                        (g_cov[d + 1][a] + n_cov[d + 1] * n_cov[a]);
+                    Ggamma += Gcon[a] * g_cov[d + 1][a];
                 }
                 group_Ggamma[idx][d] = Ggamma;
                 sum_Ggamma[d] += Ggamma;
@@ -5876,51 +5881,51 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                     sigma[idx] * ddelta / 3.0;
                 dkt = dkappa_eff + dsigma_eff;
 
-                dR00 = dER * ((4.0 / 3.0) * ur[0] * ur[0] +
-                        (1.0 / 3.0) * g_con[0][0]) +
-                    ER * (8.0 / 3.0) * ur[0] * dur[0];
-                if (is_fluid_col) {
-                    blocks->rad_fluid[idx][0][block_col] +=
-                        sqrtg * geom->alpha * geom->alpha * dR00;
-                } else {
-                    blocks->rad_rad[idx][0][block_col] +=
-                        sqrtg * geom->alpha * geom->alpha * dR00;
-                }
-                for (d = 0; d < 3; ++d) {
-                    dRmixed = 0.0;
-                    for (b = 0; b < 4; ++b) {
-                        double dR0b = dER * ((4.0 / 3.0) * ur[0] * ur[b] +
-                                (1.0 / 3.0) * g_con[0][b]) +
-                            ER * (4.0 / 3.0) *
-                            (dur[0] * ur[b] + ur[0] * dur[b]);
+                /* dR^{ab} is nonzero only for radiation columns (dER or dur);
+                 * for fluid columns dER=dur=0 makes it exactly 0.0, so the
+                 * dR00/dRmixed writes are += 0 and the dRab*ucov term drops --
+                 * only the fluid four-velocity derivatives ducov survive there.
+                 * Radiation columns conversely have ducov=0.  Splitting the two
+                 * cases skips the zero work and is bit-identical (x + 0.0 == x,
+                 * 0.0 * finite == 0.0). */
+                if (!is_fluid_col) {
+                    dR00 = dER * ((4.0 / 3.0) * ur[0] * ur[0] +
+                            (1.0 / 3.0) * g_con[0][0]) +
+                        ER * (8.0 / 3.0) * ur[0] * dur[0];
+                    blocks->rad_rad[idx][0][block_col] += s_r00 * dR00;
+                    for (d = 0; d < 3; ++d) {
+                        dRmixed = 0.0;
+                        for (b = 0; b < 4; ++b) {
+                            double dR0b = dER * ((4.0 / 3.0) * ur[0] * ur[b] +
+                                    (1.0 / 3.0) * g_con[0][b]) +
+                                ER * (4.0 / 3.0) *
+                                (dur[0] * ur[b] + ur[0] * dur[b]);
 
-                        dRmixed += dR0b * g_cov[b][d + 1];
-                    }
-                    if (is_fluid_col) {
-                        blocks->rad_fluid[idx][1 + d][block_col] +=
-                            sqrtg * c * geom->alpha * dRmixed;
-                    } else {
+                            dRmixed += dR0b * g_cov[b][d + 1];
+                        }
                         blocks->rad_rad[idx][1 + d][block_col] +=
-                            sqrtg * c * geom->alpha * dRmixed;
+                            s_rmix * dRmixed;
                     }
-                }
+                    for (a = 0; a < 4; ++a) {
+                        for (b = 0; b < 4; ++b) {
+                            double dRab = dER * ((4.0 / 3.0) * ur[a] * ur[b] +
+                                    (1.0 / 3.0) * g_con[a][b]) +
+                                ER * (4.0 / 3.0) *
+                                (dur[a] * ur[b] + ur[a] * dur[b]);
 
-                for (a = 0; a < 4; ++a) {
-                    double ducov_an = is_fluid_col ?
-                        ducov[a][block_col] : 0.0;
-
-                    for (b = 0; b < 4; ++b) {
-                        double dRab = dER * ((4.0 / 3.0) * ur[a] * ur[b] +
-                                (1.0 / 3.0) * g_con[a][b]) +
-                            ER * (4.0 / 3.0) *
-                            (dur[a] * ur[b] + ur[a] * dur[b]);
-                        double ducov_bn = is_fluid_col ?
-                            ducov[b][block_col] : 0.0;
-
-                        dR_u[a] += dRab * ucov[b] +
-                            Rcon[a][b] * ducov_bn;
+                            dR_u[a] += dRab * ucov[b];
+                        }
+                        dRuu += dR_u[a] * ucov[a];
                     }
-                    dRuu += dR_u[a] * ucov[a] + R_u[a] * ducov_an;
+                } else {
+                    for (a = 0; a < 4; ++a) {
+                        double ducov_an = ducov[a][block_col];
+
+                        for (b = 0; b < 4; ++b) {
+                            dR_u[a] += Rcon[a][b] * ducov[b][block_col];
+                        }
+                        dRuu += dR_u[a] * ucov[a] + R_u[a] * ducov_an;
+                    }
                 }
                 dscalar = dsigma_eff * Ruu + sigma_eff * dRuu + deta / c;
                 for (a = 0; a < 4; ++a) {
@@ -5939,42 +5944,33 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                 }
 
                 if (is_fluid_col) {
-                    blocks->fluid[4][block_col] +=
-                        sqrtg * dt * RAD_SCALE * c * dGn;
+                    blocks->fluid[4][block_col] += s_gn * dGn;
                 } else {
-                    blocks->fluid_rad[idx][4][block_col] +=
-                        sqrtg * dt * RAD_SCALE * c * dGn;
+                    blocks->fluid_rad[idx][4][block_col] += s_gn * dGn;
                 }
                 for (d = 0; d < 3; ++d) {
                     if (is_fluid_col) {
                         blocks->fluid[1 + d][block_col] -=
-                            geom->alpha * sqrtg * dt * RAD_SCALE *
-                            dGgamma[d];
+                            s_gg_f * dGgamma[d];
                     } else {
                         blocks->fluid_rad[idx][1 + d][block_col] -=
-                            geom->alpha * sqrtg * dt * RAD_SCALE *
-                            dGgamma[d];
+                            s_gg_f * dGgamma[d];
                     }
                 }
                 if (is_fluid_col) {
-                    blocks->fluid[5][block_col] += geom->alpha * sqrtg *
-                        dt * c * dGu * rad->x_e[field][group];
-                    blocks->rad_fluid[idx][0][block_col] -=
-                        geom->alpha * sqrtg * dt * c * dGn;
+                    blocks->fluid[5][block_col] += s_gu * dGu * xe;
+                    blocks->rad_fluid[idx][0][block_col] -= s_gu * dGn;
                 } else {
-                    blocks->fluid_rad[idx][5][block_col] +=
-                        geom->alpha * sqrtg * dt * c * dGu *
-                        rad->x_e[field][group];
-                    blocks->rad_rad[idx][0][block_col] -=
-                        geom->alpha * sqrtg * dt * c * dGn;
+                    blocks->fluid_rad[idx][5][block_col] += s_gu * dGu * xe;
+                    blocks->rad_rad[idx][0][block_col] -= s_gu * dGn;
                 }
                 for (d = 0; d < 3; ++d) {
                     if (is_fluid_col) {
                         blocks->rad_fluid[idx][1 + d][block_col] +=
-                            geom->alpha * sqrtg * dt * c * c * dGgamma[d];
+                            s_rgg * dGgamma[d];
                     } else {
                         blocks->rad_rad[idx][1 + d][block_col] +=
-                            geom->alpha * sqrtg * dt * c * c * dGgamma[d];
+                            s_rgg * dGgamma[d];
                     }
                 }
             }
@@ -7479,7 +7475,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_p_to_prim");
     ok = prj_rad_gr_m1_p_to_prim(eos, &geom, g_cov, g_con, u_old, P,
-        W_new);
+        W_new, 0);
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_p_to_prim");
     if (!ok) {
         prj_rad_gr_m1_matter_abort("post-solve primitive recovery failed",
