@@ -1881,28 +1881,45 @@ int prj_rad_grm1_freq_drift(const double g_cov[4][4],
     return 1;
 }
 
-static int prj_rad_grm1_freq_drift_3p1(
+/* Cell-local pieces of the GR M1 frequency drift.  These depend on the metric,
+ * fluid velocity, velocity gradients, and observer acceleration, but not on the
+ * radiation energy group. */
+typedef struct prj_rad_gr_m1_freq_drift_cache {
+    double g_cov[4][4];
+    double g_con[4][4];
+    double ucon[4];
+    double ucov[4];
+    double gcon_ucov[4];
+    double hcon[4][4];
+    double hcov[4][4];
+    double g_ucov_ucov;
+    double energy_Z;
+    double energy_Y[3];
+    double energy_X[3][3];
+    double mom_Y[3][3];
+    double mom_X[3][3][3];
+    double mom_W[3][3][3][3];
+} prj_rad_gr_m1_freq_drift_cache;
+
+static int prj_rad_gr_m1_freq_drift_cache_init(
     const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, const prj_z4c_hydro_geom *geom,
-    const double g_cov[4][4], const double g_con[4][4],
-    const double ucon[4], const double Rcon[4][4],
-    const double observer_time_derivative[4], double drift[4])
+    const double observer_time_derivative[4],
+    prj_rad_gr_m1_freq_drift_cache *cache)
 {
-    prj_rad_grm1_m3_data m3;
-    double Ycon[3];
-    double Ycov[3];
-    double Xcon[3][3];
-    double Xmix[3][3];
-    double Xcov[3][3];
     double dLam[3];
     double dLv[3][3];
     double dLv_cov[3][3];
     double nDLam;
     double nDLv[3];
+    double da[3];
+    double vdb[3] = {0.0, 0.0, 0.0};
+    double vdb_cov[3] = {0.0, 0.0, 0.0};
+    double nDLv_cov[3] = {0.0, 0.0, 0.0};
+    double vdg[3][3] = {{0.0}};
+    double sum_v_da = 0.0;
     double inv_alpha;
-    double Z;
-    double Rn;
-    double On;
+    double unorm = 0.0;
     int a;
     int b;
     int d;
@@ -1910,49 +1927,64 @@ static int prj_rad_grm1_freq_drift_3p1(
     int j;
     int k;
     int m;
+    int x;
 
-    if (drift != 0) {
-        memset(drift, 0, 4 * sizeof(double));
+    if (cache != 0) {
+        memset(cache, 0, sizeof(*cache));
     }
-    if (drift == 0 || ctx == 0 || side == 0 || geom == 0 ||
-        !isfinite(geom->alpha) || geom->alpha <= 0.0 ||
-        !prj_rad_grm1_prepare_m3_data(g_cov, g_con, ucon, Rcon, &m3)) {
+    if (cache == 0 || ctx == 0 || side == 0 || geom == 0 ||
+        !isfinite(geom->alpha) || geom->alpha <= 0.0) {
         return 0;
     }
 
-    Z = prj_rad_grm1_m3_component(&m3, 0, 0, 0);
-    for (k = 0; k < 3; ++k) {
-        Ycon[k] = prj_rad_grm1_m3_component(&m3, 0, 0, k + 1);
-    }
-    for (k = 0; k < 3; ++k) {
-        Ycov[k] = 0.0;
+    cache->g_cov[0][0] = -1.0;
+    cache->g_con[0][0] = -1.0;
+    for (a = 0; a < 3; ++a) {
+        cache->ucon[a + 1] = side->wlor * side->vcon[a];
         for (b = 0; b < 3; ++b) {
-            Ycov[k] += ctx->gamma[k][b] * Ycon[b];
+            cache->g_cov[a + 1][b + 1] = ctx->gamma[a][b];
+            cache->g_con[a + 1][b + 1] = ctx->gamma_inv[a][b];
         }
     }
-    for (k = 0; k < 3; ++k) {
-        for (i = 0; i < 3; ++i) {
-            Xcon[k][i] = prj_rad_grm1_m3_component(&m3, 0, k + 1, i + 1);
+    cache->ucon[0] = side->wlor;
+
+    for (a = 0; a < 4; ++a) {
+        if (!isfinite(cache->ucon[a])) {
+            return 0;
         }
-    }
-    for (k = 0; k < 3; ++k) {
-        for (i = 0; i < 3; ++i) {
-            Xmix[k][i] = 0.0;
-            for (b = 0; b < 3; ++b) {
-                Xmix[k][i] += ctx->gamma[k][b] * Xcon[b][i];
+        cache->ucov[a] = 0.0;
+        for (b = 0; b < 4; ++b) {
+            if (!isfinite(cache->g_cov[a][b]) ||
+                !isfinite(cache->g_con[a][b])) {
+                return 0;
             }
+            cache->ucov[a] += cache->g_cov[a][b] * cache->ucon[b];
         }
+        unorm += cache->ucov[a] * cache->ucon[a];
     }
-    for (j = 0; j < 3; ++j) {
-        for (k = 0; k < 3; ++k) {
-            Xcov[j][k] = 0.0;
-            for (b = 0; b < 3; ++b) {
-                Xcov[j][k] += ctx->gamma[k][b] * Xmix[j][b];
+    if (!isfinite(unorm) || fabs(unorm + 1.0) > 1.0e-8) {
+        return 0;
+    }
+    for (a = 0; a < 4; ++a) {
+        cache->gcon_ucov[a] = 0.0;
+        for (b = 0; b < 4; ++b) {
+            cache->gcon_ucov[a] += cache->g_con[b][a] * cache->ucov[b];
+        }
+        cache->g_ucov_ucov += cache->gcon_ucov[a] * cache->ucov[a];
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            cache->hcon[a][b] = cache->g_con[a][b] +
+                cache->ucon[a] * cache->ucon[b];
+            cache->hcov[a][b] = cache->g_cov[a][b] +
+                cache->ucov[a] * cache->ucov[b];
+            if (!isfinite(cache->hcon[a][b]) ||
+                !isfinite(cache->hcov[a][b])) {
+                return 0;
             }
         }
     }
 
-    /* d_d W and d_d (W v^k), with W = (1 - gamma_ab v^a v^b)^(-1/2). */
     for (d = 0; d < 3; ++d) {
         double dv2 = 0.0;
 
@@ -1997,87 +2029,321 @@ static int prj_rad_grm1_freq_drift_3p1(
         nDLv[k] *= inv_alpha;
     }
 
-    /* R_n + O_n is -n_alpha M^{alpha beta gamma} u_{beta;gamma}.
-     * Since n_alpha = (-1,0,0,0) in this normal-frame basis,
-     * drift^0 = M^{0 beta gamma} u_{beta;gamma} = -(R_n + O_n). */
-    Rn = 0.0;
-    On = Z * nDLam;
     for (i = 0; i < 3; ++i) {
-        Rn += (Z * side->vcon[i] - Ycon[i]) *
-            geom->dalpha[i] * inv_alpha;
-        On += Ycon[i] * dLam[i];
+        da[i] = geom->dalpha[i] * inv_alpha;
+        sum_v_da += side->vcon[i] * da[i];
         for (k = 0; k < 3; ++k) {
-            Rn -= Ycov[k] * side->vcon[i] * geom->dbeta[i][k] *
-                inv_alpha;
-            On -= Xmix[k][i] * dLv[i][k];
+            vdb[k] += side->vcon[i] * geom->dbeta[i][k] * inv_alpha;
         }
     }
-    for (k = 0; k < 3; ++k) {
-        On -= Ycov[k] * nDLv[k];
-        for (i = 0; i < 3; ++i) {
-            double Xki = Xcon[k][i];
-
-            Rn += Xki * ctx->K_dd[k][i];
-            for (m = 0; m < 3; ++m) {
-                Rn -= 0.5 * Xki * side->vcon[m] *
-                    ctx->dgamma[m][k][i];
-            }
-        }
-    }
-    Rn *= side->wlor;
-    drift[0] = -(Rn + On);
-
-    /* gamma_{j alpha} drift^alpha = -(R_g + O_g)_j; raise it back to the
-     * normal-frame contravariant spatial components for the public drift^alpha. */
-    for (j = 0; j < 3; ++j) {
-        double Wmix[3][3];
-        double drift_cov_j;
-        double Rg = 0.0;
-        double Og = Ycov[j] * nDLam;
-
+    for (m = 0; m < 3; ++m) {
         for (k = 0; k < 3; ++k) {
             for (i = 0; i < 3; ++i) {
-                Wmix[k][i] = 0.0;
-                for (a = 0; a < 3; ++a) {
-                    Wmix[k][i] += ctx->gamma[j][a] *
-                        prj_rad_grm1_m3_component(&m3, a + 1, k + 1, i + 1);
-                }
+                vdg[k][i] += side->vcon[m] * ctx->dgamma[m][k][i];
             }
         }
+    }
+    for (x = 0; x < 3; ++x) {
+        for (k = 0; k < 3; ++k) {
+            vdb_cov[x] += ctx->gamma[k][x] * vdb[k];
+            nDLv_cov[x] += ctx->gamma[k][x] * nDLv[k];
+        }
+    }
+
+    cache->energy_Z = -(side->wlor * sum_v_da + nDLam);
+    for (x = 0; x < 3; ++x) {
+        double Rn_Y = -da[x] - vdb_cov[x];
+        double On_Y = dLam[x] - nDLv_cov[x];
+
+        cache->energy_Y[x] = -(side->wlor * Rn_Y + On_Y);
         for (i = 0; i < 3; ++i) {
-            Rg += (Ycov[j] * side->vcon[i] - Xmix[j][i]) *
-                geom->dalpha[i] * inv_alpha;
-            Og += Xmix[j][i] * dLam[i];
+            double Rn_X = ctx->K_dd[x][i] - 0.5 * vdg[x][i];
+            double On_X = 0.0;
+
             for (k = 0; k < 3; ++k) {
-                Rg -= Xcov[j][k] * side->vcon[i] * geom->dbeta[i][k] *
-                    inv_alpha;
+                On_X -= ctx->gamma[k][x] * dLv[i][k];
             }
-        }
-        for (k = 0; k < 3; ++k) {
-            Og -= Xcov[j][k] * nDLv[k];
-            for (i = 0; i < 3; ++i) {
-                Rg += Wmix[k][i] * ctx->K_dd[k][i];
-                Og -= Wmix[k][i] * dLv_cov[i][k];
-                for (m = 0; m < 3; ++m) {
-                    Rg -= 0.5 * Wmix[k][i] * side->vcon[m] *
-                        ctx->dgamma[m][k][i];
-                }
-            }
-        }
-        Rg *= side->wlor;
-        drift_cov_j = -(Rg + Og);
-        for (a = 0; a < 3; ++a) {
-            drift[a + 1] += ctx->gamma_inv[a][j] * drift_cov_j;
+            cache->energy_X[x][i] = -(side->wlor * Rn_X + On_X);
         }
     }
 
-    for (a = 0; a < 4; ++a) {
-        if (!isfinite(drift[a])) {
-            memset(drift, 0, 4 * sizeof(double));
-            return 0;
+    for (j = 0; j < 3; ++j) {
+        for (x = 0; x < 3; ++x) {
+            cache->mom_Y[j][x] =
+                -(side->wlor * ctx->gamma[j][x] * sum_v_da +
+                    ctx->gamma[j][x] * nDLam);
+            for (i = 0; i < 3; ++i) {
+                double Rg_X;
+                double Og_X;
+
+                Rg_X = ctx->gamma[j][x] * (-da[i] - vdb_cov[i]);
+                Og_X = ctx->gamma[j][x] * (dLam[i] - nDLv_cov[i]);
+                cache->mom_X[j][x][i] = -(side->wlor * Rg_X + Og_X);
+            }
+            for (k = 0; k < 3; ++k) {
+                for (i = 0; i < 3; ++i) {
+                    double Rg_W = ctx->gamma[j][x] *
+                        (ctx->K_dd[k][i] - 0.5 * vdg[k][i]);
+                    double Og_W = -ctx->gamma[j][x] * dLv_cov[i][k];
+
+                    cache->mom_W[j][x][k][i] =
+                        -(side->wlor * Rg_W + Og_W);
+                }
+            }
         }
     }
     return 1;
+}
+
+static int prj_rad_grm1_prepare_m3_data_freq(
+    const prj_rad_gr_m1_freq_drift_cache *cache, double E,
+    const double Fcov_in[3], prj_rad_grm1_m3_data *m3)
+{
+    double Fcov[3];
+    double Fcon[3] = {0.0, 0.0, 0.0};
+    double R0[4];
+    double K[4];
+    double A = 0.0;
+    double B;
+    double G;
+    double disc;
+    double disc_scale;
+    double sqrt_disc;
+    double root_denom;
+    double denom;
+    double iso;
+    double coeff;
+    double F2 = 0.0;
+    double Fmag;
+    double cE;
+    double Ku = 0.0;
+    double Hnorm2 = 0.0;
+    double xi;
+    double chi;
+    double J;
+    int a;
+    int b;
+
+    if (m3 != 0) {
+        memset(m3, 0, sizeof(*m3));
+    }
+    if (cache == 0 || Fcov_in == 0 || m3 == 0 ||
+        !isfinite(E) || E < 0.0) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        Fcov[a] = isfinite(Fcov_in[a]) ? Fcov_in[a] : 0.0;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            Fcon[a] += cache->g_con[a + 1][b + 1] * Fcov[b];
+        }
+        if (!isfinite(Fcon[a])) {
+            return 0;
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        F2 += Fcov[a] * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * E;
+    if (Fmag > cE && Fmag > 0.0) {
+        double scale = cE / Fmag;
+
+        for (a = 0; a < 3; ++a) {
+            Fcon[a] *= scale;
+        }
+    }
+
+    R0[0] = E;
+    for (a = 0; a < 3; ++a) {
+        R0[a + 1] = Fcon[a] / PRJ_CLIGHT;
+    }
+    B = R0[0];
+    if (!isfinite(B) || B < 0.0) {
+        return 0;
+    }
+    if (B == 0.0) {
+        for (a = 0; a < 3; ++a) {
+            if (Fcon[a] != 0.0) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            A += cache->g_cov[a][b] * R0[a] * R0[b];
+        }
+    }
+    G = cache->g_con[0][0];
+    disc_scale = fmax(B * B, fabs(3.0 * G * A));
+    if (disc_scale <= 0.0) {
+        disc_scale = 1.0;
+    }
+    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
+        A = 0.0;
+    }
+    disc = B * B + 3.0 * G * A;
+    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
+        return 0;
+    }
+    if (disc < 0.0) {
+        disc = 0.0;
+    }
+    sqrt_disc = sqrt(disc);
+    root_denom = B + sqrt_disc;
+    if (!isfinite(root_denom) || root_denom <= 0.0) {
+        return 0;
+    }
+    iso = -A / root_denom;
+    if (!isfinite(iso) || iso < 0.0) {
+        return 0;
+    }
+    denom = 2.0 * B + sqrt_disc;
+    if (!isfinite(denom) || denom <= 0.0) {
+        return 0;
+    }
+    coeff = 3.0 / denom;
+    for (a = 0; a < 4; ++a) {
+        K[a] = R0[a] - iso * cache->g_con[0][a];
+        Ku += K[a] * cache->ucov[a];
+        m3->ucon[a] = cache->ucon[a];
+        m3->ucov[a] = cache->ucov[a];
+    }
+    J = coeff * Ku * Ku + iso * cache->g_ucov_ucov;
+    if (!isfinite(J) || J < 0.0) {
+        return 0;
+    }
+    if (J == 0.0) {
+        return 1;
+    }
+    m3->J = J;
+    for (a = 0; a < 4; ++a) {
+        double Ru = coeff * Ku * K[a] + iso * cache->gcon_ucov[a];
+
+        m3->H[a] = -Ru - J * cache->ucon[a];
+        if (!isfinite(m3->H[a])) {
+            return 0;
+        }
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            double Rcon_ab = coeff * K[a] * K[b] +
+                iso * cache->g_con[a][b];
+
+            m3->hcon[a][b] = cache->hcon[a][b];
+            m3->hcov[a][b] = cache->hcov[a][b];
+            m3->L[a][b] = Rcon_ab - J * cache->ucon[a] * cache->ucon[b] -
+                m3->H[a] * cache->ucon[b] - m3->H[b] * cache->ucon[a];
+            Hnorm2 += m3->hcov[a][b] * m3->H[a] * m3->H[b];
+            if (!isfinite(m3->L[a][b])) {
+                return 0;
+            }
+        }
+    }
+    if (!isfinite(Hnorm2) || Hnorm2 < -1.0e-12 * J * J) {
+        return 0;
+    }
+    if (Hnorm2 < 0.0) {
+        Hnorm2 = 0.0;
+    }
+    m3->Hnorm2 = Hnorm2;
+    if (Hnorm2 > 0.0) {
+        m3->inv_Hnorm3 = 1.0 / (Hnorm2 * sqrt(Hnorm2));
+    }
+    xi = sqrt(Hnorm2) / J;
+    if (!isfinite(xi) || xi < 0.0) {
+        return 0;
+    }
+    if (xi > 1.0) {
+        if (xi > 1.0 + 1.0e-10) {
+            return 0;
+        }
+        xi = 1.0;
+    }
+    chi = prj_rad_m1_chi_exact(xi);
+    m3->thin_w = 0.5 * (3.0 * chi - 1.0);
+    m3->thick_w = 1.5 * (1.0 - chi);
+    return 1;
+}
+
+static void prj_rad_gr_m1_frequency_drifts_cached(
+    const prj_rad_gr_m1_freq_drift_cache *cache, double E_in,
+    const double Fcov_in[3], double *energy_drift,
+    double momentum_drift_cov[3])
+{
+    prj_rad_grm1_m3_data m3;
+    double Ycon[3];
+    double Xcon[3][3];
+    double energy;
+    double momentum[3];
+    int a;
+    int i;
+    int j;
+    int k;
+    int x;
+
+    if (energy_drift != 0) {
+        *energy_drift = 0.0;
+    }
+    for (j = 0; j < 3; ++j) {
+        momentum_drift_cov[j] = 0.0;
+        momentum[j] = 0.0;
+    }
+    if (cache == 0 || Fcov_in == 0 || !isfinite(E_in) || E_in < 0.0) {
+        return;
+    }
+    if (!prj_rad_grm1_prepare_m3_data_freq(cache, E_in, Fcov_in, &m3)) {
+        return;
+    }
+    if (m3.J == 0.0) {
+        return;
+    }
+
+    energy = cache->energy_Z * prj_rad_grm1_m3_component(&m3, 0, 0, 0);
+    for (x = 0; x < 3; ++x) {
+        Ycon[x] = prj_rad_grm1_m3_component(&m3, 0, 0, x + 1);
+        energy += cache->energy_Y[x] * Ycon[x];
+        for (i = 0; i < 3; ++i) {
+            Xcon[x][i] = prj_rad_grm1_m3_component(&m3, 0, x + 1, i + 1);
+            energy += cache->energy_X[x][i] * Xcon[x][i];
+        }
+    }
+    for (j = 0; j < 3; ++j) {
+        for (x = 0; x < 3; ++x) {
+            momentum[j] += cache->mom_Y[j][x] * Ycon[x];
+            for (i = 0; i < 3; ++i) {
+                momentum[j] += cache->mom_X[j][x][i] * Xcon[x][i];
+            }
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (k = 0; k < 3; ++k) {
+            for (i = 0; i < 3; ++i) {
+                double Wcon = prj_rad_grm1_m3_component(&m3, a + 1, k + 1,
+                    i + 1);
+
+                for (j = 0; j < 3; ++j) {
+                    momentum[j] += cache->mom_W[j][a][k][i] * Wcon;
+                }
+            }
+        }
+    }
+    if (!isfinite(energy) || !isfinite(momentum[0]) ||
+        !isfinite(momentum[1]) || !isfinite(momentum[2])) {
+        return;
+    }
+    if (energy_drift != 0) {
+        *energy_drift = PRJ_CLIGHT * energy;
+    }
+    for (j = 0; j < 3; ++j) {
+        momentum_drift_cov[j] = PRJ_CLIGHT * PRJ_CLIGHT * momentum[j];
+    }
 }
 
 static void prj_rad_gr_m1_raise_vec_ctx(const prj_rad_gr_m1_closure_ctx *ctx,
@@ -3423,82 +3689,6 @@ static void prj_rad_gr_m1_decompose_m2(
 }
 
 #endif /* legacy implicit GR M1 pressure closure */
-
-/* Momentum-space divergence (frequency-drift) integrands for the GR M1
- * moments, in the 3+1 Eulerian-projection form of Cardall, Endeve &
- * Mezzacappa 2013 (arXiv:1209.2151), Eqs. 145-150.
- *
- * The monochromatic energy equation carries (1/e^2) d/de [e^2 (R_n + O_n)]
- * on its left-hand side and the momentum equation the analogous
- * (R_g + O_g)_j term (paper Eqs. 173-174).  The code evaluates those expanded
- * projections directly from J, H^alpha, L^{alpha beta}, and the analytic
- * Levermore third-moment closure, without materializing M^{alpha beta gamma}.
- *
- * The returned drifts are the integrands the caller's bin-face update
- * expects,
- *   energy_drift       = -(R_n + O_n)  / (alpha sqrt(gamma))
- *   momentum_drift[j]  = -(R_g + O_g)_j / (alpha sqrt(gamma))
- * (the caller multiplies by dt alpha sqrt(gamma) and the bin-face energy),
- * with the usual unit factors: one PRJ_CLIGHT converting spatial gradients
- * (1/cm) to 1/s, and one more on the momentum drift converting the F/c legs
- * of M3 back to the evolved physical flux F_i.
- *
- * The gravitational-shift terms R (Eqs. 146/149) need only d_i alpha,
- * d_i beta^k, d_m gamma_ki and K_ij, so the spectral gravitational redshift
- * is complete here.  The observer-acceleration terms O (Eqs. 147/150)
- * involve n^mu d_mu = (d_t - beta^i d_i)/alpha of the Lorentz factor W and
- * of W v^k; RK2/eSSPRK callers provide the d_t pieces through the
- * observer_time_derivative array, while other paths pass zeros.  The
- * energy-integrated budget is unaffected either way: the geometric sources in
- * prj_src_gr_m1_z4c act on every group, and this bin redistribution telescopes
- * to zero. */
-static void prj_rad_gr_m1_frequency_drifts(
-    const prj_rad_gr_m1_closure_ctx *ctx, const prj_rad_gr_m1_side_data *side,
-    double E_in, const double Fcov_in[3], const prj_z4c_hydro_geom *geom,
-    const double observer_time_derivative[4], double *energy_drift,
-    double momentum_drift_cov[3])
-{
-    double g_cov_m3[4][4];
-    double g_con_m3[4][4];
-    double ucon_m3[4];
-    double Rcon[4][4];
-    double drift[4];
-    int a;
-    int j;
-
-    if (energy_drift != 0) {
-        *energy_drift = 0.0;
-    }
-    for (j = 0; j < 3; ++j) {
-        momentum_drift_cov[j] = 0.0;
-    }
-    if (ctx == 0 || side == 0 || Fcov_in == 0 || geom == 0 ||
-        !isfinite(E_in) || E_in < 0.0) {
-        return;
-    }
-    if (!prj_rad_grm1_build_R_from_ctx(ctx, E_in, Fcov_in, g_cov_m3,
-            g_con_m3, Rcon, 0)) {
-        return;
-    }
-    prj_rad_grm1_ucon_from_side(side, ucon_m3);
-    if (!prj_rad_grm1_freq_drift_3p1(ctx, side, geom, g_cov_m3, g_con_m3,
-            ucon_m3, Rcon, observer_time_derivative, drift)) {
-        return;
-    }
-    if (energy_drift != 0) {
-        *energy_drift = PRJ_CLIGHT * drift[0];
-    }
-
-    /* gamma_{j alpha} drift^alpha, with one PRJ_CLIGHT converting gradient
-     * units and one more converting the F/c legs back to the evolved F_j. */
-    for (j = 0; j < 3; ++j) {
-        momentum_drift_cov[j] = 0.0;
-        for (a = 0; a < 3; ++a) {
-            momentum_drift_cov[j] += ctx->gamma[j][a] * drift[a + 1];
-        }
-        momentum_drift_cov[j] *= PRJ_CLIGHT * PRJ_CLIGHT;
-    }
-}
 
 void prj_rad_gr_m1_pressure(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov_in[3],
@@ -4944,6 +5134,7 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     prj_z4c_hydro_geom geom;
     prj_rad_gr_m1_closure_ctx base_closure;
     prj_rad_gr_m1_side_data pside;
+    prj_rad_gr_m1_freq_drift_cache drift_cache;
     const double *W_mhd;
     double dt_geom;
     int field;
@@ -4971,6 +5162,10 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     prj_rad_gr_m1_freq_base_closure_ctx(&geom, W_mhd, dvcon_dx, ic, jc, kc,
         &base_closure);
     prj_rad_gr_m1_prepare_side(&base_closure, &pside);
+    if (!prj_rad_gr_m1_freq_drift_cache_init(&base_closure, &pside, &geom,
+            observer_time_derivative, &drift_cache)) {
+        return;
+    }
 
     for (field = 0; field < PRJ_NRAD; ++field) {
         double Eg[PRJ_NEGROUP];
@@ -5009,8 +5204,8 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
             Fcov[1] = W_state[WIDX(PRJ_RAD_PRIM_F2(field, g), ic, jc, kc)];
             Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
 
-            prj_rad_gr_m1_frequency_drifts(&base_closure, &pside, Eg[g],
-                Fcov, &geom, observer_time_derivative, &Acon, Mq_cov[g]);
+            prj_rad_gr_m1_frequency_drifts_cached(&drift_cache, Eg[g],
+                Fcov, &Acon, Mq_cov[g]);
             Acon_spec[g] = Acon * inv_dnu[g];
             for (a = 0; a < 3; ++a) {
                 Mq_spec[g][a] = Mq_cov[g][a] * inv_dnu[g];
