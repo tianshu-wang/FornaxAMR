@@ -894,7 +894,7 @@ static void check_gr_m1_matter_update_clamps_flux(void)
     double final_temperature = -1.0;
     double E = 1.2;
     double E_floor = 1.0e-50;
-    double F_clamped = (1.0 - 1.0e-6) * PRJ_CLIGHT * E;
+    double F_clamped = (1.0 - 1.0e-4) * PRJ_CLIGHT * E;
     int ic = PRJ_BLOCK_SIZE / 2;
     int v;
     int field;

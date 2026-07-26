@@ -6138,7 +6138,13 @@ static double prj_rad_gr_m1_residual_norm(const double *u_old,
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int eidx = PRJ_CONS_RAD_E(field, group);
             int fidx = PRJ_CONS_RAD_F1(field, group);
-            double scale_e = fmax(threshold * etot_scale / RAD_SCALE,
+            /* Scale the radiation residual by a per-group share of the hydro
+             * energy/momentum, hydro/(NEGROUP*NRAD), rather than by
+             * threshold*hydro.  The old floor made the effective raw tolerance
+             * threshold^2*hydro (comparing to threshold after the divide),
+             * which was far too strict for the radiation sector. */
+            double scale_e = fmax(etot_scale /
+                    (RAD_SCALE * PRJ_NEGROUP * PRJ_NRAD),
                 fabs(u_old[eidx]));
             double flux2 = 0.0;
             double rflux2 = 0.0;
@@ -6163,8 +6169,8 @@ static double prj_rad_gr_m1_residual_norm(const double *u_old,
             if (!isfinite(flux2) || !isfinite(rflux2)) {
                 return HUGE_VAL;
             }
-            scale_f = fmax(threshold * mom_norm * PRJ_CLIGHT * PRJ_CLIGHT /
-                    RAD_SCALE, sqrt(flux2));
+            scale_f = fmax(mom_norm * PRJ_CLIGHT * PRJ_CLIGHT /
+                    (RAD_SCALE * PRJ_NEGROUP * PRJ_NRAD), sqrt(flux2));
             if (!isfinite(scale_f) || scale_f <= 0.0) {
                 return HUGE_VAL;
             }
@@ -6788,6 +6794,35 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
             return 0;
         }
 
+        /* Regularize the near-singular uR^i diagonal of each radiation block.
+         * The flux (RAD_F_i) rows collapse to O(ER) as ER->0, so floor their
+         * diagonal at a fluid-energy-scaled damping
+         *   reg = c * |u_old[ETOT]| * (1e-4*threshold/(NEGROUP*NRAD))
+         *         / RAD_SCALE
+         * which carries the cE units of that diagonal.  The fluid energy is a
+         * stable O(1) scale (unlike resid_RAD_F, which self-limits, or
+         * resid_MOM, which decouples as ER->0), and the fixed magnitude keeps
+         * the uR^i step scaling ~ resid_F so Newton still settles.  The
+         * 1e-4*threshold/(NEGROUP*NRAD) factor keeps reg well below the
+         * loosened per-group radiation tolerance (~threshold*hydro/(NEGROUP*
+         * NRAD)) so it de-corrupts the ER->0 solve without capping it. */
+        {
+            double reg = PRJ_CLIGHT * fabs(u_old[PRJ_CONS_ETOT]) *
+                (1.0e-4 * threshold / (PRJ_NEGROUP * PRJ_NRAD)) / RAD_SCALE;
+            int gidx;
+            int r;
+
+            if (isfinite(reg) && reg > 0.0) {
+                for (gidx = 0; gidx < PRJ_RAD_GR_M1_NGROUPS; ++gidx) {
+                    for (r = 1; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+                        if (jac_blocks.rad_rad[gidx][r][r] < reg) {
+                            jac_blocks.rad_rad[gidx][r][r] = reg;
+                        }
+                    }
+                }
+            }
+        }
+
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_linear");
         prj_rad_gr_m1_last_solve_diag.linear_min_pivot = HUGE_VAL;
@@ -7112,10 +7147,11 @@ static int prj_rad_gr_m1_clamp_fluxes_for_solve(
              * R^{ab} = (4/3) qR^a qR^b.  It is degenerate for our
              * {ER, ur^i} Newton variables because with qR^a = sqrt(ER) ur^a
              * the radiation four-velocity ur^a -> infinity as ER -> 0.  Keep
-             * every state strictly inside the bound (|F|/cE <= 1 - 1e-6) so
-             * the implicit solve always sees a regular state. */
+             * every state strictly inside the bound (|F|/cE <= 1 - 1e-4) so
+             * the implicit solve always sees a regular state, and bounded well
+             * away from f=1 (celerity |uR| <= ~1/(2 sqrt(1e-4)) = 50). */
             cE = PRJ_CLIGHT * E;
-            fmax_bound = (1.0 - 1.0e-6) * cE;
+            fmax_bound = (1.0 - 1.0e-4) * cE;
             if (F2 > fmax_bound * fmax_bound && F2 > 0.0) {
                 double scale = fmax_bound / sqrt(F2);
 
