@@ -5533,7 +5533,7 @@ static int prj_rad_gr_m1_frozen_R(
 
 static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
-    double dt, double *resid, double *u_new_out)
+    double dt, double *resid, double *u_new_out, double *W_out)
 {
     double W[PRJ_NVAR_PRIM];
     double u_new[PRJ_NVAR_CONS];
@@ -5570,6 +5570,11 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
     if (u_new_out != 0) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
             u_new_out[v] = 0.0;
+        }
+    }
+    if (W_out != 0) {
+        for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+            W_out[v] = 0.0;
         }
     }
     if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
@@ -5713,13 +5718,16 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
             u_new_out[v] = u_new[v];
         }
     }
+    if (W_out != 0) {
+        memcpy(W_out, W, sizeof(W));
+    }
     return 1;
 }
 
 static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
     double dt, double *resid, prj_rad_gr_m1_jac_blocks *blocks, double *jac,
-    double *u_new_out)
+    double *u_new_out, double *W_out)
 {
     double resid_local[PRJ_NVAR_CONS];
     double *resid_use = resid != 0 ? resid : resid_local;
@@ -5805,6 +5813,11 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
     if (u_new_out != 0) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
             u_new_out[v] = 0.0;
+        }
+    }
+    if (W_out != 0) {
+        for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+            W_out[v] = 0.0;
         }
     }
     if (jac != 0) {
@@ -6233,6 +6246,9 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
             u_new_out[v] = u_new[v];
         }
     }
+    if (W_out != 0) {
+        memcpy(W_out, W, sizeof(W));
+    }
     if (jac != 0) {
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_resjac_dense");
@@ -6252,7 +6268,7 @@ static int prj_rad_gr_m1_jacobian(const prj_rad *rad, prj_eos *eos,
         return 0;
     }
     return prj_rad_gr_m1_residual_jacobian(rad, eos, geom, u_old, P, dt,
-        resid, &blocks, jac, u_new_out);
+        resid, &blocks, jac, u_new_out, 0);
 }
 
 static int prj_rad_gr_m1_active_row(int eq)
@@ -6594,68 +6610,6 @@ static int prj_rad_gr_m1_solve4_many(
     return 1;
 }
 
-static int prj_rad_gr_m1_build_reduced_hydro_jac(
-    const prj_rad_gr_m1_jac_blocks *blocks,
-    double jac[PRJ_RAD_GR_M1_NFLUID * PRJ_RAD_GR_M1_NFLUID])
-{
-    int frow;
-    int fcol;
-    int gidx;
-    int r;
-    int cidx;
-
-    if (blocks == 0 || jac == 0) {
-        return 0;
-    }
-    for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
-        for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
-            jac[(size_t)frow * PRJ_RAD_GR_M1_NFLUID + (size_t)fcol] =
-                blocks->fluid[frow][fcol];
-        }
-    }
-
-    for (gidx = 0; gidx < PRJ_RAD_GR_M1_NGROUPS; ++gidx) {
-        double B[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK];
-        double rad_fluid_sol[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_RHS];
-        int pivot[PRJ_RAD_GR_M1_NRAD_BLOCK];
-
-        for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
-            for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
-                rad_fluid_sol[r][fcol] = blocks->rad_fluid[gidx][r][fcol];
-            }
-            for (cidx = 0; cidx < PRJ_RAD_GR_M1_NRAD_BLOCK; ++cidx) {
-                B[r][cidx] = blocks->rad_rad[gidx][r][cidx];
-            }
-        }
-        if (!prj_rad_gr_m1_factor4(B, pivot, gidx) ||
-            !prj_rad_gr_m1_solve4_many(B, pivot, PRJ_RAD_GR_M1_NFLUID,
-                rad_fluid_sol)) {
-            return 0;
-        }
-        for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
-            for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
-                double fluid_to_rad = blocks->fluid_rad[gidx][frow][r];
-
-                for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
-                    jac[(size_t)frow * PRJ_RAD_GR_M1_NFLUID +
-                        (size_t)fcol] -= fluid_to_rad *
-                        rad_fluid_sol[r][fcol];
-                }
-            }
-        }
-    }
-
-    for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
-        for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
-            if (!isfinite(jac[(size_t)frow * PRJ_RAD_GR_M1_NFLUID +
-                    (size_t)fcol])) {
-                return 0;
-            }
-        }
-    }
-    return 1;
-}
-
 static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
     prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
     const prj_rad_gr_m1_frozen_group frozen[PRJ_RAD_GR_M1_NGROUPS],
@@ -6666,7 +6620,6 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
     double W[PRJ_NVAR_PRIM];
     double u_new[PRJ_NVAR_CONS];
     double resid_tmp[PRJ_NVAR_CONS];
-    prj_rad_gr_m1_jac_blocks blocks;
     prj_eos_gr_geom eos_geom;
     double g_cov[4][4];
     double g_con[4][4];
@@ -6722,6 +6675,8 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
     double sum_Gn = 0.0;
     double sum_Gu_xe = 0.0;
     double sum_Ggamma[3] = {0.0, 0.0, 0.0};
+    double fluid_jac[PRJ_RAD_GR_M1_NFLUID][PRJ_RAD_GR_M1_NFLUID];
+    double schur_sub[PRJ_RAD_GR_M1_NFLUID][PRJ_RAD_GR_M1_NFLUID];
     double group_Gn[PRJ_RAD_GR_M1_NGROUPS];
     double group_Ggamma[PRJ_RAD_GR_M1_NGROUPS][3];
     int a;
@@ -6730,6 +6685,8 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
     int field;
     int group;
     int block_col;
+    int frow;
+    int fcol;
     int n;
     int v;
     int ok;
@@ -6798,7 +6755,8 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
             P_hydro[5], kappa, sigma, delta, eta, dkappa_drho, dkappa_dT,
             dkappa_dYe, dsigma_drho, dsigma_dT, dsigma_dYe, ddelta_drho,
             ddelta_dT, ddelta_dYe, deta_drho, deta_dT, deta_dYe);
-        prj_rad_gr_m1_jac_blocks_zero(&blocks);
+        memset(fluid_jac, 0, sizeof(fluid_jac));
+        memset(schur_sub, 0, sizeof(schur_sub));
     } else {
         prj_rad3_opac_lookup(rad, P_hydro[0], P_hydro[4], P_hydro[5],
             kappa, sigma, delta, eta);
@@ -6868,63 +6826,64 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
             double dA;
             double dUtmp;
 
-        if (n >= 1 && n <= 3) {
-            dbeta_con[n - 1] = 1.0 / c_light;
-        }
-        for (d = 0; d < 3; ++d) {
-            int m;
-
-            for (m = 0; m < 3; ++m) {
-                dbeta_cov[d] += geom->gamma[d][m] * dbeta_con[m];
+            if (n >= 1 && n <= 3) {
+                dbeta_con[n - 1] = 1.0 / c_light;
             }
-            dbeta2 += dbeta_cov[d] * beta_con[d] +
-                beta_cov[d] * dbeta_con[d];
-            dBbeta += Bcov[d] * dbeta_con[d];
-        }
-        dwlor = 0.5 * wlor * wlor * wlor * dbeta2;
-        dwlor2 = 2.0 * wlor * dwlor;
-        if (n == 0) {
-            deint = deint_drho;
-            dpressure = dpressure_drho;
-        } else if (n == 4) {
-            deint = deint_dT;
-            dpressure = dpressure_dT;
-        } else if (n == 5) {
-            deint = deint_dYe;
-            dpressure = dpressure_dYe;
-        }
-        dw = drho * (c2 + eint) + P_hydro[0] * deint + dpressure;
+            for (d = 0; d < 3; ++d) {
+                int m;
 
-        ducon[0][n] = dwlor / alpha;
-        for (d = 0; d < 3; ++d) {
-            ducon[d + 1][n] = dwlor *
-                (beta_con[d] - geom->beta[d] / alpha) +
-                wlor * dbeta_con[d];
-        }
-        for (a = 0; a < 4; ++a) {
-            for (b = 0; b < 4; ++b) {
-                ducov[a][n] += g_cov[a][b] * ducon[b][n];
+                for (m = 0; m < 3; ++m) {
+                    dbeta_cov[d] += geom->gamma[d][m] * dbeta_con[m];
+                }
+                dbeta2 += dbeta_cov[d] * beta_con[d] +
+                    beta_cov[d] * dbeta_con[d];
+                dBbeta += Bcov[d] * dbeta_con[d];
             }
-        }
+            dwlor = 0.5 * wlor * wlor * wlor * dbeta2;
+            dwlor2 = 2.0 * wlor * dwlor;
+            if (n == 0) {
+                deint = deint_drho;
+                dpressure = dpressure_drho;
+            } else if (n == 4) {
+                deint = deint_dT;
+                dpressure = dpressure_dT;
+            } else if (n == 5) {
+                deint = deint_dYe;
+                dpressure = dpressure_dYe;
+            }
+            dw = drho * (c2 + eint) + P_hydro[0] * deint + dpressure;
 
-        dD = drho * wlor + P_hydro[0] * dwlor;
-        blocks.fluid[0][n] += sqrtg * dD;
-        for (d = 0; d < 3; ++d) {
-            dUtmp = ((dw * wlor2 + w * dwlor2) * beta_cov[d] +
-                (w * wlor2 + Bsq) * dbeta_cov[d] -
-                dBbeta * Bcov[d]) / c_light;
-            blocks.fluid[1 + d][n] += sqrtg * dUtmp;
-        }
-        dA = drho * eint + P_hydro[0] * deint + dpressure;
-        dUtmp = dA * wlor2 + (P_hydro[0] * eint + pressure) * dwlor2 +
-            c2 * (drho * wlor * wlor_m1 +
-                P_hydro[0] * (dwlor * wlor_m1 + wlor * dwlor)) -
-            dpressure - Bbeta * dBbeta;
-        if (wlor2 > 0.0) {
-            dUtmp += 0.5 * Bsq * dwlor2 / (wlor2 * wlor2);
-        }
-            blocks.fluid[4][n] += sqrtg * dUtmp;
-            blocks.fluid[5][n] += sqrtg * (dD * P_hydro[5] + D * dYe);
+            ducon[0][n] = dwlor / alpha;
+            for (d = 0; d < 3; ++d) {
+                ducon[d + 1][n] = dwlor *
+                    (beta_con[d] - geom->beta[d] / alpha) +
+                    wlor * dbeta_con[d];
+            }
+            for (a = 0; a < 4; ++a) {
+                for (b = 0; b < 4; ++b) {
+                    ducov[a][n] += g_cov[a][b] * ducon[b][n];
+                }
+            }
+
+            dD = drho * wlor + P_hydro[0] * dwlor;
+            fluid_jac[0][n] += sqrtg * dD;
+            for (d = 0; d < 3; ++d) {
+                dUtmp = ((dw * wlor2 + w * dwlor2) * beta_cov[d] +
+                    (w * wlor2 + Bsq) * dbeta_cov[d] -
+                    dBbeta * Bcov[d]) / c_light;
+                fluid_jac[1 + d][n] += sqrtg * dUtmp;
+            }
+            dA = drho * eint + P_hydro[0] * deint + dpressure;
+            dUtmp = dA * wlor2 +
+                (P_hydro[0] * eint + pressure) * dwlor2 +
+                c2 * (drho * wlor * wlor_m1 +
+                    P_hydro[0] * (dwlor * wlor_m1 + wlor * dwlor)) -
+                dpressure - Bbeta * dBbeta;
+            if (wlor2 > 0.0) {
+                dUtmp += 0.5 * Bsq * dwlor2 / (wlor2 * wlor2);
+            }
+            fluid_jac[4][n] += sqrtg * dUtmp;
+            fluid_jac[5][n] += sqrtg * (dD * P_hydro[5] + D * dYe);
         }
     }
 
@@ -7022,9 +6981,6 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
             for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
                 for (cc = 0; cc < PRJ_RAD_GR_M1_NRAD_BLOCK; ++cc) {
                     Bmat[r][cc] = A[r][cc];
-                    if (need_jac) {
-                        blocks.rad_rad[idx][r][cc] = A[r][cc];
-                    }
                 }
             }
             if (!prj_rad_gr_m1_factor4(Bmat, pivot, idx) ||
@@ -7078,7 +7034,11 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
                 sum_Ggamma[d] += Ggamma;
             }
 
-            {
+            if (need_jac) {
+                double rad_fluid[PRJ_RAD_GR_M1_NRAD_BLOCK]
+                    [PRJ_RAD_GR_M1_NFLUID] = {{0.0}};
+                double fluid_rad[PRJ_RAD_GR_M1_NFLUID]
+                    [PRJ_RAD_GR_M1_NRAD_BLOCK] = {{0.0}};
                 double delta_fac = 1.0 - delta[idx] / 3.0;
                 double dsigma_eff_col[PRJ_RAD_GR_M1_NFLUID] =
                     {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
@@ -7135,16 +7095,15 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
                         }
                     }
 
-                    blocks.fluid[4][block_col] += s_gn * dGn;
+                    fluid_jac[4][block_col] += s_gn * dGn;
                     for (d = 0; d < 3; ++d) {
-                        blocks.fluid[1 + d][block_col] -=
+                        fluid_jac[1 + d][block_col] -=
                             s_gg_f * dGgamma[d];
                     }
-                    blocks.fluid[5][block_col] += s_gu * dGu * xe;
-                    blocks.rad_fluid[idx][0][block_col] -= s_gu * dGn;
+                    fluid_jac[5][block_col] += s_gu * dGu * xe;
+                    rad_fluid[0][block_col] -= s_gu * dGn;
                     for (d = 0; d < 3; ++d) {
-                        blocks.rad_fluid[idx][1 + d][block_col] +=
-                            s_rgg * dGgamma[d];
+                        rad_fluid[1 + d][block_col] += s_rgg * dGgamma[d];
                     }
                 }
 
@@ -7164,13 +7123,37 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
                         }
                     }
 
-                    blocks.fluid_rad[idx][4][block_col] += s_gn * dGn;
+                    fluid_rad[4][block_col] += s_gn * dGn;
                     for (d = 0; d < 3; ++d) {
-                        blocks.fluid_rad[idx][1 + d][block_col] -=
-                            s_gg_f * dGgamma[d];
+                        fluid_rad[1 + d][block_col] -= s_gg_f * dGgamma[d];
                     }
-                    blocks.fluid_rad[idx][5][block_col] +=
-                        s_gu * dGu * xe;
+                    fluid_rad[5][block_col] += s_gu * dGu * xe;
+                }
+
+                {
+                    double rad_fluid_sol[PRJ_RAD_GR_M1_NRAD_BLOCK]
+                        [PRJ_RAD_GR_M1_NRAD_RHS] = {{0.0}};
+
+                    for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+                        for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+                            rad_fluid_sol[r][fcol] = rad_fluid[r][fcol];
+                        }
+                    }
+                    if (!prj_rad_gr_m1_solve4_many(Bmat, pivot,
+                            PRJ_RAD_GR_M1_NFLUID, rad_fluid_sol)) {
+                        return 0;
+                    }
+                    for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
+                        for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+                            double fluid_to_rad = fluid_rad[frow][r];
+
+                            for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID;
+                                 ++fcol) {
+                                schur_sub[frow][fcol] += fluid_to_rad *
+                                    rad_fluid_sol[r][fcol];
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -7210,9 +7193,19 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
         }
     }
 
-    if (need_jac &&
-        !prj_rad_gr_m1_build_reduced_hydro_jac(&blocks, red_jac)) {
-        return 0;
+    if (need_jac) {
+        for (frow = 0; frow < PRJ_RAD_GR_M1_NFLUID; ++frow) {
+            for (fcol = 0; fcol < PRJ_RAD_GR_M1_NFLUID; ++fcol) {
+                double value = fluid_jac[frow][fcol] -
+                    schur_sub[frow][fcol];
+
+                if (!isfinite(value)) {
+                    return 0;
+                }
+                red_jac[(size_t)frow * PRJ_RAD_GR_M1_NFLUID +
+                    (size_t)fcol] = value;
+            }
+        }
     }
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         if (!isfinite(resid_tmp[v])) {
@@ -7415,7 +7408,7 @@ static void prj_rad_gr_m1_diagnose_directional_jacobian(
             P_eps[col] = P[col] + eps * dP[col];
         }
         ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_eps, dt,
-            resid_eps, u_eps);
+            resid_eps, u_eps, 0);
         if (ok) {
             break;
         }
@@ -7528,9 +7521,9 @@ static void prj_rad_gr_m1_diagnose_elementwise_jacobian(
             Pp[col] += h;
             Pm[col] -= h;
             ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, Pp, dt,
-                    resp, u_tmp) &&
+                    resp, u_tmp, 0) &&
                 prj_rad_gr_m1_residual(rad, eos, geom, u_old, Pm, dt,
-                    resm, u_tmp);
+                    resm, u_tmp, 0);
             if (ok) {
                 break;
             }
@@ -7576,7 +7569,8 @@ static void prj_rad_gr_m1_diagnose_elementwise_jacobian(
 
 static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
     prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
-    double dt, double *P, double *resid_out, double *u_new_out)
+    double dt, double *P, double *resid_out, double *u_new_out,
+    double *W_out)
 {
     const int np = PRJ_RAD_GR_M1_NP;
     double threshold = PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT;
@@ -7591,6 +7585,7 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
     double resid_exact[PRJ_NVAR_CONS];
     double u_new[PRJ_NVAR_CONS];
     double u_exact[PRJ_NVAR_CONS];
+    double W_exact[PRJ_NVAR_PRIM];
     double red_jac[PRJ_RAD_GR_M1_NFLUID * PRJ_RAD_GR_M1_NFLUID];
     double rhs[PRJ_RAD_GR_M1_NFLUID];
     double dfluid[PRJ_RAD_GR_M1_NFLUID];
@@ -7646,7 +7641,7 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
 
             PRJ_TIMER_CURRENT_START("rad_matter_temp_approx_exact_check");
             ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_eval, dt,
-                resid_exact, u_exact);
+                resid_exact, u_exact, W_exact);
             exact_norm = ok ? prj_rad_gr_m1_residual_norm(u_old,
                 resid_exact, threshold) : HUGE_VAL;
             PRJ_TIMER_CURRENT_STOP("rad_matter_temp_approx_exact_check");
@@ -7657,6 +7652,9 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
                 }
                 if (u_new_out != 0) {
                     memcpy(u_new_out, u_exact, sizeof(u_exact));
+                }
+                if (W_out != 0) {
+                    memcpy(W_out, W_exact, sizeof(W_exact));
                 }
                 prj_rad_gr_m1_last_solve_diag.norm = exact_norm;
                 return 1;
@@ -7746,7 +7744,7 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
 
 static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, double dt, double *P,
-    double *resid_out, double *u_new_out)
+    double *resid_out, double *u_new_out, double *W_out)
 {
     const int np = PRJ_RAD_GR_M1_NP;
     double threshold = PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT;
@@ -7755,6 +7753,8 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
     double resid_trial[PRJ_NVAR_CONS];
     double u_new[PRJ_NVAR_CONS];
     double u_new_trial[PRJ_NVAR_CONS];
+    double W_new[PRJ_NVAR_PRIM];
+    double W_trial[PRJ_NVAR_PRIM];
     prj_rad_gr_m1_jac_blocks jac_blocks;
     double dP[PRJ_RAD_GR_M1_NP];
     double P_trial[PRJ_RAD_GR_M1_NP];
@@ -7785,7 +7785,7 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_resjac");
         ok = prj_rad_gr_m1_residual_jacobian(rad, eos, geom, u_old, P, dt,
-            resid, &jac_blocks, 0, u_new);
+            resid, &jac_blocks, 0, u_new, W_new);
         PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_resjac");
         if (!ok) {
             return 0;
@@ -7801,6 +7801,9 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
             }
             if (u_new_out != 0) {
                 memcpy(u_new_out, u_new, sizeof(u_new));
+            }
+            if (W_out != 0) {
+                memcpy(W_out, W_new, sizeof(W_new));
             }
             return 1;
         }
@@ -7868,7 +7871,7 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
             /* TEMP TIMER: remove after rad-matter coupling profiling. */
             PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_trial_resid");
             ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_trial, dt,
-                resid_trial, u_new_trial);
+                resid_trial, u_new_trial, W_trial);
             PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_trial_resid");
             if (!ok) {
                 prj_rad_gr_m1_last_solve_diag.invalid_trials += 1;
@@ -7893,6 +7896,7 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
                 memcpy(P, P_trial, (size_t)np * sizeof(double));
                 memcpy(resid, resid_trial, sizeof(resid));
                 memcpy(u_new, u_new_trial, sizeof(u_new));
+                memcpy(W_new, W_trial, sizeof(W_new));
                 norm = trial_norm;
                 accepted = 1;
                 break;
@@ -7919,6 +7923,9 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
             if (u_new_out != 0) {
                 memcpy(u_new_out, u_new, sizeof(u_new));
             }
+            if (W_out != 0) {
+                memcpy(W_out, W_new, sizeof(W_new));
+            }
             return 1;
         }
     }
@@ -7927,7 +7934,7 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("rad_matter_temp_newton_final_resid");
         ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt, resid_out,
-            u_new_out);
+            u_new_out, W_out);
         PRJ_TIMER_CURRENT_STOP("rad_matter_temp_newton_final_resid");
     } else {
         ok = 0;
@@ -7940,7 +7947,7 @@ static int prj_rad_gr_m1_implicit_solve_exact(const prj_rad *rad, prj_eos *eos,
 
 static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, double dt, double *P,
-    double *resid_out, double *u_new_out)
+    double *resid_out, double *u_new_out, double *W_out)
 {
     double P_approx[PRJ_RAD_GR_M1_NP];
     int ok;
@@ -7951,7 +7958,7 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
     memcpy(P_approx, P, sizeof(P_approx));
     PRJ_TIMER_CURRENT_START("rad_matter_temp_implicit_approx");
     ok = prj_rad_gr_m1_implicit_solve_approx(rad, eos, geom, u_old, dt,
-        P_approx, resid_out, u_new_out);
+        P_approx, resid_out, u_new_out, W_out);
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_implicit_approx");
     if (ok) {
         memcpy(P, P_approx, sizeof(P_approx));
@@ -7960,7 +7967,7 @@ static int prj_rad_gr_m1_implicit_solve(const prj_rad *rad, prj_eos *eos,
 
     PRJ_TIMER_CURRENT_START("rad_matter_temp_implicit_exact_fallback");
     ok = prj_rad_gr_m1_implicit_solve_exact(rad, eos, geom, u_old, dt, P,
-        resid_out, u_new_out);
+        resid_out, u_new_out, W_out);
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_implicit_exact_fallback");
     return ok;
 }
@@ -8055,7 +8062,7 @@ int prj_rad_gr_m1_residual_test_wrapper(const prj_rad *rad, prj_eos *eos,
     double dt, double *resid, double *u_new_out)
 {
     return prj_rad_gr_m1_residual(rad, eos, geom, u_old, P, dt, resid,
-        u_new_out);
+        u_new_out, 0);
 }
 
 int prj_rad_gr_m1_jacobian_test_wrapper(const prj_rad *rad, prj_eos *eos,
@@ -8071,7 +8078,7 @@ int prj_rad_gr_m1_implicit_solve_test_wrapper(const prj_rad *rad,
     double dt, double *P, double *resid_out, double *u_new_out)
 {
     return prj_rad_gr_m1_implicit_solve(rad, eos, geom, u_old, dt, P,
-        resid_out, u_new_out);
+        resid_out, u_new_out, 0);
 }
 
 static void prj_rad_gr_m1_matter_abort(const char *reason,
@@ -8356,21 +8363,11 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_implicit");
     ok = prj_rad_gr_m1_implicit_solve(rad, eos, &geom, u_old, dt, P, resid,
-        u_new);
+        u_new, W_new);
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_implicit");
     if (!ok) {
         prj_rad_gr_m1_matter_abort("implicit solve failed", rad, block,
             z4c_stage, i, j, k, dt, u_old, P, W, &geom, resid);
-    }
-    /* TEMP TIMER: remove after rad-matter coupling profiling. */
-    PRJ_TIMER_CURRENT_START("rad_matter_temp_p_to_prim");
-    ok = prj_rad_gr_m1_p_to_prim(eos, &geom, g_cov, g_con, u_old, P,
-        W_new, 0);
-    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_p_to_prim");
-    if (!ok) {
-        prj_rad_gr_m1_matter_abort("post-solve primitive recovery failed",
-            rad, block, z4c_stage, i, j, k, dt, u_old, P, W, &geom,
-            resid);
     }
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_copy_out");
