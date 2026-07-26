@@ -356,113 +356,80 @@ static void prj_src_gr_fail(const char *op, int status, int i, int j, int k)
     exit(EXIT_FAILURE);
 }
 
-static void prj_src_gr_hydro_z4c(prj_eos *eos, const prj_mesh *mesh,
-    const prj_block *block, int z4c_stage, double *restrict W_mhd,
-    double *restrict mhd_rhs)
+static void prj_src_gr_hydro_z4c_cell(prj_eos *eos, const prj_block *block,
+    const prj_z4c_hydro_geom *geom, int i, int j, int k,
+    double *restrict W_mhd, double *restrict mhd_rhs)
 {
-    int i;
-    int j;
-    int k;
+    prj_eos_gr_geom egeom;
+    prj_eos_grmhd_state state;
+    double Wc[PRJ_NVAR_PRIM];
+    double Tij[3][3];
+    double pressure;
+    double energy_src = 0.0;
+    int status;
+    int v;
+    int a;
+    int b;
+    int d;
 
-    if (!prj_eos_full_dynamic_gr_enabled(mesh) || block == 0 || block->id < 0 ||
-        block->active != 1 || W_mhd == 0 || mhd_rhs == 0) {
+    if (eos == 0 || block == 0 || geom == 0 || W_mhd == 0 ||
+        mhd_rhs == 0) {
         return;
     }
-    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                prj_z4c_hydro_geom geom;
-                prj_eos_gr_geom egeom;
-                prj_eos_grmhd_state state;
-                double Wc[PRJ_NVAR_PRIM];
-                double Tij[3][3];
-                double pressure;
-                double energy_src = 0.0;
-                int status;
-                int v;
-                int a;
-                int b;
-                int d;
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            egeom.gamma[a][b] = geom->gamma[a][b];
+        }
+    }
+    for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
+        Wc[v] = W_mhd[WIDX(v, i, j, k)];
+    }
+    pressure = block->eosvar != 0 ?
+        block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] : 0.0;
+    status = prj_eos_grmhd_state_from_prim(eos, &egeom, Wc, pressure,
+        &state, PRJ_EOS_CTX_MAIN);
+    if (status != PRJ_EOS_GR_OK) {
+        prj_src_gr_fail("grmhd state", status, i, j, k);
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            int c;
+            int e;
 
-                if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
-                    prj_src_gr_fail("geometry load", -1, i, j, k);
+            Tij[a][b] = 0.0;
+            for (c = 0; c < 3; ++c) {
+                for (e = 0; e < 3; ++e) {
+                    Tij[a][b] += geom->gamma_inv[a][c] *
+                        geom->gamma_inv[b][e] * state.stress_cov[c][e];
                 }
-                for (a = 0; a < 3; ++a) {
-                    for (b = 0; b < 3; ++b) {
-                        egeom.gamma[a][b] = geom.gamma[a][b];
-                    }
-                }
-                for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
-                    Wc[v] = W_mhd[WIDX(v, i, j, k)];
-                }
-                pressure = block->eosvar != 0 ?
-                    block->eosvar[EIDX(PRJ_EOSVAR_PRESSURE, i, j, k)] : 0.0;
-                status = prj_eos_grmhd_state_from_prim(eos, &egeom, Wc,
-                    pressure, &state, PRJ_EOS_CTX_MAIN);
-                if (status != PRJ_EOS_GR_OK) {
-                    prj_src_gr_fail("grmhd state", status, i, j, k);
-                }
-                for (a = 0; a < 3; ++a) {
-                    for (b = 0; b < 3; ++b) {
-                        int c;
-                        int e;
-
-                        Tij[a][b] = 0.0;
-                        for (c = 0; c < 3; ++c) {
-                            for (e = 0; e < 3; ++e) {
-                                Tij[a][b] += geom.gamma_inv[a][c] *
-                                    geom.gamma_inv[b][e] * state.stress_cov[c][e];
-                            }
-                        }
-                    }
-                }
-                for (d = 0; d < 3; ++d) {
-                    double src = -state.E * geom.dalpha[d];
-
-                    for (a = 0; a < 3; ++a) {
-                        src += state.S_cov[a] *
-                            geom.dbeta[d][a];
-                        for (b = 0; b < 3; ++b) {
-                            src += 0.5 * geom.alpha * Tij[a][b] *
-                                geom.dgamma[d][a][b];
-                        }
-                    }
-                    mhd_rhs[MHDVIDX(PRJ_CONS_MOM1 + d, i, j, k)] +=
-                        geom.sqrt_gamma * src;
-                    energy_src -= geom.sqrt_gamma * PRJ_CLIGHT * PRJ_CLIGHT *
-                        (state.S_con[d] / PRJ_CLIGHT) * geom.dalpha[d];
-                }
-                for (a = 0; a < 3; ++a) {
-                    for (b = 0; b < 3; ++b) {
-                        energy_src += geom.sqrt_gamma * PRJ_CLIGHT *
-                            geom.alpha * Tij[a][b] * geom.K_dd[a][b];
-                    }
-                }
-                mhd_rhs[MHDVIDX(PRJ_CONS_ETOT, i, j, k)] += energy_src;
             }
         }
     }
+    for (d = 0; d < 3; ++d) {
+        double src = -state.E * geom->dalpha[d];
+
+        for (a = 0; a < 3; ++a) {
+            src += state.S_cov[a] * geom->dbeta[d][a];
+            for (b = 0; b < 3; ++b) {
+                src += 0.5 * geom->alpha * Tij[a][b] *
+                    geom->dgamma[d][a][b];
+            }
+        }
+        mhd_rhs[MHDVIDX(PRJ_CONS_MOM1 + d, i, j, k)] +=
+            geom->sqrt_gamma * src;
+        energy_src -= geom->sqrt_gamma * PRJ_CLIGHT * PRJ_CLIGHT *
+            (state.S_con[d] / PRJ_CLIGHT) * geom->dalpha[d];
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            energy_src += geom->sqrt_gamma * PRJ_CLIGHT *
+                geom->alpha * Tij[a][b] * geom->K_dd[a][b];
+        }
+    }
+    mhd_rhs[MHDVIDX(PRJ_CONS_ETOT, i, j, k)] += energy_src;
 }
 
 #if PRJ_USE_RADIATION_M1
-static void prj_src_gr_m1_normal_metric(const prj_z4c_hydro_geom *geom,
-    double g_cov[4][4], double g_con[4][4])
-{
-    int a;
-    int b;
-
-    memset(g_cov, 0, 16 * sizeof(double));
-    memset(g_con, 0, 16 * sizeof(double));
-    g_cov[0][0] = -1.0;
-    g_con[0][0] = -1.0;
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            g_cov[a + 1][b + 1] = geom->gamma[a][b];
-            g_con[a + 1][b + 1] = geom->gamma_inv[a][b];
-        }
-    }
-}
-
 static void prj_src_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
     double *E, double Fcov[3], double Fcon[3])
 {
@@ -500,104 +467,235 @@ static void prj_src_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
     }
 }
 
-static void prj_src_gr_m1_z4c(const prj_rad *rad, const prj_mesh *mesh,
-    const prj_block *block, int z4c_stage, const double *restrict W_mhd,
+static int prj_src_gr_m1_pressure_contractions(
+    const prj_z4c_hydro_geom *geom, double E, const double Fcon[3],
+    double *pK_out, double pDgamma[3])
+{
+    double R0[4];
+    double K[4];
+    double A = 0.0;
+    double B;
+    double disc;
+    double disc_scale;
+    double sqrt_disc;
+    double root_denom;
+    double denom;
+    double iso;
+    double coeff;
+    int a;
+    int b;
+    int d;
+
+    if (pK_out == 0 || pDgamma == 0) {
+        return 0;
+    }
+    *pK_out = 0.0;
+    for (d = 0; d < 3; ++d) {
+        pDgamma[d] = 0.0;
+    }
+    if (geom == 0 || Fcon == 0 || !isfinite(E) || E < 0.0) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcon[a])) {
+            return 0;
+        }
+        for (b = 0; b < 3; ++b) {
+            if (!isfinite(geom->gamma[a][b]) ||
+                !isfinite(geom->gamma_inv[a][b])) {
+                return 0;
+            }
+        }
+    }
+
+    R0[0] = E;
+    for (a = 0; a < 3; ++a) {
+        R0[a + 1] = Fcon[a] / PRJ_CLIGHT;
+    }
+    B = R0[0];
+    if (!isfinite(B) || B < 0.0) {
+        return 0;
+    }
+    if (B == 0.0) {
+        for (a = 0; a < 3; ++a) {
+            if (Fcon[a] != 0.0) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+
+    A = -R0[0] * R0[0];
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            A += geom->gamma[a][b] * R0[a + 1] * R0[b + 1];
+        }
+    }
+    disc_scale = fmax(B * B, fabs(-3.0 * A));
+    if (disc_scale <= 0.0) {
+        disc_scale = 1.0;
+    }
+    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
+        A = 0.0;
+    }
+    disc = B * B - 3.0 * A;
+    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
+        return 0;
+    }
+    if (disc < 0.0) {
+        disc = 0.0;
+    }
+    sqrt_disc = sqrt(disc);
+    root_denom = B + sqrt_disc;
+    if (!isfinite(root_denom) || root_denom <= 0.0) {
+        return 0;
+    }
+    iso = -A / root_denom;
+    if (!isfinite(iso) || iso < 0.0) {
+        return 0;
+    }
+    denom = 2.0 * B + sqrt_disc;
+    if (!isfinite(denom) || denom <= 0.0) {
+        return 0;
+    }
+    coeff = 3.0 / denom;
+
+    K[0] = R0[0] + iso;
+    for (a = 0; a < 3; ++a) {
+        K[a + 1] = R0[a + 1];
+    }
+    for (a = 0; a < 4; ++a) {
+        double row0 = coeff * K[0] * K[a] + (a == 0 ? -iso : 0.0);
+        double err = fabs(row0 - R0[a]);
+        double scale = fmax(fabs(R0[a]), fabs(row0));
+
+        if (scale < 1.0) {
+            scale = 1.0;
+        }
+        if (!isfinite(row0) || err > 1.0e-10 * scale) {
+            return 0;
+        }
+    }
+
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            double Pab = coeff * K[a + 1] * K[b + 1] +
+                iso * geom->gamma_inv[a][b];
+
+            if (!isfinite(Pab)) {
+                *pK_out = 0.0;
+                for (d = 0; d < 3; ++d) {
+                    pDgamma[d] = 0.0;
+                }
+                return 0;
+            }
+            *pK_out += Pab * geom->K_dd[a][b];
+            for (d = 0; d < 3; ++d) {
+                pDgamma[d] += Pab * geom->dgamma[d][a][b];
+            }
+        }
+    }
+    return 1;
+}
+
+static void prj_src_gr_m1_z4c_cell(const prj_rad *rad, const prj_block *block,
+    const prj_z4c_hydro_geom *geom, int i, int j, int k,
     double *restrict W_rad, double *restrict rad_rhs)
+{
+    const double c = PRJ_CLIGHT;
+    const double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    int field;
+    int group;
+
+    if (rad == 0 || block == 0 || geom == 0 || W_rad == 0 || rad_rhs == 0) {
+        return;
+    }
+    (void)rad;
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            double E;
+            double Fcov[3];
+            double Fcon[3];
+            double pK = 0.0;
+            double pDgamma[3] = {0.0, 0.0, 0.0};
+            double energy_src = 0.0;
+            int a;
+            int d;
+
+            E = W_rad[WIDX(PRJ_RAD_PRIM_E(field, group), i, j, k)];
+            Fcov[0] = W_rad[WIDX(PRJ_RAD_PRIM_F1(field, group), i, j, k)];
+            Fcov[1] = W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)];
+            Fcov[2] = W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)];
+
+            prj_src_gr_m1_limit_state(geom, &E, Fcov, Fcon);
+            (void)prj_src_gr_m1_pressure_contractions(geom, E, Fcon, &pK,
+                pDgamma);
+
+            /* Eq. 3.37/3.38 are written with c=1.  PRJ stores F_i as the
+             * physical radiation flux, while K_ij and metric derivatives are
+             * spatial derivatives, so the restored source terms use c P K in
+             * the energy equation and c^2/c factors in the evolved-F_i equation
+             * below. */
+            for (a = 0; a < 3; ++a) {
+                energy_src -= Fcon[a] * geom->dalpha[a] / geom->alpha;
+            }
+            energy_src += c * pK;
+            rad_rhs[RADVIDX(PRJ_RAD_CONS_E(field, group), i, j, k)] +=
+                geom->alpha * geom->sqrt_gamma * energy_src;
+
+            for (d = 0; d < 3; ++d) {
+                double mom_src = -c2 * E * geom->dalpha[d];
+
+                for (a = 0; a < 3; ++a) {
+                    mom_src += c * Fcov[a] * geom->dbeta[d][a];
+                }
+                mom_src += 0.5 * geom->alpha * c2 * pDgamma[d];
+                rad_rhs[RADVIDX(PRJ_RAD_CONS_F1(field, group) + d,
+                    i, j, k)] += geom->sqrt_gamma * mom_src;
+            }
+            /* S^alpha matter-coupling terms are intentionally omitted in this
+             * first GR-M1 transport pass. */
+        }
+    }
+}
+#endif
+
+static void prj_src_gr_z4c(prj_eos *eos, const prj_rad *rad,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage,
+    double *restrict W_mhd, double *restrict W_rad,
+    double *restrict mhd_rhs, double *restrict rad_rhs)
 {
     int i;
     int j;
     int k;
 
-    (void)W_mhd;
-    if (!prj_eos_full_dynamic_gr_enabled(mesh) || rad == 0 || block == 0 ||
-        block->id < 0 || block->active != 1 || W_rad == 0 || rad_rhs == 0) {
+    if (!prj_eos_full_dynamic_gr_enabled(mesh) || block == 0 || block->id < 0 ||
+        block->active != 1) {
         return;
     }
     for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
         for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
             for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                 prj_z4c_hydro_geom geom;
-                double g_cov[4][4];
-                double g_con[4][4];
-                int field;
-                int group;
 
-                if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom)) {
-                    prj_src_gr_fail("radiation geometry load", -1, i, j, k);
+                if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k,
+                        &geom)) {
+                    prj_src_gr_fail("geometry load", -1, i, j, k);
                 }
-                prj_src_gr_m1_normal_metric(&geom, g_cov, g_con);
-                for (field = 0; field < PRJ_NRAD; ++field) {
-                    for (group = 0; group < PRJ_NEGROUP; ++group) {
-                        double E;
-                        double Fcov[3];
-                        double Fcon[3];
-                        double Pcon[3][3];
-                        double Rcon[4][4];
-                        double energy_src = 0.0;
-                        double c = PRJ_CLIGHT;
-                        double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
-                        int a;
-                        int b;
-                        int d;
-
-                        E = W_rad[WIDX(PRJ_RAD_PRIM_E(field, group), i, j, k)];
-                        Fcov[0] = W_rad[WIDX(PRJ_RAD_PRIM_F1(field, group), i, j, k)];
-                        Fcov[1] = W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)];
-                        Fcov[2] = W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)];
-
-                        prj_src_gr_m1_limit_state(&geom, &E, Fcov, Fcon);
-                        if (prj_rad_grm1_build_R(g_cov, g_con, 1.0, E,
-                                Fcon, Rcon)) {
-                            for (a = 0; a < 3; ++a) {
-                                for (b = 0; b < 3; ++b) {
-                                    Pcon[a][b] = Rcon[a + 1][b + 1];
-                                }
-                            }
-                        } else {
-                            for (a = 0; a < 3; ++a) {
-                                for (b = 0; b < 3; ++b) {
-                                    Pcon[a][b] = 0.0;
-                                }
-                            }
-                        }
-
-                        /* Eq. 3.37/3.38 are written with c=1.  PRJ stores
-                         * F_i as the physical radiation flux, while K_ij and
-                         * metric derivatives are spatial derivatives, so the
-                         * restored source terms use c P K in the energy
-                         * equation and c^2/c factors in the evolved-F_i
-                         * equation below. */
-                        for (a = 0; a < 3; ++a) {
-                            energy_src -= Fcon[a] * geom.dalpha[a] / geom.alpha;
-                            for (b = 0; b < 3; ++b) {
-                                energy_src += c * Pcon[a][b] * geom.K_dd[a][b];
-                            }
-                        }
-                        rad_rhs[RADVIDX(PRJ_RAD_CONS_E(field, group), i, j, k)] +=
-                            geom.alpha * geom.sqrt_gamma * energy_src;
-
-                        for (d = 0; d < 3; ++d) {
-                            double mom_src = -c2 * E * geom.dalpha[d];
-
-                            for (a = 0; a < 3; ++a) {
-                                mom_src += c * Fcov[a] * geom.dbeta[d][a];
-                                for (b = 0; b < 3; ++b) {
-                                    mom_src += 0.5 * geom.alpha * c2 * Pcon[a][b] *
-                                        geom.dgamma[d][a][b];
-                                }
-                            }
-                            rad_rhs[RADVIDX(PRJ_RAD_CONS_F1(field, group) + d,
-                                i, j, k)] += geom.sqrt_gamma * mom_src;
-                        }
-                        /* S^alpha matter-coupling terms are intentionally
-                         * omitted in this first GR-M1 transport pass. */
-                    }
-                }
+                prj_src_gr_hydro_z4c_cell(eos, block, &geom, i, j, k, W_mhd,
+                    mhd_rhs);
+#if PRJ_USE_RADIATION_M1
+                prj_src_gr_m1_z4c_cell(rad, block, &geom, i, j, k, W_rad,
+                    rad_rhs);
+#else
+                (void)rad;
+                (void)W_rad;
+                (void)rad_rhs;
+#endif
             }
         }
     }
 }
-#endif
 #endif
 
 void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
@@ -609,6 +707,10 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     int i;
     int j;
     int k;
+
+#if PRJ_DYNAMIC_GR
+    int full_dynamic_gr = prj_eos_full_dynamic_gr_enabled(mesh);
+#endif
 
     for (v = 0; v < PRJ_NVAR_MHD_CONS; ++v) {
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
@@ -631,11 +733,9 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     prj_src_geom(eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
     prj_src_user(eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
 #if PRJ_DYNAMIC_GR
-    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-        prj_src_gr_hydro_z4c(eos, mesh, block, z4c_stage, W_mhd, mhd_rhs);
-#if PRJ_USE_RADIATION_M1
-        prj_src_gr_m1_z4c(rad, mesh, block, z4c_stage, W_mhd, W_rad, rad_rhs);
-#endif
+    if (full_dynamic_gr) {
+        prj_src_gr_z4c(eos, rad, mesh, block, z4c_stage, W_mhd, W_rad,
+            mhd_rhs, rad_rhs);
     } else
 #else
     (void)mesh;
@@ -646,7 +746,7 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
             rad_rhs);
     }
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
-    if (!prj_eos_full_dynamic_gr_enabled(mesh))
+    if (!full_dynamic_gr)
 #endif
     prj_src_radiation_vel_grad(rad, block, W_rad, rad_rhs);
 }

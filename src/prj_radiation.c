@@ -5295,6 +5295,25 @@ typedef struct prj_rad_gr_m1_frozen_group {
     double dRcon[PRJ_RAD_GR_M1_NRAD_BLOCK][4][4];
 } prj_rad_gr_m1_frozen_group;
 
+typedef struct prj_rad_gr_m1_opac_cache {
+    double kappa[PRJ_RAD_GR_M1_NGROUPS];
+    double sigma[PRJ_RAD_GR_M1_NGROUPS];
+    double delta[PRJ_RAD_GR_M1_NGROUPS];
+    double eta[PRJ_RAD_GR_M1_NGROUPS];
+    double dkappa_drho[PRJ_RAD_GR_M1_NGROUPS];
+    double dkappa_dT[PRJ_RAD_GR_M1_NGROUPS];
+    double dkappa_dYe[PRJ_RAD_GR_M1_NGROUPS];
+    double dsigma_drho[PRJ_RAD_GR_M1_NGROUPS];
+    double dsigma_dT[PRJ_RAD_GR_M1_NGROUPS];
+    double dsigma_dYe[PRJ_RAD_GR_M1_NGROUPS];
+    double ddelta_drho[PRJ_RAD_GR_M1_NGROUPS];
+    double ddelta_dT[PRJ_RAD_GR_M1_NGROUPS];
+    double ddelta_dYe[PRJ_RAD_GR_M1_NGROUPS];
+    double deta_drho[PRJ_RAD_GR_M1_NGROUPS];
+    double deta_dT[PRJ_RAD_GR_M1_NGROUPS];
+    double deta_dYe[PRJ_RAD_GR_M1_NGROUPS];
+} prj_rad_gr_m1_opac_cache;
+
 typedef struct prj_rad_gr_m1_solve_diag {
     int iter;
     int maxiter;
@@ -6810,7 +6829,8 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
     const prj_rad_gr_m1_frozen_group frozen[PRJ_RAD_GR_M1_NGROUPS],
     const double *P_hydro, double dt, double *P_full, double *resid,
     double red_jac[PRJ_RAD_GR_M1_NFLUID * PRJ_RAD_GR_M1_NFLUID],
-    double *u_new_out)
+    double *u_new_out, const prj_rad_gr_m1_opac_cache *opac_in,
+    prj_rad_gr_m1_opac_cache *opac_out)
 {
     double W[PRJ_NVAR_PRIM];
     double u_new[PRJ_NVAR_CONS];
@@ -6823,22 +6843,25 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
     double ucov[4];
     double ducon[4][PRJ_RAD_GR_M1_NFLUID];
     double ducov[4][PRJ_RAD_GR_M1_NFLUID];
-    double kappa[PRJ_RAD_GR_M1_NGROUPS];
-    double sigma[PRJ_RAD_GR_M1_NGROUPS];
-    double delta[PRJ_RAD_GR_M1_NGROUPS];
-    double eta[PRJ_RAD_GR_M1_NGROUPS];
-    double dkappa_drho[PRJ_RAD_GR_M1_NGROUPS];
-    double dkappa_dT[PRJ_RAD_GR_M1_NGROUPS];
-    double dkappa_dYe[PRJ_RAD_GR_M1_NGROUPS];
-    double dsigma_drho[PRJ_RAD_GR_M1_NGROUPS];
-    double dsigma_dT[PRJ_RAD_GR_M1_NGROUPS];
-    double dsigma_dYe[PRJ_RAD_GR_M1_NGROUPS];
-    double ddelta_drho[PRJ_RAD_GR_M1_NGROUPS];
-    double ddelta_dT[PRJ_RAD_GR_M1_NGROUPS];
-    double ddelta_dYe[PRJ_RAD_GR_M1_NGROUPS];
-    double deta_drho[PRJ_RAD_GR_M1_NGROUPS];
-    double deta_dT[PRJ_RAD_GR_M1_NGROUPS];
-    double deta_dYe[PRJ_RAD_GR_M1_NGROUPS];
+    prj_rad_gr_m1_opac_cache opac_local;
+    const prj_rad_gr_m1_opac_cache *opac_used;
+    prj_rad_gr_m1_opac_cache *opac_fill;
+    const double *kappa;
+    const double *sigma;
+    const double *delta;
+    const double *eta;
+    const double *dkappa_drho;
+    const double *dkappa_dT;
+    const double *dkappa_dYe;
+    const double *dsigma_drho;
+    const double *dsigma_dT;
+    const double *dsigma_dYe;
+    const double *ddelta_drho;
+    const double *ddelta_dT;
+    const double *ddelta_dYe;
+    const double *deta_drho;
+    const double *deta_dT;
+    const double *deta_dYe;
     double eint;
     double pressure;
     double deint_drho;
@@ -6945,16 +6968,46 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
     if (!ok || !isfinite(eint) || eint < 0.0 || !isfinite(pressure)) {
         return 0;
     }
+    if (opac_in != 0) {
+        opac_used = opac_in;
+    } else {
+        opac_fill = opac_out != 0 ? opac_out : &opac_local;
+        if (need_jac || opac_out != 0) {
+            prj_rad3_opac_lookup_derivs(rad, P_hydro[0], P_hydro[4],
+                P_hydro[5], opac_fill->kappa, opac_fill->sigma,
+                opac_fill->delta, opac_fill->eta, opac_fill->dkappa_drho,
+                opac_fill->dkappa_dT, opac_fill->dkappa_dYe,
+                opac_fill->dsigma_drho, opac_fill->dsigma_dT,
+                opac_fill->dsigma_dYe, opac_fill->ddelta_drho,
+                opac_fill->ddelta_dT, opac_fill->ddelta_dYe,
+                opac_fill->deta_drho, opac_fill->deta_dT,
+                opac_fill->deta_dYe);
+        } else {
+            prj_rad3_opac_lookup(rad, P_hydro[0], P_hydro[4], P_hydro[5],
+                opac_fill->kappa, opac_fill->sigma, opac_fill->delta,
+                opac_fill->eta);
+        }
+        opac_used = opac_fill;
+    }
+    kappa = opac_used->kappa;
+    sigma = opac_used->sigma;
+    delta = opac_used->delta;
+    eta = opac_used->eta;
+    dkappa_drho = opac_used->dkappa_drho;
+    dkappa_dT = opac_used->dkappa_dT;
+    dkappa_dYe = opac_used->dkappa_dYe;
+    dsigma_drho = opac_used->dsigma_drho;
+    dsigma_dT = opac_used->dsigma_dT;
+    dsigma_dYe = opac_used->dsigma_dYe;
+    ddelta_drho = opac_used->ddelta_drho;
+    ddelta_dT = opac_used->ddelta_dT;
+    ddelta_dYe = opac_used->ddelta_dYe;
+    deta_drho = opac_used->deta_drho;
+    deta_dT = opac_used->deta_dT;
+    deta_dYe = opac_used->deta_dYe;
     if (need_jac) {
-        prj_rad3_opac_lookup_derivs(rad, P_hydro[0], P_hydro[4],
-            P_hydro[5], kappa, sigma, delta, eta, dkappa_drho, dkappa_dT,
-            dkappa_dYe, dsigma_drho, dsigma_dT, dsigma_dYe, ddelta_drho,
-            ddelta_dT, ddelta_dYe, deta_drho, deta_dT, deta_dYe);
         memset(fluid_jac, 0, sizeof(fluid_jac));
         memset(schur_sub, 0, sizeof(schur_sub));
-    } else {
-        prj_rad3_opac_lookup(rad, P_hydro[0], P_hydro[4], P_hydro[5],
-            kappa, sigma, delta, eta);
     }
     for (v = 0; v < PRJ_NVAR_PRIM; ++v) {
         W[v] = 0.0;
@@ -7771,6 +7824,7 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
     double threshold = PRJ_RAD_GR_M1_SOLVE_TOL_DEFAULT;
     int maxiter = PRJ_RAD_GR_M1_SOLVE_MAXITER_DEFAULT;
     prj_rad_gr_m1_frozen_group frozen[PRJ_RAD_GR_M1_NGROUPS];
+    prj_rad_gr_m1_opac_cache opac_cache;
     double P_current[PRJ_RAD_GR_M1_NP];
     double P_eval[PRJ_RAD_GR_M1_NP];
     double P_trial_in[PRJ_RAD_GR_M1_NP];
@@ -7817,10 +7871,11 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
         int ls;
 
         prj_rad_gr_m1_last_solve_diag.iter = iter;
-        PRJ_TIMER_CURRENT_START("rad_matter_temp_approx_resjac");
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_approx_resid");
         ok = prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old,
-            frozen, P_current, dt, P_eval, resid, red_jac, u_new);
-        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_approx_resjac");
+            frozen, P_current, dt, P_eval, resid, 0, u_new, 0,
+            &opac_cache);
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_approx_resid");
         if (!ok) {
             return 0;
         }
@@ -7857,6 +7912,46 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
             return 0;
         }
 
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_approx_resjac");
+        ok = prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old,
+            frozen, P_current, dt, P_eval, resid, red_jac, u_new,
+            &opac_cache, 0);
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_approx_resjac");
+        if (!ok) {
+            return 0;
+        }
+        PRJ_TIMER_CURRENT_START("rad_matter_temp_approx_norm");
+        norm = prj_rad_gr_m1_residual_norm(u_old, resid, threshold);
+        PRJ_TIMER_CURRENT_STOP("rad_matter_temp_approx_norm");
+        prj_rad_gr_m1_last_solve_diag.norm = norm;
+        if (!isfinite(norm)) {
+            return 0;
+        }
+        if (norm < threshold) {
+            double exact_norm;
+
+            PRJ_TIMER_CURRENT_START("rad_matter_temp_approx_exact_check");
+            ok = prj_rad_gr_m1_residual(rad, eos, geom, u_old, P_eval, dt,
+                resid_exact, u_exact, W_exact);
+            exact_norm = ok ? prj_rad_gr_m1_residual_norm(u_old,
+                resid_exact, threshold) : HUGE_VAL;
+            PRJ_TIMER_CURRENT_STOP("rad_matter_temp_approx_exact_check");
+            if (ok && isfinite(exact_norm) && exact_norm < threshold) {
+                memcpy(P, P_eval, (size_t)np * sizeof(double));
+                if (resid_out != 0) {
+                    memcpy(resid_out, resid_exact, sizeof(resid_exact));
+                }
+                if (u_new_out != 0) {
+                    memcpy(u_new_out, u_exact, sizeof(u_exact));
+                }
+                if (W_out != 0) {
+                    memcpy(W_out, W_exact, sizeof(W_exact));
+                }
+                prj_rad_gr_m1_last_solve_diag.norm = exact_norm;
+                return 1;
+            }
+            return 0;
+        }
         for (col = 0; col < PRJ_RAD_GR_M1_NFLUID; ++col) {
             rhs[col] = -resid[prj_rad_gr_m1_active_row(col)];
         }
@@ -7905,7 +8000,7 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
             }
             ok = prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old,
                 frozen, P_trial_in, dt, P_trial, resid_trial,
-                0, u_new);
+                0, u_new, 0, 0);
             if (!ok) {
                 prj_rad_gr_m1_last_solve_diag.invalid_trials += 1;
                 continue;

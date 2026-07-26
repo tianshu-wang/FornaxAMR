@@ -585,8 +585,37 @@ static int prj_timeint_observer_gr_recover_prim(prj_eos *eos,
     return 1;
 }
 
+static int prj_timeint_observer_quantities_from_vel(
+    const prj_z4c_hydro_geom *geom, const double vcon[3], double q[4]);
+
 static int prj_timeint_observer_quantities_from_prim(
     const prj_z4c_hydro_geom *geom, const double *w, double q[4])
+{
+    double vcon[3];
+
+    vcon[0] = w[PRJ_PRIM_V1];
+    vcon[1] = w[PRJ_PRIM_V2];
+    vcon[2] = w[PRJ_PRIM_V3];
+    return prj_timeint_observer_quantities_from_vel(geom, vcon, q);
+}
+
+static int prj_timeint_observer_quantities_from_cell_prim(
+    const prj_z4c_hydro_geom *geom, const double *W, int i, int j, int k,
+    double q[4])
+{
+    double vcon[3];
+
+    if (W == 0) {
+        return 0;
+    }
+    vcon[0] = W[WIDX(PRJ_PRIM_V1, i, j, k)];
+    vcon[1] = W[WIDX(PRJ_PRIM_V2, i, j, k)];
+    vcon[2] = W[WIDX(PRJ_PRIM_V3, i, j, k)];
+    return prj_timeint_observer_quantities_from_vel(geom, vcon, q);
+}
+
+static int prj_timeint_observer_quantities_from_vel(
+    const prj_z4c_hydro_geom *geom, const double vcon[3], double q[4])
 {
     double beta_con[3];
     double beta2 = 0.0;
@@ -594,8 +623,11 @@ static int prj_timeint_observer_quantities_from_prim(
     int a;
     int b;
 
+    if (geom == 0 || vcon == 0 || q == 0) {
+        return 0;
+    }
     for (a = 0; a < 3; ++a) {
-        beta_con[a] = w[PRJ_PRIM_V1 + a] / PRJ_CLIGHT;
+        beta_con[a] = vcon[a] / PRJ_CLIGHT;
     }
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
@@ -618,8 +650,78 @@ static int prj_timeint_observer_quantities_from_prim(
     }
     return 1;
 }
+
+static void prj_timeint_observer_time_derivative_from_prim_cons(
+    prj_eos *eos, const prj_mesh *mesh, const prj_block *block, int z4c_stage,
+    int i, int j, int k, const double *W_before, const double *u_after,
+    double dt_update, double observer_time_derivative[4])
+{
+    prj_timeint_zero_observer_time_derivative(observer_time_derivative);
+    if (!prj_eos_full_dynamic_gr_enabled(mesh) || W_before == 0 ||
+        u_after == 0 || !isfinite(dt_update) || dt_update == 0.0) {
+        return;
+    }
+    {
+        prj_z4c_hydro_geom zgeom;
+        prj_eos_gr_geom egeom;
+        double w_after[PRJ_NVAR_PRIM];
+        double q_before[4];
+        double q_after[4];
+        double inv_dt = 1.0 / dt_update;
+        int a;
+        int b;
+
+        if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k,
+                &zgeom)) {
+            return;
+        }
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                egeom.gamma[a][b] = zgeom.gamma[a][b];
+            }
+        }
+        if (!prj_timeint_observer_quantities_from_cell_prim(&zgeom, W_before,
+                i, j, k, q_before) ||
+            !prj_timeint_observer_gr_recover_prim(eos, &egeom, u_after,
+                w_after) ||
+            !prj_timeint_observer_quantities_from_prim(&zgeom, w_after,
+                q_after)) {
+            prj_timeint_zero_observer_time_derivative(
+                observer_time_derivative);
+            return;
+        }
+        for (a = 0; a < 4; ++a) {
+            observer_time_derivative[a] = (q_after[a] - q_before[a]) *
+                inv_dt;
+            if (!isfinite(observer_time_derivative[a])) {
+                prj_timeint_zero_observer_time_derivative(
+                    observer_time_derivative);
+                return;
+            }
+        }
+    }
+}
+#else
+static void prj_timeint_observer_time_derivative_from_prim_cons(
+    prj_eos *eos, const prj_mesh *mesh, const prj_block *block, int z4c_stage,
+    int i, int j, int k, const double *W_before, const double *u_after,
+    double dt_update, double observer_time_derivative[4])
+{
+    (void)eos;
+    (void)mesh;
+    (void)block;
+    (void)z4c_stage;
+    (void)i;
+    (void)j;
+    (void)k;
+    (void)W_before;
+    (void)u_after;
+    (void)dt_update;
+    prj_timeint_zero_observer_time_derivative(observer_time_derivative);
+}
 #endif
 
+#if TIME_INTEGRATION == RK2 || !(PRJ_MHD && PRJ_NRAD > 0)
 static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
     const prj_mesh *mesh, const prj_block *block, int z4c_stage,
     int i, int j, int k, const double *u_before, const double *u_after,
@@ -691,6 +793,7 @@ static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
     (void)dt_update;
 #endif
 }
+#endif
 #endif
 
 #if PRJ_MHD && PRJ_NRAD > 0 && TIME_INTEGRATION != PRJ_TIMEINT_IMEX
@@ -879,12 +982,10 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #if PRJ_MHD && PRJ_NRAD > 0
     double *bf_dst[3];
     double u[PRJ_NVAR_CONS];
-    double u_before[PRJ_NVAR_MHD_CONS];
     double observer_time_derivative[4];
     int d;
     int field;
     int group;
-    int v;
 
     for (d = 0; d < 3; ++d) {
         bf_dst[d] = prj_block_bf_stage(block, d, use_bf1 != 0 ? 1 : 0);
@@ -894,9 +995,6 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     PRJ_TIMER_CURRENT_START("essprk_src_temp_cons_dt");
     prj_timeint_cell_cons_from_prim_mhd_rad(eos, mesh, block, 0,
         block->W_mhd, block->W_rad, i, j, k, u);
-    for (v = 0; v < PRJ_NVAR_MHD_CONS; ++v) {
-        u_before[v] = u[v];
-    }
     prj_timeint_update_dt_src_values(mesh, grav, block, u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1],
         u[PRJ_CONS_MOM2], u[PRJ_CONS_MOM3], u[PRJ_CONS_ETOT], i, j, k, mpi, dt_src);
     PRJ_TIMER_CURRENT_STOP("essprk_src_temp_cons_dt");
@@ -939,8 +1037,8 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("essprk_src_temp_mhd_obs");
     prj_timeint_mhd_set_cons_b_from_bf(block, bf_dst, i, j, k, u);
-    prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 0,
-        i, j, k, u_before, u, dt, observer_time_derivative);
+    prj_timeint_observer_time_derivative_from_prim_cons(eos, mesh, block, 0,
+        i, j, k, block->W_mhd, u, dt, observer_time_derivative);
     PRJ_TIMER_CURRENT_STOP("essprk_src_temp_mhd_obs");
     {
         double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
