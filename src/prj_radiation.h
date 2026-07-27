@@ -116,11 +116,6 @@ void prj_rad_gr_m1_pressure_cached(const prj_rad *rad,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov[3],
     double P[3][3]);
 
-/* Like prj_rad_gr_m1_pressure but also returns the closure ratio fbar. */
-void prj_rad_gr_m1_pressure_fbar(const prj_rad *rad,
-    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov[3],
-    double P[3][3], double *fbar_out);
-
 void prj_rad_gr_m1_pressure_fbar_cached(const prj_rad *rad,
     const prj_rad_gr_m1_closure_ctx *ctx,
     const prj_rad_gr_m1_side_data *side, double E, const double Fcov[3],
