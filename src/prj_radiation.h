@@ -84,19 +84,19 @@ typedef struct prj_rad_gr_m1_side_data {
 void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
     prj_rad_gr_m1_side_data *side);
 
-/* Build R^{alpha beta} from Eulerian moments using paper Eqs. (2), (4),
- * (9), and (10). `Fcon` is the physical contravariant lab-frame flux; the
- * stress-tensor time-space leg is F^i/c internally. The implementation
- * substitutes out E_R and u_R^alpha, so the null/free-streaming limit remains
- * finite. */
+/* Spatial M1 pressure tensor in the Eulerian (lab) frame, algebraic Levermore
+ * closure: P^{ij} = E a(f) gamma^{ij} + b(f) F^i F^j/(c^2 E), f = |F|/(cE).
+ * gamma_inv is the spatial inverse 3-metric; Fcon the contravariant spatial
+ * flux; Fmag = sqrt(F_i F^i).  Callers guarantee E > 0 and f <= 1. */
+void prj_rad_grm1_pressure_lab(double E, const double Fcon[3],
+    double Fmag, const double gamma_inv[3][3], double P[3][3]);
+
+/* Build R^{alpha beta} = E n^a n^b + (n^a F^b + n^b F^a)/c + P^{ab} from the
+ * Eulerian moments with the algebraic lab-frame Levermore closure (spatial
+ * block from prj_rad_grm1_pressure_lab). `Fcon` is the physical contravariant
+ * lab-frame flux; the stress-tensor time-space leg is F^i/c internally. */
 int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
     double alpha, double E, const double Fcon[3], double Rcon[4][4]);
-
-/* Recover the fluid-frame flux factor from an already-built radiation tensor.
- * `ucon` must be the fluid four-velocity in the same basis as g_ab/g^ab/R^ab. */
-int prj_rad_grm1_fbar_from_R(const double g_cov[4][4],
-    const double g_con[4][4], const double ucon[4],
-    const double Rcon[4][4], double *fbar_out);
 
 /* Contract the third radiation moment with the velocity gradient,
  * drift^alpha = M^{alpha beta gamma} u_{beta;gamma}.  The third moment is not

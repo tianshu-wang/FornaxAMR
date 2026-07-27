@@ -79,6 +79,18 @@ static double geo_factor(void)
     return PRJ_GNEWT / (c2 * c2);
 }
 
+static void disable_z4c_damping(prj_mesh *mesh)
+{
+    mesh->z4c_params.damp_kappa1_inv_cm = 0.0;
+    mesh->z4c_params.shift_eta_inv_cm = 0.0;
+    mesh->z4c_params.ssl_damping_amp_inv_cm = 0.0;
+}
+
+static double flat_gauge_denom_inv_cm(void)
+{
+    return 3.0 * sqrt(2.0) / 3.0e10;
+}
+
 static void set_constant_diagonal_z4c_metric(prj_block *block,
     double chi, double gxx, double gyy, double gzz)
 {
@@ -169,6 +181,7 @@ static void check_flat_state(void)
     }
 
     prj_z4c_init_mesh_flat(&mesh, 0);
+    disable_z4c_damping(&mesh);
     dt = prj_z4c_calc_dt_seconds(&mesh, 0, 0.5);
     assert_close("dt_z4c", dt,
         0.5 * 3.0e10 / (3.0 * sqrt(2.0) * PRJ_CLIGHT), 1.0e-12);
@@ -204,6 +217,45 @@ static void check_flat_state(void)
             }
         }
     }
+    prj_mesh_destroy(&mesh);
+}
+
+static void check_dt_includes_damping_terms(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    double cfl = 0.5;
+    double gauge_denom = flat_gauge_denom_inv_cm();
+    double dt;
+
+    init_one_block_mesh(&mesh, &coord);
+    prj_z4c_init_mesh_flat(&mesh, 0);
+
+    disable_z4c_damping(&mesh);
+    mesh.z4c_params.damp_kappa1_inv_cm = 1.0e-5;
+    mesh.z4c_params.damp_kappa2 = 0.0;
+    dt = prj_z4c_calc_dt_seconds(&mesh, 0, cfl);
+    assert_close_rel("dt_z4c kappa damping", dt,
+        cfl / (PRJ_CLIGHT * (gauge_denom + 2.0 * mesh.z4c_params.damp_kappa1_inv_cm)),
+        1.0e-12);
+
+    disable_z4c_damping(&mesh);
+    mesh.z4c_params.shift_eta_inv_cm = 7.0e-6;
+    dt = prj_z4c_calc_dt_seconds(&mesh, 0, cfl);
+    assert_close_rel("dt_z4c shift damping", dt,
+        cfl / (PRJ_CLIGHT * (gauge_denom + mesh.z4c_params.shift_eta_inv_cm)),
+        1.0e-12);
+
+    disable_z4c_damping(&mesh);
+    mesh.z4c_params.slow_start_lapse = 1;
+    mesh.z4c_params.ssl_damping_amp_inv_cm = 3.0e-6;
+    mesh.z4c_params.ssl_damping_index = 1;
+    mesh.time_seconds = 0.0;
+    dt = prj_z4c_calc_dt_seconds(&mesh, 0, cfl);
+    assert_close_rel("dt_z4c lapse damping", dt,
+        cfl / (PRJ_CLIGHT * (gauge_denom + mesh.z4c_params.ssl_damping_amp_inv_cm)),
+        1.0e-12);
+
     prj_mesh_destroy(&mesh);
 }
 
@@ -476,6 +528,7 @@ static void check_rhs_hydro_matter_projection(void)
     init_one_block_mesh(&mesh, &coord);
     block = &mesh.blocks[0];
     prj_z4c_init_mesh_flat(&mesh, 0);
+    disable_z4c_damping(&mesh);
     W = prj_block_mhd_stage(block, 0);
     W[WIDX(PRJ_PRIM_RHO, i, j, k)] = rho;
     W[WIDX(PRJ_PRIM_V1, i, j, k)] = v1;
@@ -559,6 +612,7 @@ static void check_rhs_hydro_matter_uses_z4c_metric(void)
     mesh.use_full_dynamic_gr = 1;
     block = &mesh.blocks[0];
     prj_z4c_init_mesh_flat(&mesh, 0);
+    disable_z4c_damping(&mesh);
     set_constant_diagonal_z4c_metric(block, chi, gxx, gyy, gzz);
     W = prj_block_mhd_stage(block, 0);
     W[WIDX(PRJ_PRIM_RHO, i, j, k)] = rho;
@@ -654,6 +708,7 @@ static void check_rhs_grmhd_matter_uses_z4c_metric(void)
     mesh.use_full_dynamic_gr = 1;
     block = &mesh.blocks[0];
     prj_z4c_init_mesh_flat(&mesh, 0);
+    disable_z4c_damping(&mesh);
     set_constant_diagonal_z4c_metric(block, chi, gxx, gyy, gzz);
     W = prj_block_mhd_stage(block, 0);
     W[WIDX(PRJ_PRIM_RHO, i, j, k)] = rho;
@@ -739,6 +794,7 @@ static void check_rhs_hydro_matter_uses_minkowski_without_full_gr(void)
     mesh.use_full_dynamic_gr = 0;
     block = &mesh.blocks[0];
     prj_z4c_init_mesh_flat(&mesh, 0);
+    disable_z4c_damping(&mesh);
     set_constant_diagonal_z4c_metric(block, chi, gxx, gyy, gzz);
     W = prj_block_mhd_stage(block, 0);
     W[WIDX(PRJ_PRIM_RHO, i, j, k)] = rho;
@@ -808,6 +864,7 @@ static void check_rhs_m1_matter_projection(void)
         rad.chi[n] = test_m1_chi_exact((double)n / (double)NCLOSURE);
     }
     prj_z4c_init_mesh_flat(&mesh, 0);
+    disable_z4c_damping(&mesh);
     W_rad = prj_block_rad_stage(block, 0);
     W_rad[WIDX(PRJ_RAD_PRIM_E(0, 0), i, j, k)] = Erad / RAD_SCALE;
     W_rad[WIDX(PRJ_RAD_PRIM_F1(0, 0), i, j, k)] = Frad / RAD_SCALE;
@@ -840,6 +897,7 @@ int main(int argc, char **argv)
     check_enum_names();
 #if PRJ_DYNAMIC_GR
     check_flat_state();
+    check_dt_includes_damping_terms();
     check_z4c_amr_transfer();
     check_z4c_sommerfeld_rhs();
     check_rhs_hydro_matter_projection();

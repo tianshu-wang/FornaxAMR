@@ -471,17 +471,9 @@ static int prj_src_gr_m1_pressure_contractions(
     const prj_z4c_hydro_geom *geom, double E, const double Fcon[3],
     double *pK_out, double pDgamma[3])
 {
-    double R0[4];
-    double K[4];
-    double A = 0.0;
-    double B;
-    double disc;
-    double disc_scale;
-    double sqrt_disc;
-    double root_denom;
-    double denom;
-    double iso;
-    double coeff;
+    double P[3][3];
+    double F2 = 0.0;
+    double Fmag;
     int a;
     int b;
     int d;
@@ -507,16 +499,7 @@ static int prj_src_gr_m1_pressure_contractions(
             }
         }
     }
-
-    R0[0] = E;
-    for (a = 0; a < 3; ++a) {
-        R0[a + 1] = Fcon[a] / PRJ_CLIGHT;
-    }
-    B = R0[0];
-    if (!isfinite(B) || B < 0.0) {
-        return 0;
-    }
-    if (B == 0.0) {
+    if (E == 0.0) {
         for (a = 0; a < 3; ++a) {
             if (Fcon[a] != 0.0) {
                 return 0;
@@ -525,62 +508,23 @@ static int prj_src_gr_m1_pressure_contractions(
         return 1;
     }
 
-    A = -R0[0] * R0[0];
+    /* Spatial radiation pressure from the algebraic lab-frame Levermore
+     * closure.  In the local frame (n^a = (1,0,0,0)) the stress tensor's
+     * spatial block is exactly P^{ij}. */
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
-            A += geom->gamma[a][b] * R0[a + 1] * R0[b + 1];
+            F2 += geom->gamma[a][b] * Fcon[a] * Fcon[b];
         }
     }
-    disc_scale = fmax(B * B, fabs(-3.0 * A));
-    if (disc_scale <= 0.0) {
-        disc_scale = 1.0;
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
     }
-    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
-        A = 0.0;
-    }
-    disc = B * B - 3.0 * A;
-    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
-        return 0;
-    }
-    if (disc < 0.0) {
-        disc = 0.0;
-    }
-    sqrt_disc = sqrt(disc);
-    root_denom = B + sqrt_disc;
-    if (!isfinite(root_denom) || root_denom <= 0.0) {
-        return 0;
-    }
-    iso = -A / root_denom;
-    if (!isfinite(iso) || iso < 0.0) {
-        return 0;
-    }
-    denom = 2.0 * B + sqrt_disc;
-    if (!isfinite(denom) || denom <= 0.0) {
-        return 0;
-    }
-    coeff = 3.0 / denom;
-
-    K[0] = R0[0] + iso;
-    for (a = 0; a < 3; ++a) {
-        K[a + 1] = R0[a + 1];
-    }
-    for (a = 0; a < 4; ++a) {
-        double row0 = coeff * K[0] * K[a] + (a == 0 ? -iso : 0.0);
-        double err = fabs(row0 - R0[a]);
-        double scale = fmax(fabs(R0[a]), fabs(row0));
-
-        if (scale < 1.0) {
-            scale = 1.0;
-        }
-        if (!isfinite(row0) || err > 1.0e-10 * scale) {
-            return 0;
-        }
-    }
+    Fmag = sqrt(F2);
+    prj_rad_grm1_pressure_lab(E, Fcon, Fmag, geom->gamma_inv, P);
 
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
-            double Pab = coeff * K[a + 1] * K[b + 1] +
-                iso * geom->gamma_inv[a][b];
+            double Pab = P[a][b];
 
             if (!isfinite(Pab)) {
                 *pK_out = 0.0;

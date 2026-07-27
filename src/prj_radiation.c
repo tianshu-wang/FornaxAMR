@@ -1175,22 +1175,49 @@ void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, dou
 }
 
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+/* Spatial M1 pressure tensor in the Eulerian (lab) frame, algebraic Levermore
+ * closure:  P^{ij} = E a(f) gamma^{ij} + b(f) F^i F^j / (c^2 E),
+ *   a(f) = (sqrt(4-3 f^2) - 1)/3,  b(f) = 3 / (2 + sqrt(4-3 f^2)),
+ *   f = |F| / (c E)  (lab-frame flux factor).
+ * Callers guarantee E > 0 and f <= 1; f is clamped only as cheap insurance
+ * against non-finite inputs.  gamma_inv is the spatial inverse 3-metric
+ * gamma^{ij}; Fcon is the contravariant spatial flux; Fmag = sqrt(F_i F^i).
+ * Reduces to E/3 gamma^{ij} at f=0 and E n^i n^j at f=1. */
+void prj_rad_grm1_pressure_lab(double E, const double Fcon[3],
+    double Fmag, const double gamma_inv[3][3], double P[3][3])
+{
+    double cE = PRJ_CLIGHT * E;
+    double f = cE > 0.0 ? Fmag / cE : 0.0;
+    double s;
+    double a_coef;
+    double b_coef;
+    int i;
+    int j;
+
+    if (!isfinite(f) || f < 0.0) {
+        f = 0.0;
+    } else if (f > 1.0) {
+        f = 1.0;
+    }
+    s = sqrt(4.0 - 3.0 * f * f);
+    a_coef = E * (s - 1.0) / 3.0;                              /* E a(f) */
+    b_coef = 3.0 / ((2.0 + s) * PRJ_CLIGHT * PRJ_CLIGHT * E);  /* b(f)/(c^2 E) */
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            P[i][j] = a_coef * gamma_inv[i][j] + b_coef * Fcon[i] * Fcon[j];
+        }
+    }
+}
+
 int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
     double alpha, double E, const double Fcon[3], double Rcon[4][4])
 {
     double ncon[4];
-    double R0[4];
-    double K[4];
-    double A = 0.0;
-    double B;
-    double G;
-    double disc;
-    double disc_scale;
-    double sqrt_disc;
-    double root_denom;
-    double denom;
-    double iso;
-    double coeff;
+    double gamma_inv[3][3];
+    double P[3][3];
+    double F2 = 0.0;
+    double Fmag;
+    double invc = 1.0 / PRJ_CLIGHT;
     int a;
     int b;
 
@@ -1219,18 +1246,9 @@ int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
         ncon[a + 1] = -alpha * g_con[0][a + 1];
     }
 
-    /* Paper Eq. (2), with explicit code units: R^{0i} uses F^i/c. */
-    R0[0] = E * ncon[0] * ncon[0];
-    for (a = 0; a < 3; ++a) {
-        R0[a + 1] = E * ncon[0] * ncon[a + 1] +
-            (Fcon[a] / PRJ_CLIGHT) * ncon[0];
-    }
-
-    B = R0[0];
-    if (!isfinite(B) || B < 0.0) {
-        return 0;
-    }
-    if (B == 0.0) {
+    /* Radiation vanishes for E == 0 (callers guarantee E > 0 for transport;
+     * this branch keeps the null seed exact and avoids the f = 0/0 pressure). */
+    if (E == 0.0) {
         for (a = 0; a < 3; ++a) {
             if (Fcon[a] != 0.0) {
                 return 0;
@@ -1239,73 +1257,46 @@ int prj_rad_grm1_build_R(const double g_cov[4][4], const double g_con[4][4],
         return 1;
     }
 
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            A += g_cov[a][b] * R0[a] * R0[b];
+    /* Spatial inverse 3-metric gamma^{ij} and lab-frame flux magnitude.  The
+     * 4-inverse spatial block g^{ij} = gamma^{ij} - beta^i beta^j/alpha^2, and
+     * ncon^i = -beta^i/alpha, so gamma^{ij} = g^{ij} + n^i n^j. */
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            gamma_inv[a][b] = g_con[a + 1][b + 1] + ncon[a + 1] * ncon[b + 1];
+            F2 += g_cov[a + 1][b + 1] * Fcon[a] * Fcon[b];
         }
     }
-    G = g_con[0][0];
-    disc_scale = fmax(B * B, fabs(3.0 * G * A));
-    if (disc_scale <= 0.0) {
-        disc_scale = 1.0;
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
     }
-    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
-        A = 0.0;
-    }
+    Fmag = sqrt(F2);
 
-    /* Eliminating (u_R^0)^2 from paper eqs. (9)-(10) gives
-     *   g^{00} E_R^2 - 2 R^{00} E_R - 3 g_ab R^{0a}R^{0b} = 0.
-     * Only the root's substituted combinations are used below:
-     *   E_R/3 = -A / (R^{00} + sqrt(D)),
-     *   3/(3R^{00} - E_R g^{00}) = 3/(2R^{00} + sqrt(D)).
-     * In the null limit A -> 0, E_R -> 0 and the tensor below
-     * reduces smoothly to R^{ab} = R^{0a} R^{0b} / R^{00}. */
-    disc = B * B + 3.0 * G * A;
-    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
-        return 0;
-    }
-    if (disc < 0.0) {
-        disc = 0.0;
-    }
-    sqrt_disc = sqrt(disc);
-    root_denom = B + sqrt_disc;
-    if (!isfinite(root_denom) || root_denom <= 0.0) {
-        return 0;
-    }
-    iso = -A / root_denom;
-    if (!isfinite(iso) || iso < 0.0) {
-        return 0;
-    }
-    denom = 2.0 * B + sqrt_disc;
-    if (!isfinite(denom) || denom <= 0.0) {
-        return 0;
-    }
-    coeff = 3.0 / denom;
+    /* Algebraic Eulerian-frame Levermore closure:
+     *   R^{ab} = E n^a n^b + (n^a F^b + n^b F^a)/c + P^{ab},
+     * with F^a purely spatial (F^0 = 0) and P^{ab} spatial (P^{0a} = 0).  The
+     * time-space rows R^{0a} = E n^0 n^a + n^0 F^a/c are identical to the
+     * previous closure's Eq. (2); only the spatial block R^{ij} changes. */
+    prj_rad_grm1_pressure_lab(E, Fcon, Fmag, gamma_inv, P);
 
-    for (a = 0; a < 4; ++a) {
-        K[a] = R0[a] - iso * g_con[0][a];
+    Rcon[0][0] = E * ncon[0] * ncon[0];
+    for (a = 0; a < 3; ++a) {
+        Rcon[0][a + 1] = E * ncon[0] * ncon[a + 1] + ncon[0] * Fcon[a] * invc;
+        Rcon[a + 1][0] = Rcon[0][a + 1];
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            Rcon[a + 1][b + 1] = E * ncon[a + 1] * ncon[b + 1] +
+                (ncon[a + 1] * Fcon[b] + ncon[b + 1] * Fcon[a]) * invc +
+                P[a][b];
+        }
     }
     for (a = 0; a < 4; ++a) {
         for (b = 0; b < 4; ++b) {
-            Rcon[a][b] = coeff * K[a] * K[b] + iso * g_con[a][b];
             if (!isfinite(Rcon[a][b])) {
                 memset(Rcon, 0, 16 * sizeof(double));
                 return 0;
             }
         }
-    }
-    for (a = 0; a < 4; ++a) {
-        double err = fabs(Rcon[0][a] - R0[a]);
-        double scale = fmax(fabs(R0[a]), fabs(Rcon[0][a]));
-
-        if (scale < 1.0) {
-            scale = 1.0;
-        }
-        if (err > 1.0e-10 * scale) {
-            memset(Rcon, 0, 16 * sizeof(double));
-            return 0;
-        }
-        Rcon[a][0] = Rcon[0][a];
     }
     return 1;
 }
@@ -1365,26 +1356,28 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
     double dRcon[4][4][4])
 {
     double Fcon[3];
-    double R0[4];
-    double R0cov[4];
-    double K[4];
+    double gamma_inv[3][3];
     const double *ncon;
     const double (*T)[4];
-    double A = 0.0;
-    double B;
-    double G;
-    double disc;
-    double disc_scale;
-    double sqrt_disc;
-    double root_denom;
-    double denom;
-    double iso;
-    double coeff;
-    double dA[4] = {0.0, 0.0, 0.0, 0.0};
-    int clamp_A;
+    double F2 = 0.0;
+    double Fmag;
+    double cE;
+    double f;
+    double f2;
+    double s;
+    double a_coef;
+    double b_coef;
+    double D;
+    double da_dE;
+    double db_dE;
+    double invc = 1.0 / PRJ_CLIGHT;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
     int a;
     int b;
     int cc;
+    int i;
+    int j;
+    int m;
 
     if (Rcon == 0 || dRcon == 0) {
         if (Rcon != 0) {
@@ -1412,18 +1405,14 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
             goto fail;
         }
     }
-
-    R0[0] = E * ncon[0] * ncon[0];
-    for (a = 0; a < 3; ++a) {
-        R0[a + 1] = E * ncon[0] * ncon[a + 1] +
-            (Fcon[a] / PRJ_CLIGHT) * ncon[0];
+    /* True inverse 3-metric gamma^{ij} = g^{ij} + n^i n^j (see build_R). */
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            gamma_inv[i][j] = g_con[i + 1][j + 1] + ncon[i + 1] * ncon[j + 1];
+        }
     }
 
-    B = R0[0];
-    if (!isfinite(B) || B < 0.0) {
-        goto fail;
-    }
-    if (B == 0.0) {
+    if (E == 0.0) {
         double dFcon[4][4] = {{0.0}};
 
         memset(Rcon, 0, 16 * sizeof(double));
@@ -1435,8 +1424,8 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
                 dFcon[b + 1][a] = jac_geom->dFcon[b + 1][a];
             }
         }
-        /* The algebraic closure has a removable 0/0 at exactly E=F=0.
-         * Use the isotropic normal-frame seed:
+        /* R = 0 at E = 0.  Seed the Jacobian with the isotropic normal-frame
+         * limit, which is the exact F -> 0 limit of the algebraic closure:
          *   dR/dE = (4 n^a n^b + g^{ab})/3,
          *   dR/dF_j = (dF^a_j n^b + n^a dF^b_j)/c.
          */
@@ -1469,93 +1458,100 @@ static int prj_rad_grm1_build_R_jac(const double g_cov[4][4],
         return 1;
     }
 
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            A += g_cov[a][b] * R0[a] * R0[b];
+    /* Lab-frame flux factor and Levermore closure scalars (must match the
+     * arithmetic in prj_rad_grm1_pressure_lab so Rcon reproduces build_R). */
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            F2 += g_cov[i + 1][j + 1] * Fcon[i] * Fcon[j];
         }
     }
-    for (a = 0; a < 4; ++a) {
-        R0cov[a] = 0.0;
-        for (b = 0; b < 4; ++b) {
-            R0cov[a] += g_cov[a][b] * R0[b];
-        }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
     }
-    G = g_con[0][0];
-    disc_scale = fmax(B * B, fabs(3.0 * G * A));
-    if (disc_scale <= 0.0) {
-        disc_scale = 1.0;
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * E;
+    f = Fmag / cE;
+    if (!isfinite(f) || f < 0.0) {
+        f = 0.0;
+    } else if (f > 1.0) {
+        f = 1.0;
     }
-    clamp_A = (A > 0.0 && A <= 1.0e-12 * disc_scale);
-    if (clamp_A) {
-        A = 0.0;
-    }
-    for (cc = 0; cc < 4; ++cc) {
-        dA[cc] = 0.0;
-        for (a = 0; a < 4; ++a) {
-            dA[cc] += R0cov[a] * T[cc][a];
-        }
-        dA[cc] *= 2.0;
-        if (clamp_A) {
-            dA[cc] = 0.0;
-        }
-    }
+    f2 = f * f;
+    s = sqrt(4.0 - 3.0 * f2);
+    a_coef = E * (s - 1.0) / 3.0;
+    b_coef = 3.0 / ((2.0 + s) * PRJ_CLIGHT * PRJ_CLIGHT * E);
 
-    disc = B * B + 3.0 * G * A;
-    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
-        goto fail;
+    /* R^{ab} = E n^a n^b + (n^a F^b + n^b F^a)/c + P^{ab}. */
+    Rcon[0][0] = E * ncon[0] * ncon[0];
+    for (a = 0; a < 3; ++a) {
+        Rcon[0][a + 1] = E * ncon[0] * ncon[a + 1] + ncon[0] * Fcon[a] * invc;
+        Rcon[a + 1][0] = Rcon[0][a + 1];
     }
-    if (disc < 0.0) {
-        disc = 0.0;
-    }
-    sqrt_disc = sqrt(disc);
-    root_denom = B + sqrt_disc;
-    if (!isfinite(root_denom) || root_denom <= 0.0) {
-        goto fail;
-    }
-    iso = -A / root_denom;
-    if (!isfinite(iso) || iso < 0.0) {
-        goto fail;
-    }
-    denom = 2.0 * B + sqrt_disc;
-    if (!isfinite(denom) || denom <= 0.0) {
-        goto fail;
-    }
-    coeff = 3.0 / denom;
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            double P = a_coef * gamma_inv[i][j] + b_coef * Fcon[i] * Fcon[j];
 
-    for (a = 0; a < 4; ++a) {
-        K[a] = R0[a] - iso * g_con[0][a];
+            Rcon[i + 1][j + 1] = E * ncon[i + 1] * ncon[j + 1] +
+                (ncon[i + 1] * Fcon[j] + ncon[j + 1] * Fcon[i]) * invc + P;
+        }
     }
     for (a = 0; a < 4; ++a) {
         for (b = 0; b < 4; ++b) {
-            Rcon[a][b] = coeff * K[a] * K[b] + iso * g_con[a][b];
             if (!isfinite(Rcon[a][b])) {
                 goto fail;
             }
         }
     }
-    for (a = 0; a < 4; ++a) {
-        Rcon[a][0] = Rcon[0][a];
+
+    /* Closure-scalar derivatives w.r.t. E (f = Fmag/(cE), ds/df = -3f/s):
+     *   ds/dE = 3 f^2/(s E),  D = (2+s) E,  b_coef = 3/(c^2 D). */
+    D = (2.0 + s) * E;
+    da_dE = (s - 1.0) / 3.0 + f2 / s;
+    db_dE = -3.0 * ((2.0 + s) + 3.0 * f2 / s) / (c2 * D * D);
+
+    /* dR^{0a}/dp_c are the geometry rows in T (unchanged from build_R). */
+    for (cc = 0; cc < 4; ++cc) {
+        dRcon[cc][0][0] = T[cc][0];
+        for (a = 0; a < 3; ++a) {
+            dRcon[cc][0][a + 1] = T[cc][a + 1];
+            dRcon[cc][a + 1][0] = T[cc][a + 1];
+        }
+    }
+
+    /* Spatial block dR^{ij}/dE. */
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            dRcon[0][i + 1][j + 1] = ncon[i + 1] * ncon[j + 1] +
+                da_dE * gamma_inv[i][j] + db_dE * Fcon[i] * Fcon[j];
+        }
+    }
+
+    /* Spatial block dR^{ij}/dF_m (covariant flux component m). */
+    for (m = 0; m < 3; ++m) {
+        double gm = Fcon[m];
+        double da_dFm = -gm / (s * c2 * E);
+        double dD_dFm = -3.0 * gm / (s * c2 * E);
+        double db_dFm = -3.0 * dD_dFm / (c2 * D * D);
+
+        for (i = 0; i < 3; ++i) {
+            for (j = 0; j < 3; ++j) {
+                dRcon[m + 1][i + 1][j + 1] =
+                    (ncon[i + 1] * gamma_inv[j][m] +
+                     ncon[j + 1] * gamma_inv[i][m]) * invc +
+                    da_dFm * gamma_inv[i][j] +
+                    db_dFm * Fcon[i] * Fcon[j] +
+                    b_coef * (gamma_inv[i][m] * Fcon[j] +
+                        Fcon[i] * gamma_inv[j][m]);
+            }
+        }
     }
 
     for (cc = 0; cc < 4; ++cc) {
-        double dB = T[cc][0];
-        double dDisc = 2.0 * B * dB + 3.0 * G * dA[cc];
-        double dsqrt = sqrt_disc > 0.0 ? dDisc / (2.0 * sqrt_disc) : 0.0;
-        double droot = dB + dsqrt;
-        double diso = -(dA[cc] * root_denom - A * droot) /
-            (root_denom * root_denom);
-        double ddenom = 2.0 * dB + dsqrt;
-        double dcoeff = -3.0 * ddenom / (denom * denom);
-        double dK[4];
-
-        for (a = 0; a < 4; ++a) {
-            dK[a] = T[cc][a] - diso * g_con[0][a];
-        }
         for (a = 0; a < 4; ++a) {
             for (b = 0; b < 4; ++b) {
-                dRcon[cc][a][b] = dcoeff * K[a] * K[b] +
-                    coeff * (dK[a] * K[b] + K[a] * dK[b]) +
-                    diso * g_con[a][b];
+                if (!isfinite(dRcon[cc][a][b])) {
+                    goto fail;
+                }
             }
         }
     }
@@ -1714,98 +1710,6 @@ static double prj_rad_grm1_m3_component(
         m3->L[a][b] * m3->ucon[c] + m3->L[a][c] * m3->ucon[b] +
         m3->L[b][c] * m3->ucon[a] +
         m3->thin_w * Nthin + m3->thick_w * Nthick;
-}
-
-int prj_rad_grm1_fbar_from_R(const double g_cov[4][4],
-    const double g_con[4][4], const double ucon[4],
-    const double Rcon[4][4], double *fbar_out)
-{
-    double ucov[4];
-    double H[4];
-    double J = 0.0;
-    double unorm = 0.0;
-    double Hnorm2 = 0.0;
-    double fbar;
-    int a;
-    int b;
-
-    if (fbar_out != 0) {
-        *fbar_out = 0.0;
-    }
-    if (fbar_out == 0 || g_cov == 0 || g_con == 0 || ucon == 0 ||
-        Rcon == 0) {
-        return 0;
-    }
-    for (a = 0; a < 4; ++a) {
-        if (!isfinite(ucon[a])) {
-            return 0;
-        }
-        ucov[a] = 0.0;
-        for (b = 0; b < 4; ++b) {
-            if (!isfinite(g_cov[a][b]) || !isfinite(g_con[a][b]) ||
-                !isfinite(Rcon[a][b])) {
-                return 0;
-            }
-            ucov[a] += g_cov[a][b] * ucon[b];
-        }
-        unorm += ucov[a] * ucon[a];
-    }
-    if (!isfinite(unorm) || fabs(unorm + 1.0) > 1.0e-8) {
-        return 0;
-    }
-
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            J += Rcon[a][b] * ucov[a] * ucov[b];
-        }
-    }
-    if (!isfinite(J) || J < 0.0) {
-        return 0;
-    }
-    if (J == 0.0) {
-        for (a = 0; a < 4; ++a) {
-            for (b = 0; b < 4; ++b) {
-                if (Rcon[a][b] != 0.0) {
-                    return 0;
-                }
-            }
-        }
-        return 1;
-    }
-
-    for (a = 0; a < 4; ++a) {
-        double Ru = 0.0;
-
-        for (b = 0; b < 4; ++b) {
-            Ru += Rcon[b][a] * ucov[b];
-        }
-        H[a] = -Ru - J * ucon[a];
-        if (!isfinite(H[a])) {
-            return 0;
-        }
-    }
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            double hcov = g_cov[a][b] + ucov[a] * ucov[b];
-
-            Hnorm2 += hcov * H[a] * H[b];
-        }
-    }
-    if (!isfinite(Hnorm2) || Hnorm2 < -1.0e-12 * J * J) {
-        return 0;
-    }
-    if (Hnorm2 < 0.0) {
-        Hnorm2 = 0.0;
-    }
-
-    fbar = sqrt(Hnorm2) / J;
-    if (!isfinite(fbar) || fbar < 0.0) {
-        fbar = 0.0;
-    } else if (fbar > 1.0) {
-        fbar = 1.0;
-    }
-    *fbar_out = fbar;
-    return 1;
 }
 
 int prj_rad_grm1_freq_drift(const double g_cov[4][4],
@@ -2074,27 +1978,21 @@ static void prj_rad_grm1_prepare_m3_data_freq(
 {
     double Fcov[3];
     double Fcon[3] = {0.0, 0.0, 0.0};
-    double R0[4];
-    double K[4];
-    double A = 0.0;
-    double B;
-    double G;
-    double disc;
-    double sqrt_disc;
-    double root_denom;
-    double denom;
-    double iso;
-    double coeff;
+    double gamma_inv[3][3];
+    double P[3][3];
+    double Rcon[4][4];
     double F2 = 0.0;
     double Fmag;
     double Fmax;
-    double Ku = 0.0;
     double Hnorm2 = 0.0;
     double xi;
     double chi;
     double J;
+    double invc = 1.0 / PRJ_CLIGHT;
     int a;
     int b;
+    int i;
+    int j;
 
     memset(m3, 0, sizeof(*m3));
     if (E < PRJ_RAD_GR_M1_E_FLOOR) {
@@ -2120,47 +2018,54 @@ static void prj_rad_grm1_prepare_m3_data_freq(
             Fcov[a] *= scale;
             Fcon[a] *= scale;
         }
+        Fmag = Fmax;
     }
 
-    R0[0] = E;
-    for (a = 0; a < 3; ++a) {
-        R0[a + 1] = Fcon[a] / PRJ_CLIGHT;
-    }
-    B = R0[0];
-
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            A += cache->g_cov[a][b] * R0[a] * R0[b];
+    /* Algebraic lab-frame Levermore closure in the cache's local frame
+     * (alpha = 1, beta = 0), where n^a = (1,0,0,0): R^{00}=E, R^{0i}=F^i/c,
+     * and the spatial block is the pressure tensor P^{ij}. */
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            gamma_inv[i][j] = cache->g_con[i + 1][j + 1];
         }
     }
-    G = cache->g_con[0][0];
-    disc = B * B + 3.0 * G * A;
-    sqrt_disc = sqrt(disc);
-    root_denom = B + sqrt_disc;
-    iso = -A / root_denom;
-    denom = 2.0 * B + sqrt_disc;
-    coeff = 3.0 / denom;
+    prj_rad_grm1_pressure_lab(E, Fcon, Fmag, gamma_inv, P);
+    Rcon[0][0] = E;
+    for (a = 0; a < 3; ++a) {
+        Rcon[0][a + 1] = Fcon[a] * invc;
+        Rcon[a + 1][0] = Rcon[0][a + 1];
+    }
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            Rcon[i + 1][j + 1] = P[i][j];
+        }
+    }
+
+    /* Fluid-frame decomposition (uses the cached u and projectors). */
     for (a = 0; a < 4; ++a) {
-        K[a] = R0[a] - iso * cache->g_con[0][a];
-        Ku += K[a] * cache->ucov[a];
         m3->ucon[a] = cache->ucon[a];
         m3->ucov[a] = cache->ucov[a];
     }
-    J = coeff * Ku * Ku + iso * cache->g_ucov_ucov;
+    J = 0.0;
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            J += Rcon[a][b] * cache->ucov[a] * cache->ucov[b];
+        }
+    }
     m3->J = J;
     for (a = 0; a < 4; ++a) {
-        double Ru = coeff * Ku * K[a] + iso * cache->gcon_ucov[a];
+        double Ru = 0.0;
 
+        for (b = 0; b < 4; ++b) {
+            Ru += Rcon[b][a] * cache->ucov[b];
+        }
         m3->H[a] = -Ru - J * cache->ucon[a];
     }
     for (a = 0; a < 4; ++a) {
         for (b = 0; b < 4; ++b) {
-            double Rcon_ab = coeff * K[a] * K[b] +
-                iso * cache->g_con[a][b];
-
             m3->hcon[a][b] = cache->hcon[a][b];
             m3->hcov[a][b] = cache->hcov[a][b];
-            m3->L[a][b] = Rcon_ab - J * cache->ucon[a] * cache->ucon[b] -
+            m3->L[a][b] = Rcon[a][b] - J * cache->ucon[a] * cache->ucon[b] -
                 m3->H[a] * cache->ucon[b] - m3->H[b] * cache->ucon[a];
             Hnorm2 += m3->hcov[a][b] * m3->H[a] * m3->H[b];
         }

@@ -121,19 +121,60 @@ static void make_closure_ctx(const prj_z4c_hydro_geom *geom,
     }
 }
 
+/* Reference for the algebraic lab-frame Levermore closure:
+ *   R^{ab} = E n^a n^b + (n^a F^b + n^b F^a)/c + P^{ab},
+ *   P^{ij} = E a(f) gamma^{ij} + b(f) F^i F^j/(c^2 E),
+ *   a(f) = (sqrt(4-3 f^2)-1)/3, b(f) = 3/(2+sqrt(4-3 f^2)), f = |F|/(cE). */
+static void expected_lab_frame_R(const double gamma_cov[3][3],
+    const double gamma_inv[3][3], const double ncon[4], double E,
+    const double Fcon[3], double expected[4][4])
+{
+    double c = PRJ_CLIGHT;
+    double F2 = 0.0;
+    double f;
+    double s;
+    double a_c;
+    double b_c;
+    int i;
+    int j;
+
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            F2 += gamma_cov[i][j] * Fcon[i] * Fcon[j];
+        }
+    }
+    f = sqrt(F2) / (c * E);
+    s = sqrt(4.0 - 3.0 * f * f);
+    a_c = E * (s - 1.0) / 3.0;
+    b_c = 3.0 / ((2.0 + s) * c * c * E);
+
+    expected[0][0] = E * ncon[0] * ncon[0];
+    for (i = 0; i < 3; ++i) {
+        expected[0][i + 1] = E * ncon[0] * ncon[i + 1] + ncon[0] * Fcon[i] / c;
+        expected[i + 1][0] = expected[0][i + 1];
+    }
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            double P = a_c * gamma_inv[i][j] + b_c * Fcon[i] * Fcon[j];
+
+            expected[i + 1][j + 1] = E * ncon[i + 1] * ncon[j + 1] +
+                (ncon[i + 1] * Fcon[j] + ncon[j + 1] * Fcon[i]) / c + P;
+        }
+    }
+}
+
 static void check_grm1_build_R_flat(void)
 {
     double g_cov[4][4] = {{0.0}};
     double g_inv[4][4] = {{0.0}};
-    double ER_expected = 1.7;
-    double v[3] = {0.23, -0.11, 0.07};
-    double v2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
-    double w = 1.0 / sqrt(1.0 - v2);
-    double uR[4];
+    double gamma_cov[3][3] = {{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
+    double gamma_inv[3][3] = {{1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
+    double ncon[4] = {1.0, 0.0, 0.0, 0.0};
+    double E = 1.7;
+    double frac[3] = {0.3, -0.2, 0.15};
     double expected[4][4];
     double R[4][4];
     double Fcon[3];
-    double E;
     int ok;
     int a;
     int b;
@@ -146,24 +187,11 @@ static void check_grm1_build_R_flat(void)
     g_inv[1][1] = 1.0;
     g_inv[2][2] = 1.0;
     g_inv[3][3] = 1.0;
-    uR[0] = w;
     for (a = 0; a < 3; ++a) {
-        uR[a + 1] = w * v[a];
+        Fcon[a] = frac[a] * PRJ_CLIGHT * E;
     }
 
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            expected[a][b] = ER_expected *
-                ((4.0 / 3.0) * uR[a] * uR[b] +
-                 (1.0 / 3.0) * g_inv[a][b]);
-        }
-    }
-
-    E = expected[0][0];
-    for (a = 0; a < 3; ++a) {
-        Fcon[a] = PRJ_CLIGHT * expected[0][a + 1];
-    }
-
+    expected_lab_frame_R(gamma_cov, gamma_inv, ncon, E, Fcon, expected);
     ok = prj_rad_grm1_build_R(g_cov, g_inv, 1.0, E, Fcon, R);
     if (!ok) {
         die("flat build_R failed");
@@ -211,48 +239,30 @@ static void check_grm1_build_R_shifted_metric(void)
     double alpha = 0.83;
     double gamma_diag[3] = {1.2, 0.9, 1.5};
     double beta_con[3] = {0.08, -0.03, 0.04};
-    double vcon[3] = {0.18, -0.07, 0.05};
     double g_cov[4][4];
     double g_inv[4][4];
+    double gamma_cov[3][3] = {{0.0}};
+    double gamma_inv[3][3] = {{0.0}};
     double ncon[4];
-    double ucon[4];
     double expected[4][4];
     double R[4][4];
     double Fcon[3];
-    double ER_expected = 0.9;
-    double v2 = 0.0;
-    double w;
-    double E;
+    double frac[3] = {0.05, -0.02, 0.03};
+    double E = 0.9;
     int ok;
     int a;
     int b;
 
     build_test_metric4(alpha, gamma_diag, beta_con, g_cov, g_inv);
-    for (a = 0; a < 3; ++a) {
-        v2 += gamma_diag[a] * vcon[a] * vcon[a];
-    }
-    w = 1.0 / sqrt(1.0 - v2);
     ncon[0] = 1.0 / alpha;
-    ucon[0] = w * ncon[0];
     for (a = 0; a < 3; ++a) {
         ncon[a + 1] = -beta_con[a] / alpha;
-        ucon[a + 1] = w * (ncon[a + 1] + vcon[a]);
+        gamma_cov[a][a] = gamma_diag[a];
+        gamma_inv[a][a] = 1.0 / gamma_diag[a];
+        Fcon[a] = frac[a] * PRJ_CLIGHT * E;
     }
 
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            expected[a][b] = ER_expected *
-                ((4.0 / 3.0) * ucon[a] * ucon[b] +
-                 (1.0 / 3.0) * g_inv[a][b]);
-        }
-    }
-    E = alpha * alpha * expected[0][0];
-    for (a = 0; a < 3; ++a) {
-        double Fhat = alpha * expected[0][a + 1] - E * ncon[a + 1];
-
-        Fcon[a] = PRJ_CLIGHT * Fhat;
-    }
-
+    expected_lab_frame_R(gamma_cov, gamma_inv, ncon, E, Fcon, expected);
     ok = prj_rad_grm1_build_R(g_cov, g_inv, alpha, E, Fcon, R);
     if (!ok) {
         die("shifted build_R failed");
@@ -982,18 +992,21 @@ static void expected_gr_m1_side_energy_flux(const prj_rad *rad,
     double Ein, const double Fcov_in[3],
     double *U, double *Fphys, double *smin, double *smax)
 {
-    prj_rad_gr_m1_closure_ctx ctx;
     double Fcov[3] = {Fcov_in[0], Fcov_in[1], Fcov_in[2]};
     double Fcon[3];
-    double Pcon[3][3];
     double E = Ein;
     double Fmag;
-    double fbar = 0.0;
+    double cE;
+    double f;
 
     expected_gr_m1_limit_state(geom, &E, Fcov, Fcon, &Fmag);
-    make_closure_ctx(geom, vcon, 0, 0, 0.0, &ctx);
-    prj_rad_gr_m1_pressure_fbar(rad, &ctx, E, Fcov, Pcon, &fbar);
-    expected_gr_m1_speeds(rad, geom, vcon, Fcon, Fmag, fbar, smin, smax);
+    /* Lab-frame flux factor drives the wavespeed Eddington blend. */
+    cE = PRJ_CLIGHT * E;
+    f = cE > 0.0 ? Fmag / cE : 0.0;
+    if (f > 1.0) {
+        f = 1.0;
+    }
+    expected_gr_m1_speeds(rad, geom, vcon, Fcon, Fmag, f, smin, smax);
     *U = geom->sqrt_gamma * E;
     *Fphys = geom->sqrt_gamma *
         (geom->alpha * Fcon[0] - PRJ_CLIGHT * geom->beta[0] * E);

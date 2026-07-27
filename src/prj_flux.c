@@ -1558,85 +1558,27 @@ static void prj_flux_gr_m1_face_cache_init(const prj_z4c_hydro_geom *geom,
     }
 }
 
-static void prj_flux_gr_m1_coord_ucon(const prj_z4c_hydro_geom *geom,
-    const prj_rad_gr_m1_side_data *side, double ucon[4])
-{
-    double alpha = geom->alpha;
-    double inv_alpha;
-    double wlor = side->wlor;
-    int a;
-
-    if (!isfinite(alpha) || alpha <= 0.0) {
-        alpha = 1.0;
-    }
-    if (!isfinite(wlor) || wlor <= 0.0) {
-        wlor = 1.0;
-    }
-    inv_alpha = 1.0 / alpha;
-    ucon[0] = wlor * inv_alpha;
-    for (a = 0; a < 3; ++a) {
-        double beta = isfinite(geom->beta[a]) ? geom->beta[a] : 0.0;
-        double vcon = isfinite(side->vcon[a]) ? side->vcon[a] : 0.0;
-
-        ucon[a + 1] = wlor * (vcon - beta * inv_alpha);
-    }
-}
-
 typedef struct prj_flux_gr_m1_side_cache {
     prj_rad_gr_m1_closure_ctx closure;
     prj_rad_gr_m1_side_data side;
     prj_flux_gr_m1_wave_cache wave;
-    double ucon[4];
-    double ucov[4];
-    double hcov[4][4];
-    double unorm;
-    int fbar_frame_ok;
 } prj_flux_gr_m1_side_cache;
 
 static void prj_flux_gr_m1_side_cache_init(const prj_z4c_hydro_geom *geom,
     const double *W, const prj_flux_gr_m1_face_cache *face,
     prj_flux_gr_m1_side_cache *cache)
 {
-    int a;
-    int b;
-    double unorm = 0.0;
-
+    (void)face;
     memset(cache, 0, sizeof(*cache));
     prj_flux_gr_m1_closure_ctx(geom, W, &cache->closure);
     prj_rad_gr_m1_prepare_side(&cache->closure, &cache->side);
     prj_flux_gr_m1_wave_cache_init(geom, &cache->side, &cache->wave);
-    prj_flux_gr_m1_coord_ucon(geom, &cache->side, cache->ucon);
-    cache->fbar_frame_ok = face != 0 && face->metric_ok;
-    for (a = 0; a < 4; ++a) {
-        if (!isfinite(cache->ucon[a])) {
-            cache->fbar_frame_ok = 0;
-        }
-        cache->ucov[a] = 0.0;
-        for (b = 0; b < 4; ++b) {
-            cache->ucov[a] += face->g_cov[a][b] * cache->ucon[b];
-        }
-        unorm += cache->ucov[a] * cache->ucon[a];
-    }
-    cache->unorm = unorm;
-    if (!isfinite(unorm) || fabs(unorm + 1.0) > 1.0e-8) {
-        cache->fbar_frame_ok = 0;
-    }
-    for (a = 0; a < 4; ++a) {
-        if (!isfinite(cache->ucov[a])) {
-            cache->fbar_frame_ok = 0;
-        }
-        for (b = 0; b < 4; ++b) {
-            cache->hcov[a][b] = face->g_cov[a][b] +
-                cache->ucov[a] * cache->ucov[b];
-        }
-    }
 }
 
 #ifdef PRJ_DEBUG
 enum prj_flux_gr_m1_state_status {
     PRJ_FLUX_GR_M1_STATE_OK = 0,
-    PRJ_FLUX_GR_M1_STATE_BUILD_FAIL = 1,
-    PRJ_FLUX_GR_M1_STATE_FBAR_FAIL = 2
+    PRJ_FLUX_GR_M1_STATE_BUILD_FAIL = 1
 };
 #endif
 
@@ -1645,7 +1587,6 @@ typedef struct prj_flux_gr_m1_state_eval {
     double Fcov[3];
     double Fcon[3];
     double Fmag;
-    double fbar;
     double U[4];
     double F[4];
     double smin;
@@ -1655,6 +1596,51 @@ typedef struct prj_flux_gr_m1_state_eval {
 static inline int prj_flux_gr_m1_group_base(int gidx)
 {
     return PRJ_NHYDRO + gidx * PRJ_RAD_GROUP_STRIDE;
+}
+
+/* Rows R^{0a} and R^{1a} of the algebraic lab-frame Levermore stress tensor at
+ * a face state, in the face's Eulerian frame:
+ *   R^{ab} = E n^a n^b + (n^a F^b + n^b F^a)/c + P^{ab},
+ * with P^{ij} the spatial pressure (prj_rad_grm1_pressure_lab).  The sweep
+ * direction is folded into index 1 by the caller's rotated metric, so only
+ * these two rows feed U and the x-flux. */
+static inline void prj_flux_gr_m1_R_rows(
+    const prj_flux_gr_m1_face_cache *face, double E, const double Fcon[3],
+    double Rrow0[4], double Rrow1[4])
+{
+    const double *ncon = face->ncon;
+    double gamma_inv[3][3];
+    double P[3][3];
+    double F2 = 0.0;
+    double Fmag;
+    double invc = 1.0 / PRJ_CLIGHT;
+    int i;
+    int j;
+
+    /* True inverse 3-metric gamma^{ij} = g^{ij} + n^i n^j (see build_R). */
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            gamma_inv[i][j] = face->g_con[i + 1][j + 1] +
+                ncon[i + 1] * ncon[j + 1];
+            F2 += face->g_cov[i + 1][j + 1] * Fcon[i] * Fcon[j];
+        }
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    prj_rad_grm1_pressure_lab(E, Fcon, Fmag, gamma_inv, P);
+
+    Rrow0[0] = E * ncon[0] * ncon[0];
+    for (i = 0; i < 3; ++i) {
+        Rrow0[i + 1] = E * ncon[0] * ncon[i + 1] + ncon[0] * Fcon[i] * invc;
+    }
+    /* R^{1a}: index 1 is the (rotated) sweep direction, spatial index 0. */
+    Rrow1[0] = Rrow0[1];
+    for (j = 0; j < 3; ++j) {
+        Rrow1[j + 1] = E * ncon[1] * ncon[j + 1] +
+            (ncon[1] * Fcon[j] + ncon[j + 1] * Fcon[0]) * invc + P[0][j];
+    }
 }
 
 #ifdef PRJ_DEBUG
@@ -1673,46 +1659,21 @@ static void prj_flux_gr_m1_group_decode(int gidx, int *field, int *group)
 
 #ifdef PRJ_DEBUG
 static enum prj_flux_gr_m1_state_status prj_flux_gr_m1_closure_direct_checked(
-    const prj_flux_gr_m1_face_cache *face,
-    const prj_flux_gr_m1_side_cache *side, double E, const double Fcon[3],
-    double U[4], double F[4], double *fbar_out)
+    const prj_flux_gr_m1_face_cache *face, double E, const double Fcon[3],
+    double U[4], double F[4])
 {
-    double R0[4];
-    double K[4];
     double Rrow0[4];
     double Rrow1[4];
-    double A = 0.0;
-    double B;
-    double G;
-    double disc;
-    double disc_scale;
-    double sqrt_disc;
-    double root_denom;
-    double denom;
-    double iso;
-    double coeff;
-    double coeffK0;
-    double coeffK1;
-    double Ku;
-    double J;
-    double iso_plus_J;
-    double H[4];
-    double Hnorm2 = 0.0;
-    double fbar;
     int a;
     int b;
 
-    if (fbar_out != 0) {
-        *fbar_out = 0.0;
-    }
     if (U != 0) {
         memset(U, 0, 4 * sizeof(double));
     }
     if (F != 0) {
         memset(F, 0, 4 * sizeof(double));
     }
-    if (face == 0 || side == 0 || Fcon == 0 || U == 0 || F == 0 ||
-        fbar_out == 0 || !face->metric_ok ||
+    if (face == 0 || Fcon == 0 || U == 0 || F == 0 || !face->metric_ok ||
         !isfinite(E) || E < 0.0) {
         return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
     }
@@ -1722,91 +1683,13 @@ static enum prj_flux_gr_m1_state_status prj_flux_gr_m1_closure_direct_checked(
         }
     }
 
-    R0[0] = E * face->ncon[0] * face->ncon[0];
-    for (a = 0; a < 3; ++a) {
-        R0[a + 1] = E * face->ncon[0] * face->ncon[a + 1] +
-            (Fcon[a] / PRJ_CLIGHT) * face->ncon[0];
-    }
-
-    B = R0[0];
-    if (!isfinite(B) || B < 0.0) {
-        return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-    }
-    if (B == 0.0) {
-        for (a = 0; a < 3; ++a) {
-            if (Fcon[a] != 0.0) {
-                return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-            }
-        }
-        return side->fbar_frame_ok ? PRJ_FLUX_GR_M1_STATE_OK :
-            PRJ_FLUX_GR_M1_STATE_FBAR_FAIL;
-    }
-
+    prj_flux_gr_m1_R_rows(face, E, Fcon, Rrow0, Rrow1);
     for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            A += face->g_cov[a][b] * R0[a] * R0[b];
-        }
-    }
-    G = face->g_con[0][0];
-    disc_scale = fmax(B * B, fabs(3.0 * G * A));
-    if (disc_scale <= 0.0) {
-        disc_scale = 1.0;
-    }
-    if (A > 0.0 && A <= 1.0e-12 * disc_scale) {
-        A = 0.0;
-    }
-    disc = B * B + 3.0 * G * A;
-    if (!isfinite(disc) || disc < -1.0e-12 * disc_scale) {
-        return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-    }
-    if (disc < 0.0) {
-        disc = 0.0;
-    }
-    sqrt_disc = sqrt(disc);
-    root_denom = B + sqrt_disc;
-    if (!isfinite(root_denom) || root_denom <= 0.0) {
-        return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-    }
-    iso = -A / root_denom;
-    if (!isfinite(iso) || iso < 0.0) {
-        return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-    }
-    denom = 2.0 * B + sqrt_disc;
-    if (!isfinite(denom) || denom <= 0.0) {
-        return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-    }
-    coeff = 3.0 / denom;
-
-    for (a = 0; a < 4; ++a) {
-        K[a] = R0[a] - iso * face->g_con[0][a];
-    }
-    coeffK0 = coeff * K[0];
-    coeffK1 = coeff * K[1];
-    for (a = 0; a < 4; ++a) {
-        double row0 = coeffK0 * K[a] + iso * face->g_con[0][a];
-        double err;
-        double scale;
-
-        if (!isfinite(row0)) {
-            return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-        }
-        err = fabs(row0 - R0[a]);
-        scale = fmax(fabs(R0[a]), fabs(row0));
-        if (scale < 1.0) {
-            scale = 1.0;
-        }
-        if (err > 1.0e-10 * scale) {
-            return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
-        }
-        Rrow0[a] = row0;
-    }
-    Rrow1[0] = Rrow0[1];
-    for (a = 1; a < 4; ++a) {
-        Rrow1[a] = coeffK1 * K[a] + iso * face->g_con[1][a];
-        if (!isfinite(Rrow1[a])) {
+        if (!isfinite(Rrow0[a]) || !isfinite(Rrow1[a])) {
             return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
         }
     }
+
     for (a = 0; a < 3; ++a) {
         double mixed0 = 0.0;
         double mixed1 = 0.0;
@@ -1820,113 +1703,21 @@ static enum prj_flux_gr_m1_state_status prj_flux_gr_m1_closure_direct_checked(
     }
     U[0] = face->sqrt_alpha_alpha * Rrow0[0];
     F[0] = face->c_alpha_alpha_sqrt_gamma * Rrow0[1];
-
-    if (!side->fbar_frame_ok) {
-        return PRJ_FLUX_GR_M1_STATE_FBAR_FAIL;
-    }
-    Ku = 0.0;
-    for (a = 0; a < 4; ++a) {
-        Ku += K[a] * side->ucov[a];
-    }
-    J = coeff * Ku * Ku + iso * side->unorm;
-    if (!isfinite(J) || J < 0.0) {
-        return PRJ_FLUX_GR_M1_STATE_FBAR_FAIL;
-    }
-    if (J == 0.0) {
-        return PRJ_FLUX_GR_M1_STATE_FBAR_FAIL;
-    }
-
-    iso_plus_J = iso + J;
-    for (a = 0; a < 4; ++a) {
-        H[a] = -(coeff * K[a] * Ku) - iso_plus_J * side->ucon[a];
-        if (!isfinite(H[a])) {
-            return PRJ_FLUX_GR_M1_STATE_FBAR_FAIL;
-        }
-    }
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            Hnorm2 += side->hcov[a][b] * H[a] * H[b];
-        }
-    }
-    if (!isfinite(Hnorm2) || Hnorm2 < -1.0e-12 * J * J) {
-        return PRJ_FLUX_GR_M1_STATE_FBAR_FAIL;
-    }
-    if (Hnorm2 < 0.0) {
-        Hnorm2 = 0.0;
-    }
-
-    fbar = sqrt(Hnorm2) / J;
-    if (!isfinite(fbar) || fbar < 0.0) {
-        fbar = 0.0;
-    } else if (fbar > 1.0) {
-        fbar = 1.0;
-    }
-    *fbar_out = fbar;
     return PRJ_FLUX_GR_M1_STATE_OK;
 }
 #endif
 
 #ifndef PRJ_DEBUG
 static inline void prj_flux_gr_m1_closure_direct_fast(
-    const prj_flux_gr_m1_face_cache *face,
-    const prj_flux_gr_m1_side_cache *side, double E, const double Fcon[3],
-    double U[4], double F[4], double *fbar_out)
+    const prj_flux_gr_m1_face_cache *face, double E, const double Fcon[3],
+    double U[4], double F[4])
 {
-    double R0[4];
-    double K[4];
     double Rrow0[4];
     double Rrow1[4];
-    double A = 0.0;
-    double B;
-    double G;
-    double disc;
-    double sqrt_disc;
-    double root_denom;
-    double denom;
-    double iso;
-    double coeff;
-    double coeffK0;
-    double coeffK1;
-    double Ku;
-    double J;
-    double iso_plus_J;
-    double H[4];
-    double Hnorm2 = 0.0;
     int a;
     int b;
 
-    R0[0] = E * face->ncon[0] * face->ncon[0];
-    for (a = 0; a < 3; ++a) {
-        R0[a + 1] = E * face->ncon[0] * face->ncon[a + 1] +
-            (Fcon[a] / PRJ_CLIGHT) * face->ncon[0];
-    }
-
-    B = R0[0];
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            A += face->g_cov[a][b] * R0[a] * R0[b];
-        }
-    }
-    G = face->g_con[0][0];
-    disc = B * B + 3.0 * G * A;
-    sqrt_disc = sqrt(disc);
-    root_denom = B + sqrt_disc;
-    iso = -A / root_denom;
-    denom = 2.0 * B + sqrt_disc;
-    coeff = 3.0 / denom;
-
-    for (a = 0; a < 4; ++a) {
-        K[a] = R0[a] - iso * face->g_con[0][a];
-    }
-    coeffK0 = coeff * K[0];
-    coeffK1 = coeff * K[1];
-    for (a = 0; a < 4; ++a) {
-        Rrow0[a] = coeffK0 * K[a] + iso * face->g_con[0][a];
-    }
-    Rrow1[0] = Rrow0[1];
-    for (a = 1; a < 4; ++a) {
-        Rrow1[a] = coeffK1 * K[a] + iso * face->g_con[1][a];
-    }
+    prj_flux_gr_m1_R_rows(face, E, Fcon, Rrow0, Rrow1);
     for (a = 0; a < 3; ++a) {
         double mixed0 = 0.0;
         double mixed1 = 0.0;
@@ -1940,22 +1731,6 @@ static inline void prj_flux_gr_m1_closure_direct_fast(
     }
     U[0] = face->sqrt_alpha_alpha * Rrow0[0];
     F[0] = face->c_alpha_alpha_sqrt_gamma * Rrow0[1];
-
-    Ku = 0.0;
-    for (a = 0; a < 4; ++a) {
-        Ku += K[a] * side->ucov[a];
-    }
-    J = coeff * Ku * Ku + iso * side->unorm;
-    iso_plus_J = iso + J;
-    for (a = 0; a < 4; ++a) {
-        H[a] = -(coeff * K[a] * Ku) - iso_plus_J * side->ucon[a];
-    }
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            Hnorm2 += side->hcov[a][b] * H[a] * H[b];
-        }
-    }
-    *fbar_out = sqrt(Hnorm2) / J;
 }
 #endif
 
@@ -1992,37 +1767,6 @@ static void prj_flux_gr_m1_build_R_fail(const prj_z4c_hydro_geom *geom,
     prj_flux_gr_abort();
 }
 
-static void prj_flux_gr_m1_fbar_fail(const prj_z4c_hydro_geom *geom,
-    const double *W, int gidx, double E, const double Fcov[3],
-    const double Fcon[3], double Fmag)
-{
-    double cE = PRJ_CLIGHT * (E > 0.0 ? E : 0.0);
-    double f = cE > 0.0 ? Fmag / cE : 0.0;
-    int field;
-    int group;
-
-    prj_flux_gr_m1_group_decode(gidx, &field, &group);
-
-    fprintf(stderr,
-        "GR M1 flux prj_rad_grm1_fbar_from_R failed: field=%d group=%d "
-        "E=%.17e Fcov=(%.17e, %.17e, %.17e) "
-        "Fcon=(%.17e, %.17e, %.17e) |F|/(cE)=%.17e "
-        "alpha=%.17e beta=(%.17e, %.17e, %.17e) sqrt_gamma=%.17e "
-        "rho=%.17e v=(%.17e, %.17e, %.17e)\n",
-        field, group, E, Fcov[0], Fcov[1], Fcov[2],
-        Fcon[0], Fcon[1], Fcon[2], f,
-        geom != 0 ? geom->alpha : 0.0,
-        geom != 0 ? geom->beta[0] : 0.0,
-        geom != 0 ? geom->beta[1] : 0.0,
-        geom != 0 ? geom->beta[2] : 0.0,
-        geom != 0 ? geom->sqrt_gamma : 0.0,
-        W != 0 ? W[PRJ_PRIM_RHO] : 0.0,
-        W != 0 ? W[PRJ_PRIM_V1] : 0.0,
-        W != 0 ? W[PRJ_PRIM_V2] : 0.0,
-        W != 0 ? W[PRJ_PRIM_V3] : 0.0);
-    fflush(stderr);
-    prj_flux_gr_abort();
-}
 #endif
 
 static inline void prj_flux_gr_m1_state_prepare(
@@ -2037,45 +1781,48 @@ static inline void prj_flux_gr_m1_state_prepare(
     state->Fcov[2] = W[base + 3];
     prj_flux_gr_m1_project_state(geom, &state->E, state->Fcov,
         state->Fcon, &state->Fmag);
-    state->fbar = 0.0;
     state->smin = 0.0;
     state->smax = 0.0;
 }
 
-/* Per-group closure for one side of a face. The contractions are evaluated
- * directly from R^{ab}=coeff K^a K^b + iso g^{ab}; only the components and
- * fluid-frame contractions needed by the face flux are formed. */
+/* Per-group closure for one side of a face. U and the x-flux are formed from
+ * rows R^{0a}, R^{1a} of the algebraic lab-frame Levermore stress tensor. */
 static inline void prj_flux_gr_m1_state_closure(
     const prj_z4c_hydro_geom *geom, const double *W, int gidx,
     const prj_flux_gr_m1_face_cache *face,
     const prj_flux_gr_m1_side_cache *side, prj_flux_gr_m1_state_eval *state)
 {
+    (void)side;
 #ifdef PRJ_DEBUG
-    enum prj_flux_gr_m1_state_status status;
-
-    status = prj_flux_gr_m1_closure_direct_checked(face, side, state->E,
-        state->Fcon, state->U, state->F, &state->fbar);
-    if (status == PRJ_FLUX_GR_M1_STATE_BUILD_FAIL) {
+    if (prj_flux_gr_m1_closure_direct_checked(face, state->E,
+            state->Fcon, state->U, state->F) ==
+            PRJ_FLUX_GR_M1_STATE_BUILD_FAIL) {
         prj_flux_gr_m1_build_R_fail(geom, W, gidx, state->E, state->Fcov,
-            state->Fcon, state->Fmag);
-    } else if (status == PRJ_FLUX_GR_M1_STATE_FBAR_FAIL) {
-        prj_flux_gr_m1_fbar_fail(geom, W, gidx, state->E, state->Fcov,
             state->Fcon, state->Fmag);
     }
 #else
     (void)geom;
     (void)W;
     (void)gidx;
-    prj_flux_gr_m1_closure_direct_fast(face, side, state->E, state->Fcon,
-        state->U, state->F, &state->fbar);
+    prj_flux_gr_m1_closure_direct_fast(face, state->E, state->Fcon,
+        state->U, state->F);
 #endif
 }
 
 static inline void prj_flux_gr_m1_state_wavespeed(const prj_rad *rad,
     const prj_flux_gr_m1_side_cache *side, prj_flux_gr_m1_state_eval *state)
 {
+    /* Lab-frame flux factor f = |F|/(cE) feeds the Eddington-factor blend. */
+    double cE = PRJ_CLIGHT * state->E;
+    double f = cE > 0.0 ? state->Fmag / cE : 0.0;
+
+    if (!isfinite(f) || f < 0.0) {
+        f = 0.0;
+    } else if (f > 1.0) {
+        f = 1.0;
+    }
     prj_flux_gr_m1_wavespeeds(rad, &side->wave, state->Fcon, state->Fmag,
-        state->fbar, &state->smin, &state->smax);
+        f, &state->smin, &state->smax);
 }
 
 static inline void prj_flux_gr_m1_group_hll_flux(int gidx,

@@ -394,6 +394,52 @@ static double prj_z4c_diss_coeff(const prj_z4c_params *params)
     return coeff;
 }
 
+static double prj_z4c_positive_rate(double value)
+{
+    return isfinite(value) && value > 0.0 ? value : 0.0;
+}
+
+static double prj_z4c_cell_damping_rate_inv_cm(const prj_z4c_params *opt,
+    const double *z, double alpha, double tau_cm, int i, int j, int k)
+{
+    double rate = 0.0;
+    double kappa1;
+    double eta;
+    double ssl_amp;
+
+    if (opt == 0) {
+        return 0.0;
+    }
+    kappa1 = prj_z4c_positive_rate(opt->damp_kappa1_inv_cm);
+    if (kappa1 > 0.0 && isfinite(alpha) && alpha > 0.0) {
+        double kappa2 = isfinite(opt->damp_kappa2) ? opt->damp_kappa2 : 0.0;
+        double factor = 2.0;
+
+        factor = PRJ_MAX(factor, fabs(2.0 + kappa2));
+        factor = PRJ_MAX(factor, fabs(1.0 - kappa2));
+        rate += alpha * factor * kappa1;
+    }
+
+    eta = prj_z4c_positive_rate(opt->shift_eta_inv_cm);
+    rate += eta;
+
+    ssl_amp = prj_z4c_positive_rate(opt->ssl_damping_amp_inv_cm);
+    if (opt->slow_start_lapse && ssl_amp > 0.0 && z != 0 &&
+        isfinite(opt->ssl_damping_time_cm) && opt->ssl_damping_time_cm > 0.0) {
+        double chi = prj_z4c_get(z, PRJ_Z4C_CHI, i, j, k);
+        double W2 = chi > opt->chi_min_floor ? chi : opt->chi_min_floor;
+        double W = W2 > 0.0 && isfinite(W2) ? sqrt(W2) : 0.0;
+        double tscale = tau_cm / opt->ssl_damping_time_cm;
+        double Wpow = pow(W, (double)opt->ssl_damping_index);
+        double ssl_rate = ssl_amp * Wpow * exp(-0.5 * tscale * tscale);
+
+        if (isfinite(ssl_rate) && ssl_rate > 0.0) {
+            rate += ssl_rate;
+        }
+    }
+    return rate;
+}
+
 static double prj_z4c_det3(const double g[3][3])
 {
     return g[0][0] * (g[1][1] * g[2][2] - g[1][2] * g[2][1])
@@ -827,11 +873,13 @@ static void prj_z4c_enforce_range(prj_mesh *mesh, const prj_mpi *mpi, int stage,
 double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double cfl)
 {
     double dt_min = HUGE_VAL;
+    double tau_cm;
     int bidx;
 
     if (!prj_z4c_runtime_enabled(mesh)) {
         return HUGE_VAL;
     }
+    tau_cm = PRJ_CLIGHT * mesh->time_seconds;
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         const prj_block *block = &mesh->blocks[bidx];
         const prj_z4c_params *opt = &mesh->z4c_params;
@@ -873,6 +921,8 @@ double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double 
                             }
                             denom += (gauge_speed + fabs(beta[a])) / block->dx[a];
                         }
+                        denom += prj_z4c_cell_damping_rate_inv_cm(opt, z, alpha,
+                            tau_cm, i, j, k);
                     }
                     if (!isfinite(denom) || denom <= 0.0) {
                         dt_cell = HUGE_VAL;
@@ -884,22 +934,6 @@ double prj_z4c_calc_dt_seconds(const prj_mesh *mesh, const prj_mpi *mpi, double 
                     }
                 }
             }
-        }
-    }
-    if (isfinite(mesh->z4c_params.damp_kappa1_inv_cm) &&
-        mesh->z4c_params.damp_kappa1_inv_cm > 0.0) {
-        double dt_damp = cfl / (PRJ_CLIGHT * mesh->z4c_params.damp_kappa1_inv_cm);
-
-        if (dt_damp < dt_min) {
-            dt_min = dt_damp;
-        }
-    }
-    if (isfinite(mesh->z4c_params.shift_eta_inv_cm) &&
-        mesh->z4c_params.shift_eta_inv_cm > 0.0) {
-        double dt_shift = cfl / (PRJ_CLIGHT * mesh->z4c_params.shift_eta_inv_cm);
-
-        if (dt_shift < dt_min) {
-            dt_min = dt_shift;
         }
     }
     return prj_mpi_min_dt(mpi, dt_min);
