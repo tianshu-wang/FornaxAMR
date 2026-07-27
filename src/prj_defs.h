@@ -86,6 +86,12 @@ typedef double prj_table_real;
 #ifndef PRJ_RAD_GR_M1_FBAR_TOL
 #define PRJ_RAD_GR_M1_FBAR_TOL 1.0e-6
 #endif
+#ifndef PRJ_RAD_GR_M1_E_FLOOR
+#define PRJ_RAD_GR_M1_E_FLOOR 1.0e-50
+#endif
+#ifndef PRJ_RAD_GR_M1_F_MARGIN
+#define PRJ_RAD_GR_M1_F_MARGIN 1.0e-6
+#endif
 
 #define PRJ_TIMEINT_RK2 1
 #define PRJ_TIMEINT_ESSPRK 2

@@ -2264,6 +2264,9 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
     (void)coord;
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_flux_send");
+    /* BEGIN TEMP TIMER: essprk_step_flux_send breakdown
+     * Remove tmp_flux_update_blocks/tmp_flux_mpi_send after flux profiling. */
+    PRJ_TIMER_START(timer, "tmp_flux_update_blocks");
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         prj_block *block = &mesh->blocks[bidx];
 
@@ -2272,7 +2275,11 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
                 block->flux, 0);
         }
     }
+    PRJ_TIMER_STOP(timer, "tmp_flux_update_blocks");
+    PRJ_TIMER_START(timer, "tmp_flux_mpi_send");
     prj_riemann_flux_send(mesh, mpi);
+    PRJ_TIMER_STOP(timer, "tmp_flux_mpi_send");
+    /* END TEMP TIMER: essprk_step_flux_send breakdown */
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_flux_send");
 
 #if PRJ_MHD

@@ -887,8 +887,8 @@ static void expected_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
     int a;
     int b;
 
-    if (!isfinite(*E) || *E < 0.0) {
-        *E = 0.0;
+    if (!isfinite(*E) || *E < PRJ_RAD_GR_M1_E_FLOOR) {
+        *E = PRJ_RAD_GR_M1_E_FLOOR;
     }
     for (a = 0; a < 3; ++a) {
         Fcon[a] = 0.0;
@@ -901,7 +901,7 @@ static void expected_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
         F2 = 0.0;
     }
     Fmag = sqrt(F2);
-    cE = PRJ_CLIGHT * *E;
+    cE = (1.0 - PRJ_RAD_GR_M1_F_MARGIN) * PRJ_CLIGHT * *E;
     if (Fmag > cE && Fmag > 0.0) {
         double scale = cE / Fmag;
 
