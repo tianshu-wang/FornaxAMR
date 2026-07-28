@@ -1,6 +1,8 @@
 #ifndef PRJ_RADIATION_H
 #define PRJ_RADIATION_H
 
+#include <math.h>
+
 #define PRJ_CLIGHT 2.99792458e10
 #define PRJ_HPLANCK 6.62607015e-27
 
@@ -80,6 +82,41 @@ typedef struct prj_rad_gr_m1_side_data {
     double wlor;
     double beta2;
 } prj_rad_gr_m1_side_data;
+
+typedef struct prj_rad_grm1_closure_coeffs {
+    double a_coef;
+    double b_coef;
+    double s;
+    double f2;
+} prj_rad_grm1_closure_coeffs;
+
+static inline void prj_rad_grm1_closure_coeffs_from_F2(double E, double F2,
+    prj_rad_grm1_closure_coeffs *coeffs)
+{
+    double cE;
+    double f2;
+    double s;
+
+    if (coeffs == 0) {
+        return;
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    cE = PRJ_CLIGHT * E;
+    f2 = cE > 0.0 ? F2 / (cE * cE) : 0.0;
+    if (!isfinite(f2) || f2 < 0.0) {
+        f2 = 0.0;
+    } else if (f2 > 1.0) {
+        f2 = 1.0;
+    }
+    s = sqrt(4.0 - 3.0 * f2);
+    coeffs->a_coef = E * (s - 1.0) / 3.0;
+    coeffs->b_coef = E > 0.0 ?
+        3.0 / ((2.0 + s) * PRJ_CLIGHT * PRJ_CLIGHT * E) : 0.0;
+    coeffs->s = s;
+    coeffs->f2 = f2;
+}
 
 void prj_rad_gr_m1_prepare_side(const prj_rad_gr_m1_closure_ctx *ctx,
     prj_rad_gr_m1_side_data *side);

@@ -1512,6 +1512,7 @@ static void prj_flux_gr_m1_metric4(const prj_z4c_hydro_geom *geom,
 typedef struct prj_flux_gr_m1_face_cache {
     double g_cov[4][4];
     double g_con[4][4];
+    double gamma_inv[3][3];
     double alpha;
     double sqrt_gamma;
     double sqrt_alpha_alpha;
@@ -1554,6 +1555,12 @@ static void prj_flux_gr_m1_face_cache_init(const prj_z4c_hydro_geom *geom,
         cache->ncon[0] = 1.0 / cache->alpha;
         for (a = 0; a < 3; ++a) {
             cache->ncon[a + 1] = -cache->alpha * cache->g_con[0][a + 1];
+        }
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                cache->gamma_inv[a][b] = cache->g_con[a + 1][b + 1] +
+                    cache->ncon[a + 1] * cache->ncon[b + 1];
+            }
         }
     }
 }
@@ -1606,30 +1613,15 @@ static inline int prj_flux_gr_m1_group_base(int gidx)
  * these two rows feed U and the x-flux. */
 static inline void prj_flux_gr_m1_R_rows(
     const prj_flux_gr_m1_face_cache *face, double E, const double Fcon[3],
-    double Rrow0[4], double Rrow1[4])
+    double Fmag, double Rrow0[4], double Rrow1[4])
 {
     const double *ncon = face->ncon;
-    double gamma_inv[3][3];
-    double P[3][3];
-    double F2 = 0.0;
-    double Fmag;
+    prj_rad_grm1_closure_coeffs coeffs;
     double invc = 1.0 / PRJ_CLIGHT;
     int i;
     int j;
 
-    /* True inverse 3-metric gamma^{ij} = g^{ij} + n^i n^j (see build_R). */
-    for (i = 0; i < 3; ++i) {
-        for (j = 0; j < 3; ++j) {
-            gamma_inv[i][j] = face->g_con[i + 1][j + 1] +
-                ncon[i + 1] * ncon[j + 1];
-            F2 += face->g_cov[i + 1][j + 1] * Fcon[i] * Fcon[j];
-        }
-    }
-    if (!isfinite(F2) || F2 < 0.0) {
-        F2 = 0.0;
-    }
-    Fmag = sqrt(F2);
-    prj_rad_grm1_pressure_lab(E, Fcon, Fmag, gamma_inv, P);
+    prj_rad_grm1_closure_coeffs_from_F2(E, Fmag * Fmag, &coeffs);
 
     Rrow0[0] = E * ncon[0] * ncon[0];
     for (i = 0; i < 3; ++i) {
@@ -1638,8 +1630,11 @@ static inline void prj_flux_gr_m1_R_rows(
     /* R^{1a}: index 1 is the (rotated) sweep direction, spatial index 0. */
     Rrow1[0] = Rrow0[1];
     for (j = 0; j < 3; ++j) {
+        double P0j = coeffs.a_coef * face->gamma_inv[0][j] +
+            coeffs.b_coef * Fcon[0] * Fcon[j];
+
         Rrow1[j + 1] = E * ncon[1] * ncon[j + 1] +
-            (ncon[1] * Fcon[j] + ncon[j + 1] * Fcon[0]) * invc + P[0][j];
+            (ncon[1] * Fcon[j] + ncon[j + 1] * Fcon[0]) * invc + P0j;
     }
 }
 
@@ -1660,7 +1655,7 @@ static void prj_flux_gr_m1_group_decode(int gidx, int *field, int *group)
 #ifdef PRJ_DEBUG
 static enum prj_flux_gr_m1_state_status prj_flux_gr_m1_closure_direct_checked(
     const prj_flux_gr_m1_face_cache *face, double E, const double Fcon[3],
-    double U[4], double F[4])
+    double Fmag, double U[4], double F[4])
 {
     double Rrow0[4];
     double Rrow1[4];
@@ -1674,7 +1669,7 @@ static enum prj_flux_gr_m1_state_status prj_flux_gr_m1_closure_direct_checked(
         memset(F, 0, 4 * sizeof(double));
     }
     if (face == 0 || Fcon == 0 || U == 0 || F == 0 || !face->metric_ok ||
-        !isfinite(E) || E < 0.0) {
+        !isfinite(E) || E < 0.0 || !isfinite(Fmag) || Fmag < 0.0) {
         return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
     }
     for (a = 0; a < 3; ++a) {
@@ -1683,7 +1678,7 @@ static enum prj_flux_gr_m1_state_status prj_flux_gr_m1_closure_direct_checked(
         }
     }
 
-    prj_flux_gr_m1_R_rows(face, E, Fcon, Rrow0, Rrow1);
+    prj_flux_gr_m1_R_rows(face, E, Fcon, Fmag, Rrow0, Rrow1);
     for (a = 0; a < 4; ++a) {
         if (!isfinite(Rrow0[a]) || !isfinite(Rrow1[a])) {
             return PRJ_FLUX_GR_M1_STATE_BUILD_FAIL;
@@ -1710,14 +1705,14 @@ static enum prj_flux_gr_m1_state_status prj_flux_gr_m1_closure_direct_checked(
 #ifndef PRJ_DEBUG
 static inline void prj_flux_gr_m1_closure_direct_fast(
     const prj_flux_gr_m1_face_cache *face, double E, const double Fcon[3],
-    double U[4], double F[4])
+    double Fmag, double U[4], double F[4])
 {
     double Rrow0[4];
     double Rrow1[4];
     int a;
     int b;
 
-    prj_flux_gr_m1_R_rows(face, E, Fcon, Rrow0, Rrow1);
+    prj_flux_gr_m1_R_rows(face, E, Fcon, Fmag, Rrow0, Rrow1);
     for (a = 0; a < 3; ++a) {
         double mixed0 = 0.0;
         double mixed1 = 0.0;
@@ -1733,6 +1728,39 @@ static inline void prj_flux_gr_m1_closure_direct_fast(
     F[0] = face->c_alpha_alpha_sqrt_gamma * Rrow0[1];
 }
 #endif
+
+int prj_flux_gr_m1_closure_test_wrapper(const prj_z4c_hydro_geom *geom,
+    double E, const double Fcov[3], double U[4], double F[4])
+{
+    prj_flux_gr_m1_face_cache face;
+    double Fcon[3];
+    double F2 = 0.0;
+    double Fmag;
+    int a;
+
+    if (geom == 0 || Fcov == 0 || U == 0 || F == 0) {
+        return 0;
+    }
+    prj_flux_gr_m1_face_cache_init(geom, &face);
+    if (!face.metric_ok) {
+        return 0;
+    }
+    prj_flux_gr_m1_raise_vec(geom, Fcov, Fcon);
+    for (a = 0; a < 3; ++a) {
+        F2 += Fcov[a] * Fcon[a];
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+#ifdef PRJ_DEBUG
+    return prj_flux_gr_m1_closure_direct_checked(&face, E, Fcon, Fmag, U, F) ==
+        PRJ_FLUX_GR_M1_STATE_OK;
+#else
+    prj_flux_gr_m1_closure_direct_fast(&face, E, Fcon, Fmag, U, F);
+    return 1;
+#endif
+}
 
 #ifdef PRJ_DEBUG
 static void prj_flux_gr_m1_build_R_fail(const prj_z4c_hydro_geom *geom,
@@ -1795,7 +1823,7 @@ static inline void prj_flux_gr_m1_state_closure(
     (void)side;
 #ifdef PRJ_DEBUG
     if (prj_flux_gr_m1_closure_direct_checked(face, state->E,
-            state->Fcon, state->U, state->F) ==
+            state->Fcon, state->Fmag, state->U, state->F) ==
             PRJ_FLUX_GR_M1_STATE_BUILD_FAIL) {
         prj_flux_gr_m1_build_R_fail(geom, W, gidx, state->E, state->Fcov,
             state->Fcon, state->Fmag);
@@ -1805,7 +1833,7 @@ static inline void prj_flux_gr_m1_state_closure(
     (void)W;
     (void)gidx;
     prj_flux_gr_m1_closure_direct_fast(face, state->E, state->Fcon,
-        state->U, state->F);
+        state->Fmag, state->U, state->F);
 #endif
 }
 

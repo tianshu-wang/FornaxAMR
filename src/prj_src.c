@@ -467,13 +467,54 @@ static void prj_src_gr_m1_limit_state(const prj_z4c_hydro_geom *geom,
     }
 }
 
-static int prj_src_gr_m1_pressure_contractions(
-    const prj_z4c_hydro_geom *geom, double E, const double Fcon[3],
-    double *pK_out, double pDgamma[3])
+typedef struct prj_src_gr_m1_pressure_cache {
+    double trK;
+    double trDgamma[3];
+} prj_src_gr_m1_pressure_cache;
+
+static int prj_src_gr_m1_pressure_cache_init(
+    const prj_z4c_hydro_geom *geom, prj_src_gr_m1_pressure_cache *cache)
 {
-    double P[3][3];
+    int a;
+    int b;
+    int d;
+
+    if (geom == 0 || cache == 0) {
+        return 0;
+    }
+    cache->trK = 0.0;
+    for (d = 0; d < 3; ++d) {
+        cache->trDgamma[d] = 0.0;
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            double ginv = geom->gamma_inv[a][b];
+
+            if (!isfinite(geom->gamma[a][b]) || !isfinite(ginv) ||
+                !isfinite(geom->K_dd[a][b])) {
+                return 0;
+            }
+            cache->trK += ginv * geom->K_dd[a][b];
+            for (d = 0; d < 3; ++d) {
+                if (!isfinite(geom->dgamma[d][a][b])) {
+                    return 0;
+                }
+                cache->trDgamma[d] += ginv * geom->dgamma[d][a][b];
+            }
+        }
+    }
+    return 1;
+}
+
+static int prj_src_gr_m1_pressure_contractions_cached(
+    const prj_z4c_hydro_geom *geom,
+    const prj_src_gr_m1_pressure_cache *cache, double E,
+    const double Fcon[3], double *pK_out, double pDgamma[3])
+{
+    prj_rad_grm1_closure_coeffs coeffs;
     double F2 = 0.0;
-    double Fmag;
+    double FK = 0.0;
+    double FD[3] = {0.0, 0.0, 0.0};
     int a;
     int b;
     int d;
@@ -485,19 +526,8 @@ static int prj_src_gr_m1_pressure_contractions(
     for (d = 0; d < 3; ++d) {
         pDgamma[d] = 0.0;
     }
-    if (geom == 0 || Fcon == 0 || !isfinite(E) || E < 0.0) {
+    if (geom == 0 || cache == 0 || Fcon == 0 || !isfinite(E) || E < 0.0) {
         return 0;
-    }
-    for (a = 0; a < 3; ++a) {
-        if (!isfinite(Fcon[a])) {
-            return 0;
-        }
-        for (b = 0; b < 3; ++b) {
-            if (!isfinite(geom->gamma[a][b]) ||
-                !isfinite(geom->gamma_inv[a][b])) {
-                return 0;
-            }
-        }
     }
     if (E == 0.0) {
         for (a = 0; a < 3; ++a) {
@@ -508,38 +538,76 @@ static int prj_src_gr_m1_pressure_contractions(
         return 1;
     }
 
-    /* Spatial radiation pressure from the algebraic lab-frame Levermore
-     * closure.  In the local frame (n^a = (1,0,0,0)) the stress tensor's
-     * spatial block is exactly P^{ij}. */
     for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcon[a])) {
+            return 0;
+        }
         for (b = 0; b < 3; ++b) {
-            F2 += geom->gamma[a][b] * Fcon[a] * Fcon[b];
+            double FF = Fcon[a] * Fcon[b];
+
+            F2 += geom->gamma[a][b] * FF;
+            FK += geom->K_dd[a][b] * FF;
+            for (d = 0; d < 3; ++d) {
+                FD[d] += geom->dgamma[d][a][b] * FF;
+            }
         }
     }
     if (!isfinite(F2) || F2 < 0.0) {
         F2 = 0.0;
     }
-    Fmag = sqrt(F2);
-    prj_rad_grm1_pressure_lab(E, Fcon, Fmag, geom->gamma_inv, P);
-
-    for (a = 0; a < 3; ++a) {
-        for (b = 0; b < 3; ++b) {
-            double Pab = P[a][b];
-
-            if (!isfinite(Pab)) {
-                *pK_out = 0.0;
-                for (d = 0; d < 3; ++d) {
-                    pDgamma[d] = 0.0;
-                }
-                return 0;
-            }
-            *pK_out += Pab * geom->K_dd[a][b];
-            for (d = 0; d < 3; ++d) {
-                pDgamma[d] += Pab * geom->dgamma[d][a][b];
-            }
+    prj_rad_grm1_closure_coeffs_from_F2(E, F2, &coeffs);
+    *pK_out = coeffs.a_coef * cache->trK + coeffs.b_coef * FK;
+    for (d = 0; d < 3; ++d) {
+        pDgamma[d] = coeffs.a_coef * cache->trDgamma[d] +
+            coeffs.b_coef * FD[d];
+    }
+    if (!isfinite(*pK_out)) {
+        *pK_out = 0.0;
+        for (d = 0; d < 3; ++d) {
+            pDgamma[d] = 0.0;
+        }
+        return 0;
+    }
+    for (d = 0; d < 3; ++d) {
+        if (!isfinite(pDgamma[d])) {
+            *pK_out = 0.0;
+            pDgamma[0] = pDgamma[1] = pDgamma[2] = 0.0;
+            return 0;
         }
     }
     return 1;
+}
+
+static int prj_src_gr_m1_pressure_contractions(
+    const prj_z4c_hydro_geom *geom, double E, const double Fcon[3],
+    double *pK_out, double pDgamma[3])
+{
+    prj_src_gr_m1_pressure_cache cache;
+
+    if (!prj_src_gr_m1_pressure_cache_init(geom, &cache)) {
+        return 0;
+    }
+    return prj_src_gr_m1_pressure_contractions_cached(geom, &cache, E,
+        Fcon, pK_out, pDgamma);
+}
+
+int prj_src_gr_m1_pressure_contractions_test_wrapper(
+    const prj_z4c_hydro_geom *geom, double E, const double Fcov_in[3],
+    double *pK_out, double pDgamma[3])
+{
+    double Fcov[3];
+    double Fcon[3];
+    int a;
+
+    if (geom == 0 || Fcov_in == 0) {
+        return 0;
+    }
+    for (a = 0; a < 3; ++a) {
+        Fcov[a] = Fcov_in[a];
+    }
+    prj_src_gr_m1_limit_state(geom, &E, Fcov, Fcon);
+    return prj_src_gr_m1_pressure_contractions(geom, E, Fcon, pK_out,
+        pDgamma);
 }
 
 static void prj_src_gr_m1_z4c_cell(const prj_rad *rad, const prj_block *block,
@@ -548,10 +616,14 @@ static void prj_src_gr_m1_z4c_cell(const prj_rad *rad, const prj_block *block,
 {
     const double c = PRJ_CLIGHT;
     const double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    prj_src_gr_m1_pressure_cache pressure_cache;
     int field;
     int group;
 
     if (rad == 0 || block == 0 || geom == 0 || W_rad == 0 || rad_rhs == 0) {
+        return;
+    }
+    if (!prj_src_gr_m1_pressure_cache_init(geom, &pressure_cache)) {
         return;
     }
     (void)rad;
@@ -572,8 +644,8 @@ static void prj_src_gr_m1_z4c_cell(const prj_rad *rad, const prj_block *block,
             Fcov[2] = W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)];
 
             prj_src_gr_m1_limit_state(geom, &E, Fcov, Fcon);
-            (void)prj_src_gr_m1_pressure_contractions(geom, E, Fcon, &pK,
-                pDgamma);
+            (void)prj_src_gr_m1_pressure_contractions_cached(geom,
+                &pressure_cache, E, Fcon, &pK, pDgamma);
 
             /* Eq. 3.37/3.38 are written with c=1.  PRJ stores F_i as the
              * physical radiation flux, while K_ij and metric derivatives are

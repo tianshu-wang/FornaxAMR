@@ -1186,25 +1186,15 @@ void prj_rad_m1_pressure(const prj_rad *rad, double E, double F1, double F2, dou
 void prj_rad_grm1_pressure_lab(double E, const double Fcon[3],
     double Fmag, const double gamma_inv[3][3], double P[3][3])
 {
-    double cE = PRJ_CLIGHT * E;
-    double f = cE > 0.0 ? Fmag / cE : 0.0;
-    double s;
-    double a_coef;
-    double b_coef;
+    prj_rad_grm1_closure_coeffs coeffs;
     int i;
     int j;
 
-    if (!isfinite(f) || f < 0.0) {
-        f = 0.0;
-    } else if (f > 1.0) {
-        f = 1.0;
-    }
-    s = sqrt(4.0 - 3.0 * f * f);
-    a_coef = E * (s - 1.0) / 3.0;                              /* E a(f) */
-    b_coef = 3.0 / ((2.0 + s) * PRJ_CLIGHT * PRJ_CLIGHT * E);  /* b(f)/(c^2 E) */
+    prj_rad_grm1_closure_coeffs_from_F2(E, Fmag * Fmag, &coeffs);
     for (i = 0; i < 3; ++i) {
         for (j = 0; j < 3; ++j) {
-            P[i][j] = a_coef * gamma_inv[i][j] + b_coef * Fcon[i] * Fcon[j];
+            P[i][j] = coeffs.a_coef * gamma_inv[i][j] +
+                coeffs.b_coef * Fcon[i] * Fcon[j];
         }
     }
 }
@@ -1563,6 +1553,239 @@ fail:
     return 0;
 }
 
+typedef struct prj_rad_grm1_R_projector {
+    double ncon[4];
+    double gamma_inv[3][3];
+    double Fcon[3];
+    double E;
+    double a_coef;
+    double b_coef;
+    double da_dE;
+    double db_dE;
+    double s;
+    double D;
+    int zero_E;
+} prj_rad_grm1_R_projector;
+
+static int prj_rad_grm1_R_projector_init(const double g_cov[4][4],
+    const double g_con[4][4], const prj_rad_grm1_R_jac_geom *jac_geom,
+    double E, const double Fcov[3], prj_rad_grm1_R_projector *proj)
+{
+    double F2 = 0.0;
+    double Fmag;
+    double cE;
+    double f;
+    double f2;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    int a;
+    int i;
+    int j;
+
+    if (proj != 0) {
+        memset(proj, 0, sizeof(*proj));
+    }
+    if (g_cov == 0 || g_con == 0 || jac_geom == 0 || Fcov == 0 ||
+        proj == 0 || !isfinite(E) || E < 0.0) {
+        return 0;
+    }
+    proj->E = E;
+    for (a = 0; a < 4; ++a) {
+        proj->ncon[a] = jac_geom->ncon[a];
+    }
+    for (a = 0; a < 3; ++a) {
+        if (!isfinite(Fcov[a])) {
+            return 0;
+        }
+        proj->Fcon[a] = jac_geom->dFcon[a + 1][0] * Fcov[0] +
+            jac_geom->dFcon[a + 1][1] * Fcov[1] +
+            jac_geom->dFcon[a + 1][2] * Fcov[2];
+        if (!isfinite(proj->Fcon[a])) {
+            return 0;
+        }
+    }
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            proj->gamma_inv[i][j] = g_con[i + 1][j + 1] +
+                proj->ncon[i + 1] * proj->ncon[j + 1];
+        }
+    }
+    if (E == 0.0) {
+        for (a = 0; a < 3; ++a) {
+            if (proj->Fcon[a] != 0.0) {
+                return 0;
+            }
+        }
+        proj->zero_E = 1;
+        return 1;
+    }
+
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            F2 += g_cov[i + 1][j + 1] * proj->Fcon[i] * proj->Fcon[j];
+        }
+    }
+    if (!isfinite(F2) || F2 < 0.0) {
+        F2 = 0.0;
+    }
+    Fmag = sqrt(F2);
+    cE = PRJ_CLIGHT * E;
+    f = Fmag / cE;
+    if (!isfinite(f) || f < 0.0) {
+        f = 0.0;
+    } else if (f > 1.0) {
+        f = 1.0;
+    }
+    f2 = f * f;
+    proj->s = sqrt(4.0 - 3.0 * f2);
+    proj->a_coef = E * (proj->s - 1.0) / 3.0;
+    proj->b_coef = 3.0 / ((2.0 + proj->s) * c2 * E);
+    proj->D = (2.0 + proj->s) * E;
+    proj->da_dE = (proj->s - 1.0) / 3.0 + f2 / proj->s;
+    proj->db_dE = -3.0 * ((2.0 + proj->s) + 3.0 * f2 / proj->s) /
+        (c2 * proj->D * proj->D);
+    return isfinite(proj->a_coef) && isfinite(proj->b_coef) &&
+        isfinite(proj->da_dE) && isfinite(proj->db_dE);
+}
+
+static void prj_rad_grm1_R_projector_apply(
+    const prj_rad_grm1_R_projector *proj, const double cov[4], double out[4])
+{
+    double invc = 1.0 / PRJ_CLIGHT;
+    int i;
+    int j;
+
+    for (i = 0; i < 4; ++i) {
+        out[i] = 0.0;
+    }
+    if (proj == 0 || cov == 0 || proj->zero_E) {
+        return;
+    }
+    out[0] = proj->E * proj->ncon[0] * proj->ncon[0] * cov[0];
+    for (j = 0; j < 3; ++j) {
+        double R0j = proj->E * proj->ncon[0] * proj->ncon[j + 1] +
+            proj->ncon[0] * proj->Fcon[j] * invc;
+
+        out[0] += R0j * cov[j + 1];
+        out[j + 1] += R0j * cov[0];
+    }
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            double Pij = proj->a_coef * proj->gamma_inv[i][j] +
+                proj->b_coef * proj->Fcon[i] * proj->Fcon[j];
+            double Rij = proj->E * proj->ncon[i + 1] *
+                proj->ncon[j + 1] +
+                (proj->ncon[i + 1] * proj->Fcon[j] +
+                 proj->ncon[j + 1] * proj->Fcon[i]) * invc + Pij;
+
+            out[i + 1] += Rij * cov[j + 1];
+        }
+    }
+}
+
+static void prj_rad_grm1_R_projector_dR_u(
+    const prj_rad_grm1_R_projector *proj, const double g_con[4][4],
+    const prj_rad_grm1_R_jac_geom *jac_geom, const double ucov[4],
+    double dR_u[4][4], double dRuu[4])
+{
+    double invc = 1.0 / PRJ_CLIGHT;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    int a;
+    int b;
+    int cc;
+    int i;
+    int j;
+    int m;
+
+    memset(dR_u, 0, 16 * sizeof(double));
+    for (cc = 0; cc < 4; ++cc) {
+        dRuu[cc] = 0.0;
+    }
+    if (proj == 0 || jac_geom == 0 || ucov == 0) {
+        return;
+    }
+
+    if (proj->zero_E) {
+        double dFcon[4][3] = {{0.0}};
+
+        for (a = 0; a < 3; ++a) {
+            for (b = 0; b < 3; ++b) {
+                dFcon[b + 1][a] = jac_geom->dFcon[b + 1][a];
+            }
+        }
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                double dR = ((4.0 / 3.0) * proj->ncon[a] *
+                    proj->ncon[b]) + (g_con[a][b] / 3.0);
+
+                dR_u[0][a] += dR * ucov[b];
+            }
+        }
+        for (cc = 1; cc < 4; ++cc) {
+            int jc = cc - 1;
+
+            for (a = 0; a < 4; ++a) {
+                for (b = 0; b < 4; ++b) {
+                    double dR = (dFcon[a][jc] * proj->ncon[b] +
+                        proj->ncon[a] * dFcon[b][jc]) * invc;
+
+                    dR_u[cc][a] += dR * ucov[b];
+                }
+            }
+        }
+        for (cc = 0; cc < 4; ++cc) {
+            for (a = 0; a < 4; ++a) {
+                dRuu[cc] += dR_u[cc][a] * ucov[a];
+            }
+        }
+        return;
+    }
+
+    for (cc = 0; cc < 4; ++cc) {
+        dR_u[cc][0] = jac_geom->T[cc][0] * ucov[0];
+        for (a = 0; a < 3; ++a) {
+            dR_u[cc][0] += jac_geom->T[cc][a + 1] * ucov[a + 1];
+            dR_u[cc][a + 1] = jac_geom->T[cc][a + 1] * ucov[0];
+        }
+    }
+
+    for (i = 0; i < 3; ++i) {
+        for (j = 0; j < 3; ++j) {
+            double dR = proj->ncon[i + 1] * proj->ncon[j + 1] +
+                proj->da_dE * proj->gamma_inv[i][j] +
+                proj->db_dE * proj->Fcon[i] * proj->Fcon[j];
+
+            dR_u[0][i + 1] += dR * ucov[j + 1];
+        }
+    }
+
+    for (m = 0; m < 3; ++m) {
+        double gm = proj->Fcon[m];
+        double da_dFm = -gm / (proj->s * c2 * proj->E);
+        double dD_dFm = -3.0 * gm / (proj->s * c2 * proj->E);
+        double db_dFm = -3.0 * dD_dFm / (c2 * proj->D * proj->D);
+
+        for (i = 0; i < 3; ++i) {
+            for (j = 0; j < 3; ++j) {
+                double dR =
+                    (proj->ncon[i + 1] * proj->gamma_inv[j][m] +
+                     proj->ncon[j + 1] * proj->gamma_inv[i][m]) * invc +
+                    da_dFm * proj->gamma_inv[i][j] +
+                    db_dFm * proj->Fcon[i] * proj->Fcon[j] +
+                    proj->b_coef * (proj->gamma_inv[i][m] *
+                        proj->Fcon[j] + proj->Fcon[i] *
+                        proj->gamma_inv[j][m]);
+
+                dR_u[m + 1][i + 1] += dR * ucov[j + 1];
+            }
+        }
+    }
+    for (cc = 0; cc < 4; ++cc) {
+        for (a = 0; a < 4; ++a) {
+            dRuu[cc] += dR_u[cc][a] * ucov[a];
+        }
+    }
+}
+
 typedef struct prj_rad_grm1_m3_data {
     double ucon[4];
     double ucov[4];
@@ -1803,7 +2026,133 @@ typedef struct prj_rad_gr_m1_freq_drift_cache {
     double mom_Y[3][3];
     double mom_X[3][3][3];
     double mom_W[3][3][3][3];
+    double qcoef[4][4][4][4];
+    double q_uuu[4];
+    double q_H[4][4];
+    double q_L[4][4][4];
+    double q_h[4][4];
 } prj_rad_gr_m1_freq_drift_cache;
+
+static void prj_rad_gr_m1_freq_qcoef_add(
+    prj_rad_gr_m1_freq_drift_cache *cache, int out,
+    int a, int b, int c, double value)
+{
+    cache->qcoef[out][a][b][c] += value;
+}
+
+static void prj_rad_gr_m1_freq_drift_precontract(
+    prj_rad_gr_m1_freq_drift_cache *cache)
+{
+    int out;
+    int a;
+    int b;
+    int c;
+    int x;
+    int i;
+    int j;
+    int k;
+
+    memset(cache->qcoef, 0, sizeof(cache->qcoef));
+    memset(cache->q_uuu, 0, sizeof(cache->q_uuu));
+    memset(cache->q_H, 0, sizeof(cache->q_H));
+    memset(cache->q_L, 0, sizeof(cache->q_L));
+    memset(cache->q_h, 0, sizeof(cache->q_h));
+
+    prj_rad_gr_m1_freq_qcoef_add(cache, 0, 0, 0, 0, cache->energy_Z);
+    for (x = 0; x < 3; ++x) {
+        prj_rad_gr_m1_freq_qcoef_add(cache, 0, 0, 0, x + 1,
+            cache->energy_Y[x]);
+        for (i = 0; i < 3; ++i) {
+            prj_rad_gr_m1_freq_qcoef_add(cache, 0, 0, x + 1, i + 1,
+                cache->energy_X[x][i]);
+        }
+    }
+    for (j = 0; j < 3; ++j) {
+        int out_mom = j + 1;
+
+        for (x = 0; x < 3; ++x) {
+            prj_rad_gr_m1_freq_qcoef_add(cache, out_mom, 0, 0, x + 1,
+                cache->mom_Y[j][x]);
+            for (i = 0; i < 3; ++i) {
+                prj_rad_gr_m1_freq_qcoef_add(cache, out_mom, 0, x + 1,
+                    i + 1, cache->mom_X[j][x][i]);
+            }
+        }
+        for (a = 0; a < 3; ++a) {
+            for (k = 0; k < 3; ++k) {
+                for (i = 0; i < 3; ++i) {
+                    prj_rad_gr_m1_freq_qcoef_add(cache, out_mom, a + 1,
+                        k + 1, i + 1, cache->mom_W[j][a][k][i]);
+                }
+            }
+        }
+    }
+
+    for (out = 0; out < 4; ++out) {
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                for (c = 0; c < 4; ++c) {
+                    double q = cache->qcoef[out][a][b][c];
+
+                    if (q == 0.0) {
+                        continue;
+                    }
+                    cache->q_uuu[out] += q * cache->ucon[a] *
+                        cache->ucon[b] * cache->ucon[c];
+                    cache->q_H[out][a] += q * cache->ucon[b] *
+                        cache->ucon[c];
+                    cache->q_H[out][b] += q * cache->ucon[a] *
+                        cache->ucon[c];
+                    cache->q_H[out][c] += q * cache->ucon[a] *
+                        cache->ucon[b];
+                    cache->q_L[out][a][b] += q * cache->ucon[c];
+                    cache->q_L[out][a][c] += q * cache->ucon[b];
+                    cache->q_L[out][b][c] += q * cache->ucon[a];
+                    cache->q_h[out][a] += q * cache->hcon[b][c];
+                    cache->q_h[out][b] += q * cache->hcon[a][c];
+                    cache->q_h[out][c] += q * cache->hcon[a][b];
+                }
+            }
+        }
+    }
+}
+
+static double prj_rad_gr_m1_freq_m3_contract(
+    const prj_rad_gr_m1_freq_drift_cache *cache,
+    const prj_rad_grm1_m3_data *m3, int out)
+{
+    double value;
+    int a;
+    int b;
+
+    value = m3->J * cache->q_uuu[out];
+    for (a = 0; a < 4; ++a) {
+        value += m3->H[a] * cache->q_H[out][a];
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            value += m3->L[a][b] * cache->q_L[out][a][b];
+        }
+    }
+    if (m3->inv_Hnorm3 > 0.0) {
+        double cubic = 0.0;
+        int c;
+
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                for (c = 0; c < 4; ++c) {
+                    cubic += cache->qcoef[out][a][b][c] * m3->H[a] *
+                        m3->H[b] * m3->H[c];
+                }
+            }
+        }
+        value += m3->thin_w * m3->J * m3->inv_Hnorm3 * cubic;
+    }
+    for (a = 0; a < 4; ++a) {
+        value += 0.2 * m3->thick_w * m3->H[a] * cache->q_h[out][a];
+    }
+    return value;
+}
 
 static void prj_rad_gr_m1_freq_drift_cache_init(
     const prj_rad_gr_m1_closure_ctx *ctx,
@@ -1970,6 +2319,7 @@ static void prj_rad_gr_m1_freq_drift_cache_init(
             }
         }
     }
+    prj_rad_gr_m1_freq_drift_precontract(cache);
 }
 
 static void prj_rad_grm1_prepare_m3_data_freq(
@@ -2080,12 +2430,11 @@ static void prj_rad_grm1_prepare_m3_data_freq(
     m3->thick_w = 1.5 * (1.0 - chi);
 }
 
-static void prj_rad_gr_m1_frequency_drifts_cached(
-    const prj_rad_gr_m1_freq_drift_cache *cache, double E_in,
-    const double Fcov_in[3], double *energy_drift,
+static void prj_rad_gr_m1_frequency_drifts_component_ref(
+    const prj_rad_gr_m1_freq_drift_cache *cache,
+    const prj_rad_grm1_m3_data *m3, double *energy_drift,
     double momentum_drift_cov[3])
 {
-    prj_rad_grm1_m3_data m3;
     double Ycon[3];
     double Xcon[3][3];
     double energy;
@@ -2101,17 +2450,16 @@ static void prj_rad_gr_m1_frequency_drifts_cached(
         momentum_drift_cov[j] = 0.0;
         momentum[j] = 0.0;
     }
-    prj_rad_grm1_prepare_m3_data_freq(cache, E_in, Fcov_in, &m3);
-    if (m3.J == 0.0) {
+    if (m3 == 0 || m3->J == 0.0) {
         return;
     }
 
-    energy = cache->energy_Z * prj_rad_grm1_m3_component(&m3, 0, 0, 0);
+    energy = cache->energy_Z * prj_rad_grm1_m3_component(m3, 0, 0, 0);
     for (x = 0; x < 3; ++x) {
-        Ycon[x] = prj_rad_grm1_m3_component(&m3, 0, 0, x + 1);
+        Ycon[x] = prj_rad_grm1_m3_component(m3, 0, 0, x + 1);
         energy += cache->energy_Y[x] * Ycon[x];
         for (i = 0; i < 3; ++i) {
-            Xcon[x][i] = prj_rad_grm1_m3_component(&m3, 0, x + 1, i + 1);
+            Xcon[x][i] = prj_rad_grm1_m3_component(m3, 0, x + 1, i + 1);
             energy += cache->energy_X[x][i] * Xcon[x][i];
         }
     }
@@ -2126,7 +2474,7 @@ static void prj_rad_gr_m1_frequency_drifts_cached(
     for (a = 0; a < 3; ++a) {
         for (k = 0; k < 3; ++k) {
             for (i = 0; i < 3; ++i) {
-                double Wcon = prj_rad_grm1_m3_component(&m3, a + 1, k + 1,
+                double Wcon = prj_rad_grm1_m3_component(m3, a + 1, k + 1,
                     i + 1);
 
                 for (j = 0; j < 3; ++j) {
@@ -2138,6 +2486,32 @@ static void prj_rad_gr_m1_frequency_drifts_cached(
     *energy_drift = PRJ_CLIGHT * energy;
     for (j = 0; j < 3; ++j) {
         momentum_drift_cov[j] = PRJ_CLIGHT * PRJ_CLIGHT * momentum[j];
+    }
+}
+
+static void prj_rad_gr_m1_frequency_drifts_cached(
+    const prj_rad_gr_m1_freq_drift_cache *cache, double E_in,
+    const double Fcov_in[3], double *energy_drift,
+    double momentum_drift_cov[3])
+{
+    prj_rad_grm1_m3_data m3;
+    double energy;
+    int j;
+
+    *energy_drift = 0.0;
+    for (j = 0; j < 3; ++j) {
+        momentum_drift_cov[j] = 0.0;
+    }
+    prj_rad_grm1_prepare_m3_data_freq(cache, E_in, Fcov_in, &m3);
+    if (m3.J == 0.0) {
+        return;
+    }
+
+    energy = prj_rad_gr_m1_freq_m3_contract(cache, &m3, 0);
+    *energy_drift = PRJ_CLIGHT * energy;
+    for (j = 0; j < 3; ++j) {
+        momentum_drift_cov[j] = PRJ_CLIGHT * PRJ_CLIGHT *
+            prj_rad_gr_m1_freq_m3_contract(cache, &m3, j + 1);
     }
 }
 
@@ -4827,10 +5201,11 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
             double E = P[pidx];
             double xe = rad->x_e[field][group];
             double Fcov[3];
-            double Rcon[4][4];
-            double dRcon[4][4][4];
+            prj_rad_grm1_R_projector Rproj;
             double R_u[4];
             double Ruu = 0.0;
+            double dR_u_rad[PRJ_RAD_GR_M1_NRAD_BLOCK][4];
+            double dRuu_rad[PRJ_RAD_GR_M1_NRAD_BLOCK];
             double Gcon[4];
             double kappa_eff = kappa[idx];
             double sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
@@ -4855,16 +5230,25 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                     return 0;
                 }
             }
-            if (!prj_rad_grm1_build_R_jac(g_cov, g_con, &R_jac_geom,
-                    E, Fcov, Rcon, dRcon)) {
+            if (!prj_rad_grm1_R_projector_init(g_cov, g_con, &R_jac_geom,
+                    E, Fcov, &Rproj)) {
                 return 0;
             }
+            prj_rad_grm1_R_projector_apply(&Rproj, ucov, R_u);
             for (a = 0; a < 4; ++a) {
-                R_u[a] = 0.0;
-                for (b = 0; b < 4; ++b) {
-                    R_u[a] += Rcon[a][b] * ucov[b];
-                }
                 Ruu += R_u[a] * ucov[a];
+            }
+            prj_rad_grm1_R_projector_dR_u(&Rproj, g_con, &R_jac_geom,
+                ucov, dR_u_rad, dRuu_rad);
+            for (a = 0; a < 4; ++a) {
+                if (!isfinite(R_u[a]) || !isfinite(dRuu_rad[a])) {
+                    return 0;
+                }
+                for (b = 0; b < 4; ++b) {
+                    if (!isfinite(dR_u_rad[a][b])) {
+                        return 0;
+                    }
+                }
             }
             scalar = sigma_eff * Ruu + eta[idx] / c;
             if (!isfinite(kappa_eff) || !isfinite(sigma_eff) ||
@@ -4934,6 +5318,7 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                      ++block_col) {
                     double dR_u[4] = {0.0, 0.0, 0.0, 0.0};
                     double dRuu = 0.0;
+                    double ducov_col[4];
                     double dscalar;
                     double dGcon[4];
                     double dGn = 0.0;
@@ -4941,11 +5326,13 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                     double dGgamma[3] = {0.0, 0.0, 0.0};
 
                     for (a = 0; a < 4; ++a) {
+                        ducov_col[a] = ducov[a][block_col];
+                    }
+                    prj_rad_grm1_R_projector_apply(&Rproj, ducov_col,
+                        dR_u);
+                    for (a = 0; a < 4; ++a) {
                         double ducov_an = ducov[a][block_col];
 
-                        for (b = 0; b < 4; ++b) {
-                            dR_u[a] += Rcon[a][b] * ducov[b][block_col];
-                        }
                         dRuu += dR_u[a] * ucov[a] + R_u[a] * ducov_an;
                     }
                     dscalar = dsigma_eff_col[block_col] * Ruu +
@@ -4981,20 +5368,14 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                  * exact algebraic M1 closure derivative contributes. */
                 for (block_col = 0; block_col < PRJ_RAD_GR_M1_NRAD_BLOCK;
                      ++block_col) {
-                    double dR_u[4] = {0.0, 0.0, 0.0, 0.0};
-                    double dRuu = 0.0;
+                    const double *dR_u = dR_u_rad[block_col];
+                    double dRuu = dRuu_rad[block_col];
                     double dscalar;
                     double dGcon[4];
                     double dGn = 0.0;
                     double dGu = 0.0;
                     double dGgamma[3] = {0.0, 0.0, 0.0};
 
-                    for (a = 0; a < 4; ++a) {
-                        for (b = 0; b < 4; ++b) {
-                            dR_u[a] += dRcon[block_col][a][b] * ucov[b];
-                        }
-                        dRuu += dR_u[a] * ucov[a];
-                    }
                     dscalar = sigma_eff * dRuu;
                     for (a = 0; a < 4; ++a) {
                         dGcon[a] = -kt * dR_u[a] - dscalar * ucon[a];
@@ -7464,6 +7845,237 @@ static int prj_rad_gr_m1_copy_radiation_cons_to_prim(
                 inv_sqrtg * u[PRJ_CONS_RAD_F2(field, group)];
             prim[PRJ_PRIM_RAD_F3(field, group)] =
                 inv_sqrtg * u[PRJ_CONS_RAD_F3(field, group)];
+        }
+    }
+    return 1;
+}
+
+static void prj_rad_gr_m1_copy_m3_test_outputs(
+    const prj_rad_grm1_m3_data *m3, double *J_out, double H_out[4],
+    double L_out[4][4], double Q_out[4][4][4])
+{
+    int a;
+    int b;
+    int c;
+
+    if (J_out != 0) {
+        *J_out = m3 != 0 ? m3->J : 0.0;
+    }
+    if (H_out != 0) {
+        for (a = 0; a < 4; ++a) {
+            H_out[a] = m3 != 0 ? m3->H[a] : 0.0;
+        }
+    }
+    if (L_out != 0) {
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                L_out[a][b] = m3 != 0 ? m3->L[a][b] : 0.0;
+            }
+        }
+    }
+    if (Q_out != 0) {
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                for (c = 0; c < 4; ++c) {
+                    Q_out[a][b][c] = m3 != 0 ?
+                        prj_rad_grm1_m3_component(m3, a, b, c) : 0.0;
+                }
+            }
+        }
+    }
+}
+
+int prj_rad_gr_m1_m3_from_build_R_test_wrapper(
+    const prj_rad_gr_m1_closure_ctx *ctx, double E, const double Fcov[3],
+    double *J_out, double H_out[4], double L_out[4][4],
+    double Q_out[4][4][4])
+{
+    prj_rad_gr_m1_side_data side;
+    prj_rad_grm1_m3_data m3;
+    double g_cov[4][4];
+    double g_con[4][4];
+    double Rcon[4][4];
+    double ucon[4];
+
+    prj_rad_gr_m1_copy_m3_test_outputs(0, J_out, H_out, L_out, Q_out);
+    if (ctx == 0 || Fcov == 0) {
+        return 0;
+    }
+    prj_rad_gr_m1_prepare_side(ctx, &side);
+    if (!prj_rad_grm1_build_R_from_ctx(ctx, E, Fcov, g_cov, g_con,
+            Rcon, 0)) {
+        return 0;
+    }
+    prj_rad_grm1_ucon_from_side(&side, ucon);
+    if (!prj_rad_grm1_prepare_m3_data(g_cov, g_con, ucon, Rcon, &m3)) {
+        return 0;
+    }
+    prj_rad_gr_m1_copy_m3_test_outputs(&m3, J_out, H_out, L_out, Q_out);
+    return 1;
+}
+
+int prj_rad_gr_m1_freq_m3_test_wrapper(
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_z4c_hydro_geom *geom, double E, const double Fcov[3],
+    double *J_out, double H_out[4], double L_out[4][4],
+    double Q_out[4][4][4])
+{
+    prj_rad_gr_m1_side_data side;
+    prj_rad_gr_m1_freq_drift_cache cache;
+    prj_rad_grm1_m3_data m3;
+    double observer_time_derivative[4] = {0.0, 0.0, 0.0, 0.0};
+
+    prj_rad_gr_m1_copy_m3_test_outputs(0, J_out, H_out, L_out, Q_out);
+    if (ctx == 0 || geom == 0 || Fcov == 0) {
+        return 0;
+    }
+    prj_rad_gr_m1_prepare_side(ctx, &side);
+    prj_rad_gr_m1_freq_drift_cache_init(ctx, &side, geom,
+        observer_time_derivative, &cache);
+    prj_rad_grm1_prepare_m3_data_freq(&cache, E, Fcov, &m3);
+    prj_rad_gr_m1_copy_m3_test_outputs(&m3, J_out, H_out, L_out, Q_out);
+    return 1;
+}
+
+int prj_rad_gr_m1_freq_drift_test_wrapper(
+    const prj_rad_gr_m1_closure_ctx *ctx,
+    const prj_z4c_hydro_geom *geom, double E, const double Fcov[3],
+    double fast[4], double ref[4])
+{
+    prj_rad_gr_m1_side_data side;
+    prj_rad_gr_m1_freq_drift_cache cache;
+    prj_rad_grm1_m3_data m3;
+    double observer_time_derivative[4] = {0.0, 0.0, 0.0, 0.0};
+    int a;
+
+    if (fast != 0) {
+        for (a = 0; a < 4; ++a) {
+            fast[a] = 0.0;
+        }
+    }
+    if (ref != 0) {
+        for (a = 0; a < 4; ++a) {
+            ref[a] = 0.0;
+        }
+    }
+    if (ctx == 0 || geom == 0 || Fcov == 0 || fast == 0 || ref == 0) {
+        return 0;
+    }
+    prj_rad_gr_m1_prepare_side(ctx, &side);
+    prj_rad_gr_m1_freq_drift_cache_init(ctx, &side, geom,
+        observer_time_derivative, &cache);
+    prj_rad_gr_m1_frequency_drifts_cached(&cache, E, Fcov, &fast[0],
+        &fast[1]);
+    prj_rad_grm1_prepare_m3_data_freq(&cache, E, Fcov, &m3);
+    prj_rad_gr_m1_frequency_drifts_component_ref(&cache, &m3, &ref[0],
+        &ref[1]);
+    return 1;
+}
+
+int prj_rad_gr_m1_build_R_jac_test_wrapper(
+    const prj_z4c_hydro_geom *geom, double E, const double Fcov[3],
+    double Rcon[4][4])
+{
+    double g_cov[4][4];
+    double g_con[4][4];
+    double dRcon[4][4][4];
+    prj_rad_grm1_R_jac_geom R_jac_geom;
+
+    if (Rcon != 0) {
+        memset(Rcon, 0, 16 * sizeof(double));
+    }
+    if (geom == 0 || Fcov == 0 || Rcon == 0 ||
+        !isfinite(geom->alpha) || geom->alpha <= 0.0) {
+        return 0;
+    }
+    prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
+    prj_rad_grm1_R_jac_geom_init(geom->alpha, g_con, geom->gamma_inv,
+        &R_jac_geom);
+    return prj_rad_grm1_build_R_jac(g_cov, g_con, &R_jac_geom, E, Fcov,
+        Rcon, dRcon);
+}
+
+int prj_rad_gr_m1_projected_jac_test_wrapper(
+    const prj_z4c_hydro_geom *geom, double E, const double Fcov[3],
+    const double cov[4], double R_u[4], double dR_u[4][4],
+    double dRuu[4])
+{
+    double g_cov[4][4];
+    double g_con[4][4];
+    prj_rad_grm1_R_jac_geom R_jac_geom;
+    prj_rad_grm1_R_projector Rproj;
+
+    if (R_u != 0) {
+        memset(R_u, 0, 4 * sizeof(double));
+    }
+    if (dR_u != 0) {
+        memset(dR_u, 0, 16 * sizeof(double));
+    }
+    if (dRuu != 0) {
+        memset(dRuu, 0, 4 * sizeof(double));
+    }
+    if (geom == 0 || Fcov == 0 || cov == 0 || R_u == 0 || dR_u == 0 ||
+        dRuu == 0 || !isfinite(geom->alpha) || geom->alpha <= 0.0) {
+        return 0;
+    }
+    prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
+    prj_rad_grm1_R_jac_geom_init(geom->alpha, g_con, geom->gamma_inv,
+        &R_jac_geom);
+    if (!prj_rad_grm1_R_projector_init(g_cov, g_con, &R_jac_geom, E,
+            Fcov, &Rproj)) {
+        return 0;
+    }
+    prj_rad_grm1_R_projector_apply(&Rproj, cov, R_u);
+    prj_rad_grm1_R_projector_dR_u(&Rproj, g_con, &R_jac_geom, cov, dR_u,
+        dRuu);
+    return 1;
+}
+
+int prj_rad_gr_m1_full_jac_projection_test_wrapper(
+    const prj_z4c_hydro_geom *geom, double E, const double Fcov[3],
+    const double cov[4], double R_u[4], double dR_u[4][4],
+    double dRuu[4])
+{
+    double g_cov[4][4];
+    double g_con[4][4];
+    double Rcon[4][4];
+    double dRcon[4][4][4];
+    prj_rad_grm1_R_jac_geom R_jac_geom;
+    int a;
+    int b;
+    int cc;
+
+    if (R_u != 0) {
+        memset(R_u, 0, 4 * sizeof(double));
+    }
+    if (dR_u != 0) {
+        memset(dR_u, 0, 16 * sizeof(double));
+    }
+    if (dRuu != 0) {
+        memset(dRuu, 0, 4 * sizeof(double));
+    }
+    if (geom == 0 || Fcov == 0 || cov == 0 || R_u == 0 || dR_u == 0 ||
+        dRuu == 0 || !isfinite(geom->alpha) || geom->alpha <= 0.0) {
+        return 0;
+    }
+    prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
+    prj_rad_grm1_R_jac_geom_init(geom->alpha, g_con, geom->gamma_inv,
+        &R_jac_geom);
+    if (!prj_rad_grm1_build_R_jac(g_cov, g_con, &R_jac_geom, E, Fcov,
+            Rcon, dRcon)) {
+        return 0;
+    }
+    for (a = 0; a < 4; ++a) {
+        for (b = 0; b < 4; ++b) {
+            R_u[a] += Rcon[a][b] * cov[b];
+        }
+    }
+    for (cc = 0; cc < 4; ++cc) {
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                dR_u[cc][a] += dRcon[cc][a][b] * cov[b];
+            }
+            dRuu[cc] += dR_u[cc][a] * cov[a];
         }
     }
     return 1;
