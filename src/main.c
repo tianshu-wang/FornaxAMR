@@ -187,6 +187,8 @@ static void prj_amr_estimator_label(const prj_sim *sim, char *label, size_t labe
             } else {
                 name = "fractional_jump_density";
             }
+        } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_Z4C_DCHI) {
+            name = "z4c_dchi";
         } else if (sim->mesh.amr_estimator[i] == PRJ_AMR_ESTIMATOR_VELOCITY) {
             name = "velocity";
         } else {

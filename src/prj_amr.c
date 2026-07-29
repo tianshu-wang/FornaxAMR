@@ -82,6 +82,17 @@ static int prj_clamp_storage_index(int idx)
     return idx;
 }
 
+static int prj_clamp_z4c_storage_index(int idx)
+{
+    if (idx < -PRJ_NGHOST_Z4C) {
+        return -PRJ_NGHOST_Z4C;
+    }
+    if (idx >= PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C) {
+        return PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C - 1;
+    }
+    return idx;
+}
+
 static int prj_is_active_block(const prj_block *b)
 {
     return b != 0 && b->id >= 0 && b->active == 1;
@@ -933,6 +944,31 @@ static double prj_velocity_cell_indicator(
     return max_indicator;
 }
 
+static double prj_z4c_chi_at(const double *z, int i, int j, int k)
+{
+    i = prj_clamp_z4c_storage_index(i);
+    j = prj_clamp_z4c_storage_index(j);
+    k = prj_clamp_z4c_storage_index(k);
+    return z[Z4CIDX(PRJ_Z4C_CHI, i, j, k)];
+}
+
+static double prj_z4c_dchi_cell_indicator(const prj_block *b, int i, int j, int k)
+{
+    const double *z = prj_block_z4c_stage_const(b, 0);
+    double dx;
+    double dy;
+    double dz;
+
+    if (z == 0) {
+        return 0.0;
+    }
+
+    dx = prj_z4c_chi_at(z, i + 1, j, k) - prj_z4c_chi_at(z, i - 1, j, k);
+    dy = prj_z4c_chi_at(z, i, j + 1, k) - prj_z4c_chi_at(z, i, j - 1, k);
+    dz = prj_z4c_chi_at(z, i, j, k + 1) - prj_z4c_chi_at(z, i, j, k - 1);
+    return prj_sqrt_double(dx * dx + dy * dy + dz * dz);
+}
+
 static double prj_pressure_scale_height_cell_indicator(
     const prj_mesh *mesh, const prj_block *b, int i, int j, int k)
 {
@@ -1083,6 +1119,9 @@ static double prj_amr_cell_indicator_for_estimator(
     }
     if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_VELOCITY) {
         return prj_velocity_cell_indicator(mesh, b, eos, i, j, k);
+    }
+    if (mesh != 0 && estimator == PRJ_AMR_ESTIMATOR_Z4C_DCHI) {
+        return prj_z4c_dchi_cell_indicator(b, i, j, k);
     }
     return prj_loehner_cell_indicator(
         mesh, b, eos, mesh->amr_lohner_var[amr_idx], mesh->amr_lohner_eps[amr_idx], i, j, k);

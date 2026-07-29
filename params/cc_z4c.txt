@@ -34,6 +34,10 @@ amr_estimator = pressure_scale_height
 amr_refine_thresh = 0.25
 amr_derefine_thresh = 0.0
 
+amr_estimator2 = z4c_dchi
+amr_refine_thresh2 = 0.01
+amr_derefine_thresh2 = 0.0
+
 use_amr_angular_resolution_limit = 1
 
 eos_type = table

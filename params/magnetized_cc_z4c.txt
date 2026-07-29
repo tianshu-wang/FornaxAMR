@@ -43,6 +43,10 @@ amr_estimator3 = velocity
 amr_refine_thresh3 = 0.4
 amr_derefine_thresh3 = 0.0
 
+amr_estimator4 = z4c_dchi
+amr_refine_thresh4 = 0.01
+amr_derefine_thresh4 = 0.0
+
 use_amr_angular_resolution_limit = 1
 
 amr_init_scale_factor = 0.2

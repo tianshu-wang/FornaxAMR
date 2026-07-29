@@ -105,6 +105,10 @@ static int prj_io_parse_amr_estimator(const char *value, int *amr_estimator)
         *amr_estimator = PRJ_AMR_ESTIMATOR_FRACTIONAL_JUMP;
         return 0;
     }
+    if (strcmp(value, "z4c_dchi") == 0) {
+        *amr_estimator = PRJ_AMR_ESTIMATOR_Z4C_DCHI;
+        return 0;
+    }
     return 1;
 }
 

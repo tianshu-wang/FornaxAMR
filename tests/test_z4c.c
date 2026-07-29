@@ -387,6 +387,73 @@ static void check_z4c_amr_transfer(void)
     prj_block_free_data(&parent);
 }
 
+static void set_z4c_chi_step(prj_block *block, double jump)
+{
+    double *z = prj_block_z4c_stage(block, 0);
+    int i;
+    int j;
+    int k;
+
+    for (i = -PRJ_NGHOST_Z4C; i < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++i) {
+        for (j = -PRJ_NGHOST_Z4C; j < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++j) {
+            for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
+                z[Z4CIDX(PRJ_Z4C_CHI, i, j, k)] = 1.0 + (i >= PRJ_BLOCK_SIZE / 2 ? jump : 0.0);
+            }
+        }
+    }
+}
+
+static void configure_z4c_dchi_amr(prj_mesh *mesh, double refine_thresh)
+{
+    int n;
+
+    for (n = 0; n < PRJ_AMR_N; ++n) {
+        mesh->amr_criterion_set[n] = 0;
+        mesh->amr_refine_thresh[n] = 0.0;
+        mesh->amr_derefine_thresh[n] = 0.0;
+    }
+    mesh->amr_estimator[0] = PRJ_AMR_ESTIMATOR_Z4C_DCHI;
+    mesh->amr_refine_thresh[0] = refine_thresh;
+    mesh->amr_derefine_thresh[0] = 0.0;
+    mesh->amr_criterion_set[0] = 1;
+}
+
+static void check_z4c_dchi_amr_tag(void)
+{
+    prj_mesh mesh;
+    prj_coord coord;
+    prj_block *block;
+
+    init_one_block_mesh(&mesh, &coord);
+    mesh.max_level = 1;
+    block = &mesh.blocks[0];
+    prj_z4c_init_mesh_flat(&mesh, 0);
+    configure_z4c_dchi_amr(&mesh, 0.01);
+    if (prj_amr_criteria_need_eosvar(&mesh) != 0) {
+        die("z4c_dchi AMR should not require EOS variables");
+    }
+
+    prj_amr_tag(&mesh, 0, 0);
+    if (block->refine_flag != 0) {
+        die("constant chi should not refine");
+    }
+
+    set_z4c_chi_step(block, 0.2);
+    configure_z4c_dchi_amr(&mesh, 0.05);
+    prj_amr_tag(&mesh, 0, 0);
+    if (block->refine_flag != 1) {
+        die("z4c_dchi jump should refine");
+    }
+
+    configure_z4c_dchi_amr(&mesh, 0.5);
+    prj_amr_tag(&mesh, 0, 0);
+    if (block->refine_flag != 0) {
+        die("z4c_dchi should respect high refine threshold");
+    }
+
+    prj_mesh_destroy(&mesh);
+}
+
 static void set_linear_sommerfeld_var(prj_block *block, int var, const double coeff[4])
 {
     double *z = prj_block_z4c_stage(block, 0);
@@ -899,6 +966,7 @@ int main(int argc, char **argv)
     check_flat_state();
     check_dt_includes_damping_terms();
     check_z4c_amr_transfer();
+    check_z4c_dchi_amr_tag();
     check_z4c_sommerfeld_rhs();
     check_rhs_hydro_matter_projection();
     check_rhs_hydro_matter_uses_minkowski_without_full_gr();
