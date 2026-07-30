@@ -1403,8 +1403,12 @@ static void prj_z4c_clear_block_aux(prj_block *block)
     }
 }
 
+enum {
+    PRJ_Z4C_AMR_PROLONG_MAX_N = 8
+};
+
 static void prj_z4c_amr_prolong_axis_weights(int parent_index, int fine_odd,
-    int *base, int *n, double w[5])
+    int *base, int *n, double w[PRJ_Z4C_AMR_PROLONG_MAX_N])
 {
 #if PRJ_NGHOST_Z4C == 2
     static const double pro[3] = {0.15625, 0.9375, -0.09375};
@@ -1416,13 +1420,20 @@ static void prj_z4c_amr_prolong_axis_weights(int parent_index, int fine_odd,
         w[q] = fine_odd ? pro[*n - 1 - q] : pro[q];
     }
 #elif PRJ_NGHOST_Z4C == 4
-    static const double pro[5] = {
-        -0.02197265625, 0.205078125, 0.9228515625, -0.123046875, 0.01708984375
+    static const double pro[8] = {
+        -429.0 / 262144.0,
+        4095.0 / 262144.0,
+        -19305.0 / 262144.0,
+        75075.0 / 262144.0,
+        225225.0 / 262144.0,
+        -27027.0 / 262144.0,
+        5005.0 / 262144.0,
+        -495.0 / 262144.0
     };
     int q;
 
-    *n = 5;
-    *base = parent_index - 2;
+    *n = 8;
+    *base = parent_index - (fine_odd ? 3 : 4);
     for (q = 0; q < *n; ++q) {
         w[q] = fine_odd ? pro[*n - 1 - q] : pro[q];
     }
@@ -1431,7 +1442,7 @@ static void prj_z4c_amr_prolong_axis_weights(int parent_index, int fine_odd,
     (void)fine_odd;
     *base = 0;
     *n = 0;
-    memset(w, 0, 5U * sizeof(*w));
+    memset(w, 0, (size_t)PRJ_Z4C_AMR_PROLONG_MAX_N * sizeof(*w));
 #endif
 }
 
@@ -1447,7 +1458,9 @@ static double prj_z4c_amr_prolong_value(const double *src, int var,
     int pk = gk / 2;
     int ibase, jbase, kbase;
     int ni, nj, nk;
-    double wi[5], wj[5], wk[5];
+    double wi[PRJ_Z4C_AMR_PROLONG_MAX_N];
+    double wj[PRJ_Z4C_AMR_PROLONG_MAX_N];
+    double wk[PRJ_Z4C_AMR_PROLONG_MAX_N];
     double out = 0.0;
     int ii, jj, kk;
 
@@ -1566,7 +1579,9 @@ static double prj_z4c_amr_prolong_slot_value(const double *src,
     int pk = k / 2 + slot->send_loc_start_z4c[2];
     int ibase, jbase, kbase;
     int ni, nj, nk;
-    double wi[5], wj[5], wk[5];
+    double wi[PRJ_Z4C_AMR_PROLONG_MAX_N];
+    double wj[PRJ_Z4C_AMR_PROLONG_MAX_N];
+    double wk[PRJ_Z4C_AMR_PROLONG_MAX_N];
     double out = 0.0;
     int ii, jj, kk;
 

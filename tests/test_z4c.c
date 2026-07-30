@@ -259,13 +259,27 @@ static void check_dt_includes_damping_terms(void)
     prj_mesh_destroy(&mesh);
 }
 
-static double z4c_linear_pattern(int var, double i, double j, double k, int stage)
+static double z4c_poly_axis(double x)
 {
-    return 100.0 * (double)(stage + 1) + 10.0 * (double)(var + 1) +
-        0.125 * i + 0.25 * j + 0.5 * k;
+    return (((((((0.071 * x - 0.043) * x + 0.019) * x - 0.031) * x +
+        0.053) * x - 0.079) * x + 0.097) * x - 0.113);
 }
 
-static void fill_z4c_linear(prj_block *block)
+static double z4c_poly_pattern(int var, double i, double j, double k, int stage)
+{
+    double x = 0.125 * i;
+    double y = 0.125 * j;
+    double z = 0.125 * k;
+    double cross = x * y * z + 0.25 * x * x * y * y * z -
+        0.125 * y * z * z * z;
+
+    return 100.0 * (double)(stage + 1) + 10.0 * (double)(var + 1) +
+        (1.0 + 0.01 * (double)(var + 1)) *
+        (z4c_poly_axis(x) + 0.75 * z4c_poly_axis(y + 0.125) -
+        0.5 * z4c_poly_axis(z - 0.25)) + 0.0625 * cross;
+}
+
+static void fill_z4c_polynomial(prj_block *block)
 {
     int stage, var, i, j, k;
 
@@ -277,7 +291,7 @@ static void fill_z4c_linear(prj_block *block)
                 for (k = -PRJ_NGHOST_Z4C; k < PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C; ++k) {
                     for (var = 0; var < PRJ_NZ4C; ++var) {
                         z[Z4CIDX(var, i, j, k)] =
-                            z4c_linear_pattern(var, (double)i, (double)j, (double)k, stage);
+                            z4c_poly_pattern(var, (double)i, (double)j, (double)k, stage);
                     }
                 }
             }
@@ -287,10 +301,22 @@ static void fill_z4c_linear(prj_block *block)
 
 static void init_allocated_test_block(prj_block *block, int id)
 {
+    int n;
+
     memset(block, 0, sizeof(*block));
     block->id = id;
     block->active = 1;
     block->rank = 0;
+    block->parent = -1;
+    for (n = 0; n < 8; ++n) {
+        block->children[n] = -1;
+    }
+    for (n = 0; n < 56; ++n) {
+        block->slot[n].id = -1;
+        block->slot[n].rank = 0;
+        block->slot[n].rel_level = 0;
+        block->slot[n].type = PRJ_NEIGHBOR_NONE;
+    }
     if (prj_block_alloc_data(block) != 0) {
         die("test block allocation failed");
     }
@@ -315,33 +341,42 @@ static void check_z4c_amr_transfer(void)
     prj_block children_storage[8];
     const prj_block *children[8];
     const int oct = 5;
-    const int i = 3, j = 4, k = 5;
-    const int var = PRJ_Z4C_THETA;
-    const int stage = 1;
+    const int restrict_var = PRJ_Z4C_THETA;
+    const int restrict_stage = 1;
     double *z_child;
     double expected;
-    int gi, gj, gk;
-    int pi, pj, pk;
+    int i, j, k, var, stage;
     int o;
 
     init_allocated_test_block(&parent, 100);
     init_allocated_test_block(&child, 101);
-    fill_z4c_linear(&parent);
+    fill_z4c_polynomial(&parent);
     prj_fill(child.z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
         (size_t)PRJ_BLOCK_NCELLS_Z4C, 42.0);
     prj_z4c_amr_prolongate_child(&parent, &child, oct);
-    z_child = prj_block_z4c_stage(&child, stage);
-    gi = ((oct & 1) ? PRJ_BLOCK_SIZE : 0) + i;
-    gj = ((oct & 2) ? PRJ_BLOCK_SIZE : 0) + j;
-    gk = ((oct & 4) ? PRJ_BLOCK_SIZE : 0) + k;
-    pi = gi / 2;
-    pj = gj / 2;
-    pk = gk / 2;
-    expected = z4c_linear_pattern(var,
-        (double)pi + ((gi & 1) ? 0.25 : -0.25),
-        (double)pj + ((gj & 1) ? 0.25 : -0.25),
-        (double)pk + ((gk & 1) ? 0.25 : -0.25), stage);
-    assert_close("z4c prolong", z_child[Z4CIDX(var, i, j, k)], expected, 1.0e-12);
+    for (stage = 0; stage < PRJ_BLOCK_NSTAGES; ++stage) {
+        z_child = prj_block_z4c_stage(&child, stage);
+        for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
+            int gi = ((oct & 1) ? PRJ_BLOCK_SIZE : 0) + i;
+            double x = (double)(gi / 2) + ((gi & 1) ? 0.25 : -0.25);
+
+            for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
+                int gj = ((oct & 2) ? PRJ_BLOCK_SIZE : 0) + j;
+                double y = (double)(gj / 2) + ((gj & 1) ? 0.25 : -0.25);
+
+                for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
+                    int gk = ((oct & 4) ? PRJ_BLOCK_SIZE : 0) + k;
+                    double z = (double)(gk / 2) + ((gk & 1) ? 0.25 : -0.25);
+
+                    for (var = 0; var < PRJ_NZ4C; ++var) {
+                        expected = z4c_poly_pattern(var, x, y, z, stage);
+                        assert_close("z4c prolong degree-7",
+                            z_child[Z4CIDX(var, i, j, k)], expected, 1.0e-10);
+                    }
+                }
+            }
+        }
+    }
     check_z4c_aux_cleared(&child);
 
     prj_fill(parent.z4c_rhs, (size_t)PRJ_BLOCK_NSTAGES * (size_t)PRJ_NZ4C *
@@ -372,12 +407,13 @@ static void check_z4c_amr_transfer(void)
         int ioff = (o & 1) ? PRJ_BLOCK_SIZE / 2 : 0;
         int joff = (o & 2) ? PRJ_BLOCK_SIZE / 2 : 0;
         int koff = (o & 4) ? PRJ_BLOCK_SIZE / 2 : 0;
-        double *z_parent = prj_block_z4c_stage(&parent, stage);
+        double *z_parent = prj_block_z4c_stage(&parent, restrict_stage);
 
-        expected = 1000.0 + 100.0 * (double)o + 10.0 * (double)stage +
-            0.01 * (double)var;
+        expected = 1000.0 + 100.0 * (double)o + 10.0 * (double)restrict_stage +
+            0.01 * (double)restrict_var;
         assert_close("z4c restrict",
-            z_parent[Z4CIDX(var, ioff + 1, joff + 1, koff + 1)], expected, 1.0e-12);
+            z_parent[Z4CIDX(restrict_var, ioff + 1, joff + 1, koff + 1)],
+            expected, 1.0e-12);
     }
     check_z4c_aux_cleared(&parent);
     for (o = 0; o < 8; ++o) {
@@ -385,6 +421,163 @@ static void check_z4c_amr_transfer(void)
     }
     prj_block_free_data(&child);
     prj_block_free_data(&parent);
+}
+
+static int z4c_test_fine_index_odd(int index)
+{
+    return (index % 2) != 0;
+}
+
+static double z4c_slot_parent_coord(const prj_neighbor *slot, int axis, int offset)
+{
+    int fine_index = offset + slot->recv_loc_start_z4c[axis];
+    int parent_index = offset / 2 + slot->send_loc_start_z4c[axis];
+
+    return (double)parent_index + (z4c_test_fine_index_odd(fine_index) ? 0.25 : -0.25);
+}
+
+static void set_test_block_box(prj_block *block, int level,
+    double x0, double x1, double y0, double y1, double z0, double z1)
+{
+    block->level = level;
+    block->xmin[0] = x0;
+    block->xmax[0] = x1;
+    block->xmin[1] = y0;
+    block->xmax[1] = y1;
+    block->xmin[2] = z0;
+    block->xmax[2] = z1;
+    block->dx[0] = (x1 - x0) / (double)PRJ_BLOCK_SIZE;
+    block->dx[1] = (y1 - y0) / (double)PRJ_BLOCK_SIZE;
+    block->dx[2] = (z1 - z0) / (double)PRJ_BLOCK_SIZE;
+}
+
+static void init_z4c_two_block_mesh(prj_mesh *mesh, int fine_on_high_side)
+{
+    prj_block *coarse;
+    prj_block *fine;
+    prj_neighbor *slot;
+    int d;
+
+    memset(mesh, 0, sizeof(*mesh));
+    prj_z4c_init_params(&mesh->z4c_params);
+    mesh->nblocks = 2;
+    mesh->nblocks_max = 2;
+    mesh->max_blocks = 2;
+    mesh->max_level = 1;
+    mesh->blocks = (prj_block *)calloc(2U, sizeof(*mesh->blocks));
+    if (mesh->blocks == 0) {
+        die("two-block mesh allocation failed");
+    }
+
+    coarse = &mesh->blocks[0];
+    fine = &mesh->blocks[1];
+    init_allocated_test_block(coarse, 0);
+    init_allocated_test_block(fine, 1);
+    set_test_block_box(coarse, 0, 0.0, 1.0, 0.0, 1.0, 0.0, 1.0);
+    if (fine_on_high_side) {
+        set_test_block_box(fine, 1, 1.0, 1.5, 0.0, 0.5, 0.0, 0.5);
+    } else {
+        set_test_block_box(fine, 1, -0.5, 0.0, 0.0, 0.5, 0.0, 0.5);
+    }
+
+    slot = &coarse->slot[0];
+    prj_neighbor_compute_geometry(coarse, fine, slot);
+    slot->id = 1;
+    slot->rank = 0;
+    for (d = 0; d < 3; ++d) {
+        slot->xmin[d] = fine->xmin[d];
+        slot->xmax[d] = fine->xmax[d];
+        slot->dx[d] = fine->dx[d];
+    }
+    if (slot->type != PRJ_NEIGHBOR_FACE || slot->rel_level != 1) {
+        die("unexpected two-block Z4c neighbor geometry");
+    }
+}
+
+static void destroy_z4c_two_block_mesh(prj_mesh *mesh)
+{
+    int b;
+
+    if (mesh->blocks != 0) {
+        for (b = 0; b < mesh->nblocks; ++b) {
+            prj_block_free_data(&mesh->blocks[b]);
+        }
+        free(mesh->blocks);
+    }
+    mesh->blocks = 0;
+    mesh->nblocks = 0;
+}
+
+static void check_z4c_one_prolong_ghost_side(int fine_on_high_side)
+{
+    prj_mesh mesh;
+    prj_block *coarse;
+    prj_block *fine;
+    const prj_neighbor *slot;
+    const double sentinel = -9.87654321e90;
+    int stage = PRJ_BLOCK_NSTAGES > 1 ? 1 : 0;
+    int ni, nj, nk;
+    int i, j, k, var;
+    int checked = 0;
+
+    init_z4c_two_block_mesh(&mesh, fine_on_high_side);
+    coarse = &mesh.blocks[0];
+    fine = &mesh.blocks[1];
+    slot = &coarse->slot[0];
+    fill_z4c_polynomial(coarse);
+    prj_fill(prj_block_z4c_stage(fine, stage),
+        (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, sentinel);
+    prj_z4c_fill_ghosts(&mesh, 0, 0, stage);
+
+    if (fine_on_high_side && slot->recv_loc_start_z4c[0] >= 0) {
+        die("expected negative fine ghost receive range");
+    }
+    if (!fine_on_high_side && slot->recv_loc_start_z4c[0] != PRJ_BLOCK_SIZE) {
+        die("expected high-side fine ghost receive range");
+    }
+
+    ni = slot->recv_loc_end_z4c[0] - slot->recv_loc_start_z4c[0];
+    nj = slot->recv_loc_end_z4c[1] - slot->recv_loc_start_z4c[1];
+    nk = slot->recv_loc_end_z4c[2] - slot->recv_loc_start_z4c[2];
+    for (i = 0; i < ni; ++i) {
+        int di = i + slot->recv_loc_start_z4c[0];
+        double x = z4c_slot_parent_coord(slot, 0, i);
+
+        for (j = 0; j < nj; ++j) {
+            int dj = j + slot->recv_loc_start_z4c[1];
+            double y = z4c_slot_parent_coord(slot, 1, j);
+
+            for (k = 0; k < nk; ++k) {
+                int dk = k + slot->recv_loc_start_z4c[2];
+                double z = z4c_slot_parent_coord(slot, 2, k);
+                double *dst;
+
+                if (di < -PRJ_NGHOST_Z4C || di >= PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C ||
+                    dj < -PRJ_NGHOST_Z4C || dj >= PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C ||
+                    dk < -PRJ_NGHOST_Z4C || dk >= PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C) {
+                    continue;
+                }
+                dst = prj_block_z4c_stage(fine, stage);
+                for (var = 0; var < PRJ_NZ4C; ++var) {
+                    double expected = z4c_poly_pattern(var, x, y, z, stage);
+
+                    assert_close("z4c prolong ghost degree-7",
+                        dst[Z4CIDX(var, di, dj, dk)], expected, 1.0e-10);
+                    ++checked;
+                }
+            }
+        }
+    }
+    if (checked == 0) {
+        die("Z4c prolong ghost test checked no cells");
+    }
+    destroy_z4c_two_block_mesh(&mesh);
+}
+
+static void check_z4c_amr_prolong_ghost_fill(void)
+{
+    check_z4c_one_prolong_ghost_side(1);
+    check_z4c_one_prolong_ghost_side(0);
 }
 
 static void set_z4c_chi_step(prj_block *block, double jump)
@@ -966,6 +1159,7 @@ int main(int argc, char **argv)
     check_flat_state();
     check_dt_includes_damping_terms();
     check_z4c_amr_transfer();
+    check_z4c_amr_prolong_ghost_fill();
     check_z4c_dchi_amr_tag();
     check_z4c_sommerfeld_rhs();
     check_rhs_hydro_matter_projection();
