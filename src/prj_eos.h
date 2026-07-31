@@ -64,9 +64,25 @@ enum prj_eos_gr_status {
     PRJ_EOS_GR_NO_CONVERGE = 4
 };
 
+typedef struct prj_eos_rty_interp_result {
+    double eint;
+    double pressure;
+    double eint_raw_slope[3];
+    double pressure_log_raw_slope[3];
+    double coord_scale[3];
+    double inv_rho_ln10;
+    double inv_T_ln10;
+    int tabulated;
+} prj_eos_rty_interp_result;
+
 void prj_eos_init(prj_eos *eos, const prj_mpi *mpi);
 void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quantities,
     enum prj_eos_call_ctx ctx);
+int prj_eos_rty_interp(prj_eos *eos, double rho, double T, double ye,
+    prj_eos_rty_interp_result *result, enum prj_eos_call_ctx ctx);
+int prj_eos_rty_interp_derivs(const prj_eos_rty_interp_result *result,
+    double *deint_drho, double *deint_dT, double *deint_dYe,
+    double *dpressure_drho, double *dpressure_dT, double *dpressure_dYe);
 int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
     double *eint, double *pressure,
     double *deint_drho, double *deint_dT, double *deint_dYe,

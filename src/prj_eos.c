@@ -544,15 +544,10 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
     eos_quantities[PRJ_EOS_TEMPERATURE] = T;
 }
 
-int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
-    double *eint, double *pressure,
-    double *deint_drho, double *deint_dT, double *deint_dYe,
-    double *dpressure_drho, double *dpressure_dT, double *dpressure_dYe,
-    enum prj_eos_call_ctx ctx)
+int prj_eos_rty_interp(prj_eos *eos, double rho, double T, double ye,
+    prj_eos_rty_interp_result *result, enum prj_eos_call_ctx ctx)
 {
-    if (eint == 0 || pressure == 0 || deint_drho == 0 ||
-        deint_dT == 0 || deint_dYe == 0 || dpressure_drho == 0 ||
-        dpressure_dT == 0 || dpressure_dYe == 0 ||
+    if (result == 0 ||
         !isfinite(rho) || rho <= 0.0 || !isfinite(T) || T <= 0.0 ||
         !isfinite(ye)) {
         return 0;
@@ -575,8 +570,6 @@ int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
         double dfd_dtemp;
         double e_raw;
         double plog_raw;
-        double inv_rho_ln10;
-        double inv_T_ln10;
 
         prj_eos_table_interp_base(eos, rho, T, ye, &jy, &jyp, &jr, &jrp,
             &jt, &jtp, &dye, &drho, &dtemp, ctx);
@@ -591,14 +584,10 @@ int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
         e_raw = prj_trilinear_with_deriv(v, dye, drho, dtemp, &dfd_dye,
             &dfd_drho, &dfd_dtemp);
 
-        inv_rho_ln10 = 1.0 / (rho * M_LN10);
-        inv_T_ln10 = 1.0 / (T * M_LN10);
-        *eint = e_raw * PRJ_EOS_ENERGY_SCALE;
-        *deint_dYe = PRJ_EOS_ENERGY_SCALE * dfd_dye * eos->inv_dYe;
-        *deint_drho = PRJ_EOS_ENERGY_SCALE * dfd_drho *
-            eos->inv_dlogrho * inv_rho_ln10;
-        *deint_dT = PRJ_EOS_ENERGY_SCALE * dfd_dtemp *
-            eos->inv_dlogT * inv_T_ln10;
+        result->eint = e_raw * PRJ_EOS_ENERGY_SCALE;
+        result->eint_raw_slope[0] = dfd_drho;
+        result->eint_raw_slope[1] = dfd_dtemp;
+        result->eint_raw_slope[2] = dfd_dye;
 
         v[0] = prj_eos_tab_elem(eos, PRJ_EOS_REC_PRESSURE, jy,  jr,  jt);
         v[1] = prj_eos_tab_elem(eos, PRJ_EOS_REC_PRESSURE, jyp, jr,  jt);
@@ -610,30 +599,91 @@ int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
         v[7] = prj_eos_tab_elem(eos, PRJ_EOS_REC_PRESSURE, jyp, jrp, jtp);
         plog_raw = prj_trilinear_with_deriv(v, dye, drho, dtemp, &dfd_dye,
             &dfd_drho, &dfd_dtemp);
-        *pressure = exp(plog_raw) * PRJ_EOS_PRESSURE_SCALE;
-        *dpressure_dYe = *pressure * dfd_dye * eos->inv_dYe;
-        *dpressure_drho = *pressure * dfd_drho * eos->inv_dlogrho *
-            inv_rho_ln10;
-        *dpressure_dT = *pressure * dfd_dtemp * eos->inv_dlogT *
-            inv_T_ln10;
-        return isfinite(*eint) && isfinite(*pressure) &&
-            isfinite(*deint_drho) && isfinite(*deint_dT) &&
-            isfinite(*deint_dYe) && isfinite(*dpressure_drho) &&
-            isfinite(*dpressure_dT) && isfinite(*dpressure_dYe);
+        result->pressure = exp(plog_raw) * PRJ_EOS_PRESSURE_SCALE;
+        result->pressure_log_raw_slope[0] = dfd_drho;
+        result->pressure_log_raw_slope[1] = dfd_dtemp;
+        result->pressure_log_raw_slope[2] = dfd_dye;
+        result->coord_scale[0] = eos->inv_dlogrho;
+        result->coord_scale[1] = eos->inv_dlogT;
+        result->coord_scale[2] = eos->inv_dYe;
+        result->inv_rho_ln10 = 1.0 / (rho * M_LN10);
+        result->inv_T_ln10 = 1.0 / (T * M_LN10);
+        result->tabulated = 1;
+        return isfinite(result->eint) && isfinite(result->pressure);
     }
 
     {
         double gamma = prj_eos_gamma_value();
 
-        *eint = PRJ_EOS_ENERGY_SCALE * T / (gamma - 1.0);
-        *pressure = rho * PRJ_EOS_ENERGY_SCALE * T;
-        *deint_drho = 0.0;
-        *deint_dT = PRJ_EOS_ENERGY_SCALE / (gamma - 1.0);
-        *deint_dYe = 0.0;
-        *dpressure_drho = PRJ_EOS_ENERGY_SCALE * T;
-        *dpressure_dT = rho * PRJ_EOS_ENERGY_SCALE;
-        *dpressure_dYe = 0.0;
+        result->eint = PRJ_EOS_ENERGY_SCALE * T / (gamma - 1.0);
+        result->pressure = rho * PRJ_EOS_ENERGY_SCALE * T;
+        result->eint_raw_slope[0] = 0.0;
+        result->eint_raw_slope[1] = PRJ_EOS_ENERGY_SCALE / (gamma - 1.0);
+        result->eint_raw_slope[2] = 0.0;
+        result->pressure_log_raw_slope[0] = PRJ_EOS_ENERGY_SCALE * T;
+        result->pressure_log_raw_slope[1] = rho * PRJ_EOS_ENERGY_SCALE;
+        result->pressure_log_raw_slope[2] = 0.0;
+        result->coord_scale[0] = 1.0;
+        result->coord_scale[1] = 1.0;
+        result->coord_scale[2] = 1.0;
+        result->inv_rho_ln10 = 1.0;
+        result->inv_T_ln10 = 1.0;
+        result->tabulated = 0;
     }
+    return 1;
+}
+
+int prj_eos_rty_interp_derivs(const prj_eos_rty_interp_result *result,
+    double *deint_drho, double *deint_dT, double *deint_dYe,
+    double *dpressure_drho, double *dpressure_dT, double *dpressure_dYe)
+{
+    double *deint[3] = {deint_drho, deint_dT, deint_dYe};
+    double *dpressure[3] = {dpressure_drho, dpressure_dT, dpressure_dYe};
+    int d;
+
+    if (result == 0 || deint_drho == 0 || deint_dT == 0 ||
+        deint_dYe == 0 || dpressure_drho == 0 || dpressure_dT == 0 ||
+        dpressure_dYe == 0) {
+        return 0;
+    }
+    for (d = 0; d < 3; ++d) {
+        if (result->tabulated) {
+            double physical_scale = d == 0 ? result->inv_rho_ln10 :
+                (d == 1 ? result->inv_T_ln10 : 1.0);
+
+            *deint[d] = PRJ_EOS_ENERGY_SCALE *
+                result->eint_raw_slope[d] * result->coord_scale[d] *
+                physical_scale;
+            *dpressure[d] = result->pressure *
+                result->pressure_log_raw_slope[d] * result->coord_scale[d] *
+                physical_scale;
+        } else {
+            *deint[d] = result->eint_raw_slope[d];
+            *dpressure[d] = result->pressure_log_raw_slope[d];
+        }
+        if (!isfinite(*deint[d]) || !isfinite(*dpressure[d])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
+    double *eint, double *pressure,
+    double *deint_drho, double *deint_dT, double *deint_dYe,
+    double *dpressure_drho, double *dpressure_dT, double *dpressure_dYe,
+    enum prj_eos_call_ctx ctx)
+{
+    prj_eos_rty_interp_result result;
+
+    if (eint == 0 || pressure == 0 ||
+        !prj_eos_rty_interp(eos, rho, T, ye, &result, ctx) ||
+        !prj_eos_rty_interp_derivs(&result, deint_drho, deint_dT,
+            deint_dYe, dpressure_drho, dpressure_dT, dpressure_dYe)) {
+        return 0;
+    }
+    *eint = result.eint;
+    *pressure = result.pressure;
     return 1;
 }
 

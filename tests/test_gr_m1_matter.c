@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,6 +26,11 @@ int prj_rad_gr_m1_residual_test_wrapper(const prj_rad *rad, prj_eos *eos,
 int prj_rad_gr_m1_jacobian_test_wrapper(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
     double dt, double *resid, double *jac, double *u_new_out);
+int prj_rad_gr_m1_fast_candidate_compare_test_wrapper(const prj_rad *rad,
+    prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
+    const double *P, double dt, double *projected_out, double *dense_out,
+    double *legacy_norm_out, double *projected_exact_norm_out,
+    double *dense_exact_norm_out);
 int prj_rad_gr_m1_implicit_solve_test_wrapper(const prj_rad *rad,
     prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
     double dt, double *P, double *resid_out, double *u_new_out);
@@ -60,6 +66,25 @@ static void assert_abs_close(const char *name, double got, double expected,
             name, got, expected, tol);
         exit(1);
     }
+}
+
+static uint64_t ordered_double_bits(double x)
+{
+    uint64_t bits;
+
+    memcpy(&bits, &x, sizeof(bits));
+    if ((bits >> 63) != 0) {
+        return ~bits;
+    }
+    return bits | (UINT64_C(1) << 63);
+}
+
+static uint64_t double_ulp_distance(double a, double b)
+{
+    uint64_t oa = ordered_double_bits(a);
+    uint64_t ob = ordered_double_bits(b);
+
+    return oa >= ob ? oa - ob : ob - oa;
 }
 
 static double test_m1_chi_exact(double f)
@@ -214,6 +239,128 @@ static void init_test_eos(prj_eos *eos)
     memset(eos, 0, sizeof(*eos));
     eos->kind = PRJ_EOS_KIND_IDEAL;
     prj_eos_init(eos, 0);
+}
+
+static unsigned int interp_test_rng = 0x6d2b79f5u;
+
+static double interp_test_unit(void)
+{
+    interp_test_rng = 1664525u * interp_test_rng + 1013904223u;
+    return (double)(interp_test_rng >> 8) / 16777216.0;
+}
+
+static void check_eos_interp_cache_at(prj_eos *eos, double rho, double T,
+    double ye)
+{
+    prj_eos_rty_interp_result interp;
+    double q[PRJ_EOS_NQUANT];
+    double deriv_cached[6];
+    double deriv_wrapper[6];
+    double eint = 0.0;
+    double pressure = 0.0;
+    int d;
+
+    if (!prj_eos_rty_interp(eos, rho, T, ye, &interp,
+            PRJ_EOS_CTX_MAIN) ||
+        !prj_eos_rty_interp_derivs(&interp, &deriv_cached[0],
+            &deriv_cached[1], &deriv_cached[2], &deriv_cached[3],
+            &deriv_cached[4], &deriv_cached[5]) ||
+        !prj_eos_rty_derivs(eos, rho, T, ye, &eint, &pressure,
+            &deriv_wrapper[0], &deriv_wrapper[1], &deriv_wrapper[2],
+            &deriv_wrapper[3], &deriv_wrapper[4], &deriv_wrapper[5],
+            PRJ_EOS_CTX_MAIN)) {
+        die("EOS interpolation cache evaluation failed");
+    }
+    prj_eos_rty(eos, rho, T, ye, q, PRJ_EOS_CTX_MAIN);
+    assert_close("EOS cached eint", interp.eint, eint, 2.0e-14);
+    assert_close("EOS cached pressure", interp.pressure, pressure, 2.0e-14);
+    assert_close("EOS value eint", interp.eint, q[PRJ_EOS_EINT], 2.0e-13);
+    assert_close("EOS value pressure", interp.pressure,
+        q[PRJ_EOS_PRESSURE], 2.0e-13);
+    for (d = 0; d < 6; ++d) {
+        assert_close("EOS cached derivative", deriv_cached[d],
+            deriv_wrapper[d], 2.0e-14);
+    }
+}
+
+static void check_opac_interp_cache_at(const prj_rad *rad, double rho,
+    double T, double ye)
+{
+    prj_rad3_opac_interp_result interp;
+    double value[4][PRJ_RAD3_OPAC_NGROUPS];
+    double deriv[4][3][PRJ_RAD3_OPAC_NGROUPS];
+    int idx;
+    int d;
+
+    prj_rad3_opac_lookup_interp(rad, rho, T, ye, &interp);
+    prj_rad3_opac_lookup_derivs(rad, rho, T, ye, value[0], value[1],
+        value[2], value[3], deriv[0][0], deriv[0][1], deriv[0][2],
+        deriv[1][0], deriv[1][1], deriv[1][2], deriv[2][0], deriv[2][1],
+        deriv[2][2], deriv[3][0], deriv[3][1], deriv[3][2]);
+    for (idx = 0; idx < PRJ_RAD3_OPAC_NGROUPS; ++idx) {
+        double got[4][3];
+
+        if (!prj_rad3_opac_interp_group_derivs(&interp, idx, got[0],
+                got[1], got[2], got[3])) {
+            die("opacity interpolation derivative conversion failed");
+        }
+        assert_close("opacity cached kappa", interp.kappa[idx],
+            value[0][idx], 2.0e-14);
+        assert_close("opacity cached sigma", interp.sigma[idx],
+            value[1][idx], 2.0e-14);
+        assert_close("opacity cached delta", interp.delta[idx],
+            value[2][idx], 2.0e-14);
+        assert_close("opacity cached eta", interp.eta[idx],
+            value[3][idx], 2.0e-14);
+        for (d = 0; d < 3; ++d) {
+            int quantity;
+
+            for (quantity = 0; quantity < 4; ++quantity) {
+                assert_close("opacity cached derivative", got[quantity][d],
+                    deriv[quantity][d][idx], 2.0e-14);
+            }
+        }
+    }
+}
+
+static void check_table_interp_caches(void)
+{
+    prj_rad rad;
+    prj_eos eos;
+    prj_eos ideal;
+    int sample;
+
+    init_real_test_rad(&rad);
+    init_real_test_eos(&eos);
+    init_test_eos(&ideal);
+    check_eos_interp_cache_at(&ideal, 1.7, 0.8, 0.23);
+    check_eos_interp_cache_at(&eos,
+        sqrt(eos.rho_min * eos.rho_max),
+        sqrt(eos.temp_min * eos.temp_max), 0.5 * (eos.y1c + eos.y2c));
+    check_opac_interp_cache_at(&rad, sqrt(rad.romin * rad.romax),
+        sqrt(rad.tmin * rad.tmax), 0.5 * (rad.yemin + rad.yemax));
+    check_opac_interp_cache_at(&rad, rad.romin, 0.5 * rad.tmin,
+        rad.yemin - 0.1);
+    check_opac_interp_cache_at(&rad, rad.romax, 2.0 * rad.tmax,
+        rad.yemax + 0.1);
+    for (sample = 0; sample < 16; ++sample) {
+        double rho_eos = exp(log(eos.rho_min) + interp_test_unit() *
+            log(eos.rho_max / eos.rho_min));
+        double T_eos = exp(log(eos.temp_min) + interp_test_unit() *
+            log(eos.temp_max / eos.temp_min));
+        double ye_eos = eos.y1c + interp_test_unit() *
+            (eos.y2c - eos.y1c);
+        double rho_opac = exp(log(rad.romin) + interp_test_unit() *
+            log(rad.romax / rad.romin));
+        double T_opac = exp(log(rad.tmin) + interp_test_unit() *
+            log(rad.tmax / rad.tmin));
+        double ye_opac = rad.yemin + interp_test_unit() *
+            (rad.yemax - rad.yemin);
+
+        check_eos_interp_cache_at(&eos, rho_eos, T_eos, ye_eos);
+        check_opac_interp_cache_at(&rad, rho_opac, T_opac, ye_opac);
+    }
+    prj_rad3_opac_free(&rad);
 }
 
 static void set_diag_geom(prj_z4c_hydro_geom *geom, double alpha,
@@ -467,6 +614,61 @@ static void check_gr_m1_solver_converged(const char *name,
     }
 }
 
+static void check_gr_m1_fast_candidate_parity(const char *name,
+    const prj_rad *rad, prj_eos *eos, const prj_z4c_hydro_geom *geom,
+    const double *u_old, const double *P, double dt)
+{
+    double projected[TEST_GR_M1_RESIDUAL_NP];
+    double dense[TEST_GR_M1_RESIDUAL_NP];
+    double legacy_norm;
+    double projected_exact_norm;
+    double dense_exact_norm;
+    const double threshold = 1.0e-6;
+    int legacy_accept;
+    int fast_accept;
+    uint64_t exact_norm_ulp;
+    int v;
+
+    if (!prj_rad_gr_m1_fast_candidate_compare_test_wrapper(rad, eos, geom,
+            u_old, P, dt, projected, dense, &legacy_norm,
+            &projected_exact_norm, &dense_exact_norm)) {
+        die("fast/dense candidate comparison failed");
+    }
+    for (v = 0; v < TEST_GR_M1_RESIDUAL_NP; ++v) {
+        {
+            uint64_t ulp = double_ulp_distance(projected[v], dense[v]);
+
+            if (ulp > 1) {
+                fprintf(stderr,
+                    "test_gr_m1_matter: %s candidate[%d] differs by "
+                    "%llu ULP: projected=%.17e dense=%.17e\n",
+                    name, v, (unsigned long long)ulp, projected[v],
+                    dense[v]);
+                exit(1);
+            }
+        }
+    }
+    exact_norm_ulp = double_ulp_distance(projected_exact_norm,
+        dense_exact_norm);
+    if (exact_norm_ulp != 0) {
+        fprintf(stderr,
+            "test_gr_m1_matter: %s exact norms differ by %llu ULP: "
+            "projected=%.17e dense=%.17e\n",
+            name, (unsigned long long)exact_norm_ulp,
+            projected_exact_norm, dense_exact_norm);
+        exit(1);
+    }
+    legacy_accept = legacy_norm < threshold && dense_exact_norm < threshold;
+    fast_accept = projected_exact_norm < threshold;
+    if (legacy_accept != fast_accept) {
+        fprintf(stderr,
+            "test_gr_m1_matter: %s acceptance mismatch legacy_norm=%.17e "
+            "dense_exact=%.17e projected_exact=%.17e\n",
+            name, legacy_norm, dense_exact_norm, projected_exact_norm);
+        exit(1);
+    }
+}
+
 static void make_gr_m1_exact_old_from_p(const prj_rad *rad, prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double *P, double dt,
     double *u_old)
@@ -693,8 +895,12 @@ static void check_gr_m1_implicit_solve_real_tables(void)
     set_diag_geom(&geom, 0.94, beta, gamma_diag);
     set_gr_m1_jacobian_test_p(P_root);
     make_gr_m1_exact_old_from_p(&rad, &eos, &geom, P_root, dt, u_old);
+    check_gr_m1_fast_candidate_parity("root", &rad, &eos, &geom, u_old,
+        P_root, dt);
     copy_gr_m1_p(P_guess, P_root);
     perturb_gr_m1_solver_guess(P_guess);
+    check_gr_m1_fast_candidate_parity("perturbed", &rad, &eos, &geom,
+        u_old, P_guess, dt);
 
     if (!prj_rad_gr_m1_implicit_solve_test_wrapper(&rad, &eos, &geom,
             u_old, dt, P_guess, resid, u_new)) {
@@ -1307,6 +1513,7 @@ int main(int argc, char **argv)
 #endif
 
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1 && PRJ_NRAD > 0
+    check_table_interp_caches();
     check_gr_m1_residual_rest_energy_matches_non_gr();
     check_gr_m1_residual_jacobian_fd();
     check_gr_m1_implicit_solve_real_tables();
