@@ -623,6 +623,9 @@ static void check_gr_m1_fast_candidate_parity(const char *name,
     double legacy_norm;
     double projected_exact_norm;
     double dense_exact_norm;
+    double legacy_exact_resid[PRJ_NVAR_CONS];
+    double legacy_exact_u[PRJ_NVAR_CONS];
+    double legacy_exact_norm;
     const double threshold = 1.0e-6;
     int legacy_accept;
     int fast_accept;
@@ -634,6 +637,12 @@ static void check_gr_m1_fast_candidate_parity(const char *name,
             &projected_exact_norm, &dense_exact_norm)) {
         die("fast/dense candidate comparison failed");
     }
+    if (!prj_rad_gr_m1_residual_test_wrapper(rad, eos, geom, u_old,
+            projected, dt, legacy_exact_resid, legacy_exact_u)) {
+        die("legacy exact candidate certification failed");
+    }
+    legacy_exact_norm = test_gr_m1_solver_norm(u_old, legacy_exact_resid,
+        threshold);
     for (v = 0; v < TEST_GR_M1_RESIDUAL_NP; ++v) {
         {
             uint64_t ulp = double_ulp_distance(projected[v], dense[v]);
@@ -656,6 +665,15 @@ static void check_gr_m1_fast_candidate_parity(const char *name,
             "projected=%.17e dense=%.17e\n",
             name, (unsigned long long)exact_norm_ulp,
             projected_exact_norm, dense_exact_norm);
+        exit(1);
+    }
+    if (double_ulp_distance(projected_exact_norm, legacy_exact_norm) > 0) {
+        fprintf(stderr,
+            "test_gr_m1_matter: %s optimized/legacy certification norm "
+            "mismatch optimized=%.17e legacy=%.17e ulp=%llu\n",
+            name, projected_exact_norm, legacy_exact_norm,
+            (unsigned long long)double_ulp_distance(projected_exact_norm,
+                legacy_exact_norm));
         exit(1);
     }
     legacy_accept = legacy_norm < threshold && dense_exact_norm < threshold;

@@ -4516,6 +4516,93 @@ static int prj_rad_gr_m1_cell_context_init(
         ctx->ucon, ctx->ucov);
 }
 
+static int prj_rad_gr_m1_hydro_cons_cached(
+    const prj_z4c_hydro_geom *geom, const double *u_old, const double *P,
+    double eint, double pressure, double *u_new)
+{
+    double beta_con[3];
+    double beta_cov[3] = {0.0, 0.0, 0.0};
+    double beta2 = 0.0;
+    double sqrt_one_minus_beta2;
+    double wlor;
+    double wlor2;
+    double wlor_m1;
+    double Bcon[3] = {0.0, 0.0, 0.0};
+    double Bcov[3] = {0.0, 0.0, 0.0};
+    double Bsq = 0.0;
+    double Bbeta = 0.0;
+    double w;
+    double sqrtg;
+    double c = PRJ_CLIGHT;
+    double c2 = PRJ_CLIGHT * PRJ_CLIGHT;
+    int a;
+    int b;
+
+    if (geom == 0 || u_old == 0 || P == 0 || u_new == 0 ||
+        !isfinite(geom->sqrt_gamma) || geom->sqrt_gamma <= 0.0 ||
+        !isfinite(P[0]) || P[0] <= 0.0 || !isfinite(eint) || eint < 0.0 ||
+        !isfinite(pressure) || !isfinite(P[5])) {
+        return 0;
+    }
+    sqrtg = geom->sqrt_gamma;
+    for (a = 0; a < 3; ++a) {
+        beta_con[a] = P[1 + a] / c;
+        if (!isfinite(beta_con[a])) {
+            return 0;
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            beta_cov[a] += geom->gamma[a][b] * beta_con[b];
+        }
+        beta2 += beta_cov[a] * beta_con[a];
+    }
+    if (!isfinite(beta2) || beta2 < 0.0 || beta2 >= 1.0) {
+        return 0;
+    }
+    sqrt_one_minus_beta2 = sqrt(1.0 - beta2);
+    wlor = 1.0 / sqrt_one_minus_beta2;
+    wlor2 = wlor * wlor;
+    wlor_m1 = beta2 /
+        (sqrt_one_minus_beta2 * (1.0 + sqrt_one_minus_beta2));
+#if PRJ_MHD
+    Bcon[0] = u_old[PRJ_CONS_B1] / sqrtg;
+    Bcon[1] = u_old[PRJ_CONS_B2] / sqrtg;
+    Bcon[2] = u_old[PRJ_CONS_B3] / sqrtg;
+#endif
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            Bcov[a] += geom->gamma[a][b] * Bcon[b];
+        }
+        Bsq += Bcov[a] * Bcon[a];
+        Bbeta += Bcov[a] * beta_con[a];
+    }
+    if (!isfinite(Bsq) || !isfinite(Bbeta) || Bsq < 0.0) {
+        return 0;
+    }
+    w = P[0] * c2 + P[0] * eint + pressure;
+    u_new[PRJ_CONS_RHO] = sqrtg * P[0] * wlor;
+    for (a = 0; a < 3; ++a) {
+        u_new[PRJ_CONS_MOM1 + a] = sqrtg *
+            ((w * wlor2 + Bsq) * beta_cov[a] - Bbeta * Bcov[a]) / c;
+    }
+    u_new[PRJ_CONS_ETOT] = sqrtg *
+        ((P[0] * eint + pressure) * wlor2 +
+         P[0] * c2 * wlor * wlor_m1 - pressure + Bsq -
+         0.5 * (Bbeta * Bbeta + Bsq / wlor2));
+    u_new[PRJ_CONS_YE] = u_new[PRJ_CONS_RHO] * P[5];
+#if PRJ_MHD
+    u_new[PRJ_CONS_B1] = sqrtg * Bcon[0];
+    u_new[PRJ_CONS_B2] = sqrtg * Bcon[1];
+    u_new[PRJ_CONS_B3] = sqrtg * Bcon[2];
+#endif
+    return isfinite(u_new[PRJ_CONS_RHO]) &&
+        isfinite(u_new[PRJ_CONS_MOM1]) &&
+        isfinite(u_new[PRJ_CONS_MOM2]) &&
+        isfinite(u_new[PRJ_CONS_MOM3]) &&
+        isfinite(u_new[PRJ_CONS_ETOT]) && isfinite(u_new[PRJ_CONS_YE]);
+}
+
 static int prj_rad_gr_m1_p_to_prim(prj_eos *eos,
     const prj_z4c_hydro_geom *geom, const double g_cov[4][4],
     const double g_con[4][4], const double *u_old, const double *P,
@@ -5820,6 +5907,7 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
     const double *n_cov;
     const double *ucon;
     const double *ucov;
+    prj_rad_grm1_R_jac_geom R_jac_geom;
     double kappa_local[PRJ_RAD_GR_M1_NGROUPS];
     double sigma_local[PRJ_RAD_GR_M1_NGROUPS];
     double delta_local[PRJ_RAD_GR_M1_NGROUPS];
@@ -5828,6 +5916,7 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
     const double *sigma;
     const double *delta;
     const double *eta;
+    double pressure;
     double sum_Gn = 0.0;
     double sum_Gu_xe = 0.0;
     double sum_Ggamma[3] = {0.0, 0.0, 0.0};
@@ -5836,10 +5925,8 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
     int field;
     int group;
     int a;
-    int b;
     int d;
     int v;
-    int ok;
 
     if (resid_out != 0) {
         for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -5858,6 +5945,9 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
     }
     if (norm_out != 0) {
         *norm_out = HUGE_VAL;
+    }
+    for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+        u_new[v] = 0.0;
     }
     if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P == 0 ||
         norm_out == 0 || !isfinite(dt) ||
@@ -5893,11 +5983,14 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
     W[PRJ_PRIM_YE] = P[5];
     if (eos_in != 0) {
         W[PRJ_PRIM_EINT] = eos_in->eint;
+        pressure = eos_in->pressure;
     } else {
         prj_eos_rty(eos, P[0], P[4], P[5], eos_q, PRJ_EOS_CTX_MAIN);
         W[PRJ_PRIM_EINT] = eos_q[PRJ_EOS_EINT];
+        pressure = eos_q[PRJ_EOS_PRESSURE];
     }
-    if (!isfinite(W[PRJ_PRIM_EINT]) || W[PRJ_PRIM_EINT] < 0.0) {
+    if (!isfinite(W[PRJ_PRIM_EINT]) || W[PRJ_PRIM_EINT] < 0.0 ||
+        !isfinite(pressure)) {
         return 0;
     }
 #if PRJ_MHD
@@ -5905,6 +5998,12 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
     W[PRJ_PRIM_B2] = u_old[PRJ_CONS_B2] / geom->sqrt_gamma;
     W[PRJ_PRIM_B3] = u_old[PRJ_CONS_B3] / geom->sqrt_gamma;
 #endif
+    if (!prj_rad_gr_m1_hydro_cons_cached(geom, u_old, P,
+            W[PRJ_PRIM_EINT], pressure, u_new)) {
+        return 0;
+    }
+    prj_rad_grm1_R_jac_geom_init(geom->alpha, g_con, geom->gamma_inv,
+        &R_jac_geom);
 
     if (opac_in != 0) {
         kappa = opac_in->kappa;
@@ -5929,11 +6028,10 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
                 PRJ_RAD_GR_M1_NRAD_BLOCK * idx;
             double E = P[pidx];
             double Fcov[3];
-            double Fcon[3];
-            double Rcon[4][4];
             double R_u[4];
             double Ruu = 0.0;
             double Gcon[4];
+            prj_rad_grm1_R_projector Rproj;
             double kappa_eff = kappa[idx];
             double sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
             double scalar;
@@ -5951,25 +6049,25 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
                 if (!isfinite(Fcov[a])) {
                     return 0;
                 }
-                Fcon[a] = 0.0;
-                for (b = 0; b < 3; ++b) {
-                    Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
-                }
             }
-            if (!prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E, Fcon,
-                    Rcon)) {
+            if (!prj_rad_grm1_R_projector_init(g_cov, g_con, &R_jac_geom,
+                    E, Fcov, &Rproj)) {
                 return 0;
             }
+            prj_rad_grm1_R_projector_apply(&Rproj, ucov, R_u);
             W[PRJ_PRIM_RAD_E(field, group)] = E;
             W[PRJ_PRIM_RAD_F1(field, group)] = Fcov[0];
             W[PRJ_PRIM_RAD_F2(field, group)] = Fcov[1];
             W[PRJ_PRIM_RAD_F3(field, group)] = Fcov[2];
+            u_new[PRJ_CONS_RAD_E(field, group)] = geom->sqrt_gamma * E;
+            u_new[PRJ_CONS_RAD_F1(field, group)] =
+                geom->sqrt_gamma * Fcov[0];
+            u_new[PRJ_CONS_RAD_F2(field, group)] =
+                geom->sqrt_gamma * Fcov[1];
+            u_new[PRJ_CONS_RAD_F3(field, group)] =
+                geom->sqrt_gamma * Fcov[2];
 
             for (a = 0; a < 4; ++a) {
-                R_u[a] = 0.0;
-                for (b = 0; b < 4; ++b) {
-                    R_u[a] += Rcon[a][b] * ucov[b];
-                }
                 Ruu += R_u[a] * ucov[a];
             }
             scalar = sigma_eff * Ruu + eta[idx] / PRJ_CLIGHT;
@@ -6000,13 +6098,6 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
         }
     }
 
-    PRJ_TIMER_CURRENT_START("rad_matter_temp_exact_check_prim2cons");
-    ok = prj_eos_gr_prim2cons(eos, &ctx->eos_geom, W, u_new,
-        PRJ_EOS_CTX_MAIN) == PRJ_EOS_GR_OK;
-    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_exact_check_prim2cons");
-    if (!ok) {
-        return 0;
-    }
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
         resid_tmp[v] = u_new[v] - u_old[v];
         if (!isfinite(resid_tmp[v])) {
@@ -6614,6 +6705,8 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
             double streamed_dRuu[PRJ_RAD_GR_M1_NRAD_BLOCK];
             double A[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK];
             double Bmat[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_BLOCK];
+            double (*candidate_mat)[PRJ_RAD_GR_M1_NRAD_BLOCK] =
+                candidate_only ? Bmat : A;
             double rhs[PRJ_RAD_GR_M1_NRAD_BLOCK][PRJ_RAD_GR_M1_NRAD_RHS] =
                 {{0.0}};
             int pivot[PRJ_RAD_GR_M1_NRAD_BLOCK];
@@ -6711,14 +6804,15 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
 
             for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
                 for (cc = 0; cc < PRJ_RAD_GR_M1_NRAD_BLOCK; ++cc) {
-                    A[r][cc] = 0.0;
+                    candidate_mat[r][cc] = 0.0;
                 }
             }
             for (cc = 0; cc < PRJ_RAD_GR_M1_NRAD_BLOCK; ++cc) {
-                A[0][cc] = (cc == 0 ? sqrtg : 0.0) -
+                candidate_mat[0][cc] = (cc == 0 ? sqrtg : 0.0) -
                     s_gu * Gn_coeff[cc];
                 for (d = 0; d < 3; ++d) {
-                    A[1 + d][cc] = (cc == 1 + d ? sqrtg : 0.0) +
+                    candidate_mat[1 + d][cc] =
+                        (cc == 1 + d ? sqrtg : 0.0) +
                         s_rgg * Ggamma_coeff[d][cc];
                 }
             }
@@ -6729,9 +6823,11 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
                     u_old[PRJ_CONS_RAD_F1(field, group) + d] -
                     s_rgg * Ggamma_const[d];
             }
-            for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
-                for (cc = 0; cc < PRJ_RAD_GR_M1_NRAD_BLOCK; ++cc) {
-                    Bmat[r][cc] = A[r][cc];
+            if (!candidate_only) {
+                for (r = 0; r < PRJ_RAD_GR_M1_NRAD_BLOCK; ++r) {
+                    for (cc = 0; cc < PRJ_RAD_GR_M1_NRAD_BLOCK; ++cc) {
+                        Bmat[r][cc] = A[r][cc];
+                    }
                 }
             }
             if (!prj_rad_gr_m1_factor4(Bmat, pivot, idx) ||
@@ -8294,18 +8390,28 @@ int prj_rad_gr_m1_fast_candidate_compare_test_wrapper(const prj_rad *rad,
     }
     if (!prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old, 0,
             &ctx, P, dt, projected, 0, 0, 0, 0, &eos_cache, 0,
-            &opac_cache, 0, threshold, 1) ||
-        !prj_rad_gr_m1_freeze_closure(geom, P, frozen) ||
-        !prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old, frozen,
+            &opac_cache, 0, threshold, 1)) {
+        return 0;
+    }
+    if (!prj_rad_gr_m1_freeze_closure(geom, P, frozen)) {
+        return 0;
+    }
+    if (!prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old, frozen,
             &ctx, P, dt, dense, 0, 0, 0, &eos_cache, 0, &opac_cache, 0,
-            0, threshold, 1) ||
-        !prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old, frozen,
+            0, threshold, 1)) {
+        return 0;
+    }
+    if (!prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old, frozen,
             &ctx, P, dt, legacy, 0, 0, 0, &eos_cache, 0, &opac_cache, 0,
-            &legacy_norm, threshold, 0) ||
-        !prj_rad_gr_m1_exact_residual_check(rad, eos, geom, u_old,
+            &legacy_norm, threshold, 0)) {
+        return 0;
+    }
+    if (!prj_rad_gr_m1_exact_residual_check(rad, eos, geom, u_old,
             projected, dt, &eos_cache, &opac_cache, &ctx, threshold,
-            &projected_norm, exact_resid, exact_u, exact_W) ||
-        !prj_rad_gr_m1_exact_residual_check(rad, eos, geom, u_old, dense,
+            &projected_norm, exact_resid, exact_u, exact_W)) {
+        return 0;
+    }
+    if (!prj_rad_gr_m1_exact_residual_check(rad, eos, geom, u_old, dense,
             dt, &eos_cache, &opac_cache, &ctx, threshold, &dense_norm,
             exact_resid, exact_u, exact_W)) {
         return 0;
