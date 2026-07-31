@@ -91,6 +91,8 @@ static void prj_rad3_build_egroups(prj_rad *rad)
             rad->log_egroup[nu][g] = log(ec);
             rad->egroup_erg[nu][g] = erg;
             rad->degroup_erg[nu][g] = derg;
+            rad->freq_inv_dnu[nu][g] =
+                1.0 / (rad->eedge[nu][g + 1] - rad->eedge[nu][g]);
             if (nu == 2) {
                 rad->spec_factor[nu][g] = 0.25 * pow(PRJ_CLIGHT * PRJ_HPLANCK, 3)
                     / (4.0 * M_PI * derg * erg * erg * erg);
@@ -113,6 +115,7 @@ static void prj_rad3_build_egroups(prj_rad *rad)
                 rad->x_e[nu][g] = 0.0;
             }
         }
+        rad->freq_grid_valid[nu] = 1;
     }
 
 #if DO_FFC
@@ -379,6 +382,7 @@ void prj_rad3_opac_free(prj_rad *rad)
         rad->x_e[nu] = 0;
         rad->log_egroup[nu] = 0;
         rad->spec_factor[nu] = 0;
+        rad->freq_grid_valid[nu] = 0;
         rad->absopac[nu] = 0;
         rad->scaopac[nu] = 0;
         rad->emis[nu] = 0;

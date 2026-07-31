@@ -387,6 +387,97 @@ static void check_freq_fastpath(const prj_z4c_hydro_geom *geom,
     }
 }
 
+static unsigned int freq_rng_state = 0x4d595df4u;
+
+static void check_case(const char *name,
+    const prj_z4c_hydro_geom *geom,
+    const prj_rad_gr_m1_closure_ctx *ctx, double E, double f,
+    const double dir[3]);
+
+static double freq_rand_unit(void)
+{
+    freq_rng_state = 1664525u * freq_rng_state + 1013904223u;
+    return (double)(freq_rng_state >> 8) / 16777216.0;
+}
+
+static double freq_rand_signed(double scale)
+{
+    return scale * (2.0 * freq_rand_unit() - 1.0);
+}
+
+static void randomize_freq_case(prj_z4c_hydro_geom *geom,
+    prj_rad_gr_m1_closure_ctx *ctx, double dir[3])
+{
+    double lower[3][3] = {{0.0}};
+    double det;
+    int a;
+    int b;
+    int d;
+    int m;
+
+    memset(geom, 0, sizeof(*geom));
+    for (a = 0; a < 3; ++a) {
+        lower[a][a] = 0.8 + 0.4 * freq_rand_unit();
+        for (b = 0; b < a; ++b) {
+            lower[a][b] = freq_rand_signed(0.12);
+        }
+    }
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            for (m = 0; m < 3; ++m) {
+                geom->gamma[a][b] += lower[a][m] * lower[b][m];
+            }
+            geom->K_dd[a][b] = freq_rand_signed(2.0e-6);
+            for (d = 0; d < 3; ++d) {
+                geom->dgamma[d][a][b] = freq_rand_signed(2.0e-7);
+            }
+        }
+    }
+    inv3(geom->gamma, geom->gamma_inv, &det);
+    geom->sqrt_gamma = sqrt(det);
+    geom->alpha = 0.7 + 0.6 * freq_rand_unit();
+    for (a = 0; a < 3; ++a) {
+        geom->beta[a] = freq_rand_signed(0.04);
+        geom->dalpha[a] = freq_rand_signed(2.0e-7);
+        dir[a] = freq_rand_signed(1.0);
+        for (d = 0; d < 3; ++d) {
+            geom->dbeta[d][a] = freq_rand_signed(2.0e-7);
+        }
+    }
+    init_closure_ctx(geom, ctx);
+    for (a = 0; a < 3; ++a) {
+        ctx->vcon[a] = freq_rand_signed(0.08);
+        for (d = 0; d < 3; ++d) {
+            ctx->dvdx[d][a] = freq_rand_signed(2.0e-7);
+        }
+    }
+}
+
+static void check_freq_randomized(void)
+{
+    prj_z4c_hydro_geom geom;
+    prj_rad_gr_m1_closure_ctx ctx;
+    double dir[3];
+    int n;
+
+    for (n = 0; n < 64; ++n) {
+        double E = 0.2 + 3.0 * freq_rand_unit();
+        double f;
+
+        randomize_freq_case(&geom, &ctx, dir);
+        if (n % 4 == 0) {
+            f = 0.0;
+        } else if (n % 4 == 1) {
+            f = 1.0e-10;
+        } else if (n % 4 == 2) {
+            f = 1.0 - 2.0 * PRJ_RAD_GR_M1_F_MARGIN;
+        } else {
+            f = 0.98 * freq_rand_unit();
+        }
+        check_case("randomized", &geom, &ctx, E, f, dir);
+    }
+}
+
 static void check_implicit_fastpath(const prj_z4c_hydro_geom *geom, double E,
     const double Fcov[3], const double Rfull[4][4])
 {
@@ -468,6 +559,7 @@ static void check_gr_m1_closure_consistency(void)
     check_case("moderate", &geom, &ctx, 2.3, 0.37, dir1);
     check_case("nearly isotropic", &geom, &ctx, 0.9, 1.0e-8, dir2);
     check_case("thin", &geom, &ctx, 1.4, 0.92, dir3);
+    check_freq_randomized();
 }
 #endif
 

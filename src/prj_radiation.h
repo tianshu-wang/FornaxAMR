@@ -167,6 +167,12 @@ void prj_rad_m1_wavespeeds_with_fluxmag(double E, double F1, double Fmag, double
 void prj_rad_freq_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+struct prj_z4c_hydro_geom;
+void prj_rad_freq_flux_apply_gr_m1_geom(const prj_rad *rad,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage,
+    const struct prj_z4c_hydro_geom *geom, const double *W_state, double *u,
+    int ic, int jc, int kc, double dt,
+    const double observer_time_derivative[4]);
 void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     const prj_block *block, int z4c_stage, const double *W_state, double *u,
     int ic, int jc, int kc, double dt, const double observer_time_derivative[4]);
@@ -174,6 +180,10 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     const prj_mesh *mesh, const prj_block *block, int z4c_stage, double *u,
     double *prim, int i, int j, int k, double dt,
     double *final_temperature);
+void prj_rad_gr_m1_matter_update_geom(prj_rad *rad, prj_eos *eos,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage,
+    const struct prj_z4c_hydro_geom *geom, double *u, double *prim,
+    int i, int j, int k, double dt, double *final_temperature);
 #endif
 void prj_rad_ang_flux_apply(const prj_rad *rad, const prj_block *block,
     const double *W_state, double *u, int ic, int jc, int kc, double lapse, double dt);

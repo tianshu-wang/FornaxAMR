@@ -2026,44 +2026,50 @@ typedef struct prj_rad_gr_m1_freq_drift_cache {
     double mom_Y[3][3];
     double mom_X[3][3][3];
     double mom_W[3][3][3][3];
-    double qcoef[4][4][4][4];
     double q_uuu[4];
     double q_H[4][4];
     double q_L[4][4][4];
     double q_h[4][4];
 } prj_rad_gr_m1_freq_drift_cache;
 
-static void prj_rad_gr_m1_freq_qcoef_add(
+static void prj_rad_gr_m1_freq_precontract_add(
     prj_rad_gr_m1_freq_drift_cache *cache, int out,
     int a, int b, int c, double value)
 {
-    cache->qcoef[out][a][b][c] += value;
+    cache->q_uuu[out] += value * cache->ucon[a] * cache->ucon[b] *
+        cache->ucon[c];
+    cache->q_H[out][a] += value * cache->ucon[b] * cache->ucon[c];
+    cache->q_H[out][b] += value * cache->ucon[a] * cache->ucon[c];
+    cache->q_H[out][c] += value * cache->ucon[a] * cache->ucon[b];
+    cache->q_L[out][a][b] += value * cache->ucon[c];
+    cache->q_L[out][a][c] += value * cache->ucon[b];
+    cache->q_L[out][b][c] += value * cache->ucon[a];
+    cache->q_h[out][a] += value * cache->hcon[b][c];
+    cache->q_h[out][b] += value * cache->hcon[a][c];
+    cache->q_h[out][c] += value * cache->hcon[a][b];
 }
 
 static void prj_rad_gr_m1_freq_drift_precontract(
     prj_rad_gr_m1_freq_drift_cache *cache)
 {
-    int out;
     int a;
-    int b;
-    int c;
     int x;
     int i;
     int j;
     int k;
 
-    memset(cache->qcoef, 0, sizeof(cache->qcoef));
     memset(cache->q_uuu, 0, sizeof(cache->q_uuu));
     memset(cache->q_H, 0, sizeof(cache->q_H));
     memset(cache->q_L, 0, sizeof(cache->q_L));
     memset(cache->q_h, 0, sizeof(cache->q_h));
 
-    prj_rad_gr_m1_freq_qcoef_add(cache, 0, 0, 0, 0, cache->energy_Z);
+    prj_rad_gr_m1_freq_precontract_add(cache, 0, 0, 0, 0,
+        cache->energy_Z);
     for (x = 0; x < 3; ++x) {
-        prj_rad_gr_m1_freq_qcoef_add(cache, 0, 0, 0, x + 1,
+        prj_rad_gr_m1_freq_precontract_add(cache, 0, 0, 0, x + 1,
             cache->energy_Y[x]);
         for (i = 0; i < 3; ++i) {
-            prj_rad_gr_m1_freq_qcoef_add(cache, 0, 0, x + 1, i + 1,
+            prj_rad_gr_m1_freq_precontract_add(cache, 0, 0, x + 1, i + 1,
                 cache->energy_X[x][i]);
         }
     }
@@ -2071,87 +2077,96 @@ static void prj_rad_gr_m1_freq_drift_precontract(
         int out_mom = j + 1;
 
         for (x = 0; x < 3; ++x) {
-            prj_rad_gr_m1_freq_qcoef_add(cache, out_mom, 0, 0, x + 1,
+            prj_rad_gr_m1_freq_precontract_add(cache, out_mom, 0, 0, x + 1,
                 cache->mom_Y[j][x]);
             for (i = 0; i < 3; ++i) {
-                prj_rad_gr_m1_freq_qcoef_add(cache, out_mom, 0, x + 1,
+                prj_rad_gr_m1_freq_precontract_add(cache, out_mom, 0, x + 1,
                     i + 1, cache->mom_X[j][x][i]);
             }
         }
         for (a = 0; a < 3; ++a) {
             for (k = 0; k < 3; ++k) {
                 for (i = 0; i < 3; ++i) {
-                    prj_rad_gr_m1_freq_qcoef_add(cache, out_mom, a + 1,
+                    prj_rad_gr_m1_freq_precontract_add(cache, out_mom, a + 1,
                         k + 1, i + 1, cache->mom_W[j][a][k][i]);
-                }
-            }
-        }
-    }
-
-    for (out = 0; out < 4; ++out) {
-        for (a = 0; a < 4; ++a) {
-            for (b = 0; b < 4; ++b) {
-                for (c = 0; c < 4; ++c) {
-                    double q = cache->qcoef[out][a][b][c];
-
-                    if (q == 0.0) {
-                        continue;
-                    }
-                    cache->q_uuu[out] += q * cache->ucon[a] *
-                        cache->ucon[b] * cache->ucon[c];
-                    cache->q_H[out][a] += q * cache->ucon[b] *
-                        cache->ucon[c];
-                    cache->q_H[out][b] += q * cache->ucon[a] *
-                        cache->ucon[c];
-                    cache->q_H[out][c] += q * cache->ucon[a] *
-                        cache->ucon[b];
-                    cache->q_L[out][a][b] += q * cache->ucon[c];
-                    cache->q_L[out][a][c] += q * cache->ucon[b];
-                    cache->q_L[out][b][c] += q * cache->ucon[a];
-                    cache->q_h[out][a] += q * cache->hcon[b][c];
-                    cache->q_h[out][b] += q * cache->hcon[a][c];
-                    cache->q_h[out][c] += q * cache->hcon[a][b];
                 }
             }
         }
     }
 }
 
-static double prj_rad_gr_m1_freq_m3_contract(
+static void prj_rad_gr_m1_freq_m3_contract_all(
     const prj_rad_gr_m1_freq_drift_cache *cache,
-    const prj_rad_grm1_m3_data *m3, int out)
+    const prj_rad_grm1_m3_data *m3, double value[4])
 {
-    double value;
+    double cubic[4] = {0.0, 0.0, 0.0, 0.0};
+    int out;
     int a;
     int b;
+    int c;
+    int i;
+    int j;
+    int k;
+    int x;
 
-    value = m3->J * cache->q_uuu[out];
-    for (a = 0; a < 4; ++a) {
-        value += m3->H[a] * cache->q_H[out][a];
-    }
-    for (a = 0; a < 4; ++a) {
-        for (b = 0; b < 4; ++b) {
-            value += m3->L[a][b] * cache->q_L[out][a][b];
+    for (out = 0; out < 4; ++out) {
+        value[out] = m3->J * cache->q_uuu[out];
+        for (a = 0; a < 4; ++a) {
+            value[out] += m3->H[a] * cache->q_H[out][a];
+        }
+        for (a = 0; a < 4; ++a) {
+            for (b = 0; b < 4; ++b) {
+                value[out] += m3->L[a][b] * cache->q_L[out][a][b];
+            }
+        }
+        for (a = 0; a < 4; ++a) {
+            value[out] += 0.2 * m3->thick_w * m3->H[a] *
+                cache->q_h[out][a];
         }
     }
     if (m3->inv_Hnorm3 > 0.0) {
-        double cubic = 0.0;
-        int c;
+        double hhh[4][4][4];
 
         for (a = 0; a < 4; ++a) {
             for (b = 0; b < 4; ++b) {
                 for (c = 0; c < 4; ++c) {
-                    cubic += cache->qcoef[out][a][b][c] * m3->H[a] *
-                        m3->H[b] * m3->H[c];
+                    hhh[a][b][c] = m3->H[a] * m3->H[b] * m3->H[c];
                 }
             }
         }
-        value += m3->thin_w * m3->J * m3->inv_Hnorm3 * cubic;
+        cubic[0] = cache->energy_Z * hhh[0][0][0];
+        for (x = 0; x < 3; ++x) {
+            cubic[0] += cache->energy_Y[x] * hhh[0][0][x + 1];
+            for (i = 0; i < 3; ++i) {
+                cubic[0] += cache->energy_X[x][i] *
+                    hhh[0][x + 1][i + 1];
+            }
+        }
+        for (j = 0; j < 3; ++j) {
+            int out_mom = j + 1;
+
+            for (x = 0; x < 3; ++x) {
+                cubic[out_mom] += cache->mom_Y[j][x] *
+                    hhh[0][0][x + 1];
+                for (i = 0; i < 3; ++i) {
+                    cubic[out_mom] += cache->mom_X[j][x][i] *
+                        hhh[0][x + 1][i + 1];
+                }
+            }
+            for (a = 0; a < 3; ++a) {
+                for (k = 0; k < 3; ++k) {
+                    for (i = 0; i < 3; ++i) {
+                        cubic[out_mom] += cache->mom_W[j][a][k][i] *
+                            hhh[a + 1][k + 1][i + 1];
+                    }
+                }
+            }
+        }
+        for (out = 0; out < 4; ++out) {
+            value[out] += m3->thin_w * m3->J * m3->inv_Hnorm3 *
+                cubic[out];
+        }
     }
-    for (a = 0; a < 4; ++a) {
-        value += 0.2 * m3->thick_w * m3->H[a] * cache->q_h[out][a];
-    }
-    return value;
 }
 
 static void prj_rad_gr_m1_freq_drift_cache_init(
@@ -2495,7 +2510,7 @@ static void prj_rad_gr_m1_frequency_drifts_cached(
     double momentum_drift_cov[3])
 {
     prj_rad_grm1_m3_data m3;
-    double energy;
+    double drift[4];
     int j;
 
     *energy_drift = 0.0;
@@ -2507,11 +2522,11 @@ static void prj_rad_gr_m1_frequency_drifts_cached(
         return;
     }
 
-    energy = prj_rad_gr_m1_freq_m3_contract(cache, &m3, 0);
-    *energy_drift = PRJ_CLIGHT * energy;
+    prj_rad_gr_m1_freq_m3_contract_all(cache, &m3, drift);
+    *energy_drift = PRJ_CLIGHT * drift[0];
     for (j = 0; j < 3; ++j) {
         momentum_drift_cov[j] = PRJ_CLIGHT * PRJ_CLIGHT *
-            prj_rad_gr_m1_freq_m3_contract(cache, &m3, j + 1);
+            drift[j + 1];
     }
 }
 
@@ -4104,13 +4119,13 @@ static void prj_rad_gr_m1_freq_base_closure_ctx(const prj_z4c_hydro_geom *geom,
     prj_rad_gr_m1_fill_closure_ctx(geom, vcon, dvcon_dx, ctx);
 }
 
-void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
-    const prj_block *block, int z4c_stage, const double *W_state, double *u,
+void prj_rad_freq_flux_apply_gr_m1_geom(const prj_rad *rad,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage,
+    const prj_z4c_hydro_geom *geom, const double *W_state, double *u,
     int ic, int jc, int kc, double dt,
     const double observer_time_derivative[4])
 {
     double dvcon_dx[3][3];
-    prj_z4c_hydro_geom geom;
     prj_rad_gr_m1_closure_ctx base_closure;
     prj_rad_gr_m1_side_data pside;
     prj_rad_gr_m1_freq_drift_cache drift_cache;
@@ -4118,42 +4133,34 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
     double dt_geom;
     int field;
 
-    if (rad == 0 || mesh == 0 || block == 0 || W_state == 0 || u == 0) {
+    if (rad == 0 || mesh == 0 || block == 0 || geom == 0 || W_state == 0 ||
+        u == 0) {
         return;
     }
     if (block->v_riemann[0] == 0 || block->v_riemann[1] == 0 ||
         block->v_riemann[2] == 0) {
         return;
     }
-    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, ic, jc, kc, &geom)) {
-        fprintf(stderr,
-            "prj_rad_freq_flux_apply_gr_m1: failed to load Z4c geometry at cell (%d,%d,%d)\n",
-            ic, jc, kc);
-        exit(1);
-    }
     W_mhd = prj_block_mhd_stage_const(block, z4c_stage);
-    dt_geom = dt * geom.alpha * geom.sqrt_gamma;
+    dt_geom = dt * geom->alpha * geom->sqrt_gamma;
     if (dt_geom == 0.0) {
         return;
     }
 
     prj_rad_gr_m1_cell_dvcon_dx(block, ic, jc, kc, dvcon_dx);
-    prj_rad_gr_m1_freq_base_closure_ctx(&geom, W_mhd, dvcon_dx, ic, jc, kc,
+    prj_rad_gr_m1_freq_base_closure_ctx(geom, W_mhd, dvcon_dx, ic, jc, kc,
         &base_closure);
     prj_rad_gr_m1_prepare_side(&base_closure, &pside);
-    prj_rad_gr_m1_freq_drift_cache_init(&base_closure, &pside, &geom,
+    prj_rad_gr_m1_freq_drift_cache_init(&base_closure, &pside, geom,
         observer_time_derivative, &drift_cache);
 
     for (field = 0; field < PRJ_NRAD; ++field) {
-        double Eg[PRJ_NEGROUP];
-        double Mq_cov[PRJ_NEGROUP][3];
         double Acon_spec[PRJ_NEGROUP];
         double Mq_spec[PRJ_NEGROUP][3];
-        double inv_dnu[PRJ_NEGROUP];
         double energy_face[PRJ_NEGROUP + 1] = {0.0};
         double momentum_face[PRJ_NEGROUP + 1][PRJ_NDIM] = {{0.0}};
-        double energy_available[PRJ_NEGROUP];
         const double *nu_face = rad->eedge[field];
+        int cached_grid = rad->freq_grid_valid[field] != 0;
         int g;
         int gf;
         int a;
@@ -4167,27 +4174,28 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
         for (g = 0; g < PRJ_NEGROUP; ++g) {
             double dnu = nu_face[g + 1] - nu_face[g];
             double Fcov[3];
+            double Mq_cov[3];
             double Acon = 0.0;
+            double inv_dnu;
 
-            if (dnu <= 0.0) {
+            if (!cached_grid && dnu <= 0.0) {
                 fprintf(stderr,
                     "prj_rad_freq_flux_apply_gr_m1: non-positive eedge width for field %d group %d\n",
                     field, g);
                 exit(1);
             }
-            inv_dnu[g] = 1.0 / dnu;
-            Eg[g] = W_state[WIDX(PRJ_RAD_PRIM_E(field, g), ic, jc, kc)];
+            inv_dnu = cached_grid ? rad->freq_inv_dnu[field][g] : 1.0 / dnu;
             Fcov[0] = W_state[WIDX(PRJ_RAD_PRIM_F1(field, g), ic, jc, kc)];
             Fcov[1] = W_state[WIDX(PRJ_RAD_PRIM_F2(field, g), ic, jc, kc)];
             Fcov[2] = W_state[WIDX(PRJ_RAD_PRIM_F3(field, g), ic, jc, kc)];
 
-            prj_rad_gr_m1_frequency_drifts_cached(&drift_cache, Eg[g],
-                Fcov, &Acon, Mq_cov[g]);
-            Acon_spec[g] = Acon * inv_dnu[g];
+            prj_rad_gr_m1_frequency_drifts_cached(&drift_cache,
+                W_state[WIDX(PRJ_RAD_PRIM_E(field, g), ic, jc, kc)],
+                Fcov, &Acon, Mq_cov);
+            Acon_spec[g] = Acon * inv_dnu;
             for (a = 0; a < 3; ++a) {
-                Mq_spec[g][a] = Mq_cov[g][a] * inv_dnu[g];
+                Mq_spec[g][a] = Mq_cov[a] * inv_dnu;
             }
-            energy_available[g] = u[PRJ_CONS_RAD_E(field, g)];
         }
 
         for (gf = 1; gf < PRJ_NEGROUP; ++gf) {
@@ -4216,9 +4224,11 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                 double drain = dt_geom * outgoing[g];
 
                 theta[g] = 1.0;
-                if (drain > energy_available[g]) {
-                    theta[g] = energy_available[g] > 0.0 && drain > 0.0
-                        ? nextafter(energy_available[g] / drain, 0.0)
+                double energy_available = u[PRJ_CONS_RAD_E(field, g)];
+
+                if (drain > energy_available) {
+                    theta[g] = energy_available > 0.0 && drain > 0.0
+                        ? nextafter(energy_available / drain, 0.0)
                         : 0.0;
                 }
             }
@@ -4244,6 +4254,26 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
                 (momentum_face[g + 1][2] - momentum_face[g][2]);
         }
     }
+}
+
+void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
+    const prj_block *block, int z4c_stage, const double *W_state, double *u,
+    int ic, int jc, int kc, double dt,
+    const double observer_time_derivative[4])
+{
+    prj_z4c_hydro_geom geom;
+
+    if (rad == 0 || mesh == 0 || block == 0 || W_state == 0 || u == 0) {
+        return;
+    }
+    if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, ic, jc, kc, &geom)) {
+        fprintf(stderr,
+            "prj_rad_freq_flux_apply_gr_m1: failed to load Z4c geometry at cell (%d,%d,%d)\n",
+            ic, jc, kc);
+        exit(1);
+    }
+    prj_rad_freq_flux_apply_gr_m1_geom(rad, mesh, block, z4c_stage, &geom,
+        W_state, u, ic, jc, kc, dt, observer_time_derivative);
 }
 
 #if PRJ_NRAD > 0
@@ -8282,13 +8312,12 @@ static void prj_rad_gr_m1_matter_abort(const char *reason,
 }
 #endif
 
-void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
-    const prj_mesh *mesh, const prj_block *block, int z4c_stage, double *u,
-    double *prim, int i, int j, int k, double dt,
-    double *final_temperature)
+void prj_rad_gr_m1_matter_update_geom(prj_rad *rad, prj_eos *eos,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage,
+    const prj_z4c_hydro_geom *geom, double *u, double *prim,
+    int i, int j, int k, double dt, double *final_temperature)
 {
 #if PRJ_NRAD > 0
-    prj_z4c_hydro_geom geom;
     prj_eos_gr_geom eos_geom;
     double g_cov[4][4];
     double g_con[4][4];
@@ -8306,25 +8335,21 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     int v;
     int ok;
 
-    /* TEMP TIMER: remove after rad-matter coupling profiling. */
-    PRJ_TIMER_CURRENT_START("rad_matter_temp_geom");
     ok = rad != 0 && eos != 0 && mesh != 0 && block != 0 && u != 0 &&
-        isfinite(dt) &&
-        prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom);
-    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_geom");
+        geom != 0 && isfinite(dt);
     if (!ok) {
         return;
     }
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_clamp");
-    ok = prj_rad_gr_m1_clamp_fluxes_for_solve(&geom, u);
+    ok = prj_rad_gr_m1_clamp_fluxes_for_solve(geom, u);
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_clamp");
     if (!ok) {
         return;
     }
     for (a = 0; a < 3; ++a) {
         for (b = 0; b < 3; ++b) {
-            eos_geom.gamma[a][b] = geom.gamma[a][b];
+            eos_geom.gamma[a][b] = geom->gamma[a][b];
         }
     }
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
@@ -8365,7 +8390,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
 
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_moment_pack");
-    prj_rad_gr_m1_metric4_from_geom(&geom, g_cov, g_con);
+    prj_rad_gr_m1_metric4_from_geom(geom, g_cov, g_con);
     for (field = 0; field < PRJ_NRAD; ++field) {
         for (group = 0; group < PRJ_NEGROUP; ++group) {
             int idx = field * PRJ_NEGROUP + group;
@@ -8375,7 +8400,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
             Fcov[0] = W[PRJ_PRIM_RAD_F1(field, group)];
             Fcov[1] = W[PRJ_PRIM_RAD_F2(field, group)];
             Fcov[2] = W[PRJ_PRIM_RAD_F3(field, group)];
-            if (!prj_rad_gr_m1_moments_to_p(&geom, g_cov, g_con,
+            if (!prj_rad_gr_m1_moments_to_p(geom, g_cov, g_con,
                     W[PRJ_PRIM_RAD_E(field, group)], Fcov, &P[pidx])) {
                 PRJ_TIMER_CURRENT_STOP("rad_matter_temp_moment_pack");
                 return;
@@ -8386,22 +8411,22 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
 
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_implicit");
-    ok = prj_rad_gr_m1_implicit_solve(rad, eos, &geom, u_old, dt, P, resid,
+    ok = prj_rad_gr_m1_implicit_solve(rad, eos, geom, u_old, dt, P, resid,
         u_new, W_new);
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_implicit");
     if (!ok) {
         prj_rad_gr_m1_matter_abort("implicit solve failed", rad, block,
-            z4c_stage, i, j, k, dt, u_old, P, W, &geom, resid);
+            z4c_stage, i, j, k, dt, u_old, P, W, geom, resid);
     }
-    ok = prj_rad_gr_m1_clamp_fluxes_for_solve(&geom, u_new);
+    ok = prj_rad_gr_m1_clamp_fluxes_for_solve(geom, u_new);
     if (!ok) {
         prj_rad_gr_m1_matter_abort("post-solve radiation projection failed",
-            rad, block, z4c_stage, i, j, k, dt, u_old, P, W, &geom, resid);
+            rad, block, z4c_stage, i, j, k, dt, u_old, P, W, geom, resid);
     }
-    ok = prj_rad_gr_m1_copy_radiation_cons_to_prim(&geom, u_new, W_new);
+    ok = prj_rad_gr_m1_copy_radiation_cons_to_prim(geom, u_new, W_new);
     if (!ok) {
         prj_rad_gr_m1_matter_abort("post-solve primitive projection failed",
-            rad, block, z4c_stage, i, j, k, dt, u_old, P, W, &geom, resid);
+            rad, block, z4c_stage, i, j, k, dt, u_old, P, W, geom, resid);
     }
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_copy_out");
@@ -8423,6 +8448,7 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     (void)mesh;
     (void)block;
     (void)z4c_stage;
+    (void)geom;
     (void)u;
     (void)prim;
     (void)i;
@@ -8431,6 +8457,27 @@ void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
     (void)dt;
     (void)final_temperature;
 #endif
+}
+
+void prj_rad_gr_m1_matter_update(prj_rad *rad, prj_eos *eos,
+    const prj_mesh *mesh, const prj_block *block, int z4c_stage, double *u,
+    double *prim, int i, int j, int k, double dt,
+    double *final_temperature)
+{
+    prj_z4c_hydro_geom geom;
+    int ok;
+
+    /* TEMP TIMER: remove after rad-matter coupling profiling. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_geom");
+    ok = rad != 0 && eos != 0 && mesh != 0 && block != 0 && u != 0 &&
+        isfinite(dt) &&
+        prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k, &geom);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_geom");
+    if (!ok) {
+        return;
+    }
+    prj_rad_gr_m1_matter_update_geom(rad, eos, mesh, block, z4c_stage, &geom,
+        u, prim, i, j, k, dt, final_temperature);
 }
 #endif
 

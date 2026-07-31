@@ -572,6 +572,8 @@ struct prj_rad {
     double *egroup_erg[PRJ_NRAD];
     double *degroup_erg[PRJ_NRAD];
     double *x_e[PRJ_NRAD];
+    double freq_inv_dnu[PRJ_NRAD][PRJ_NEGROUP];
+    int freq_grid_valid[PRJ_NRAD];
 
     char table_param_file[PRJ_PATH_MAX];
     char table_file[PRJ_PATH_MAX];

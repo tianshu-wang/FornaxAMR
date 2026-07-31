@@ -532,18 +532,26 @@ static void prj_timeint_update_dt_src(const prj_mesh *mesh, const prj_grav *grav
 #if PRJ_NRAD > 0
 static void prj_timeint_rad_freq_flux_apply(const prj_mesh *mesh,
     const prj_block *block, int z4c_stage, const prj_rad *rad,
-    const double *W_state, double *u, int i, int j, int k,
+    const prj_z4c_hydro_geom *geom, const double *W_state,
+    double *u, int i, int j, int k,
     double lapse, double dt, const double observer_time_derivative[4])
 {
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
     if (prj_eos_full_dynamic_gr_enabled(mesh)) {
-        prj_rad_freq_flux_apply_gr_m1(rad, mesh, block, z4c_stage, W_state,
-            u, i, j, k, dt, observer_time_derivative);
+        if (geom != 0) {
+            prj_rad_freq_flux_apply_gr_m1_geom(rad, mesh, block, z4c_stage,
+                geom, W_state, u, i, j, k, dt,
+                observer_time_derivative);
+        } else {
+            prj_rad_freq_flux_apply_gr_m1(rad, mesh, block, z4c_stage,
+                W_state, u, i, j, k, dt, observer_time_derivative);
+        }
         return;
     }
 #else
     (void)mesh;
     (void)z4c_stage;
+    (void)geom;
     (void)observer_time_derivative;
 #endif
     prj_rad_freq_flux_apply(rad, block, W_state, u, i, j, k, lapse, dt);
@@ -653,8 +661,9 @@ static int prj_timeint_observer_quantities_from_vel(
 
 static void prj_timeint_observer_time_derivative_from_prim_cons(
     prj_eos *eos, const prj_mesh *mesh, const prj_block *block, int z4c_stage,
-    int i, int j, int k, const double *W_before, const double *u_after,
-    double dt_update, double observer_time_derivative[4])
+    const prj_z4c_hydro_geom *geom_in, int i, int j, int k,
+    const double *W_before, const double *u_after, double dt_update,
+    double observer_time_derivative[4])
 {
     prj_timeint_zero_observer_time_derivative(observer_time_derivative);
     if (!prj_eos_full_dynamic_gr_enabled(mesh) || W_before == 0 ||
@@ -662,7 +671,8 @@ static void prj_timeint_observer_time_derivative_from_prim_cons(
         return;
     }
     {
-        prj_z4c_hydro_geom zgeom;
+        prj_z4c_hydro_geom zgeom_storage;
+        const prj_z4c_hydro_geom *zgeom = geom_in;
         prj_eos_gr_geom egeom;
         double w_after[PRJ_NVAR_PRIM];
         double q_before[4];
@@ -671,20 +681,23 @@ static void prj_timeint_observer_time_derivative_from_prim_cons(
         int a;
         int b;
 
-        if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k,
-                &zgeom)) {
+        if (zgeom == 0 && !prj_z4c_load_hydro_geom(mesh, block, z4c_stage,
+                i, j, k, &zgeom_storage)) {
             return;
+        }
+        if (zgeom == 0) {
+            zgeom = &zgeom_storage;
         }
         for (a = 0; a < 3; ++a) {
             for (b = 0; b < 3; ++b) {
-                egeom.gamma[a][b] = zgeom.gamma[a][b];
+                egeom.gamma[a][b] = zgeom->gamma[a][b];
             }
         }
-        if (!prj_timeint_observer_quantities_from_cell_prim(&zgeom, W_before,
+        if (!prj_timeint_observer_quantities_from_cell_prim(zgeom, W_before,
                 i, j, k, q_before) ||
             !prj_timeint_observer_gr_recover_prim(eos, &egeom, u_after,
                 w_after) ||
-            !prj_timeint_observer_quantities_from_prim(&zgeom, w_after,
+            !prj_timeint_observer_quantities_from_prim(zgeom, w_after,
                 q_after)) {
             prj_timeint_zero_observer_time_derivative(
                 observer_time_derivative);
@@ -704,13 +717,15 @@ static void prj_timeint_observer_time_derivative_from_prim_cons(
 #else
 static void prj_timeint_observer_time_derivative_from_prim_cons(
     prj_eos *eos, const prj_mesh *mesh, const prj_block *block, int z4c_stage,
-    int i, int j, int k, const double *W_before, const double *u_after,
-    double dt_update, double observer_time_derivative[4])
+    const prj_z4c_hydro_geom *geom_in, int i, int j, int k,
+    const double *W_before, const double *u_after, double dt_update,
+    double observer_time_derivative[4])
 {
     (void)eos;
     (void)mesh;
     (void)block;
     (void)z4c_stage;
+    (void)geom_in;
     (void)i;
     (void)j;
     (void)k;
@@ -724,8 +739,9 @@ static void prj_timeint_observer_time_derivative_from_prim_cons(
 #if TIME_INTEGRATION == RK2 || !(PRJ_MHD && PRJ_NRAD > 0)
 static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
     const prj_mesh *mesh, const prj_block *block, int z4c_stage,
-    int i, int j, int k, const double *u_before, const double *u_after,
-    double dt_update, double observer_time_derivative[4])
+    const prj_z4c_hydro_geom *geom_in, int i, int j, int k,
+    const double *u_before, const double *u_after, double dt_update,
+    double observer_time_derivative[4])
 {
     prj_timeint_zero_observer_time_derivative(observer_time_derivative);
 #if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
@@ -734,7 +750,8 @@ static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
         return;
     }
     {
-        prj_z4c_hydro_geom zgeom;
+        prj_z4c_hydro_geom zgeom_storage;
+        const prj_z4c_hydro_geom *zgeom = geom_in;
         prj_eos_gr_geom egeom;
         double w_before[PRJ_NVAR_PRIM];
         double w_after[PRJ_NVAR_PRIM];
@@ -749,22 +766,25 @@ static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
          * the per-cell radiation update. The recovery below reads only the
          * leading PRJ_NVAR_MHD_CONS slots, so callers do not need to preserve
          * any radiation entries for u_before/u_after. */
-        if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage, i, j, k,
-                &zgeom)) {
+        if (zgeom == 0 && !prj_z4c_load_hydro_geom(mesh, block, z4c_stage,
+                i, j, k, &zgeom_storage)) {
             return;
+        }
+        if (zgeom == 0) {
+            zgeom = &zgeom_storage;
         }
         for (a = 0; a < 3; ++a) {
             for (b = 0; b < 3; ++b) {
-                egeom.gamma[a][b] = zgeom.gamma[a][b];
+                egeom.gamma[a][b] = zgeom->gamma[a][b];
             }
         }
         if (!prj_timeint_observer_gr_recover_prim(eos, &egeom, u_before,
                 w_before) ||
             !prj_timeint_observer_gr_recover_prim(eos, &egeom, u_after,
                 w_after) ||
-            !prj_timeint_observer_quantities_from_prim(&zgeom, w_before,
+            !prj_timeint_observer_quantities_from_prim(zgeom, w_before,
                 q_before) ||
-            !prj_timeint_observer_quantities_from_prim(&zgeom, w_after,
+            !prj_timeint_observer_quantities_from_prim(zgeom, w_after,
                 q_after)) {
             prj_timeint_zero_observer_time_derivative(
                 observer_time_derivative);
@@ -785,6 +805,7 @@ static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
     (void)mesh;
     (void)block;
     (void)z4c_stage;
+    (void)geom_in;
     (void)i;
     (void)j;
     (void)k;
@@ -983,6 +1004,10 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     double *bf_dst[3];
     double u[PRJ_NVAR_CONS];
     double observer_time_derivative[4];
+    const prj_z4c_hydro_geom *gr_geom = 0;
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+    prj_z4c_hydro_geom gr_geom_storage;
+#endif
     int d;
     int field;
     int group;
@@ -1037,8 +1062,19 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("essprk_src_temp_mhd_obs");
     prj_timeint_mhd_set_cons_b_from_bf(block, bf_dst, i, j, k, u);
+#if PRJ_DYNAMIC_GR && PRJ_USE_RADIATION_M1
+    if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+        if (!prj_z4c_load_hydro_geom(mesh, block, 0, i, j, k,
+                &gr_geom_storage)) {
+            prj_timeint_mhd_fail(
+                "prj_timeint_update_cell_stage1_mhd_rad: failed to load full-GR geometry");
+        }
+        gr_geom = &gr_geom_storage;
+    }
+#endif
     prj_timeint_observer_time_derivative_from_prim_cons(eos, mesh, block, 0,
-        i, j, k, block->W_mhd, u, dt, observer_time_derivative);
+        gr_geom, i, j, k, block->W_mhd, u, dt,
+        observer_time_derivative);
     PRJ_TIMER_CURRENT_STOP("essprk_src_temp_mhd_obs");
     {
         double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
@@ -1054,8 +1090,9 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #endif
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("essprk_src_temp_rad_freq");
-        prj_timeint_rad_freq_flux_apply(mesh, block, 0, rad, block->W_rad,
-            u, i, j, k, lapse_cell, dt, observer_time_derivative);
+        prj_timeint_rad_freq_flux_apply(mesh, block, 0, rad, gr_geom,
+            block->W_rad, u, i, j, k, lapse_cell, dt,
+            observer_time_derivative);
         PRJ_TIMER_CURRENT_STOP("essprk_src_temp_rad_freq");
         /* TEMP TIMER: remove after rad-matter coupling profiling. */
         PRJ_TIMER_CURRENT_START("essprk_src_temp_rad_ang");
@@ -1070,11 +1107,17 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
 #else
 #if PRJ_DYNAMIC_GR
         if (prj_eos_full_dynamic_gr_enabled(mesh)) {
+            const int matter_z4c_stage =
+                prj_stage_slot_from_bf_arg(use_bf1);
             /* TEMP TIMER: remove after rad-matter coupling profiling. */
             PRJ_TIMER_CURRENT_START("essprk_src_temp_rad_matter");
-            prj_rad_gr_m1_matter_update(rad, eos, mesh, block,
-                prj_stage_slot_from_bf_arg(use_bf1), u, 0, i, j, k, dt,
-                &T_cell);
+            if (matter_z4c_stage == 0) {
+                prj_rad_gr_m1_matter_update_geom(rad, eos, mesh, block,
+                    matter_z4c_stage, gr_geom, u, 0, i, j, k, dt, &T_cell);
+            } else {
+                prj_rad_gr_m1_matter_update(rad, eos, mesh, block,
+                    matter_z4c_stage, u, 0, i, j, k, dt, &T_cell);
+            }
             PRJ_TIMER_CURRENT_STOP("essprk_src_temp_rad_matter");
         } else {
 #endif
@@ -1138,15 +1181,16 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 #endif
 
-        prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 0,
+        prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 0, 0,
             i, j, k, u, u1, dt, observer_time_derivative);
 #if PRJ_USE_RADIATION_FSA
         /* Discard unphysical negative-J undershoots before the radiation update;
            no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
         prj_rad_fsa_clamp_intensities(u1);
 #endif
-        prj_timeint_rad_freq_flux_apply(mesh, block, 0, rad, block->W_rad,
-            u1, i, j, k, lapse_cell, dt, observer_time_derivative);
+        prj_timeint_rad_freq_flux_apply(mesh, block, 0, rad, 0,
+            block->W_rad, u1, i, j, k, lapse_cell, dt,
+            observer_time_derivative);
         prj_rad_ang_flux_apply(rad, block, block->W_rad, u1, i, j, k, lapse_cell, dt);
 #if PRJ_USE_RADIATION_FSA
         prj_rad_inel_fsa(rad, block, i, j, k, eos, u1, dt, T_cell);
@@ -1247,14 +1291,14 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
                 u_trial[v];
         }
         prj_timeint_mhd_set_cons_b_from_bf(block, block->Bf, i, j, k, u);
-        prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 1,
+        prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 1, 0,
             i, j, k, u1, u_trial, dt, observer_time_derivative);
         {
             double T_cell = block->eosvar[EIDX(PRJ_EOSVAR_TEMPERATURE, i, j, k)];
             double lapse_cell = prj_timeint_cell_lapse(block, i, j, k);
 
-            prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, W_rad_stage1,
-                u, i, j, k, lapse_cell, 0.5 * dt,
+            prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, 0,
+                W_rad_stage1, u, i, j, k, lapse_cell, 0.5 * dt,
                 observer_time_derivative);
             prj_rad_ang_flux_apply(rad, block, W_rad_stage1, u, i, j, k,
                 lapse_cell, 0.5 * dt);
@@ -1354,8 +1398,8 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
            no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
         prj_rad_fsa_clamp_intensities(u);
 #endif
-        prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, W_rad_stage1,
-            u, i, j, k, lapse_cell, 0.5 * dt,
+        prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, 0,
+            W_rad_stage1, u, i, j, k, lapse_cell, 0.5 * dt,
             observer_time_derivative);
         prj_rad_ang_flux_apply(rad, block, W_rad_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
 #if PRJ_USE_RADIATION_FSA
@@ -1418,15 +1462,16 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         double kappa[PRJ_NRAD * PRJ_NEGROUP];
 #endif
 
-        prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 1,
+        prj_timeint_observer_time_derivative_from_cons(eos, mesh, block, 1, 0,
             i, j, k, u1, u_trial, dt, observer_time_derivative);
 #if PRJ_USE_RADIATION_FSA
         /* Discard unphysical negative-J undershoots before the radiation update;
            no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
         prj_rad_fsa_clamp_intensities(u);
 #endif
-        prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, W_stage1,
-            u, i, j, k, lapse_cell, 0.5 * dt, observer_time_derivative);
+        prj_timeint_rad_freq_flux_apply(mesh, block, 1, rad, 0, W_stage1,
+            u, i, j, k, lapse_cell, 0.5 * dt,
+            observer_time_derivative);
         prj_rad_ang_flux_apply(rad, block, W_stage1, u, i, j, k, lapse_cell, 0.5 * dt);
 #if PRJ_USE_RADIATION_FSA
         prj_rad_inel_fsa(rad, block, i, j, k, eos, u, 0.5 * dt, T_cell);
@@ -1803,7 +1848,7 @@ static void prj_timeint_imex_add_explicit_rad_deriv(prj_eos *eos, prj_rad *rad,
        no matter back-reaction (see prj_rad_fsa_clamp_intensities). */
     prj_rad_fsa_clamp_intensities(u1);
 #endif
-    prj_timeint_rad_freq_flux_apply(mesh, block, stage, rad, W_rad_stage,
+    prj_timeint_rad_freq_flux_apply(mesh, block, stage, rad, 0, W_rad_stage,
         u1, i, j, k, lapse_cell, dt, observer_time_derivative);
     prj_rad_ang_flux_apply(rad, block, W_rad_stage, u1, i, j, k, lapse_cell, dt);
 #if PRJ_USE_RADIATION_M1 || PRJ_USE_RADIATION_FSA
