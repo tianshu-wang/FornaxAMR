@@ -4290,6 +4290,13 @@ void prj_rad_freq_flux_apply_gr_m1(const prj_rad *rad, const prj_mesh *mesh,
 #define PRJ_RAD_GR_M1_SOLVE_EMIN PRJ_RAD_GR_M1_E_FLOOR
 #define PRJ_RAD_GR_M1_LINESEARCH_MAX 16
 #define PRJ_RAD_GR_M1_APPROX_MAXITER 8
+/* Velocity gate for the Eulerian (u = n) fast candidate: cells with
+ * (v/c)^2 below this threshold build the fast candidate in the Eulerian normal
+ * frame, dropping the O(v/c) fluid boost.  The exact residual check that gates
+ * acceptance still uses the true four-velocity, so this only affects candidate
+ * quality, never correctness.  Constant for now (v/c < 0.01); to be replaced by
+ * a tol-derived per-cell estimate once realistic residual data is available. */
+#define PRJ_RAD_GR_M1_EULERIAN_V2_GATE 1.0e-4
 
 typedef struct prj_rad_gr_m1_jac_blocks {
     double fluid[PRJ_RAD_GR_M1_NFLUID][PRJ_RAD_GR_M1_NFLUID];
@@ -7504,6 +7511,111 @@ static void prj_rad_gr_m1_diagnose_elementwise_jacobian(
     }
 }
 
+/* Closed-form Eulerian (u = n) radiation candidate for the matter coupling.
+ * In the Eulerian normal frame the per-group 4x4 implicit system built by
+ * prj_rad_gr_m1_approx_reduced_resjac becomes exactly diagonal and closure-
+ * independent: every M1 closure-derivative term is contracted with the spatial
+ * part of n_cov (which is zero) and the flux columns of the geometry tensor T
+ * vanish, leaving a scalar absorption/emission update for E and an independent
+ * scalar drag on each flux component,
+ *
+ *   E_new   = (E_old + s_gu * eta/c) / (sqrtg + s_gu * kappa_eff)
+ *   F_new_d =  F_old_d              / (sqrtg + s_rgg * kt/c)
+ *
+ * with kappa_eff = kappa, sigma_eff = sigma*(1 - delta/3), kt = kappa_eff +
+ * sigma_eff, and the same s_gu = alpha*sqrtg*dt*c, s_rgg = alpha*sqrtg*dt*c^2
+ * as the general assembly.  This reproduces the general candidate at u = n up
+ * to LU-vs-division rounding, so the exact residual check (which always uses
+ * the true four-velocity) still gates acceptance.  Used only below the velocity
+ * gate; it skips the four-velocity boost, the closure projector, and the 4x4
+ * factor/solve entirely, but still fills the eos/opac caches the exact check
+ * reuses.  Returns 0 (fall through to the general path) on any invalid input. */
+static int prj_rad_gr_m1_eulerian_candidate(const prj_rad *rad,
+    prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
+    double dt, const double *P_hydro, double *P_full,
+    prj_eos_rty_interp_result *eos_out,
+    prj_rad_gr_m1_opac_cache *opac_out)
+{
+    double c_light = PRJ_CLIGHT;
+    double sqrtg;
+    double alpha;
+    double s_gu;
+    double s_rgg;
+    double eint;
+    double pressure;
+    int field;
+    int group;
+    int v;
+    int ok;
+
+    if (rad == 0 || eos == 0 || geom == 0 || u_old == 0 || P_hydro == 0 ||
+        P_full == 0 || eos_out == 0 || opac_out == 0 || !isfinite(dt) ||
+        !isfinite(geom->sqrt_gamma) || geom->sqrt_gamma <= 0.0 ||
+        !isfinite(geom->alpha) || geom->alpha <= 0.0 ||
+        !isfinite(P_hydro[0]) || P_hydro[0] <= 0.0 ||
+        !isfinite(P_hydro[4]) || P_hydro[4] <= 0.0 ||
+        !isfinite(P_hydro[5])) {
+        return 0;
+    }
+    sqrtg = geom->sqrt_gamma;
+    alpha = geom->alpha;
+    s_gu = alpha * sqrtg * dt * c_light;
+    s_rgg = alpha * sqrtg * dt * c_light * c_light;
+
+    for (v = 0; v < PRJ_RAD_GR_M1_NFLUID; ++v) {
+        P_full[v] = P_hydro[v];
+    }
+
+    ok = prj_eos_rty_interp(eos, P_hydro[0], P_hydro[4], P_hydro[5],
+        eos_out, PRJ_EOS_CTX_MAIN);
+    eint = eos_out->eint;
+    pressure = eos_out->pressure;
+    if (!ok || !isfinite(eint) || eint < 0.0 || !isfinite(pressure)) {
+        return 0;
+    }
+    prj_rad3_opac_lookup_interp(rad, P_hydro[0], P_hydro[4], P_hydro[5],
+        opac_out);
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int idx = field * PRJ_NEGROUP + group;
+            int pidx = PRJ_RAD_GR_M1_NFLUID +
+                PRJ_RAD_GR_M1_NRAD_BLOCK * idx;
+            double kappa_eff = opac_out->kappa[idx];
+            double sigma_eff = opac_out->sigma[idx] *
+                (1.0 - opac_out->delta[idx] / 3.0);
+            double kt = kappa_eff + sigma_eff;
+            double eta = opac_out->eta[idx];
+            double E_old = u_old[PRJ_CONS_RAD_E(field, group)];
+            double E_den = sqrtg + s_gu * kappa_eff;
+            double F_den = sqrtg + s_rgg * kt / c_light;
+            double E_new;
+            int d;
+
+            if (!isfinite(kappa_eff) || !isfinite(sigma_eff) ||
+                !isfinite(kt) || !isfinite(eta) || !isfinite(E_old) ||
+                !(E_den > 0.0) || !(F_den > 0.0)) {
+                return 0;
+            }
+            E_new = (E_old + s_gu * eta / c_light) / E_den;
+            if (!isfinite(E_new) || E_new < 0.0) {
+                return 0;
+            }
+            P_full[pidx] = E_new;
+            for (d = 0; d < 3; ++d) {
+                double F_old = u_old[PRJ_CONS_RAD_F1(field, group) + d];
+                double F_new = F_old / F_den;
+
+                if (!isfinite(F_new)) {
+                    return 0;
+                }
+                P_full[pidx + 1 + d] = F_new;
+            }
+        }
+    }
+    return 1;
+}
+
 static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
     prj_eos *eos, const prj_z4c_hydro_geom *geom, const double *u_old,
     double dt, double *P, double *resid_out, double *u_new_out,
@@ -7514,6 +7626,7 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
     int maxiter = PRJ_RAD_GR_M1_SOLVE_MAXITER_DEFAULT;
     prj_rad_gr_m1_frozen_group frozen[PRJ_RAD_GR_M1_NGROUPS];
     prj_rad_gr_m1_cell_context fast_ctx;
+    int use_eulerian = 0;
     prj_eos_rty_interp_result eos_cache;
     prj_eos_rty_interp_result eos_trial_cache;
     prj_rad_gr_m1_opac_cache opac_cache;
@@ -7559,10 +7672,39 @@ static int prj_rad_gr_m1_implicit_solve_approx(const prj_rad *rad,
         return 0;
     }
 
+    /* Velocity gate: for slow cells solve the fast candidate in the Eulerian
+     * normal frame (u = n) via the closed-form scalar update, which drops the
+     * O(v/c) boost, the M1 closure projector, and the per-group 4x4 solve.  The
+     * exact residual check below always uses the true four-velocity (fast_ctx),
+     * so a mis-gated cell merely fails the check and falls through to the full
+     * solve -- correctness is intact. */
+    {
+        double vhat[3];
+        double v2 = 0.0;
+        int gi;
+        int gj;
+
+        for (gi = 0; gi < 3; ++gi) {
+            vhat[gi] = P_current[1 + gi] / PRJ_CLIGHT;
+        }
+        for (gi = 0; gi < 3; ++gi) {
+            for (gj = 0; gj < 3; ++gj) {
+                v2 += geom->gamma[gi][gj] * vhat[gi] * vhat[gj];
+            }
+        }
+        use_eulerian = isfinite(v2) && v2 >= 0.0 &&
+            v2 < PRJ_RAD_GR_M1_EULERIAN_V2_GATE;
+    }
+
     PRJ_TIMER_CURRENT_START("rad_matter_temp_approx_fast_candidate");
-    ok = prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old, 0,
-        &fast_ctx, P_current, dt, P_eval, 0, 0, 0, 0, &eos_cache, 0,
-        &opac_cache, 0, threshold, 1);
+    if (use_eulerian) {
+        ok = prj_rad_gr_m1_eulerian_candidate(rad, eos, geom, u_old, dt,
+            P_current, P_eval, &eos_cache, &opac_cache);
+    } else {
+        ok = prj_rad_gr_m1_approx_reduced_resjac(rad, eos, geom, u_old, 0,
+            &fast_ctx, P_current, dt, P_eval, 0, 0, 0, 0, &eos_cache, 0,
+            &opac_cache, 0, threshold, 1);
+    }
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_approx_fast_candidate");
     if (!ok) {
         return 0;

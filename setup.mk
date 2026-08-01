@@ -1,0 +1,1 @@
+setups/magnetized_ccsn_z4c.mk
