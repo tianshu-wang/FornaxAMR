@@ -578,9 +578,23 @@ int main(int argc, char *argv[])
                 fprintf(stderr, "E_injected changed after amr_adapt: %.6e -> %.6e (delta=%.6e)\n",
                     E_injected_before, sim.eos.E_injected, sim.eos.E_injected - E_injected_before);
             }
-            if (block_changed) {
+            /* Rebalance after any AMR grid change, and additionally whenever the
+               measured per-rank workload has drifted past imbalance_tolerance
+               even if the grid is unchanged (e.g. stiff coupling migrating). The
+               imbalance test is collective, so all ranks agree. */
+            int need_rebalance = block_changed;
+            if (!need_rebalance) {
+                need_rebalance = prj_mpi_imbalance_exceeds(&sim.mesh, &mpi,
+                    sim.imbalance_tolerance);
+            }
+            if (need_rebalance) {
                 prj_mpi_rebalance(&sim.mesh, &mpi);
 #if PRJ_USE_GRAVITY
+                /* Any rebalance (grid change or imbalance-only) migrates blocks
+                   between ranks; the per-block geometric gravity cache is not
+                   refreshed per step, so rebuild it here for the new owners.
+                   build_rf is deterministic in the (unchanged-on-imbalance) mesh
+                   geometry, so this does not alter the radial grid. */
                 if (!prj_eos_full_dynamic_gr_enabled(&sim.mesh)) {
                     prj_gravity_rebuild_grid(&sim, &mpi);
                 }

@@ -149,6 +149,10 @@ struct prj_z4c_params {
 struct prj_block {
     int id;
     int rank;
+    /* Accumulated wall-clock time (seconds) spent in this block's src_cell_update
+       work since the last rebalance; used as the MPI load-balancing weight.
+       Replicated across ranks after prj_mpi_gather_block_costs. */
+    double work_cost;
     int level;
     int active;
     int refine_flag;
@@ -659,6 +663,7 @@ struct prj_sim {
     int restart_from_latest;
     char restart_file_name[256];
     int amr_interval;
+    double imbalance_tolerance;
     int dump_count;
     double perturbation_gaussian_norm;
     unsigned long long perturbation_seed;

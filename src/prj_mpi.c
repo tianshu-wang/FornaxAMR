@@ -407,12 +407,51 @@ static void prj_mpi_compute_decomposition(prj_mesh *mesh, const prj_mpi *mpi)
         return;
     }
     nrank = mpi != 0 ? mpi->totrank : 1;
-    for (i = 0; i < count; ++i) {
-        rank = (int)(((long long)i * (long long)nrank) / (long long)count);
-        if (rank >= nrank) {
-            rank = nrank - 1;
+    {
+        /* Cost-weighted split along the space-filling curve: give each rank a
+           contiguous chunk carrying roughly equal accumulated work_cost, instead
+           of an equal *count* of blocks. Blocks with no measurement yet
+           (work_cost <= 0, e.g. freshly refined or right after restart) get the
+           mean positive cost so they do not clump onto a single rank. If nothing
+           has been measured at all, fall back to the equal-count formula. */
+        double total_cost = 0.0;
+        int npos = 0;
+
+        for (i = 0; i < count; ++i) {
+            double c = mesh->blocks[items[i].id].work_cost;
+            if (c > 0.0) {
+                total_cost += c;
+                npos += 1;
+            }
         }
-        mesh->blocks[items[i].id].rank = rank;
+        if (total_cost <= 0.0 || nrank <= 1) {
+            for (i = 0; i < count; ++i) {
+                rank = (int)(((long long)i * (long long)nrank) / (long long)count);
+                if (rank >= nrank) {
+                    rank = nrank - 1;
+                }
+                mesh->blocks[items[i].id].rank = rank;
+            }
+        } else {
+            double fill = total_cost / (double)npos;
+            double eff_total = total_cost + (double)(count - npos) * fill;
+            double per = eff_total / (double)nrank;
+            double acc = 0.0;
+
+            for (i = 0; i < count; ++i) {
+                double c = mesh->blocks[items[i].id].work_cost;
+
+                rank = (int)(acc / per);
+                if (rank >= nrank) {
+                    rank = nrank - 1;
+                }
+                if (rank < 0) {
+                    rank = 0;
+                }
+                mesh->blocks[items[i].id].rank = rank;
+                acc += (c > 0.0) ? c : fill;
+            }
+        }
     }
     prj_mpi_sync_slot_ranks(mesh);
     free(items);
@@ -4065,8 +4104,17 @@ void prj_mpi_init(int *argc, char ***argv, prj_mpi *mpi)
 
 void prj_mpi_decompose(prj_mesh *mesh, const prj_mpi *mpi)
 {
+    int rb;
+
     prj_mpi_compute_decomposition(mesh, mpi);
     prj_mpi_assign_inactive_ranks(mesh);
+    /* Fresh measurement window after the initial/restart partition (and after a
+       non-MPI rebalance, which routes here). */
+    if (mesh != 0) {
+        for (rb = 0; rb < mesh->nblocks; ++rb) {
+            mesh->blocks[rb].work_cost = 0.0;
+        }
+    }
 #if defined(PRJ_ENABLE_MPI)
     /* DIAGNOSTIC: report owned-block balance across ranks before allocating cell
        storage, so a non-crashing run still shows whether rank 0 is overloaded. */
@@ -4744,6 +4792,102 @@ double prj_mpi_global_sum(const prj_mpi *mpi, double local_val)
 #endif
 }
 
+/* Replicate each block's measured work_cost across all ranks. Every rank only
+   accumulates work_cost for the blocks it currently owns (others stay 0), so an
+   element-wise SUM over the length-nblocks array leaves every rank holding each
+   block's owner-measured cost. This makes the weighted decomposition (which runs
+   redundantly and deterministically on every rank) see identical weights. */
+static void prj_mpi_gather_block_costs(prj_mesh *mesh, const prj_mpi *mpi)
+{
+#if defined(PRJ_ENABLE_MPI)
+    double *local;
+    double *global;
+    int i;
+
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1 || mesh->nblocks <= 0) {
+        return;
+    }
+    local = (double *)prj_malloc((size_t)mesh->nblocks * sizeof(*local));
+    global = (double *)prj_malloc((size_t)mesh->nblocks * sizeof(*global));
+    if (local == 0 || global == 0) {
+        free(global);
+        free(local);
+        return;
+    }
+    for (i = 0; i < mesh->nblocks; ++i) {
+        local[i] = mesh->blocks[i].work_cost;
+    }
+    MPI_Allreduce(local, global, mesh->nblocks, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    for (i = 0; i < mesh->nblocks; ++i) {
+        mesh->blocks[i].work_cost = global[i];
+    }
+    free(global);
+    free(local);
+#else
+    (void)mesh;
+    (void)mpi;
+#endif
+}
+
+/* Zero every block's accumulated work_cost so the next rebalance window starts
+   fresh right after a (re)partition. */
+static void prj_mpi_reset_block_costs(prj_mesh *mesh)
+{
+    int i;
+
+    if (mesh == 0) {
+        return;
+    }
+    for (i = 0; i < mesh->nblocks; ++i) {
+        mesh->blocks[i].work_cost = 0.0;
+    }
+}
+
+/* Collective load-imbalance test. Each rank sums the measured work_cost of the
+   active blocks it owns; the busiest rank's load relative to the average (ideal)
+   load defines the imbalance. Returns the same value on every rank (Allreduce),
+   so it is safe to use to gate the collective prj_mpi_rebalance. */
+int prj_mpi_imbalance_exceeds(const prj_mesh *mesh, const prj_mpi *mpi, double tol)
+{
+#if defined(PRJ_ENABLE_MPI)
+    double local_load = 0.0;
+    double total_load = 0.0;
+    double max_load = 0.0;
+    double avg_load;
+    int i;
+
+    if (mesh == 0 || mpi == 0 || mpi->totrank <= 1) {
+        return 0;
+    }
+    for (i = 0; i < mesh->nblocks; ++i) {
+        const prj_block *b = &mesh->blocks[i];
+
+        if (prj_block_is_active(b) && b->rank == mpi->rank) {
+            local_load += b->work_cost;
+        }
+    }
+    MPI_Allreduce(&local_load, &total_load, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&local_load, &max_load, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    avg_load = total_load / (double)mpi->totrank;
+    if (avg_load <= 0.0) {
+        return 0;
+    }
+    if (max_load / avg_load - 1.0 > tol) {
+        if (mpi->rank == 0) {
+            fprintf(stderr, "[mpi imbalance] load max/avg-1=%.4f > tol=%.4f: rebalancing\n",
+                max_load / avg_load - 1.0, tol);
+        }
+        return 1;
+    }
+    return 0;
+#else
+    (void)mesh;
+    (void)mpi;
+    (void)tol;
+    return 0;
+#endif
+}
+
 void prj_mpi_rebalance(prj_mesh *mesh, prj_mpi *mpi)
 {
 #if defined(PRJ_ENABLE_MPI)
@@ -4768,6 +4912,9 @@ void prj_mpi_rebalance(prj_mesh *mesh, prj_mpi *mpi)
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {
         old_ranks[bidx] = mesh->blocks[bidx].rank;
     }
+    /* Replicate per-block work_cost so the weighted decomposition sees identical
+       weights on every rank, then partition by that cost. */
+    prj_mpi_gather_block_costs(mesh, mpi);
     prj_mpi_collect_active_counts(mesh, mpi, counts_before);
     prj_mpi_compute_decomposition(mesh, mpi);
     did_rebalance = prj_mpi_has_rebalanced(mesh, old_ranks);
@@ -4781,6 +4928,8 @@ void prj_mpi_rebalance(prj_mesh *mesh, prj_mpi *mpi)
             prj_mpi_counts_changed(counts_before, counts_after, mpi->totrank)) {
         prj_mpi_print_balance(mesh, mpi);
     }
+    /* Start a fresh measurement window for the next rebalance. */
+    prj_mpi_reset_block_costs(mesh);
     free(counts_after);
     free(counts_before);
     free(old_ranks);

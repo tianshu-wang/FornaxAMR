@@ -22,6 +22,7 @@ int prj_mpi_amr_mhd_prolongate_bf_one(const prj_mpi *mpi, const prj_block *paren
 double prj_mpi_min_dt(const prj_mpi *mpi, double local_dt);
 double prj_mpi_global_sum(const prj_mpi *mpi, double local_val);
 void prj_mpi_rebalance(prj_mesh *mesh, prj_mpi *mpi);
+int prj_mpi_imbalance_exceeds(const prj_mesh *mesh, const prj_mpi *mpi, double tol);
 int prj_mpi_get_neighbor_rank(const prj_mesh *mesh, int neighbor_block_id);
 void prj_mpi_finalize(prj_mpi *mpi);
 

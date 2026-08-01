@@ -253,6 +253,7 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->restart_interval = -1;
     sim->timer_interval = 100;
     sim->amr_interval = -1;
+    sim->imbalance_tolerance = 0.1;
     sim->progenitor_file[0] = '\0';
     sim->perturbation_gaussian_norm = 0.0;
     sim->perturbation_seed = 0ULL;
@@ -439,6 +440,8 @@ void prj_io_parser(prj_sim *sim, char *filename)
             sim->timer_interval = (int)strtol(value, &endptr, 10);
         } else if (strcmp(key, "amr_interval") == 0) {
             sim->amr_interval = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "imbalance_tolerance") == 0) {
+            sim->imbalance_tolerance = strtod(value, &endptr);
         } else if (strcmp(key, "perturbation_gaussian_norm") == 0) {
             sim->perturbation_gaussian_norm = strtod(value, &endptr);
         } else if (strcmp(key, "perturbation_seed") == 0) {

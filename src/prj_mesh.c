@@ -278,6 +278,7 @@ static void prj_block_init_empty(prj_block *b)
 
     b->id = -1;
     b->rank = 0;
+    b->work_cost = 0.0;
     b->level = 0;
     b->active = 1;
     b->refine_flag = 0;

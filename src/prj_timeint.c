@@ -2364,6 +2364,7 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
             int i;
             int j;
             int k;
+            double cost_t0 = prj_timer_now();
 
             prj_src_update(eos, rad, grav, mesh, block, 0, block->W_mhd, block->W_rad,
                 block->mhd_rhs, block->rad_rhs);
@@ -2376,6 +2377,7 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
                     }
                 }
             }
+            block->work_cost += prj_timer_now() - cost_t0;
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "essprk_step_src_cell_update");
@@ -2612,6 +2614,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int i;
             int j;
             int k;
+            double cost_t0 = prj_timer_now();
 
             prj_src_update(eos, rad, grav, mesh, block, 0, block->W_mhd, block->W_rad,
                 block->mhd_rhs, block->rad_rhs);
@@ -2625,6 +2628,7 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     }
                 }
             }
+            block->work_cost += prj_timer_now() - cost_t0;
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage1_src_cell_update");
@@ -2726,6 +2730,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
             int i;
             int j;
             int k;
+            double cost_t0 = prj_timer_now();
 
             prj_src_update(eos, rad, grav, mesh, block, 1, prj_block_mhd_stage(block, 1),
                 prj_block_rad_stage(block, 1), block->mhd_rhs, block->rad_rhs);
@@ -2737,6 +2742,7 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
                     }
                 }
             }
+            block->work_cost += prj_timer_now() - cost_t0;
         }
     }
     PRJ_TIMER_BARRIER_STOP(timer, mpi, "stage2_src_cell_update");
