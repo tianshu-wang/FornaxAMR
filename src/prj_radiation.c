@@ -4979,6 +4979,7 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
             double Ruu = 0.0;
             double Gcon[4];
             double kappa_eff;
+            double eta_eff;
             double sigma_eff;
             double Gdotn = 0.0;
             double Gdotu = 0.0;
@@ -4990,15 +4991,16 @@ static int prj_rad_gr_m1_residual(const prj_rad *rad, prj_eos *eos,
                 }
                 Ruu += R_u[a] * ucov[a];
             }
-            kappa_eff = kappa[idx];
+            kappa_eff = kappa[idx] + rad->gr_m1_eleinel_dkappa[idx];
+            eta_eff = eta[idx] + rad->gr_m1_eleinel_deta[idx];
             sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
             if (!isfinite(kappa_eff) || !isfinite(sigma_eff) ||
-                !isfinite(eta[idx])) {
+                !isfinite(eta_eff)) {
                 return 0;
             }
             for (a = 0; a < 4; ++a) {
                 Gcon[a] = -(kappa_eff + sigma_eff) * R_u[a] -
-                    (sigma_eff * Ruu + eta[idx] / PRJ_CLIGHT) * ucon[a];
+                    (sigma_eff * Ruu + eta_eff / PRJ_CLIGHT) * ucon[a];
                 if (!isfinite(Gcon[a])) {
                     return 0;
                 }
@@ -5366,7 +5368,8 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
             double dR_u_rad[PRJ_RAD_GR_M1_NRAD_BLOCK][4];
             double dRuu_rad[PRJ_RAD_GR_M1_NRAD_BLOCK];
             double Gcon[4];
-            double kappa_eff = kappa[idx];
+            double kappa_eff = kappa[idx] + rad->gr_m1_eleinel_dkappa[idx];
+            double eta_eff = eta[idx] + rad->gr_m1_eleinel_deta[idx];
             double sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
             double kt = kappa_eff + sigma_eff;
             double scalar;
@@ -5409,9 +5412,9 @@ static int prj_rad_gr_m1_residual_jacobian(const prj_rad *rad, prj_eos *eos,
                     }
                 }
             }
-            scalar = sigma_eff * Ruu + eta[idx] / c;
+            scalar = sigma_eff * Ruu + eta_eff / c;
             if (!isfinite(kappa_eff) || !isfinite(sigma_eff) ||
-                !isfinite(eta[idx]) || !isfinite(scalar)) {
+                !isfinite(eta_eff) || !isfinite(scalar)) {
                 return 0;
             }
             for (a = 0; a < 4; ++a) {
@@ -6039,14 +6042,15 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
             double Ruu = 0.0;
             double Gcon[4];
             prj_rad_grm1_R_projector Rproj;
-            double kappa_eff = kappa[idx];
+            double kappa_eff = kappa[idx] + rad->gr_m1_eleinel_dkappa[idx];
+            double eta_eff = eta[idx] + rad->gr_m1_eleinel_deta[idx];
             double sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
             double scalar;
             double Gdotn = 0.0;
             double Gdotu = 0.0;
 
             if (!isfinite(E) || E < 0.0 || !isfinite(kappa_eff) ||
-                !isfinite(sigma_eff) || !isfinite(eta[idx])) {
+                !isfinite(sigma_eff) || !isfinite(eta_eff)) {
                 return 0;
             }
             Fcov[0] = P[pidx + 1];
@@ -6077,7 +6081,7 @@ static int prj_rad_gr_m1_exact_residual_check(const prj_rad *rad,
             for (a = 0; a < 4; ++a) {
                 Ruu += R_u[a] * ucov[a];
             }
-            scalar = sigma_eff * Ruu + eta[idx] / PRJ_CLIGHT;
+            scalar = sigma_eff * Ruu + eta_eff / PRJ_CLIGHT;
             if (!isfinite(scalar)) {
                 return 0;
             }
@@ -6732,7 +6736,10 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
             double Gn_const = 0.0;
             double Gu_const = 0.0;
             double Ggamma_const[3] = {0.0, 0.0, 0.0};
-            double kappa_eff = kappa[idx];
+            double de_kappa = rad->gr_m1_eleinel_dkappa[idx];
+            double de_eta = rad->gr_m1_eleinel_deta[idx];
+            double kappa_eff = kappa[idx] + de_kappa;
+            double eta_eff = eta[idx] + de_eta;
             double sigma_eff = sigma[idx] * (1.0 - delta[idx] / 3.0);
             double kt = kappa_eff + sigma_eff;
             double scalar;
@@ -6763,7 +6770,7 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
                 L = 0;
             }
             if (!isfinite(kappa_eff) || !isfinite(sigma_eff) ||
-                !isfinite(kt) || !isfinite(eta[idx])) {
+                !isfinite(kt) || !isfinite(eta_eff)) {
                 return 0;
             }
             for (cc = 0; cc < PRJ_RAD_GR_M1_NRAD_BLOCK; ++cc) {
@@ -6798,7 +6805,7 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
                 }
             }
             for (a = 0; a < 4; ++a) {
-                Gconst[a] = -(eta[idx] / c_light) * ucon[a];
+                Gconst[a] = -(eta_eff / c_light) * ucon[a];
                 if (!isfinite(Gconst[a])) {
                     return 0;
                 }
@@ -6868,7 +6875,7 @@ static int prj_rad_gr_m1_approx_reduced_resjac(const prj_rad *rad,
                     }
                     Ruu += R_u[a] * ucov[a];
                 }
-                scalar = sigma_eff * Ruu + eta[idx] / c_light;
+                scalar = sigma_eff * Ruu + eta_eff / c_light;
                 if (!isfinite(scalar)) {
                     return 0;
                 }
@@ -7581,11 +7588,12 @@ static int prj_rad_gr_m1_eulerian_candidate(const prj_rad *rad,
             int idx = field * PRJ_NEGROUP + group;
             int pidx = PRJ_RAD_GR_M1_NFLUID +
                 PRJ_RAD_GR_M1_NRAD_BLOCK * idx;
-            double kappa_eff = opac_out->kappa[idx];
+            double kappa_eff = opac_out->kappa[idx] +
+                rad->gr_m1_eleinel_dkappa[idx];
             double sigma_eff = opac_out->sigma[idx] *
                 (1.0 - opac_out->delta[idx] / 3.0);
             double kt = kappa_eff + sigma_eff;
-            double eta = opac_out->eta[idx];
+            double eta = opac_out->eta[idx] + rad->gr_m1_eleinel_deta[idx];
             double E_old = u_old[PRJ_CONS_RAD_E(field, group)];
             double E_den = sqrtg + s_gu * kappa_eff;
             double F_den = sqrtg + s_rgg * kt / c_light;
@@ -8751,6 +8759,150 @@ static void prj_rad_gr_m1_matter_abort(const char *reason,
 }
 #endif
 
+#if PRJ_NRAD > 0
+/* Freeze the electron-inelastic-scattering (eleinel) opacity/emissivity for one
+ * cell at the start of the GR M1 matter-coupling implicit step.  Using the
+ * comoving radiation energy J = R^{ab} u_a u_b (built from the SAME canonical
+ * M1 R^{ab} the residual/jacobian use) and the INITIAL temperature, this calls
+ * the exact non-GR eleinel kernel and stores per-group additions to eta/kappa
+ * that are then held constant during the Newton iteration.  The source/sink map
+ * onto (eta, kappa) because the non-GR normal energy update and the non-GR
+ * eleinel step share the identical backward-Euler form
+ *   E_new = (E_old + dt*eta) / (1 + dt*c*kappa)   [normal]
+ *   E_new = (E_old + dt*source_phys) / (1 + dt*c*sink)   [eleinel].
+ * When eleinel is absent (table not loaded, or rho below threshold) the arrays
+ * stay zero, so the assembly-site additions are a no-op (bit-identical). */
+static void prj_rad_gr_m1_freeze_eleinel(prj_rad *rad, prj_eos *eos,
+    const prj_z4c_hydro_geom *geom, const double g_cov[4][4],
+    const double g_con[4][4], const double *u_old, const double *P)
+{
+    const int ngroups = PRJ_NRAD * PRJ_NEGROUP;
+    const double eta_factor = 1.0 / (4.0 * M_PI);
+    double je[PRJ_NRAD * PRJ_NEGROUP];
+    double he[PRJ_NRAD * PRJ_NEGROUP * PRJ_NDIM];
+    double source_arr[PRJ_NRAD * PRJ_NEGROUP];
+    double sink_arr[PRJ_NRAD * PRJ_NEGROUP];
+    double ucon[4];
+    double ucov[4];
+    double rho;
+    double T;
+    double Ye;
+    double etael;
+    int field;
+    int group;
+    int d;
+    int idx;
+
+    (void)u_old;
+    for (idx = 0; idx < ngroups; ++idx) {
+        rad->gr_m1_eleinel_dkappa[idx] = 0.0;
+        rad->gr_m1_eleinel_deta[idx] = 0.0;
+        je[idx] = 0.0;
+        for (d = 0; d < PRJ_NDIM; ++d) {
+            he[idx * PRJ_NDIM + d] = 0.0;
+        }
+    }
+    if (!rad->eleinel_table_loaded) {
+        return;
+    }
+    rho = P[0];
+    T = P[4];
+    Ye = P[5];
+    if (rho <= rad->min_inel_density) {
+        return;
+    }
+    if (!prj_rad_gr_m1_fluid_four_velocity(geom, g_cov, P, ucon, ucov)) {
+        return;
+    }
+    etael = prj_eos_rty_geteta(eos, rho, T, Ye, PRJ_EOS_CTX_MAIN);
+    if (etael < -20.0) {
+        etael = -20.0;
+    }
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int gidx = field * PRJ_NEGROUP + group;
+            int pidx = 6 + 4 * gidx;
+            double E = P[pidx];
+            double Fcov[3];
+            double Fcon[3];
+            double Rcon[4][4];
+            double R_u[4];
+            double Ruu = 0.0;
+            double Hcon[4];
+            double he_mag = 0.0;
+            double conv = RAD_SCALE * eta_factor * PRJ_MEV_TO_ERG /
+                rad->degroup_erg[field][group];
+            int a;
+            int b;
+
+            Fcov[0] = P[pidx + 1];
+            Fcov[1] = P[pidx + 2];
+            Fcov[2] = P[pidx + 3];
+            for (a = 0; a < 3; ++a) {
+                Fcon[a] = 0.0;
+                for (b = 0; b < 3; ++b) {
+                    Fcon[a] += geom->gamma_inv[a][b] * Fcov[b];
+                }
+            }
+            if (E < 0.0 || !prj_rad_grm1_build_R(g_cov, g_con, geom->alpha, E,
+                    Fcon, Rcon)) {
+                continue; /* leave this group's je/he at zero */
+            }
+            for (a = 0; a < 4; ++a) {
+                R_u[a] = 0.0;
+                for (b = 0; b < 4; ++b) {
+                    R_u[a] += Rcon[a][b] * ucov[b];
+                }
+                Ruu += R_u[a] * ucov[a];
+            }
+            if (Ruu < 0.0) {
+                Ruu = 0.0;
+            }
+            /* Comoving energy J = Ruu; comoving flux H^a = -(R^{ab}u_b + u^a J)
+             * (projector uses u.u = -1 in this geometric metric).  Flat/static
+             * rest limit: J -> E, H_i -> F_i, matching the non-GR je/he. */
+            je[gidx] = PRJ_CLIGHT * Ruu * conv;
+            for (a = 0; a < 4; ++a) {
+                Hcon[a] = -(R_u[a] + ucon[a] * Ruu);
+            }
+            for (d = 0; d < PRJ_NDIM; ++d) {
+                double Hcov_d = 0.0;
+                double ratio;
+
+                for (b = 0; b < 3; ++b) {
+                    Hcov_d += geom->gamma[d][b] * Hcon[b + 1];
+                }
+                he[gidx * PRJ_NDIM + d] = Hcov_d * conv;
+                ratio = he[gidx * PRJ_NDIM + d] / (je[gidx] + 1.0e-15);
+                he_mag += ratio * ratio;
+            }
+            he_mag = sqrt(he_mag);
+            if (he_mag > 1.0) {
+                for (d = 0; d < PRJ_NDIM; ++d) {
+                    he[gidx * PRJ_NDIM + d] /= he_mag;
+                }
+            }
+        }
+    }
+
+    prj_rad_eleinel_lookup(rad, rho, T, Ye, etael, je, he,
+        source_arr, sink_arr, 0);
+
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int gidx = field * PRJ_NEGROUP + group;
+            double source_phys = source_arr[gidx] *
+                rad->degroup_erg[field][group] /
+                (PRJ_MEV_TO_ERG * eta_factor);
+
+            rad->gr_m1_eleinel_deta[gidx] = source_phys;
+            rad->gr_m1_eleinel_dkappa[gidx] = sink_arr[gidx];
+        }
+    }
+}
+#endif
+
 void prj_rad_gr_m1_matter_update_geom(prj_rad *rad, prj_eos *eos,
     const prj_mesh *mesh, const prj_block *block, int z4c_stage,
     const prj_z4c_hydro_geom *geom, double *u, double *prim,
@@ -8847,6 +8999,13 @@ void prj_rad_gr_m1_matter_update_geom(prj_rad *rad, prj_eos *eos,
         }
     }
     PRJ_TIMER_CURRENT_STOP("rad_matter_temp_moment_pack");
+
+    /* Freeze the eleinel opacity/emissivity from the start-of-step comoving J
+     * and the initial temperature; added, held constant, to eta/kappa inside
+     * the implicit solve below. */
+    PRJ_TIMER_CURRENT_START("rad_matter_temp_eleinel_freeze");
+    prj_rad_gr_m1_freeze_eleinel(rad, eos, geom, g_cov, g_con, u_old, P);
+    PRJ_TIMER_CURRENT_STOP("rad_matter_temp_eleinel_freeze");
 
     /* TEMP TIMER: remove after rad-matter coupling profiling. */
     PRJ_TIMER_CURRENT_START("rad_matter_temp_implicit");

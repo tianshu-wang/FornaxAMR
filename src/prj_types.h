@@ -622,6 +622,13 @@ struct prj_rad {
     double eleinel_factf_over_freqe3[PRJ_NRAD * PRJ_NEGROUP];
     double eleinel_freqe2_dnue[PRJ_NRAD * PRJ_NEGROUP];
     double expe[PRJ_NRAD][PRJ_NEGROUP * PRJ_NEGROUP * PRJ_EXPE_NT];
+    /* Per-cell frozen eleinel opacity/emissivity additions for the GR M1
+     * matter coupling.  Computed once per cell (start-of-step comoving J and
+     * initial T) in prj_rad_gr_m1_freeze_eleinel and added, held constant, to
+     * the normal kappa/eta inside the implicit solve.  Serial per-cell scratch
+     * (no OpenMP in the matter update). */
+    double gr_m1_eleinel_dkappa[PRJ_NRAD * PRJ_NEGROUP];
+    double gr_m1_eleinel_deta[PRJ_NRAD * PRJ_NEGROUP];
 #endif
 };
 
