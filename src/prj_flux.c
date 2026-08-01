@@ -2199,9 +2199,15 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
         /* BEGIN TEMP TIMER: essprk_step_flux_send breakdown
          * Remove tmp_flux_gr_geom_cache after flux profiling. */
         PRJ_TIMER_CURRENT_START("tmp_flux_gr_geom_cache");
-        for (gi = -PRJ_NGHOST; gi < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gi) {
-            for (gj = -PRJ_NGHOST; gj < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gj) {
-                for (gk = -PRJ_NGHOST; gk < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++gk) {
+        /* Only cells [-1, BLOCK_SIZE] in every axis are ever read from this
+         * cache: prj_flux_gr_face_geom_cached is the sole consumer, and
+         * prj_flux_face_cells reaches at most one cell into the ghost region
+         * (il=i-1) while the (MHD-extended) face loop spans [-1, BLOCK_SIZE].
+         * Skip the outermost ghost layer (indices -PRJ_NGHOST and
+         * BLOCK_SIZE+PRJ_NGHOST-1) instead of loading the full 20^3 range. */
+        for (gi = -1; gi <= PRJ_BLOCK_SIZE; ++gi) {
+            for (gj = -1; gj <= PRJ_BLOCK_SIZE; ++gj) {
+                for (gk = -1; gk <= PRJ_BLOCK_SIZE; ++gk) {
                     if (!prj_z4c_load_hydro_geom(mesh, block, z4c_stage,
                             gi, gj, gk, &gr_cell_geom[LIDX(gi, gj, gk)])) {
                         prj_flux_gr_fail("geometry cache load", -1, 0, gi, gj, gk);

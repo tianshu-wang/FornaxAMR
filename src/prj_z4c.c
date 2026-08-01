@@ -498,6 +498,22 @@ static double prj_z4c_guarded_chi(const prj_z4c_params *opt, double chi)
     return chi;
 }
 
+/* Conformal factor inv_factor = psi^{-4} = chi_guarded^{-4/chi_power}.
+ * The exponent -4/chi_power is a runtime value the compiler cannot fold, so
+ * pow() is called on the hot per-cell geometry path even in the common
+ * chi_psi_power == -4 configuration where the exponent is exactly 1.0. Fast-
+ * path that case: pow(x, 1.0) == x exactly (IEEE 754), so this is bit-identical
+ * while skipping the pow() call. Any other exponent falls through to pow(). */
+static double prj_z4c_chi_inv_factor(double chi_guarded, double chi_power)
+{
+    double exponent = -4.0 / chi_power;
+
+    if (exponent == 1.0) {
+        return chi_guarded;
+    }
+    return pow(chi_guarded, exponent);
+}
+
 static void prj_z4c_load_A(const double *z, int i, int j, int k, double A[3][3]);
 
 static int prj_z4c_fd1_stencil_in_storage(int dir, int i, int j, int k)
@@ -571,7 +587,7 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
     if (!isfinite(chi_power) || fabs(chi_power) < 1.0e-300) {
         chi_power = -4.0;
     }
-    inv_factor = pow(chi_guarded, -4.0 / chi_power);
+    inv_factor = prj_z4c_chi_inv_factor(chi_guarded, chi_power);
     if (!isfinite(inv_factor) || inv_factor <= 0.0) {
         return 0;
     }
@@ -631,13 +647,25 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
             geom->dbeta[dir][a] =
                 prj_z4c_Dx(z, prj_z4c_beta_var(a), dir, idx, i, j, k);
         }
-        for (a = 0; a < 3; ++a) {
-            for (b = 0; b < 3; ++b) {
-                double dg = prj_z4c_Dx(z, prj_z4c_g_var(a, b), dir, idx, i, j, k);
-                double dfactor = factor * (4.0 / chi_power) *
-                    dchi[dir] / chi_guarded;
+        {
+            /* dfactor is (a,b)-independent; hoist it out of the tensor loop.
+             * The conformal metric and its FD derivative are symmetric
+             * (prj_z4c_g_var symmetrizes its indices, so Dx(g_var(a,b)) reads
+             * the same storage as Dx(g_var(b,a)) and g[a][b]==g[b][a]), so the
+             * off-diagonal dgamma entries are bitwise equal. Compute the six
+             * unique b>=a entries and mirror, halving the FD stencil work. */
+            double dfactor = factor * (4.0 / chi_power) *
+                dchi[dir] / chi_guarded;
 
-                geom->dgamma[dir][a][b] = factor * dg + dfactor * g[a][b];
+            for (a = 0; a < 3; ++a) {
+                for (b = a; b < 3; ++b) {
+                    double dg =
+                        prj_z4c_Dx(z, prj_z4c_g_var(a, b), dir, idx, i, j, k);
+                    double val = factor * dg + dfactor * g[a][b];
+
+                    geom->dgamma[dir][a][b] = val;
+                    geom->dgamma[dir][b][a] = val;
+                }
             }
         }
     }
@@ -684,7 +712,7 @@ int prj_z4c_cell_sqrt_gamma(const prj_mesh *mesh, const prj_block *block,
     if (!isfinite(chi_power) || fabs(chi_power) < 1.0e-300) {
         chi_power = -4.0;
     }
-    inv_factor = pow(chi_guarded, -4.0 / chi_power);
+    inv_factor = prj_z4c_chi_inv_factor(chi_guarded, chi_power);
     if (!isfinite(inv_factor) || inv_factor <= 0.0) {
         return 0;
     }
@@ -735,7 +763,7 @@ int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
     if (!isfinite(chi_power) || fabs(chi_power) < 1.0e-300) {
         chi_power = -4.0;
     }
-    inv_factor = pow(chi_guarded, -4.0 / chi_power);
+    inv_factor = prj_z4c_chi_inv_factor(chi_guarded, chi_power);
     if (!isfinite(inv_factor) || inv_factor <= 0.0) {
         return 0;
     }
@@ -2136,7 +2164,7 @@ static void prj_z4c_compute_rhs_cell(const prj_mesh *mesh, const prj_block *bloc
     if (chi_guarded <= opt->chi_min_floor || !isfinite(chi_guarded)) {
         chi_guarded = opt->chi_min_floor;
     }
-    oopsi4 = pow(chi_guarded, -4.0 / opt->chi_psi_power);
+    oopsi4 = prj_z4c_chi_inv_factor(chi_guarded, opt->chi_psi_power);
     K = prj_z4c_get(z, PRJ_Z4C_KHAT, i, j, k) +
         2.0 * prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k);
     alpha = prj_z4c_get(z, PRJ_Z4C_ALPHA, i, j, k);
