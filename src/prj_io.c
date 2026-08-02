@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <math.h>
 #include <dirent.h>
@@ -266,6 +268,20 @@ static void prj_io_finalize_z4c_params(prj_sim *sim)
         prj_io_fail("use_full_dynamic_gr=1 is not supported with IMEX time integration");
     }
 #endif
+#if PRJ_DYNAMIC_GR
+    if (sim->dt_gw > 0.0) {
+        if (!isfinite(sim->mesh.z4c_params.wave_radii_cm) ||
+            sim->mesh.z4c_params.wave_radii_cm <= 0.0) {
+            prj_io_fail("z4c_wave_radii_cm must be positive and finite when dt_gw > 0");
+        }
+        if (sim->mesh.z4c_params.wave_lmax < 2) {
+            prj_io_fail("z4c_wave_lmax must be at least 2 when dt_gw > 0");
+        }
+        if (sim->mesh.use_full_dynamic_gr == 0) {
+            prj_io_fail("dt_gw requires use_full_dynamic_gr=1 in a DYNAMIC_GR build");
+        }
+    }
+#endif
 }
 
 static void prj_io_set_default_runtime(prj_sim *sim)
@@ -527,6 +543,18 @@ void prj_io_parser(prj_sim *sim, char *filename)
             exit(1);
         } else if (strcmp(key, "z4c_extrap_order") == 0) {
             sim->mesh.z4c_extrap_order = (int)strtol(value, &endptr, 10);
+        } else if (strcmp(key, "z4c_wave_radii_cm") == 0) {
+            sim->mesh.z4c_params.wave_radii_cm = strtod(value, &endptr);
+        } else if (strcmp(key, "z4c_wave_lmax") == 0) {
+            long parsed_lmax;
+
+            errno = 0;
+            parsed_lmax = strtol(value, &endptr, 10);
+            if (errno == ERANGE || parsed_lmax < INT_MIN || parsed_lmax > INT_MAX) {
+                endptr = value;
+            } else {
+                sim->mesh.z4c_params.wave_lmax = (int)parsed_lmax;
+            }
         } else if (strcmp(key, "shift_eta") == 0 || strcmp(key, "damp_kappa1") == 0 ||
                    strcmp(key, "z4c_shift_eta") == 0 || strcmp(key, "z4c_damp_kappa1") == 0) {
             fprintf(stderr,

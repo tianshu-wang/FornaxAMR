@@ -284,6 +284,10 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "min_dx: %.6e\n", sim->mesh.min_dx);
     fprintf(stderr, "x_com_err_tol: %.6e\n", sim->x_com_err_tol);
     fprintf(stderr, "dt_gw: %.6e\n", sim->dt_gw);
+#if PRJ_DYNAMIC_GR
+    fprintf(stderr, "z4c_wave_radii_cm: %.6e\n", sim->mesh.z4c_params.wave_radii_cm);
+    fprintf(stderr, "z4c_wave_lmax: %d\n", sim->mesh.z4c_params.wave_lmax);
+#endif
     fprintf(stderr, "amr_init_scale_factor: %.6e\n", sim->mesh.amr_init_scale_factor);
     fprintf(stderr, "amr_reach_highest_level_at_density: %.6e\n",
         sim->mesh.amr_reach_highest_level_at_density);
@@ -390,7 +394,11 @@ int main(int argc, char *argv[])
         mkdir("output", 0777);
     }
     if (sim.restart_from_file == 0 && sim.dt_gw > 0.0) {
+#if PRJ_DYNAMIC_GR
+        prj_z4c_wave_init(&mpi);
+#else
         prj_diagnostics_truncate_dqdt(&mpi);
+#endif
     }
     sim.dump_count = 0;
     if (sim.restart_from_file != 0) {
@@ -665,9 +673,13 @@ int main(int argc, char *argv[])
             } while (sim.time >= next_gw_time);
         }
         if (write_gw) {
-            PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_dqdt");
+            PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_gw");
+#if PRJ_DYNAMIC_GR
+            prj_z4c_extract_wave(&sim.mesh, &mpi, sim.time);
+#else
             prj_diagnostics_write_dqdt(&sim.mesh, &mpi, sim.time);
-            PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "write_dqdt");
+#endif
+            PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "write_gw");
         }
         if (write_output) {
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_output");

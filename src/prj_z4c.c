@@ -64,6 +64,8 @@ void prj_z4c_init_params(prj_z4c_params *params)
     params->shift_alpha2Gamma = 0.0;
     params->shift_H = 0.0;
     params->shift_eta_inv_cm = 7e-6;
+    params->wave_radii_cm = 1.0e9;
+    params->wave_lmax = 4;
     params->puncture_mass_cm = 1.0;
     params->puncture_center_cm[0] = 0.0;
     params->puncture_center_cm[1] = 0.0;
@@ -787,6 +789,55 @@ int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
         for (b = 0; b < 3; ++b) {
             geom->gamma[a][b] = factor * g[a][b];
             geom->gamma_inv[a][b] = inv_factor * gu[a][b];
+        }
+    }
+    return 1;
+}
+
+int prj_z4c_load_adm_cell(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, double gamma[3][3], double K_dd[3][3])
+{
+    const prj_z4c_params *opt;
+    const double *z;
+    double g[3][3];
+    double A[3][3];
+    double chi;
+    double chi_guarded;
+    double chi_power;
+    double inv_factor;
+    double factor;
+    double Ktrace;
+    int a, b;
+
+    if (!prj_z4c_runtime_enabled(mesh) || block == 0 || gamma == 0 || K_dd == 0 ||
+        !prj_z4c_cell_in_storage(i, j, k)) {
+        return 0;
+    }
+    z = prj_block_z4c_stage_const(block, prj_stage_slot_from_bf_arg(stage));
+    if (z == 0) {
+        return 0;
+    }
+    opt = &mesh->z4c_params;
+    prj_z4c_load_metric(z, i, j, k, g);
+    chi = prj_z4c_get(z, PRJ_Z4C_CHI, i, j, k);
+    chi_guarded = prj_z4c_guarded_chi(opt, chi);
+    chi_power = opt->chi_psi_power;
+    if (!isfinite(chi_power) || fabs(chi_power) < 1.0e-300) {
+        chi_power = -4.0;
+    }
+    inv_factor = prj_z4c_chi_inv_factor(chi_guarded, chi_power);
+    if (!isfinite(inv_factor) || inv_factor <= 0.0) {
+        return 0;
+    }
+    factor = 1.0 / inv_factor;
+    Ktrace = prj_z4c_get(z, PRJ_Z4C_KHAT, i, j, k) +
+        2.0 * prj_z4c_get(z, PRJ_Z4C_THETA, i, j, k);
+    prj_z4c_load_A(z, i, j, k, A);
+    for (a = 0; a < 3; ++a) {
+        for (b = 0; b < 3; ++b) {
+            gamma[a][b] = factor * g[a][b];
+            K_dd[a][b] = factor * A[a][b] +
+                (1.0 / 3.0) * gamma[a][b] * Ktrace;
         }
     }
     return 1;
@@ -2914,6 +2965,14 @@ int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
     (void)j;
     (void)k;
     (void)geom;
+    return 0;
+}
+
+int prj_z4c_load_adm_cell(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, double gamma[3][3], double K_dd[3][3])
+{
+    (void)mesh; (void)block; (void)stage; (void)i; (void)j; (void)k;
+    (void)gamma; (void)K_dd;
     return 0;
 }
 

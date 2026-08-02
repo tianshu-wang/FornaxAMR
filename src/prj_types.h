@@ -115,6 +115,7 @@ struct prj_bc {
 
 struct prj_z4c_params {
     int use_z4c;
+    int wave_lmax;
     int floor_chi;
     int slow_start_lapse;
     int ssl_damping_index;
@@ -136,6 +137,7 @@ struct prj_z4c_params {
     double shift_alpha2Gamma;
     double shift_H;
     double shift_eta_inv_cm;
+    double wave_radii_cm;
     double puncture_mass_cm;
     double puncture_center_cm[3];
     double puncture_floor_radius_cm;

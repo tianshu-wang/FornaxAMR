@@ -7,6 +7,10 @@ const char *prj_z4c_var_name(int var);
 const char *prj_z4c_tmunu_var_name(int var);
 int prj_z4c_runtime_enabled(const prj_mesh *mesh);
 void prj_z4c_init_params(prj_z4c_params *params);
+void prj_z4c_wave_init(const prj_mpi *mpi);
+void prj_z4c_extract_wave(const prj_mesh *mesh, const prj_mpi *mpi,
+    double time_seconds);
+int prj_z4c_wave_self_test(void);
 
 typedef struct prj_z4c_hydro_geom {
     double gamma[3][3];
@@ -24,6 +28,8 @@ int prj_z4c_load_hydro_geom(const prj_mesh *mesh, const prj_block *block,
     int stage, int i, int j, int k, prj_z4c_hydro_geom *geom);
 int prj_z4c_load_hydro_metric_geom(const prj_mesh *mesh, const prj_block *block,
     int stage, int i, int j, int k, prj_z4c_hydro_geom *geom);
+int prj_z4c_load_adm_cell(const prj_mesh *mesh, const prj_block *block,
+    int stage, int i, int j, int k, double gamma[3][3], double K_dd[3][3]);
 /* Lightweight sqrt(gamma) only: same value load_hydro_geom returns in
  * geom.sqrt_gamma, but without the metric inverse, lapse/shift, or extrinsic
  * curvature. Returns 1 on success. */
