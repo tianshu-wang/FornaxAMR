@@ -175,6 +175,10 @@ void prj_rad_eleinel_init(prj_rad *rad)
         fprintf(stderr, "prj_rad_inel: null rad\n");
         exit(1);
     }
+#if !PRJ_USE_INELASTIC_SCATTERING
+    rad->eleinel_table_loaded = 0;
+    return;
+#endif
     if (rad->eleinel_table_dir[0] == '\0') {
         rad->eleinel_table_loaded = 0;
         return;
@@ -498,6 +502,11 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     int g;
     int d;
 
+#if !PRJ_USE_INELASTIC_SCATTERING || \
+    PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+    (void)rad; (void)eos; (void)u; (void)dt; (void)T_cell;
+    return;
+#endif
     if (!rad->eleinel_table_loaded) return;
 
     rho = u[PRJ_CONS_RHO];
@@ -844,6 +853,11 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
     double dy;
     double Uint_new;
 
+#if !PRJ_USE_INELASTIC_SCATTERING || \
+    PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+    (void)rad; (void)eos; (void)u; (void)dt; (void)T_cell;
+    return 1;
+#endif
     rho = u[PRJ_CONS_RHO];
     if (rho < rad->min_inel_density) {
         return 1;
@@ -1077,6 +1091,11 @@ static void prj_rad_inel_fsa_apply_m1_tmp(const prj_rad *rad,
 int prj_rad_inel_fsa(prj_rad *rad, const prj_block *block, int ic, int jc, int kc,
     prj_eos *eos, double *u, double dt, double T_cell)
 {
+#if !PRJ_USE_INELASTIC_SCATTERING
+    (void)rad; (void)block; (void)ic; (void)jc; (void)kc;
+    (void)eos; (void)u; (void)dt; (void)T_cell;
+    return 1;
+#else
     double u_tmp[PRJ_NVAR_CONS];
     int status;
 
@@ -1086,6 +1105,7 @@ int prj_rad_inel_fsa(prj_rad *rad, const prj_block *block, int ic, int jc, int k
     prj_rad_inel_fsa_apply_m1_tmp(rad, block, ic, jc, kc, u, u_tmp);
 
     return status;
+#endif
 }
 #endif
 

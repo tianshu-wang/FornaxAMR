@@ -3,7 +3,8 @@
 
 void prj_src_geom(prj_eos *eos, double *W_mhd, double *W_rad,
     double *mhd_rhs, double *rad_rhs);
-void prj_src_user(prj_eos *eos, double *W_mhd, double *W_rad,
+void prj_src_user(const prj_mesh *mesh, const prj_block *block,
+    prj_eos *eos, double *W_mhd, double *W_rad,
     double *mhd_rhs, double *rad_rhs);
 void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
     const prj_grav *grav, double *restrict W_mhd, double *restrict W_rad,

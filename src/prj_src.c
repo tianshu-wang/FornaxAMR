@@ -19,14 +19,12 @@ void prj_src_geom(prj_eos *eos, double *W_mhd, double *W_rad,
     (void)rad_rhs;
 }
 
-void prj_src_user(prj_eos *eos, double *W_mhd, double *W_rad,
+void prj_src_user(const prj_mesh *mesh, const prj_block *block,
+    prj_eos *eos, double *W_mhd, double *W_rad,
     double *mhd_rhs, double *rad_rhs)
 {
     (void)eos;
-    (void)W_mhd;
-    (void)W_rad;
-    (void)mhd_rhs;
-    (void)rad_rhs;
+    prj_problem_user_source(mesh, block, W_mhd, W_rad, mhd_rhs, rad_rhs);
 }
 
 void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
@@ -747,7 +745,7 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
         }
     }
     prj_src_geom(eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
-    prj_src_user(eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
+    prj_src_user(mesh, block, eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
 #if PRJ_DYNAMIC_GR
     if (full_dynamic_gr) {
         prj_src_gr_z4c(eos, rad, mesh, block, z4c_stage, W_mhd, W_rad,

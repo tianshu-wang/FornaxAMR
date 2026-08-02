@@ -33,6 +33,19 @@
 /* 1 MeV per baryon in cgs specific-energy units (erg g^-1). */
 #define PRJ_EOS_ENERGY_SCALE 0.95655684e18
 #define PRJ_EOS_PRESSURE_SCALE 1.60217733e33
+#define PRJ_EOS_ARAD 7.5657e-15
+
+#if PRJ_EOS_T3
+static double prj_eos_t3_eint(double rho, double T)
+{
+    return PRJ_EOS_ARAD * T * T * T * T / rho;
+}
+
+static double prj_eos_t3_pressure(double rho)
+{
+    return 1.0e-30 * rho;
+}
+#endif
 
 enum {
     PRJ_EOS_REC_EINT = 1,
@@ -508,6 +521,16 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
     if (eos_quantities == 0) {
         return;
     }
+#if PRJ_EOS_T3
+    (void)eos;
+    (void)ye;
+    (void)ctx;
+    eos_quantities[PRJ_EOS_EINT] = prj_eos_t3_eint(rho, T);
+    eos_quantities[PRJ_EOS_PRESSURE] = prj_eos_t3_pressure(rho);
+    eos_quantities[PRJ_EOS_GAMMA] = 1.0;
+    eos_quantities[PRJ_EOS_TEMPERATURE] = T;
+    return;
+#endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         int jy;
@@ -552,6 +575,23 @@ int prj_eos_rty_interp(prj_eos *eos, double rho, double T, double ye,
         !isfinite(ye)) {
         return 0;
     }
+#if PRJ_EOS_T3
+    (void)eos;
+    (void)ctx;
+    result->eint = prj_eos_t3_eint(rho, T);
+    result->pressure = prj_eos_t3_pressure(rho);
+    result->eint_raw_slope[0] = -result->eint / rho;
+    result->eint_raw_slope[1] = 4.0 * result->eint / T;
+    result->eint_raw_slope[2] = 0.0;
+    result->pressure_log_raw_slope[0] = 1.0e-30;
+    result->pressure_log_raw_slope[1] = 0.0;
+    result->pressure_log_raw_slope[2] = 0.0;
+    result->coord_scale[0] = result->coord_scale[1] = result->coord_scale[2] = 1.0;
+    result->inv_rho_ln10 = result->inv_T_ln10 = 1.0;
+    result->tabulated = 0;
+    (void)ye;
+    return 1;
+#endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 &&
         eos->table_loaded == 1) {
@@ -695,6 +735,15 @@ int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
 double prj_eos_rty_eint(prj_eos *eos, double rho, double T, double ye,
     double *deint_dlnT, double *deint_dYe, enum prj_eos_call_ctx ctx)
 {
+#if PRJ_EOS_T3
+    double eint = prj_eos_t3_eint(rho, T);
+    (void)eos;
+    (void)ye;
+    (void)ctx;
+    *deint_dlnT = 4.0 * eint;
+    *deint_dYe = 0.0;
+    return eint;
+#endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         int jy;
@@ -770,6 +819,17 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
     if (eos_quantities == 0) {
         return;
     }
+#if PRJ_EOS_T3
+    (void)eos;
+    (void)ye;
+    (void)ctx;
+    T = pow(eint * rho / PRJ_EOS_ARAD, 0.25);
+    eos_quantities[PRJ_EOS_EINT] = eint;
+    eos_quantities[PRJ_EOS_PRESSURE] = prj_eos_t3_pressure(rho);
+    eos_quantities[PRJ_EOS_GAMMA] = 1.0;
+    eos_quantities[PRJ_EOS_TEMPERATURE] = T;
+    return;
+#endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         double e_table;
@@ -887,6 +947,11 @@ static int prj_eos_pressure_try(prj_eos *eos, double rho, double eint, double ye
         rho <= 0.0 || eint < 0.0) {
         return 0;
     }
+#if PRJ_EOS_T3
+    (void)eos;
+    *pressure = prj_eos_t3_pressure(rho);
+    return 1;
+#endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE && eos->filename[0] != '\0') {
         double e_table;
         double rl;
@@ -2171,6 +2236,10 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
     v1 = U[PRJ_CONS_MOM1] / rho;
     v2 = U[PRJ_CONS_MOM2] / rho;
     v3 = U[PRJ_CONS_MOM3] / rho;
+#if PRJ_STATIC_MATTER
+    v1 = v2 = v3 = 0.0;
+    U[PRJ_CONS_MOM1] = U[PRJ_CONS_MOM2] = U[PRJ_CONS_MOM3] = 0.0;
+#endif
     kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
 #if PRJ_MHD
     magnetic = 0.5 * (U[PRJ_CONS_B1] * U[PRJ_CONS_B1] +

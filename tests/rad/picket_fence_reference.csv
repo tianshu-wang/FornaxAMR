@@ -1,0 +1,14 @@
+# Provisional Case B transport markers at tau=0.3, reconstructed from Figure 3
+# of Anninos & Fragile (2020). Replace these rows with the authoritative table
+# from Su & Olson (1999), JQSRT 62, 279-302, DOI 10.1016/S0022-4073(98)00105-8.
+# Columns use the Case B normalization x=rho*kappa0*z, theta=T/T0,
+# and Un=integral(E_nu dnu)/(a_r*T0^4). Values at or below 1e-4 are the
+# documented cold-tail floor and are excluded from relative-error acceptance.
+x,theta,U1,U2
+0.00,0.420,0.140,0.110
+0.30,0.420,0.140,0.110
+0.35,0.410,0.125,0.098
+0.40,0.380,0.070,0.055
+0.45,0.280,0.040,0.032
+0.70,0.060,0.0040,0.0030
+0.75,0.015,0.0005,0.0004

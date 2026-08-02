@@ -68,6 +68,15 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     if (strcmp(name, "shock_tube") == 0) {
         return prj_problem_shocktube;
     }
+    if (strcmp(name, "rad_free_streaming") == 0) {
+        return prj_problem_rad_free_streaming;
+    }
+    if (strcmp(name, "rad_diffusive_source") == 0) {
+        return prj_problem_rad_diffusive_source;
+    }
+    if (strcmp(name, "rad_picket_fence") == 0) {
+        return prj_problem_rad_picket_fence;
+    }
     if (strcmp(name, "z4c_one_puncture") == 0 ||
         strcmp(name, "z4c_single_puncture") == 0 ||
         strcmp(name, "single_puncture") == 0) {

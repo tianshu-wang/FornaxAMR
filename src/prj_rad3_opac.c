@@ -133,6 +133,95 @@ static void prj_rad3_build_egroups(prj_rad *rad)
 #endif
 }
 
+#if PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+#define PRJ_ARAD 7.5657e-15
+#define PRJ_KB_MEV 8.617333262145e-11
+
+static double prj_rad_planck_integrand(double x)
+{
+    if (x < 1.0e-6) return x * x;
+    if (x > 80.0) return 0.0;
+    return x * x * x / expm1(x);
+}
+
+static double prj_rad_planck_fraction(double elo, double ehi, double temp)
+{
+    const int n = 128;
+    const double norm = 6.4939394022668291491; /* pi^4/15 */
+    double a;
+    double b;
+    double h;
+    double sum;
+    int i;
+
+    if (temp <= 0.0 || ehi <= elo) return 0.0;
+#if PRJ_EOS_T3
+    a = elo / (PRJ_KB_MEV * temp);
+    b = ehi / (PRJ_KB_MEV * temp);
+#else
+    a = elo / temp;
+    b = ehi / temp;
+#endif
+    if (a > 80.0) return 0.0;
+    if (b > 80.0) b = 80.0;
+    h = (b - a) / (double)n;
+    sum = prj_rad_planck_integrand(a) + prj_rad_planck_integrand(b);
+    for (i = 1; i < n; ++i) {
+        sum += (i & 1 ? 4.0 : 2.0) * prj_rad_planck_integrand(a + h * (double)i);
+    }
+    return (h * sum / 3.0) / norm;
+}
+
+static void prj_rad3_analytic_values(const prj_rad *rad, double rho, double temp,
+    double *kappa, double *sigma, double *delta, double *eta,
+    double *dlneta_dlnT)
+{
+    int nu;
+    int g;
+    for (nu = 0; nu < PRJ_NRAD; ++nu) {
+        for (g = 0; g < PRJ_NEGROUP; ++g) {
+            int q = nu * PRJ_NEGROUP + g;
+            double ka = 0.0;
+            double ss = 0.0;
+            double ee = 0.0;
+            double slope = 0.0;
+#if PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_ABSORPTION
+            ka = rho;
+#elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_SCATTERING
+            ss = 2.5e-6;
+#elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_PICKET_FENCE
+            ka = (g & 1) ? 20.0 : 2.0;
+#endif
+#if PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_ABSORPTION || \
+    PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_PICKET_FENCE
+            if (ka > 0.0 && temp > 0.0) {
+                double f = prj_rad_planck_fraction(rad->eedge[nu][g],
+                    rad->eedge[nu][g + 1], temp);
+                double tp = temp * 1.0001;
+                double fp = prj_rad_planck_fraction(rad->eedge[nu][g],
+                    rad->eedge[nu][g + 1], tp);
+                double temp_k =
+#if PRJ_EOS_T3
+                    temp;
+#else
+                    temp / PRJ_KB_MEV;
+#endif
+                ee = PRJ_CLIGHT * ka * PRJ_ARAD * temp_k * temp_k * temp_k * temp_k * f / RAD_SCALE;
+                if (f > 1.0e-300 && fp > 0.0) {
+                    slope = 4.0 + log(fp / f) / log(tp / temp);
+                }
+            }
+#endif
+            if (kappa) kappa[q] = ka;
+            if (sigma) sigma[q] = ss;
+            if (delta) delta[q] = 0.0;
+            if (eta) eta[q] = ee;
+            if (dlneta_dlnT) dlneta_dlnT[q] = slope;
+        }
+    }
+}
+#endif
+
 static void prj_rad3_read_param(prj_rad *rad)
 {
     int rank = prj_rad3_mpi_rank();
@@ -328,6 +417,9 @@ void prj_rad3_opac_init(prj_rad *rad)
     }
 
     prj_rad3_build_egroups(rad);
+#if PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+    return;
+#endif
     prj_rad3_read_param(rad);
 
     tmp_count = (size_t)rad->nromax * (size_t)rad->ntmax * (size_t)rad->nyemax *
@@ -403,6 +495,17 @@ void prj_rad3_opac_lookup_ke(const prj_rad *restrict rad, double rho, double tem
     double *restrict dlnkappa_dlnT, double *restrict dlnkappa_dYe,
     double *restrict dlneta_dlnT, double *restrict dlneta_dYe)
 {
+#if PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+    int q;
+    (void)ye;
+    prj_rad3_analytic_values(rad, rho, temp, kappa, 0, 0, eta, dlneta_dlnT);
+    for (q = 0; q < PRJ_RAD3_OPAC_NGROUPS; ++q) {
+        dlnkappa_dlnT[q] = 0.0;
+        dlnkappa_dYe[q] = 0.0;
+        dlneta_dYe[q] = 0.0;
+    }
+    return;
+#else
     int nromax = rad->nromax;
     int ntmax = rad->ntmax;
     int nyemax = rad->nyemax;
@@ -547,11 +650,17 @@ void prj_rad3_opac_lookup_ke(const prj_rad *restrict rad, double rho, double tem
             dlneta_dYe[base] = dj_dye * inv_dYe;
         }
     }
+#endif
 }
 
 void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye,
     double *kappa, double *sigma, double *delta, double *eta)
 {
+#if PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+    (void)ye;
+    prj_rad3_analytic_values(rad, rho, temp, kappa, sigma, delta, eta, 0);
+    return;
+#else
     int nromax = rad->nromax;
     int ntmax = rad->ntmax;
     int nyemax = rad->nyemax;
@@ -670,11 +779,35 @@ void prj_rad3_opac_lookup(const prj_rad *rad, double rho, double temp, double ye
 #undef SAMPLE
         }
     }
+#endif
 }
 
 void prj_rad3_opac_lookup_interp(const prj_rad *rad, double rho, double temp,
     double ye, prj_rad3_opac_interp_result *result)
 {
+#if PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+    double slopes[PRJ_RAD3_OPAC_NGROUPS];
+    int q;
+    (void)ye;
+    memset(result, 0, sizeof(*result));
+    prj_rad3_analytic_values(rad, rho, temp, result->kappa, result->sigma,
+        result->delta, result->eta, slopes);
+    result->coord_scale[0] = result->coord_scale[1] = result->coord_scale[2] = 1.0;
+    result->inv_rho = rho > 0.0 ? 1.0 / rho : 0.0;
+    result->inv_temp = temp > 0.0 ? 1.0 / temp : 0.0;
+    for (q = 0; q < PRJ_RAD3_OPAC_NGROUPS; ++q) {
+#if PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_ABSORPTION
+        result->kappa_raw_slope[0][q] = 0.0;
+        result->eta_raw_slope[0][q] = 0.0;
+#else
+        result->kappa_raw_slope[0][q] = -1.0;
+        result->eta_raw_slope[0][q] = -1.0;
+#endif
+        result->sigma_raw_slope[0][q] = -1.0;
+        result->eta_raw_slope[1][q] = slopes[q];
+    }
+    return;
+#else
     int nromax = rad->nromax;
     int ntmax = rad->ntmax;
     int nyemax = rad->nyemax;
@@ -809,6 +942,7 @@ void prj_rad3_opac_lookup_interp(const prj_rad *rad, double rho, double temp,
 #undef LOAD_OPAC_CORNERS
         }
     }
+#endif
 }
 
 int prj_rad3_opac_interp_group_derivs(

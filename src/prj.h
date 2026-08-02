@@ -34,6 +34,14 @@ void prj_problem_sedov_offcenter(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_shock1d(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_kh(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_shocktube(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_rad_free_streaming(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_rad_diffusive_source(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_rad_picket_fence(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_user_boundary(const prj_mesh *mesh, const prj_block *block,
+    double *W, int axis, int side, int i, int j, int k,
+    const double position[3], double time_seconds);
+void prj_problem_user_source(const prj_mesh *mesh, const prj_block *block,
+    double *W_mhd, double *W_rad, double *mhd_rhs, double *rad_rhs);
 void prj_problem_z4c_one_puncture(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_z4c_two_puncture(prj_sim *sim, prj_mpi *mpi);
 
