@@ -1,0 +1,38 @@
+# 1D Sod shock tube, run as a thin 3D pencil (one root block in y and z).
+# Discontinuity at x1 = 0.5; all boundaries outflow.
+# Equal cell size on every axis: (xmax-xmin)/root_nx = 1/16 per axis.
+
+problem = shock_tube
+restart_from_file = 0
+restart_file_name = output/final.h5
+
+x1min = 0.0
+x1max = 1.0
+x2min = 0.0
+x2max = 0.0625
+x3min = 0.0
+x3max = 0.0625
+
+root_nx1 = 16
+root_nx2 = 1
+root_nx3 = 1
+max_level = 0
+
+cfl = 0.4
+x_com_err_tol = 0.5
+t_end = 0.2
+max_steps = 100000
+output_interval = 20
+restart_interval = 100000
+amr_interval = 1
+
+eos_type = ideal
+
+E_floor = 1e-10
+
+bc_x1_inner = outflow
+bc_x1_outer = outflow
+bc_x2_inner = outflow
+bc_x2_outer = outflow
+bc_x3_inner = outflow
+bc_x3_outer = outflow

@@ -124,7 +124,9 @@ SRCS := \
 	problems/prj_problem_sedov.c \
 	problems/prj_problem_sedov_offcenter.c \
 	problems/prj_problem_shock1d.c \
-	problems/prj_problem_z4c_puncture.c
+	problems/prj_problem_z4c_puncture.c \
+	tests/hydro/prj_problem_kh.c \
+	tests/hydro/prj_problem_shocktube.c
 
 OBJS := $(SRCS:.c=.o)
 CORE_SRCS := $(filter-out $(SRC_DIR)/main.c,$(SRCS))
@@ -151,6 +153,13 @@ $(RK_TABLEAU_DIR)/%.o: $(RK_TABLEAU_DIR)/%.c $(SRC_DIR)/prj_timeint.h $(SRC_DIR)
 # uses the built-in %.o pattern (no header prereqs) and silently keeps stale
 # objects when the layout headers change, producing a mixed-ABI binary.
 problems/%.o: problems/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+
+# Problem TUs that live under tests/hydro/ are compiled into the engine the same
+# way (with explicit header prereqs to avoid stale mixed-ABI objects).  Note the
+# standalone-test glob below is flat ($(TEST_DIR)/*.c), so these are not built as
+# standalone test binaries.
+tests/hydro/%.o: tests/hydro/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_DIR)/%: $(TEST_DIR)/%.c $(CORE_OBJS)

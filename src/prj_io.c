@@ -65,6 +65,10 @@ static int prj_io_parse_bc(const char *value, int *bc_type)
         *bc_type = PRJ_BC_USER;
         return 0;
     }
+    if (strcmp(value, "periodic") == 0) {
+        *bc_type = PRJ_BC_PERIODIC;
+        return 0;
+    }
     return 1;
 }
 
@@ -193,6 +197,48 @@ static int prj_io_parse_amr_slot_key(const char *key, const char *prefix, int *s
     return 1;
 }
 
+/* Derive per-axis periodicity from the boundary conditions and validate that
+ * a periodic axis is periodic on BOTH sides.  A periodic seam is realized as a
+ * wrapped neighbor relationship (see prj_mesh.c / prj_amr.c), so both faces
+ * must agree or the ghost exchange would be inconsistent. */
+static void prj_io_finalize_periodic(prj_sim *sim)
+{
+    int inner[3];
+    int outer[3];
+    int axis;
+
+    if (sim == 0) {
+        return;
+    }
+    inner[0] = sim->bc.bc_x1_inner;
+    outer[0] = sim->bc.bc_x1_outer;
+    inner[1] = sim->bc.bc_x2_inner;
+    outer[1] = sim->bc.bc_x2_outer;
+    inner[2] = sim->bc.bc_x3_inner;
+    outer[2] = sim->bc.bc_x3_outer;
+    for (axis = 0; axis < 3; ++axis) {
+        int inner_p = inner[axis] == PRJ_BC_PERIODIC;
+        int outer_p = outer[axis] == PRJ_BC_PERIODIC;
+
+        if (inner_p != outer_p) {
+            fprintf(stderr, "prj_io: axis %d has periodic on only one side; "
+                "set both bc_x%d_inner and bc_x%d_outer to periodic\n",
+                axis + 1, axis + 1, axis + 1);
+            exit(1);
+        }
+        sim->mesh.periodic[axis] = inner_p;
+    }
+#if PRJ_MHD
+    for (axis = 0; axis < 3; ++axis) {
+        if (sim->mesh.periodic[axis]) {
+            fprintf(stderr, "prj_io: periodic BC is not supported with MHD "
+                "(constrained-transport face fields are not periodicized)\n");
+            exit(1);
+        }
+    }
+#endif
+}
+
 static void prj_io_finalize_z4c_params(prj_sim *sim)
 {
     int max_order;
@@ -273,6 +319,9 @@ static void prj_io_set_default_runtime(prj_sim *sim)
     sim->mesh.time_seconds = 0.0;
     sim->mesh.min_allowable_cell_size = 0.0;
     sim->mesh.max_blocks = 65536;
+    sim->mesh.periodic[0] = 0;
+    sim->mesh.periodic[1] = 0;
+    sim->mesh.periodic[2] = 0;
     {
         int amr_idx;
 
@@ -359,6 +408,7 @@ void prj_io_parser(prj_sim *sim, char *filename)
 
     prj_io_set_default_runtime(sim);
     if (filename == 0) {
+        prj_io_finalize_periodic(sim);
         prj_io_finalize_z4c_params(sim);
         return;
     }
@@ -771,6 +821,7 @@ void prj_io_parser(prj_sim *sim, char *filename)
     }
 
     fclose(fp);
+    prj_io_finalize_periodic(sim);
     prj_io_finalize_z4c_params(sim);
 }
 
@@ -1608,7 +1659,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
             int nid = block->slot[n].id;
 
             if (nid >= 0 && nid < mesh->nblocks && mesh->blocks[nid].id >= 0) {
-                prj_neighbor_compute_geometry(block, &mesh->blocks[nid], &block->slot[n]);
+                prj_neighbor_compute_geometry(block, &mesh->blocks[nid], 0, &block->slot[n]);
             }
         }
     }

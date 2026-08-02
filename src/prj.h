@@ -32,6 +32,8 @@ void prj_problem_ccsn(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_sedov(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_sedov_offcenter(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_shock1d(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_kh(prj_sim *sim, prj_mpi *mpi);
+void prj_problem_shocktube(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_z4c_one_puncture(prj_sim *sim, prj_mpi *mpi);
 void prj_problem_z4c_two_puncture(prj_sim *sim, prj_mpi *mpi);
 

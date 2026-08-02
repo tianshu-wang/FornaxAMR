@@ -416,6 +416,12 @@ static void prj_boundary_apply_axis_band(double *dst, int axis, int side, int bc
     const int axis1 = (axis + 1) % 3;
     const int axis2 = (axis + 2) % 3;
     const int normal_v = axis == 0 ? PRJ_PRIM_V1 : (axis == 1 ? PRJ_PRIM_V2 : PRJ_PRIM_V3);
+
+    /* Periodic seams are filled by the neighbor ghost exchange (the domain-edge
+     * block has a wrapped neighbor), never from the block's own interior. */
+    if (bc_type == PRJ_BC_PERIODIC) {
+        return;
+    }
     const int n_lo = side == 0 ? -ng : PRJ_BLOCK_SIZE;
     const int n_hi = side == 0 ? 0 : PRJ_BLOCK_SIZE + ng; /* exclusive */
     const int t_lo = region == PRJ_BOUNDARY_PHYS_FACE_ONLY ? 0 : -ng;

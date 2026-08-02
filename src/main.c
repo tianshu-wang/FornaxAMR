@@ -62,6 +62,12 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     if (strcmp(name, "shock1d") == 0) {
         return prj_problem_shock1d;
     }
+    if (strcmp(name, "kh") == 0) {
+        return prj_problem_kh;
+    }
+    if (strcmp(name, "shock_tube") == 0) {
+        return prj_problem_shocktube;
+    }
     if (strcmp(name, "z4c_one_puncture") == 0 ||
         strcmp(name, "z4c_single_puncture") == 0 ||
         strcmp(name, "single_puncture") == 0) {

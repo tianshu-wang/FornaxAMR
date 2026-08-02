@@ -2,10 +2,15 @@
 
 #include "prj.h"
 
-static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
+/* Fill every resident active block, independent of the pre-decomposition rank
+ * assignment.  main.c runs prj_mpi_decompose AFTER this init, and decompose
+ * migrates each block's data from its OLD owner; if only the matching rank
+ * filled a block the new owner would receive zeros (rho=0 crash under mpirun).
+ * Filling on all ranks (as prj_problem_sedov does) keeps the data replicated so
+ * migration is safe. */
+static int prj_problem_resident_active_block(const prj_block *block)
 {
-    return block != 0 && block->id >= 0 && block->active == 1 &&
-        (mpi == 0 || block->rank == mpi->rank);
+    return block != 0 && block->id >= 0 && block->active == 1;
 }
 
 static void prj_problem_store_cell(prj_block *block, int i, int j, int k, const double *W, const double *U)
@@ -30,7 +35,7 @@ void prj_problem_shock1d(prj_sim *sim, prj_mpi *mpi)
         int j;
         int k;
 
-        if (!prj_problem_local_block(mpi, block)) {
+        if (!prj_problem_resident_active_block(block)) {
             continue;
         }
         for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {

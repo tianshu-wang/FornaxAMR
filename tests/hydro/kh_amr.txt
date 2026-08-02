@@ -1,0 +1,50 @@
+# 2D Kelvin-Helmholtz instability with AMR (exercises periodic + refinement).
+# Coarser base grid (64^2) refined one level along the density interfaces;
+# effective 128^2 where refined (matches the uniform kh.txt resolution).
+# Doubly periodic in x and y; thin z (one root block) is outflow.
+# Equal cell size on every axis at the base: (xmax-xmin)/root_nx = 1/8 per axis.
+
+problem = kh
+restart_from_file = 0
+restart_file_name = output/final.h5
+
+x1min = 0.0
+x1max = 1.0
+x2min = 0.0
+x2max = 1.0
+x3min = 0.0
+x3max = 0.125
+
+root_nx1 = 8
+root_nx2 = 8
+root_nx3 = 1
+max_level = 1
+
+cfl = 0.4
+x_com_err_tol = 0.5
+t_end = 1.5
+max_steps = 100000
+output_interval = 50
+restart_interval = 100000
+amr_interval = 4
+
+eos_type = ideal
+
+E_floor = 1e-10
+
+# Refine on the density contrast (Loehner estimator on density).  KH rolls the
+# rho = 1 <-> 2 interfaces into thin spiral filaments; density tracking keeps
+# them refined as the vortices develop, whereas the default velocity estimator
+# de-refines once the shear layer smooths out.
+amr_estimator = lohner
+amr_lohner_var = density
+amr_lohner_eps = 0.02
+amr_refine_thresh = 0.25
+amr_derefine_thresh = 0.05
+
+bc_x1_inner = periodic
+bc_x1_outer = periodic
+bc_x2_inner = periodic
+bc_x2_outer = periodic
+bc_x3_inner = outflow
+bc_x3_outer = outflow

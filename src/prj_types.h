@@ -470,6 +470,7 @@ struct prj_mesh {
     double min_allowable_cell_size;
     int max_active_level;
     int root_nx[3];
+    int periodic[3];
     double x_com[3];
     prj_block *blocks;
     prj_morton_lookup_entry *morton_lookup;

@@ -534,7 +534,8 @@ enum prj_face_pos {
 enum prj_bc_type {
     PRJ_BC_OUTFLOW = 0,
     PRJ_BC_REFLECT = 1,
-    PRJ_BC_USER = 2
+    PRJ_BC_USER = 2,
+    PRJ_BC_PERIODIC = 3
 };
 
 enum prj_amr_estimator {

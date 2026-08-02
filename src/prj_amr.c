@@ -424,6 +424,90 @@ static int prj_boxes_touch_face_edge_corner(const prj_block *a, const prj_block 
     return 1;
 }
 
+static int prj_add_neighbor_shifted(prj_block *a, const prj_block *b, const double *shift);
+
+/* Like prj_boxes_touch_face_edge_corner, but with a periodic image offset
+ * `shift` applied to b's coordinates (see prj_neighbor_compute_geometry). */
+static int prj_boxes_touch_face_edge_corner_shifted(const prj_block *a,
+    const prj_block *b, const double *shift)
+{
+    const double tol = 1.0e-12;
+    int axis;
+    int touches = 0;
+    int identical = 1;
+
+    for (axis = 0; axis < 3; ++axis) {
+        double s = shift != 0 ? shift[axis] : 0.0;
+        double bmin = b->xmin[axis] + s;
+        double bmax = b->xmax[axis] + s;
+
+        if (!prj_boxes_overlap_or_touch(a->xmin[axis], a->xmax[axis], bmin, bmax, tol)) {
+            return 0;
+        }
+        if (prj_abs_double(a->xmax[axis] - bmin) < tol ||
+            prj_abs_double(bmax - a->xmin[axis]) < tol) {
+            touches += 1;
+        }
+        if (prj_abs_double(a->xmin[axis] - bmin) >= tol ||
+            prj_abs_double(a->xmax[axis] - bmax) >= tol) {
+            identical = 0;
+        }
+    }
+    if (touches == 0 || identical) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Register the a<->b neighbor pair, trying every periodic image (each axis
+ * offset by 0 or +/- the domain extent on a periodic axis).  Non-periodic runs
+ * only try the zero shift, reproducing the original adjacency behavior. */
+static void prj_amr_register_pair_periodic(prj_mesh *mesh, prj_block *a, prj_block *b)
+{
+    double extent[3];
+    int nshift[3];
+    double shifts[3][3];
+    int axis;
+    int p;
+    int q;
+    int r;
+
+    extent[0] = mesh->coord.x1max - mesh->coord.x1min;
+    extent[1] = mesh->coord.x2max - mesh->coord.x2min;
+    extent[2] = mesh->coord.x3max - mesh->coord.x3min;
+    for (axis = 0; axis < 3; ++axis) {
+        shifts[axis][0] = 0.0;
+        if (mesh->periodic[axis]) {
+            shifts[axis][1] = extent[axis];
+            shifts[axis][2] = -extent[axis];
+            nshift[axis] = 3;
+        } else {
+            nshift[axis] = 1;
+        }
+    }
+
+    for (p = 0; p < nshift[0]; ++p) {
+        for (q = 0; q < nshift[1]; ++q) {
+            for (r = 0; r < nshift[2]; ++r) {
+                double shift[3];
+                double neg[3];
+
+                shift[0] = shifts[0][p];
+                shift[1] = shifts[1][q];
+                shift[2] = shifts[2][r];
+                if (!prj_boxes_touch_face_edge_corner_shifted(a, b, shift)) {
+                    continue;
+                }
+                neg[0] = -shift[0];
+                neg[1] = -shift[1];
+                neg[2] = -shift[2];
+                prj_add_neighbor_shifted(a, b, shift);
+                prj_add_neighbor_shifted(b, a, neg);
+            }
+        }
+    }
+}
+
 static int prj_blocks_overlap_on_axis(const prj_block *a, const prj_block *b, int axis)
 {
     const double tol = 1.0e-12;
@@ -450,7 +534,10 @@ static int prj_blocks_are_face_neighbors(const prj_block *a, const prj_block *b)
     return touching_axes == 1;
 }
 
-static int prj_add_neighbor(prj_block *a, const prj_block *b)
+/* Register b as a neighbor of a.  `shift` (NULL == {0,0,0}) is the periodic
+ * image offset: for a wrapped seam neighbor the slot stores b's shifted image
+ * coordinates so the geometry/which-half math sees a physically adjacent box. */
+static int prj_add_neighbor_shifted(prj_block *a, const prj_block *b, const double *shift)
 {
     int n;
 
@@ -467,15 +554,22 @@ static int prj_add_neighbor(prj_block *a, const prj_block *b)
             a->slot[n].id = b->id;
             a->slot[n].rank = b->rank;
             for (d = 0; d < 3; ++d) {
-                a->slot[n].xmin[d] = b->xmin[d];
-                a->slot[n].xmax[d] = b->xmax[d];
+                double s = shift != 0 ? shift[d] : 0.0;
+
+                a->slot[n].xmin[d] = b->xmin[d] + s;
+                a->slot[n].xmax[d] = b->xmax[d] + s;
                 a->slot[n].dx[d] = b->dx[d];
             }
-            prj_neighbor_compute_geometry(a, b, &a->slot[n]);
+            prj_neighbor_compute_geometry(a, b, shift, &a->slot[n]);
             return 0;
         }
     }
     return 1;
+}
+
+static int prj_add_neighbor(prj_block *a, const prj_block *b)
+{
+    return prj_add_neighbor_shifted(a, b, 0);
 }
 
 static int prj_amr_neighbor_lookup_range(const prj_mesh *mesh,
@@ -586,10 +680,9 @@ static void prj_amr_init_neighbors_pairwise(prj_mesh *mesh,
                 rebuild_mask[j] == 0) {
                 continue;
             }
-            if (prj_boxes_touch_face_edge_corner(a, b)) {
-                prj_add_neighbor(a, b);
-                prj_add_neighbor(b, a);
-            }
+            /* Handles both ordinary adjacency (zero shift) and periodic seams
+             * (wrapped images) in one pass. */
+            prj_amr_register_pair_periodic(mesh, a, b);
         }
     }
 }
@@ -1466,7 +1559,13 @@ static void prj_amr_init_neighbors_with_mask(prj_mesh *mesh,
         }
     }
 
-    if (prj_mesh_rebuild_morton_lookup(mesh) == 0) {
+    /* The Morton probe only enumerates in-domain candidates, so it cannot see
+     * the far-side block across a periodic seam.  When any axis is periodic use
+     * the pairwise path, which considers all block pairs (and every periodic
+     * image via prj_amr_register_pair_periodic). */
+    if (mesh->periodic[0] || mesh->periodic[1] || mesh->periodic[2]) {
+        prj_amr_init_neighbors_pairwise(mesh, rebuild_mask);
+    } else if (prj_mesh_rebuild_morton_lookup(mesh) == 0) {
         prj_amr_init_neighbors_morton(mesh, rebuild_mask);
     } else {
         prj_amr_init_neighbors_pairwise(mesh, rebuild_mask);

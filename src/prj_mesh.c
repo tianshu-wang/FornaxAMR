@@ -39,9 +39,16 @@ static double prj_neighbor_abs(double x)
     return x < 0.0 ? -x : x;
 }
 
-void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_neighbor *slot)
+/* `shift` (may be NULL == {0,0,0}) is the periodic image offset applied to b's
+ * coordinates: for a wrapped neighbor across a periodic seam, b physically sits
+ * at the far end of the domain, so we evaluate adjacency and the coarse/fine
+ * "which-half" tests against b shifted by +/- the domain extent. */
+void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b,
+    const double *shift, prj_neighbor *slot)
 {
     double tol=0;
+    double bxmin[3];
+    double bxmax[3];
     int axisrel[3];
     int touching;
     int d;
@@ -50,13 +57,19 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
         return;
     }
 
+    for (d = 0; d < 3; ++d) {
+        double s = shift != 0 ? shift[d] : 0.0;
+        bxmin[d] = b->xmin[d] + s;
+        bxmax[d] = b->xmax[d] + s;
+    }
+
     touching = 0;
     for (d = 0; d < 3; ++d) {
         tol = 1.0e-2*PRJ_MIN(a->dx[d],b->dx[d]);
-        if (prj_neighbor_abs(a->xmax[d] - b->xmin[d]) < tol) {
+        if (prj_neighbor_abs(a->xmax[d] - bxmin[d]) < tol) {
             axisrel[d] = 1;
             touching += 1;
-        } else if (prj_neighbor_abs(b->xmax[d] - a->xmin[d]) < tol) {
+        } else if (prj_neighbor_abs(bxmax[d] - a->xmin[d]) < tol) {
             axisrel[d] = -1;
             touching += 1;
         } else {
@@ -108,7 +121,7 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
                 slot->send_loc_start[d] = 0;
                 slot->send_loc_end[d] = 2*PRJ_NGHOST;
             } else {
-                if ((b->xmin[d]+b->xmax[d]) > (a->xmin[d]+a->xmax[d])) {
+                if ((bxmin[d]+bxmax[d]) > (a->xmin[d]+a->xmax[d])) {
                     slot->recv_loc_start[d] = 0;
                     slot->recv_loc_end[d] = PRJ_BLOCK_SIZE/2;
                 } else {
@@ -131,7 +144,7 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
                 slot->send_loc_start[d] = 0;
                 slot->send_loc_end[d] = PRJ_NGHOST/2;
             } else {
-                if ((b->xmin[d]+b->xmax[d]) > (a->xmin[d]+a->xmax[d])) {
+                if ((bxmin[d]+bxmax[d]) > (a->xmin[d]+a->xmax[d])) {
                     slot->recv_loc_start[d] = -PRJ_NGHOST;
                     slot->recv_loc_end[d] = PRJ_BLOCK_SIZE;
                     slot->send_loc_start[d] = PRJ_BLOCK_SIZE/2-PRJ_NGHOST/2;
@@ -179,7 +192,7 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
                 slot->send_loc_start_z4c[d] = 0;
                 slot->send_loc_end_z4c[d] = 2 * PRJ_NGHOST_Z4C;
             } else {
-                if ((b->xmin[d] + b->xmax[d]) > (a->xmin[d] + a->xmax[d])) {
+                if ((bxmin[d] + bxmax[d]) > (a->xmin[d] + a->xmax[d])) {
                     slot->recv_loc_start_z4c[d] = 0;
                     slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE / 2;
                 } else {
@@ -201,7 +214,7 @@ void prj_neighbor_compute_geometry(const prj_block *a, const prj_block *b, prj_n
                 slot->send_loc_start_z4c[d] = 0;
                 slot->send_loc_end_z4c[d] = PRJ_NGHOST_Z4C / 2;
             } else {
-                if ((b->xmin[d] + b->xmax[d]) > (a->xmin[d] + a->xmax[d])) {
+                if ((bxmin[d] + bxmax[d]) > (a->xmin[d] + a->xmax[d])) {
                     slot->recv_loc_start_z4c[d] = -PRJ_NGHOST_Z4C;
                     slot->recv_loc_end_z4c[d] = PRJ_BLOCK_SIZE;
                     slot->send_loc_start_z4c[d] = PRJ_BLOCK_SIZE / 2 - PRJ_NGHOST_Z4C / 2;
@@ -1579,42 +1592,83 @@ int prj_mesh_init(prj_mesh *mesh, int root_nx1, int root_nx2, int root_nx3, int 
     prj_mesh_update_r_com(mesh);
     prj_mesh_update_max_active_level(mesh);
 
-    for (i = 0; i < root_nx1; ++i) {
-        for (j = 0; j < root_nx2; ++j) {
-            for (k = 0; k < root_nx3; ++k) {
-                prj_block *b = &mesh->blocks[(i * root_nx2 + j) * root_nx3 + k];
-                int ox;
-                int oy;
-                int oz;
+    {
+        /* Domain extent per axis, used to shift a wrapped neighbor's stored
+         * image coordinates so a periodic seam looks like a normal adjacency. */
+        const int root_n[3] = { root_nx1, root_nx2, root_nx3 };
+        double extent[3];
 
-                for (ox = -1; ox <= 1; ++ox) {
-                    for (oy = -1; oy <= 1; ++oy) {
-                        for (oz = -1; oz <= 1; ++oz) {
-                            int ni = i + ox;
-                            int nj = j + oy;
-                            int nk = k + oz;
-                            int slot_index = prj_neighbor_slot_index(ox, oy, oz);
+        extent[0] = mesh->coord.x1max - mesh->coord.x1min;
+        extent[1] = mesh->coord.x2max - mesh->coord.x2min;
+        extent[2] = mesh->coord.x3max - mesh->coord.x3min;
 
-                            if (slot_index < 0) {
-                                continue;
+        for (i = 0; i < root_nx1; ++i) {
+            for (j = 0; j < root_nx2; ++j) {
+                for (k = 0; k < root_nx3; ++k) {
+                    prj_block *b = &mesh->blocks[(i * root_nx2 + j) * root_nx3 + k];
+                    int base_idx[3];
+                    int ox;
+                    int oy;
+                    int oz;
+
+                    base_idx[0] = i;
+                    base_idx[1] = j;
+                    base_idx[2] = k;
+                    for (ox = -1; ox <= 1; ++ox) {
+                        for (oy = -1; oy <= 1; ++oy) {
+                            for (oz = -1; oz <= 1; ++oz) {
+                                int off[3];
+                                int nidx[3];
+                                double shift[3];
+                                int slot_index = prj_neighbor_slot_index(ox, oy, oz);
+                                int wrapped_ok = 1;
+                                int axis;
+                                prj_block *nb;
+
+                                if (slot_index < 0) {
+                                    continue;
+                                }
+                                off[0] = ox;
+                                off[1] = oy;
+                                off[2] = oz;
+                                for (axis = 0; axis < 3; ++axis) {
+                                    int ntmp = base_idx[axis] + off[axis];
+
+                                    shift[axis] = 0.0;
+                                    if (ntmp < 0 || ntmp >= root_n[axis]) {
+                                        /* Wrap only across a periodic axis with
+                                         * more than one root block (a single
+                                         * block would be its own neighbor). */
+                                        if (mesh->periodic[axis] && root_n[axis] > 1) {
+                                            if (ntmp < 0) {
+                                                ntmp += root_n[axis];
+                                                shift[axis] = -extent[axis];
+                                            } else {
+                                                ntmp -= root_n[axis];
+                                                shift[axis] = extent[axis];
+                                            }
+                                        } else {
+                                            wrapped_ok = 0;
+                                            break;
+                                        }
+                                    }
+                                    nidx[axis] = ntmp;
+                                }
+                                if (!wrapped_ok) {
+                                    continue;
+                                }
+
+                                id = (nidx[0] * root_nx2 + nidx[1]) * root_nx3 + nidx[2];
+                                nb = &mesh->blocks[id];
+                                b->slot[slot_index].id = id;
+                                b->slot[slot_index].rank = 0;
+                                for (axis = 0; axis < 3; ++axis) {
+                                    b->slot[slot_index].xmin[axis] = nb->xmin[axis] + shift[axis];
+                                    b->slot[slot_index].xmax[axis] = nb->xmax[axis] + shift[axis];
+                                    b->slot[slot_index].dx[axis] = nb->dx[axis];
+                                }
+                                prj_neighbor_compute_geometry(b, nb, shift, &b->slot[slot_index]);
                             }
-                            if (ni < 0 || ni >= root_nx1 || nj < 0 || nj >= root_nx2 || nk < 0 || nk >= root_nx3) {
-                                continue;
-                            }
-
-                            id = (ni * root_nx2 + nj) * root_nx3 + nk;
-                            b->slot[slot_index].id = id;
-                            b->slot[slot_index].rank = 0;
-                            b->slot[slot_index].xmin[0] = mesh->blocks[id].xmin[0];
-                            b->slot[slot_index].xmin[1] = mesh->blocks[id].xmin[1];
-                            b->slot[slot_index].xmin[2] = mesh->blocks[id].xmin[2];
-                            b->slot[slot_index].xmax[0] = mesh->blocks[id].xmax[0];
-                            b->slot[slot_index].xmax[1] = mesh->blocks[id].xmax[1];
-                            b->slot[slot_index].xmax[2] = mesh->blocks[id].xmax[2];
-                            b->slot[slot_index].dx[0] = mesh->blocks[id].dx[0];
-                            b->slot[slot_index].dx[1] = mesh->blocks[id].dx[1];
-                            b->slot[slot_index].dx[2] = mesh->blocks[id].dx[2];
-                            prj_neighbor_compute_geometry(b, &mesh->blocks[id], &b->slot[slot_index]);
                         }
                     }
                 }
