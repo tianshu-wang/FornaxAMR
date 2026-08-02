@@ -1698,6 +1698,7 @@ void prj_mesh_destroy(prj_mesh *mesh)
     }
     free(mesh->blocks);
     free(mesh->morton_lookup);
+    prj_z4c_puncture_tracker_free(mesh);
     mesh->blocks = 0;
     mesh->morton_lookup = 0;
     mesh->nblocks = 0;

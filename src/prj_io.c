@@ -18,7 +18,7 @@
 
 #define PRJ_IO_METADATA_SIZE 639
 #define PRJ_IO_DUMP_NAME_SIZE 32
-#define PRJ_IO_RESTART_FORMAT_VERSION 3
+#define PRJ_IO_RESTART_FORMAT_VERSION 4
 
 #if PRJ_DUMP_SINGLE_PRECISION
 typedef float prj_io_dump_real;
@@ -1261,6 +1261,8 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
 #if PRJ_DYNAMIC_GR
     hid_t space_z4c = -1;
     hid_t dset_z4c = -1;
+    hid_t space_punctures = -1;
+    hid_t dset_punctures = -1;
 #endif
 #if PRJ_MHD
     hid_t space_bf;
@@ -1270,6 +1272,7 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     hsize_t dims_meta[2];
 #if PRJ_DYNAMIC_GR
     hsize_t dims_z4c[3];
+    hsize_t dims_punctures[2];
 #endif
 #if PRJ_MHD
     hsize_t dims_bf[3];
@@ -1289,6 +1292,8 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     dims_z4c[0] = (hsize_t)mesh->nblocks;
     dims_z4c[1] = (hsize_t)PRJ_NZ4C;
     dims_z4c[2] = dims_data[2];
+    dims_punctures[0] = (hsize_t)prj_z4c_puncture_count(mesh);
+    dims_punctures[1] = 3;
 #endif
 #if PRJ_MHD
     dims_bf[0] = (hsize_t)mesh->nblocks;
@@ -1313,6 +1318,8 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     prj_io_write_attr_int(file, "nvar_z4c", PRJ_NZ4C);
     prj_io_write_attr_int(file, "nghost_z4c", PRJ_NGHOST_Z4C);
     prj_io_write_attr_int(file, "recon_z4c_order", PRJ_RECON_Z4C_ORDER);
+    prj_io_write_attr_int(file, "z4c_puncture_count",
+        prj_z4c_puncture_count(mesh));
 #else
     prj_io_write_attr_int(file, "use_full_dynamic_gr", 0);
     prj_io_write_attr_int(file, "nvar_z4c", 0);
@@ -1344,6 +1351,18 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     space_z4c = H5Screate_simple(3, dims_z4c, dims_z4c);
     dset_z4c = H5Dcreate2(file, "Z4c", H5T_NATIVE_DOUBLE, space_z4c,
         H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    if (prj_z4c_puncture_count(mesh) > 0) {
+        space_punctures = H5Screate_simple(2, dims_punctures, dims_punctures);
+        dset_punctures = H5Dcreate2(file, "Z4cPunctures", H5T_NATIVE_DOUBLE,
+            space_punctures, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+        if (prj_io_is_root_rank(mpi)) {
+            hsize_t start[2] = {0, 0};
+            hsize_t count[2] = {dims_punctures[0], 3};
+
+            prj_io_write_hyperslab(dset_punctures, mpi, H5T_NATIVE_DOUBLE,
+                2, start, count, prj_z4c_puncture_positions(mesh));
+        }
+    }
 #endif
 #if PRJ_MHD
     space_bf = H5Screate_simple(3, dims_bf, dims_bf);
@@ -1529,6 +1548,10 @@ void prj_io_write_restart(const prj_mesh *mesh, const prj_mpi *mpi, double time,
     H5Sclose(space_bf);
 #endif
 #if PRJ_DYNAMIC_GR
+    if (dset_punctures >= 0) {
+        H5Dclose(dset_punctures);
+        H5Sclose(space_punctures);
+    }
     H5Dclose(dset_z4c);
     H5Sclose(space_z4c);
 #endif
@@ -1548,6 +1571,7 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     hid_t dset_meta;
 #if PRJ_DYNAMIC_GR
     hid_t dset_z4c = -1;
+    int z4c_puncture_count;
 #endif
 #if PRJ_MHD
     hid_t dset_bf;
@@ -1575,16 +1599,9 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     }
     prj_io_read_attr_int(file, "restart_format_version",
         &restart_format_version);
-#if PRJ_DYNAMIC_GR
     if (restart_format_version != PRJ_IO_RESTART_FORMAT_VERSION) {
         prj_io_fail("prj_io_read_restart: incompatible restart_format_version");
     }
-#else
-    if (restart_format_version != PRJ_IO_RESTART_FORMAT_VERSION &&
-        restart_format_version != 2) {
-        prj_io_fail("prj_io_read_restart: incompatible restart_format_version");
-    }
-#endif
     prj_io_read_attr_double(file, "time", time);
     prj_io_read_attr_int(file, "step", step);
 #if PRJ_DYNAMIC_GR
@@ -1597,6 +1614,13 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
         }
 #endif
         mesh->use_full_dynamic_gr = restart_use_full_dynamic_gr != 0;
+    }
+    if (H5Aexists(file, "z4c_puncture_count") <= 0) {
+        prj_io_fail("prj_io_read_restart: missing z4c_puncture_count");
+    }
+    prj_io_read_attr_int(file, "z4c_puncture_count", &z4c_puncture_count);
+    if (z4c_puncture_count < 0) {
+        prj_io_fail("prj_io_read_restart: invalid z4c_puncture_count");
     }
 #endif
     if (dump_count != 0) {
@@ -1630,6 +1654,43 @@ void prj_io_read_restart(prj_mesh *mesh, const prj_eos *eos, prj_mpi *mpi, const
     if (prj_mesh_init(mesh, root_nx[0], root_nx[1], root_nx[2], max_level, &coord, 1) != 0) {
         prj_io_fail("prj_io_read_restart: mesh init failed");
     }
+#if PRJ_DYNAMIC_GR
+    if (z4c_puncture_count > 0) {
+        hid_t dset_punctures;
+        hid_t space_punctures;
+        hsize_t dims[2] = {0, 0};
+        hsize_t start[2] = {0, 0};
+        hsize_t count[2] = {(hsize_t)z4c_puncture_count, 3};
+        double (*positions)[3];
+
+        if (H5Lexists(file, "Z4cPunctures", H5P_DEFAULT) <= 0) {
+            prj_io_fail("prj_io_read_restart: missing Z4cPunctures dataset");
+        }
+        dset_punctures = H5Dopen2(file, "Z4cPunctures", H5P_DEFAULT);
+        space_punctures = H5Dget_space(dset_punctures);
+        if (H5Sget_simple_extent_ndims(space_punctures) != 2) {
+            prj_io_fail("prj_io_read_restart: invalid Z4cPunctures rank");
+        }
+        H5Sget_simple_extent_dims(space_punctures, dims, 0);
+        H5Sclose(space_punctures);
+        if (dims[0] != count[0] || dims[1] != count[1]) {
+            prj_io_fail("prj_io_read_restart: invalid Z4cPunctures dimensions");
+        }
+        positions = (double (*)[3])prj_calloc((size_t)z4c_puncture_count,
+            sizeof(*positions));
+        if (positions == 0) {
+            prj_io_fail("prj_io_read_restart: puncture allocation failed");
+        }
+        prj_io_read_hyperslab(dset_punctures, mpi, H5T_NATIVE_DOUBLE,
+            2, start, count, positions);
+        H5Dclose(dset_punctures);
+        prj_z4c_puncture_tracker_init(mesh, z4c_puncture_count,
+            (const double (*)[3])positions);
+        free(positions);
+    } else {
+        prj_z4c_puncture_tracker_init(mesh, 0, 0);
+    }
+#endif
     {
         double defaults[3] = {0.0, 0.0, 0.0};
 

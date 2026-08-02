@@ -1176,6 +1176,7 @@ void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
     if (npunctures <= 0 || centers_cm == 0 || masses_cm == 0) {
         prj_z4c_fail("prj_z4c_init_punctures: missing puncture data");
     }
+    prj_z4c_puncture_tracker_init(mesh, npunctures, centers_cm);
     eps2 = floor_radius_cm > 0.0 ? floor_radius_cm * floor_radius_cm : 0.0;
 
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {

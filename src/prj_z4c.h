@@ -45,6 +45,23 @@ void prj_z4c_fill_ghosts(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int sta
 void prj_z4c_init_punctures(prj_mesh *mesh, const prj_mpi *mpi, int npunctures,
     const double centers_cm[][3], const double masses_cm[],
     const double momenta_cm[][3], double floor_radius_cm);
+int prj_z4c_puncture_count(const prj_mesh *mesh);
+int prj_z4c_puncture_position(const prj_mesh *mesh, int puncture,
+    double position_cm[3]);
+const double *prj_z4c_puncture_positions(const prj_mesh *mesh);
+void prj_z4c_puncture_tracker_init(prj_mesh *mesh, int npunctures,
+    const double positions_cm[][3]);
+void prj_z4c_puncture_tracker_free(prj_mesh *mesh);
+void prj_z4c_puncture_save_stage(prj_mesh *mesh, int dst_stage, int src_stage);
+void prj_z4c_puncture_update(prj_mesh *mesh, const prj_mpi *mpi,
+    int dst_stage, int a_stage, double a_weight,
+    int b_stage, double b_weight, int rhs_state_stage, double dtau_cm);
+void prj_z4c_puncture_blend(prj_mesh *mesh, int saved_stage,
+    double saved_weight);
+void prj_z4c_puncture_output_init(const prj_mesh *mesh, const prj_mpi *mpi,
+    double time_seconds, int restart);
+void prj_z4c_puncture_output_append(const prj_mesh *mesh, const prj_mpi *mpi,
+    double time_seconds);
 
 void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     const prj_rad *rad, int state_stage, int rhs_stage, double tau_cm);

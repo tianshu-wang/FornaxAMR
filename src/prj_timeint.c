@@ -2192,6 +2192,7 @@ static void prj_timeint_eSSPRK_save_state(prj_mesh *mesh, const prj_mpi *mpi, in
 #endif
     }
     prj_z4c_save_stage(mesh, mpi, saved_state, 0);
+    prj_z4c_puncture_save_stage(mesh, saved_state, 0);
 }
 
 #if PRJ_MHD
@@ -2282,6 +2283,7 @@ static void prj_timeint_eSSPRK_blend_with_saved(prj_mesh *mesh, const prj_bc *bc
     PRJ_TIMER_BARRIER_STOP(timer, mpi, cell_timer);
 
     prj_z4c_blend_with_saved(mesh, mpi, bc, saved_state, saved_weight);
+    prj_z4c_puncture_blend(mesh, saved_state, saved_weight);
 
     PRJ_TIMER_BARRIER_START(timer, mpi, active_timer);
     prj_eos_fill_active_cells(mesh, eos, mpi, 1, PRJ_EOS_CTX_MAIN);
@@ -2354,6 +2356,8 @@ void prj_timeint_eSSPRK_step(prj_mesh *mesh, const prj_coord *coord, const prj_b
 
         prj_z4c_compute_rhs(mesh, mpi, rad, 0, 0, tau_cm);
         prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
+        prj_z4c_puncture_update(mesh, mpi, 0, 0, 1.0, 0, 0.0, 0,
+            PRJ_CLIGHT * dt);
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "essprk_step_src_cell_update");
@@ -2604,6 +2608,8 @@ void prj_timeint_stage1(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
         prj_z4c_compute_rhs(mesh, mpi, rad, 0, 0, tau_cm);
         prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 0, 0);
+        prj_z4c_puncture_update(mesh, mpi, 1, 0, 1.0, 0, 0.0, 0,
+            PRJ_CLIGHT * dt);
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage1_src_cell_update");
@@ -2720,6 +2726,8 @@ void prj_timeint_stage2(prj_mesh *mesh, const prj_coord *coord, const prj_bc *bc
 
         prj_z4c_compute_rhs(mesh, mpi, rad, 1, 0, tau_cm);
         prj_z4c_apply_sommerfeld_rhs(mesh, mpi, bc, 1, 0);
+        prj_z4c_puncture_update(mesh, mpi, 0, 0, 0.5, 1, 0.5, 1,
+            0.5 * PRJ_CLIGHT * dt);
     }
 
     PRJ_TIMER_BARRIER_START(timer, mpi, "stage2_src_cell_update");

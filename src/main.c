@@ -476,6 +476,7 @@ int main(int argc, char *argv[])
 
     if (sim.restart_from_file == 0) {
         prj_io_write_dump(&sim.mesh, &sim.grav, &mpi, sim.dump_count, sim.step, sim.time);
+        prj_z4c_puncture_output_init(&sim.mesh, &mpi, sim.time, 0);
         sim.dump_count += 1;
         if (sim.output_dt >= 0.0) {
             next_output_time = sim.time + sim.output_dt;
@@ -684,6 +685,7 @@ int main(int argc, char *argv[])
         if (write_output) {
             PRJ_TIMER_BARRIER_START(&timer, &mpi, "write_output");
             prj_io_write_dump(&sim.mesh, &sim.grav, &mpi, sim.dump_count, sim.step, sim.time);
+            prj_z4c_puncture_output_append(&sim.mesh, &mpi, sim.time);
             sim.dump_count += 1;
             PRJ_TIMER_BARRIER_STOP(&timer, &mpi, "write_output");
         }

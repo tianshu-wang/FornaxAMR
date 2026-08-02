@@ -495,6 +495,8 @@ struct prj_mesh {
     double amr_reach_highest_level_at_density;
     double E_floor;
     double mhd_eta;
+    int z4c_puncture_count;
+    double *z4c_puncture_positions_cm;
     prj_z4c_params z4c_params;
     prj_amr_init_refine_fn amr_init_refine_fn;
     void *amr_init_refine_userdata;

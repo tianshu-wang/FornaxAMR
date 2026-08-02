@@ -117,6 +117,7 @@ SRCS := \
 	$(SRC_DIR)/prj_timer.c \
 	$(SRC_DIR)/prj_utils.c \
 	$(SRC_DIR)/prj_z4c.c \
+	$(SRC_DIR)/prj_z4c_puncture.c \
 	$(SRC_DIR)/prj_z4c_wave.c \
 	$(RK_TABLEAU_SRCS) \
 	problems/prj_problem_general.c \
