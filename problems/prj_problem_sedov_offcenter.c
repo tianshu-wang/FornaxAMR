@@ -2,6 +2,11 @@
 #include <string.h>
 
 #include "prj.h"
+#include "prj_problem_ideal_eos.h"
+
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+PRJ_DEFINE_IDEAL_EOS(5.0 / 3.0)
+#endif
 
 static int prj_problem_local_block(const prj_mpi *mpi, const prj_block *block)
 {

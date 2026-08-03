@@ -1,5 +1,5 @@
-PROBLEM := shock1d
+PROBLEM := sedov_offcenter
 EOS := USER
-GRAVITY := 1
+GRAVITY := 0
 RADIATION_M1 := 0
 DUMP_SINGLE_PRECISION := 1

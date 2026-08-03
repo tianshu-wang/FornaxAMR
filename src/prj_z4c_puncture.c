@@ -333,6 +333,10 @@ void prj_z4c_puncture_update(prj_mesh *mesh, const prj_mpi *mpi,
     if (prj_z4c_puncture_count(mesh) == 0) {
         return;
     }
+    if (PRJ_FIX_Z4C) {
+        prj_z4c_puncture_save_stage(mesh, dst_stage, 0);
+        return;
+    }
     if (!isfinite(dtau_cm)) {
         prj_z4c_puncture_fail("prj_z4c_puncture_update: non-finite timestep");
     }
@@ -364,6 +368,9 @@ void prj_z4c_puncture_blend(prj_mesh *mesh, int saved_stage,
     size_t q;
 
     if (prj_z4c_puncture_count(mesh) == 0) {
+        return;
+    }
+    if (PRJ_FIX_Z4C) {
         return;
     }
     current = prj_z4c_puncture_stage(mesh, 0);

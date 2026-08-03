@@ -1,3 +1,6 @@
+PROBLEM := magnetized_ccsn
+EOS := TABLE
+OPAC := TABLE
 GRAVITY := 1
 RADIATION_M1 := 1
 RADIATION_FSA := 0

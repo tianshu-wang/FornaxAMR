@@ -1,3 +1,6 @@
+PROBLEM := magnetized_cc
+EOS := TABLE
+OPAC := TABLE
 GRAVITY := 1
 RADIATION_M1 := 0
 MHD := 1

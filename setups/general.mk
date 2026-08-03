@@ -1,4 +1,4 @@
-PROBLEM := shock1d
+PROBLEM := general
 EOS := USER
 GRAVITY := 1
 RADIATION_M1 := 0

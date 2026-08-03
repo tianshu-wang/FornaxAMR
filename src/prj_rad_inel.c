@@ -502,8 +502,7 @@ void prj_rad_eleinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doub
     int g;
     int d;
 
-#if !PRJ_USE_INELASTIC_SCATTERING || \
-    PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+#if !PRJ_USE_INELASTIC_SCATTERING
     (void)rad; (void)eos; (void)u; (void)dt; (void)T_cell;
     return;
 #endif
@@ -853,8 +852,7 @@ int prj_rad_nucinel_step(prj_rad *rad, prj_eos *eos, double *u, double dt, doubl
     double dy;
     double Uint_new;
 
-#if !PRJ_USE_INELASTIC_SCATTERING || \
-    PRJ_RAD_MICROPHYSICS != PRJ_RAD_MICROPHYSICS_TABLE
+#if !PRJ_USE_INELASTIC_SCATTERING
     (void)rad; (void)eos; (void)u; (void)dt; (void)T_cell;
     return 1;
 #endif

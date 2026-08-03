@@ -41,7 +41,9 @@ RADIATION_FSA ?= 0
 MHD ?= 0
 MHD_DEBUG ?= 0
 DYNAMIC_GR ?= 0
-FIXED_SPACETIME ?= 0
+FIX_MHD ?= 0
+FIX_RAD ?= 0
+FIX_Z4C ?= 0
 DUMP_SINGLE_PRECISION ?= 1
 MIXED_PRECISION_FLUX ?= 0
 MIXED_PRECISION_TABLE ?= 1
@@ -52,17 +54,9 @@ NGHOST ?=
 NRAD ?=
 NEGROUP ?=
 N_ANGLE_LEV ?=
-RAD_MICROPHYSICS ?= PRJ_RAD_MICROPHYSICS_TABLE
-EOS_T3 ?= 0
-RAD_TEST_PROBLEM ?= 0
-STATIC_MATTER ?= 0
-PRESCRIBED_MATTER ?= 0
-SPHERICAL_1D ?= 0
-USER_STATIC_METRIC ?= 0
-RAD_FERMI_DIRAC ?= 0
-IDEAL_GAMMA ?= 1.6666666666666667
-RAD_TEST_ABSORPTION ?= 1.0
-RAD_TEST_RHO_CUTOFF ?= 0.0
+EOS ?= TABLE
+OPAC ?= TABLE
+PROBLEM ?= general
 INELASTIC_SCATTERING ?= 1
 MPI_CFLAGS ?= $(shell $(CC) --showme:compile 2>/dev/null)
 MPI_LIBS ?= $(shell $(CC) --showme:link 2>/dev/null)
@@ -91,7 +85,61 @@ RADIAL_FRAME_FSA_DEF := $(if $(strip $(USE_RADIAL_FRAME_FSA)),-DPRJ_USE_RADIAL_F
 RECON_HYDRO_DEF := $(if $(RECON_HYDRO),-DPRJ_RECON_HYDRO=$(RECON_HYDRO),$(if $(RECON),-DPRJ_RECON_HYDRO=$(RECON),))
 RECON_RADIATION_DEF := $(if $(RECON_RADIATION),-DPRJ_RECON_RADIATION=$(RECON_RADIATION),)
 NGHOST_DEF := $(if $(NGHOST),-DPRJ_NGHOST=$(NGHOST),)
-CPPFLAGS := -Isrc -DPRJ_ENABLE_MPI -DPRJ_RAD_MICROPHYSICS=$(RAD_MICROPHYSICS) -DPRJ_EOS_T3=$(EOS_T3) -DPRJ_RAD_TEST_PROBLEM=$(RAD_TEST_PROBLEM) -DPRJ_STATIC_MATTER=$(STATIC_MATTER) -DPRJ_PRESCRIBED_MATTER=$(PRESCRIBED_MATTER) -DPRJ_SPHERICAL_1D=$(SPHERICAL_1D) -DPRJ_USER_STATIC_METRIC=$(USER_STATIC_METRIC) -DPRJ_RAD_FERMI_DIRAC=$(RAD_FERMI_DIRAC) -DPRJ_IDEAL_GAMMA=$(IDEAL_GAMMA) -DPRJ_RAD_TEST_ABSORPTION=$(RAD_TEST_ABSORPTION) -DPRJ_RAD_TEST_RHO_CUTOFF=$(RAD_TEST_RHO_CUTOFF) -DPRJ_USE_INELASTIC_SCATTERING=$(INELASTIC_SCATTERING) -DPRJ_USE_GRAVITY=$(GRAVITY) -DPRJ_GRAV_DEBUG=$(GRAV_DEBUG) -DPRJ_TIMER=$(TIMER) -DPRJ_USE_RADIATION_M1=$(RADIATION_M1) -DPRJ_USE_RADIATION_FSA=$(RADIATION_FSA) $(if $(INCLUDE_RADIATION_VISCOSITY),-DPRJ_INCLUDE_RADIATION_VISCOSITY=$(INCLUDE_RADIATION_VISCOSITY)) $(RADIAL_FRAME_FSA_DEF) -DPRJ_MHD=$(MHD) -DPRJ_MHD_DEBUG=$(MHD_DEBUG) -DPRJ_DYNAMIC_GR=$(DYNAMIC_GR) -DPRJ_FIXED_SPACETIME=$(FIXED_SPACETIME) $(TIME_INTEGRATION_DEF) -DPRJ_DUMP_SINGLE_PRECISION=$(DUMP_SINGLE_PRECISION) -DPRJ_MIXED_PRECISION_FLUX=$(MIXED_PRECISION_FLUX) -DPRJ_MIXED_PRECISION_TABLE=$(MIXED_PRECISION_TABLE) $(RECON_HYDRO_DEF) $(RECON_RADIATION_DEF) $(NGHOST_DEF) $(NRAD_DEF) $(NEGROUP_DEF) $(N_ANGLE_LEV_DEF) $(GIT_DEFS) $(MPI_CFLAGS) $(HDF5_CFLAGS) $(MACHINE_CPPFLAGS)
+ifneq ($(EOS),TABLE)
+ifneq ($(EOS),USER)
+$(error EOS must be TABLE or USER)
+endif
+endif
+ifneq ($(OPAC),TABLE)
+ifneq ($(OPAC),USER)
+$(error OPAC must be TABLE or USER)
+endif
+endif
+
+PROBLEM_INIT_WITH_MPI := 0
+ifeq ($(PROBLEM),general)
+PROBLEM_SRC := problems/prj_problem_general.c
+PROBLEM_INIT := prj_problem_general
+else ifneq ($(filter $(PROBLEM),sedov magnetized_sedov),)
+PROBLEM_SRC := problems/prj_problem_sedov.c
+PROBLEM_INIT := prj_problem_sedov
+PROBLEM_INIT_WITH_MPI := 1
+else ifeq ($(PROBLEM),sedov_offcenter)
+PROBLEM_SRC := problems/prj_problem_sedov_offcenter.c
+PROBLEM_INIT := prj_problem_sedov_offcenter
+else ifneq ($(filter $(PROBLEM),cc magnetized_cc),)
+PROBLEM_SRC := problems/prj_problem_cc.c
+PROBLEM_INIT := prj_problem_cc
+PROBLEM_INIT_WITH_MPI := 1
+else ifneq ($(filter $(PROBLEM),ccsn magnetized_ccsn),)
+PROBLEM_SRC := problems/prj_problem_ccsn.c
+PROBLEM_INIT := prj_problem_ccsn
+PROBLEM_INIT_WITH_MPI := 1
+else ifeq ($(PROBLEM),shock1d)
+PROBLEM_SRC := problems/prj_problem_shock1d.c
+PROBLEM_INIT := prj_problem_shock1d
+else ifeq ($(PROBLEM),kh)
+PROBLEM_SRC := tests/hydro/prj_problem_kh.c
+PROBLEM_INIT := prj_problem_kh
+else ifeq ($(PROBLEM),shock_tube)
+PROBLEM_SRC := tests/hydro/prj_problem_shocktube.c
+PROBLEM_INIT := prj_problem_shocktube
+else ifneq ($(filter $(PROBLEM),z4c_one_puncture z4c_single_puncture single_puncture),)
+PROBLEM_SRC := problems/prj_problem_z4c_puncture.c
+PROBLEM_INIT := prj_problem_z4c_one_puncture
+PROBLEM_INIT_WITH_MPI := 1
+else ifneq ($(filter $(PROBLEM),z4c_two_puncture z4c_equal_mass_punctures two_puncture),)
+PROBLEM_SRC := problems/prj_problem_z4c_puncture.c
+PROBLEM_INIT := prj_problem_z4c_two_puncture
+PROBLEM_INIT_WITH_MPI := 1
+else ifeq ($(PROBLEM),user_provider_fixture)
+PROBLEM_SRC := tests/fixtures/prj_problem_user_provider.c
+PROBLEM_INIT := prj_problem_user_provider
+else
+$(error Unknown PROBLEM '$(PROBLEM)')
+endif
+
+CPPFLAGS := -Isrc -DPRJ_ENABLE_MPI -DPRJ_EOS_PROVIDER=PRJ_PROVIDER_$(EOS) -DPRJ_OPAC_PROVIDER=PRJ_PROVIDER_$(OPAC) -DPRJ_PROBLEM_INIT=$(PROBLEM_INIT) -DPRJ_PROBLEM_NAME='"$(PROBLEM)"' -DPRJ_PROBLEM_INIT_WITH_MPI=$(PROBLEM_INIT_WITH_MPI) -DPRJ_USE_INELASTIC_SCATTERING=$(INELASTIC_SCATTERING) -DPRJ_USE_GRAVITY=$(GRAVITY) -DPRJ_GRAV_DEBUG=$(GRAV_DEBUG) -DPRJ_TIMER=$(TIMER) -DPRJ_USE_RADIATION_M1=$(RADIATION_M1) -DPRJ_USE_RADIATION_FSA=$(RADIATION_FSA) $(if $(INCLUDE_RADIATION_VISCOSITY),-DPRJ_INCLUDE_RADIATION_VISCOSITY=$(INCLUDE_RADIATION_VISCOSITY)) $(RADIAL_FRAME_FSA_DEF) -DPRJ_MHD=$(MHD) -DPRJ_MHD_DEBUG=$(MHD_DEBUG) -DPRJ_DYNAMIC_GR=$(DYNAMIC_GR) -DPRJ_FIX_MHD=$(FIX_MHD) -DPRJ_FIX_RAD=$(FIX_RAD) -DPRJ_FIX_Z4C=$(FIX_Z4C) $(TIME_INTEGRATION_DEF) -DPRJ_DUMP_SINGLE_PRECISION=$(DUMP_SINGLE_PRECISION) -DPRJ_MIXED_PRECISION_FLUX=$(MIXED_PRECISION_FLUX) -DPRJ_MIXED_PRECISION_TABLE=$(MIXED_PRECISION_TABLE) $(RECON_HYDRO_DEF) $(RECON_RADIATION_DEF) $(NGHOST_DEF) $(NRAD_DEF) $(NEGROUP_DEF) $(N_ANGLE_LEV_DEF) $(GIT_DEFS) $(MPI_CFLAGS) $(HDF5_CFLAGS) $(MACHINE_CPPFLAGS)
 LDFLAGS := $(MACHINE_LDFLAGS)
 LDLIBS := $(HDF5_LIBS) $(MPI_LIBS) $(MACHINE_LDLIBS)
 
@@ -133,20 +181,7 @@ SRCS := \
 	$(SRC_DIR)/prj_z4c_puncture.c \
 	$(SRC_DIR)/prj_z4c_wave.c \
 	$(RK_TABLEAU_SRCS) \
-	problems/prj_problem_general.c \
-	problems/prj_problem_cc.c \
-	problems/prj_problem_ccsn.c \
-	problems/prj_problem_sedov.c \
-	problems/prj_problem_sedov_offcenter.c \
-	problems/prj_problem_shock1d.c \
-	problems/prj_problem_z4c_puncture.c \
-	tests/hydro/prj_problem_kh.c \
-	tests/hydro/prj_problem_shocktube.c \
-	tests/rad/prj_problem_rad.c \
-	tests/rad/prj_problem_rad_free_streaming.c \
-	tests/rad/prj_problem_rad_diffusive_source.c \
-	tests/rad/prj_problem_rad_picket_fence.c \
-	tests/rad/prj_problem_rad_extended.c
+	$(PROBLEM_SRC)
 
 OBJS := $(SRCS:.c=.o)
 CORE_SRCS := $(filter-out $(SRC_DIR)/main.c,$(SRCS))
@@ -156,7 +191,7 @@ TEST_BINS := $(TEST_SRCS:.c=)
 RK_TABLEAU_ARTIFACTS := $(RK_TABLEAU_DIR)/*.o $(RK_TABLEAU_DIR)/*.d \
 	$(RK_TABLEAU_DIR)/*.gcda $(RK_TABLEAU_DIR)/*.gcno $(RK_TABLEAU_DIR)/*.gcov
 
-.PHONY: all clean test rad-unit
+.PHONY: all clean test
 
 all: $(TARGET)
 
@@ -172,17 +207,17 @@ $(RK_TABLEAU_DIR)/%.o: $(RK_TABLEAU_DIR)/%.c $(SRC_DIR)/prj_timeint.h $(SRC_DIR)
 # Problem TUs reference prj_block/prj_neighbor; without an explicit rule make
 # uses the built-in %.o pattern (no header prereqs) and silently keeps stale
 # objects when the layout headers change, producing a mixed-ABI binary.
-problems/%.o: problems/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
+problems/%.o: problems/%.c problems/prj_problem_ideal_eos.h $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 # Problem TUs that live under tests/hydro/ are compiled into the engine the same
 # way (with explicit header prereqs to avoid stale mixed-ABI objects).  Note the
 # standalone-test glob below is flat ($(TEST_DIR)/*.c), so these are not built as
 # standalone test binaries.
-tests/hydro/%.o: tests/hydro/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
+tests/hydro/%.o: tests/hydro/%.c problems/prj_problem_ideal_eos.h $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
-tests/rad/%.o: tests/rad/%.c $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
+tests/fixtures/%.o: tests/fixtures/%.c problems/prj_problem_ideal_eos.h $(SRC_DIR)/prj.h $(SRC_DIR)/prj_defs.h $(SRC_DIR)/prj_types.h
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
 
 $(TEST_DIR)/%: $(TEST_DIR)/%.c $(CORE_OBJS)
@@ -191,11 +226,5 @@ $(TEST_DIR)/%: $(TEST_DIR)/%.c $(CORE_OBJS)
 test: $(TEST_BINS)
 	@set -e; for test_bin in $(TEST_BINS); do ./$$test_bin; done
 
-tests/rad/test_analytic: tests/rad/test_analytic.c $(CORE_OBJS)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $< $(CORE_OBJS) $(LDFLAGS) $(LDLIBS) -o $@
-
-rad-unit: tests/rad/test_analytic
-	./tests/rad/test_analytic
-
 clean:
-	rm -f $(TARGET) $(OBJS) $(CORE_OBJS) $(TEST_BINS) tests/rad/test_analytic $(RK_TABLEAU_ARTIFACTS)
+	rm -f $(TARGET) $(OBJS) $(CORE_OBJS) $(TEST_BINS) problems/*.o tests/hydro/*.o tests/rad/*.o tests/fixtures/*.o tests/rad/test_analytic $(RK_TABLEAU_ARTIFACTS)

@@ -26,29 +26,6 @@
 #include "prj_z4c.h"
 
 void prj_problem_initial_condition(double x1, double x2, double x3, double *data);
-void prj_problem_general(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_cc(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_ccsn(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_sedov(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_sedov_offcenter(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_shock1d(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_kh(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_shocktube(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_rad_free_streaming(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_rad_diffusive_source(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_rad_picket_fence(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_rad_sphere(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_rad_doppler(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_rad_grav_redshift(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_rad_shock(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_user_boundary(const prj_mesh *mesh, const prj_block *block,
-    double *W, int axis, int side, int i, int j, int k,
-    const double position[3], double time_seconds);
-void prj_problem_user_source(const prj_mesh *mesh, const prj_block *block,
-    double *W_mhd, double *W_rad, double *mhd_rhs, double *rad_rhs);
-void prj_problem_static_metric(const double position[3], double *lapse,
-    double *gamma_rr, double *dphi_dr);
-void prj_problem_z4c_one_puncture(prj_sim *sim, prj_mpi *mpi);
-void prj_problem_z4c_two_puncture(prj_sim *sim, prj_mpi *mpi);
+void PRJ_PROBLEM_INIT(prj_sim *sim, prj_mpi *mpi);
 
 #endif

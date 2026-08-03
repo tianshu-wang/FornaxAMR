@@ -22,7 +22,22 @@ typedef struct prj_rad3_opac_interp_result {
     double coord_scale[3];
     double inv_rho;
     double inv_temp;
+    int physical_derivatives;
 } prj_rad3_opac_interp_result;
+
+#if PRJ_OPAC_PROVIDER == PRJ_PROVIDER_USER
+typedef void (*prj_user_opac_fn)(const prj_rad *rad, int species, int group,
+    double rho, double temperature, double ye, double *value,
+    double derivatives[3]);
+void opac(const prj_rad *rad, int species, int group, double rho,
+    double temperature, double ye, double *value, double derivatives[3]);
+void emis(const prj_rad *rad, int species, int group, double rho,
+    double temperature, double ye, double *value, double derivatives[3]);
+void scat(const prj_rad *rad, int species, int group, double rho,
+    double temperature, double ye, double *value, double derivatives[3]);
+void delta(const prj_rad *rad, int species, int group, double rho,
+    double temperature, double ye, double *value, double derivatives[3]);
+#endif
 
 void prj_rad3_opac_init(prj_rad *rad);
 void prj_rad3_opac_free(prj_rad *rad);

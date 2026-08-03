@@ -33,19 +33,6 @@
 /* 1 MeV per baryon in cgs specific-energy units (erg g^-1). */
 #define PRJ_EOS_ENERGY_SCALE 0.95655684e18
 #define PRJ_EOS_PRESSURE_SCALE 1.60217733e33
-#define PRJ_EOS_ARAD 7.5657e-15
-
-#if PRJ_EOS_T3
-static double prj_eos_t3_eint(double rho, double T)
-{
-    return PRJ_EOS_ARAD * T * T * T * T / rho;
-}
-
-static double prj_eos_t3_pressure(double rho)
-{
-    return 1.0e-30 * rho;
-}
-#endif
 
 enum {
     PRJ_EOS_REC_EINT = 1,
@@ -64,11 +51,6 @@ static int prj_eos_rec_to_compact(int rec)
         case 15: return 3;
         default: return 0;
     }
-}
-
-static double prj_eos_gamma_value(void)
-{
-    return PRJ_IDEAL_GAMMA;
 }
 
 static double prj_eos_exp10(double x)
@@ -407,36 +389,17 @@ void prj_eos_init(prj_eos *eos, const prj_mpi *mpi)
     if (eos == 0) {
         return;
     }
-    if (eos->kind == PRJ_EOS_KIND_TABLE && eos->filename[0] == '\0') {
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+    (void)mpi;
+    eos->table_loaded = 0;
+    eos->table_is_mmap = 0;
+    eos->table_bytes = 0;
+    eos->table = 0;
+    return;
+#endif
+    eos->kind = PRJ_EOS_KIND_TABLE;
+    if (eos->filename[0] == '\0') {
         prj_eos_missing_table_filename_fail();
-    }
-    if (eos->kind != PRJ_EOS_KIND_TABLE) {
-        eos->table_loaded = 0;
-        eos->table_is_mmap = 0;
-        eos->nt = 0;
-        eos->nr = 0;
-        eos->ny = 0;
-        eos->r1 = 0.0;
-        eos->r2 = 0.0;
-        eos->t1 = 0.0;
-        eos->t2 = 0.0;
-        eos->y1c = 0.0;
-        eos->y2c = 0.0;
-        eos->dlogrho = 0.0;
-        eos->dlogT = 0.0;
-        eos->dYe = 0.0;
-        eos->rho_min = 0.0;
-        eos->rho_max = 0.0;
-        eos->temp_min = 0.0;
-        eos->temp_max = 0.0;
-        eos->inv_dlogrho = 0.0;
-        eos->inv_dlogT = 0.0;
-        eos->inv_dYe = 0.0;
-        eos->ln10_t1 = 0.0;
-        eos->ln10_dlogT = 0.0;
-        eos->table_bytes = 0;
-        eos->table = 0;
-        return;
     }
     (void)prj_eos_prepare_table(eos, mpi);
     if (eos->table_loaded == 1 && (mpi == 0 || mpi->rank == 0)) {
@@ -521,15 +484,19 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
     if (eos_quantities == 0) {
         return;
     }
-#if PRJ_EOS_T3
-    (void)eos;
-    (void)ye;
-    (void)ctx;
-    eos_quantities[PRJ_EOS_EINT] = prj_eos_t3_eint(rho, T);
-    eos_quantities[PRJ_EOS_PRESSURE] = prj_eos_t3_pressure(rho);
-    eos_quantities[PRJ_EOS_GAMMA] = 1.0;
-    eos_quantities[PRJ_EOS_TEMPERATURE] = T;
-    return;
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+    {
+        double eta;
+        double deint[3];
+        double dpressure[3];
+        (void)eos;
+        (void)ctx;
+        eos_rty(rho, T, ye, &eos_quantities[PRJ_EOS_EINT],
+            &eos_quantities[PRJ_EOS_PRESSURE], &eos_quantities[PRJ_EOS_GAMMA],
+            &eta, deint, dpressure);
+        eos_quantities[PRJ_EOS_TEMPERATURE] = T;
+        return;
+    }
 #endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
@@ -559,12 +526,7 @@ void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quan
         return;
     }
 
-    gamma = prj_eos_gamma_value();
-    eint = PRJ_EOS_ENERGY_SCALE * T / (gamma - 1.0);
-    eos_quantities[PRJ_EOS_EINT] = eint;
-    eos_quantities[PRJ_EOS_PRESSURE] = rho * PRJ_EOS_ENERGY_SCALE * T;
-    eos_quantities[PRJ_EOS_GAMMA] = gamma;
-    eos_quantities[PRJ_EOS_TEMPERATURE] = T;
+    prj_eos_missing_table_filename_fail();
 }
 
 int prj_eos_rty_interp(prj_eos *eos, double rho, double T, double ye,
@@ -575,22 +537,22 @@ int prj_eos_rty_interp(prj_eos *eos, double rho, double T, double ye,
         !isfinite(ye)) {
         return 0;
     }
-#if PRJ_EOS_T3
-    (void)eos;
-    (void)ctx;
-    result->eint = prj_eos_t3_eint(rho, T);
-    result->pressure = prj_eos_t3_pressure(rho);
-    result->eint_raw_slope[0] = -result->eint / rho;
-    result->eint_raw_slope[1] = 4.0 * result->eint / T;
-    result->eint_raw_slope[2] = 0.0;
-    result->pressure_log_raw_slope[0] = 1.0e-30;
-    result->pressure_log_raw_slope[1] = 0.0;
-    result->pressure_log_raw_slope[2] = 0.0;
-    result->coord_scale[0] = result->coord_scale[1] = result->coord_scale[2] = 1.0;
-    result->inv_rho_ln10 = result->inv_T_ln10 = 1.0;
-    result->tabulated = 0;
-    (void)ye;
-    return 1;
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+    {
+        double gamma;
+        double eta;
+        (void)eos;
+        (void)ctx;
+        eos_rty(rho, T, ye, &result->eint, &result->pressure, &gamma, &eta,
+            result->eint_raw_slope, result->pressure_log_raw_slope);
+        result->coord_scale[0] = 1.0;
+        result->coord_scale[1] = 1.0;
+        result->coord_scale[2] = 1.0;
+        result->inv_rho_ln10 = 1.0;
+        result->inv_T_ln10 = 1.0;
+        result->tabulated = 0;
+        return isfinite(result->eint) && isfinite(result->pressure);
+    }
 #endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 &&
@@ -652,25 +614,7 @@ int prj_eos_rty_interp(prj_eos *eos, double rho, double T, double ye,
         return isfinite(result->eint) && isfinite(result->pressure);
     }
 
-    {
-        double gamma = prj_eos_gamma_value();
-
-        result->eint = PRJ_EOS_ENERGY_SCALE * T / (gamma - 1.0);
-        result->pressure = rho * PRJ_EOS_ENERGY_SCALE * T;
-        result->eint_raw_slope[0] = 0.0;
-        result->eint_raw_slope[1] = PRJ_EOS_ENERGY_SCALE / (gamma - 1.0);
-        result->eint_raw_slope[2] = 0.0;
-        result->pressure_log_raw_slope[0] = PRJ_EOS_ENERGY_SCALE * T;
-        result->pressure_log_raw_slope[1] = rho * PRJ_EOS_ENERGY_SCALE;
-        result->pressure_log_raw_slope[2] = 0.0;
-        result->coord_scale[0] = 1.0;
-        result->coord_scale[1] = 1.0;
-        result->coord_scale[2] = 1.0;
-        result->inv_rho_ln10 = 1.0;
-        result->inv_T_ln10 = 1.0;
-        result->tabulated = 0;
-    }
-    return 1;
+    return 0;
 }
 
 int prj_eos_rty_interp_derivs(const prj_eos_rty_interp_result *result,
@@ -735,15 +679,20 @@ int prj_eos_rty_derivs(prj_eos *eos, double rho, double T, double ye,
 double prj_eos_rty_eint(prj_eos *eos, double rho, double T, double ye,
     double *deint_dlnT, double *deint_dYe, enum prj_eos_call_ctx ctx)
 {
-#if PRJ_EOS_T3
-    double eint = prj_eos_t3_eint(rho, T);
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+    double eint;
+    double pressure;
+    double gamma;
+    double eta;
+    double deint[3];
+    double dpressure[3];
     (void)eos;
-    (void)ye;
     (void)ctx;
-    *deint_dlnT = 4.0 * eint;
-    *deint_dYe = 0.0;
+    eos_rty(rho, T, ye, &eint, &pressure, &gamma, &eta, deint, dpressure);
+    *deint_dlnT = T * deint[1];
+    *deint_dYe = deint[2];
     return eint;
-#endif
+#else
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         int jy;
@@ -778,19 +727,28 @@ double prj_eos_rty_eint(prj_eos *eos, double rho, double T, double ye,
         return e_raw * PRJ_EOS_ENERGY_SCALE;
     }
 
-    {
-        double eint = PRJ_EOS_ENERGY_SCALE * T / (prj_eos_gamma_value() - 1.0);
-
-        /* eint is linear in T, so d(eint)/d(lnT) = T d(eint)/dT = eint. */
-        *deint_dlnT = eint;
-        *deint_dYe = 0.0;
-        return eint;
-    }
+    prj_eos_missing_table_filename_fail();
+    *deint_dlnT = 0.0;
+    *deint_dYe = 0.0;
+    return 0.0;
+#endif
 }
 
 double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye,
     enum prj_eos_call_ctx ctx)
 {
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+    double eint;
+    double pressure;
+    double gamma;
+    double eta;
+    double deint[3];
+    double dpressure[3];
+    (void)eos;
+    (void)ctx;
+    eos_rty(rho, T, ye, &eint, &pressure, &gamma, &eta, deint, dpressure);
+    return eta;
+#else
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
         eos->filename[0] != '\0' && prj_eos_prepare_table(eos, 0) == 0 && eos->table_loaded == 1) {
         int jy, jyp, jr, jrp, jt, jtp;
@@ -808,6 +766,7 @@ double prj_eos_rty_geteta(prj_eos *eos, double rho, double T, double ye,
     }
 
     return 0.0;
+#endif
 }
 
 void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_quantities,
@@ -819,15 +778,12 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
     if (eos_quantities == 0) {
         return;
     }
-#if PRJ_EOS_T3
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
     (void)eos;
-    (void)ye;
     (void)ctx;
-    T = pow(eint * rho / PRJ_EOS_ARAD, 0.25);
+    eos_rey(rho, eint, ye, &eos_quantities[PRJ_EOS_TEMPERATURE],
+        &eos_quantities[PRJ_EOS_PRESSURE], &eos_quantities[PRJ_EOS_GAMMA]);
     eos_quantities[PRJ_EOS_EINT] = eint;
-    eos_quantities[PRJ_EOS_PRESSURE] = prj_eos_t3_pressure(rho);
-    eos_quantities[PRJ_EOS_GAMMA] = 1.0;
-    eos_quantities[PRJ_EOS_TEMPERATURE] = T;
     return;
 #endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE &&
@@ -930,27 +886,24 @@ void prj_eos_rey(prj_eos *eos, double rho, double eint, double ye, double *eos_q
         return;
     }
 
-    gamma = prj_eos_gamma_value();
-    T = (gamma - 1.0) * eint / PRJ_EOS_ENERGY_SCALE;
-    eos_quantities[PRJ_EOS_EINT] = eint;
-    eos_quantities[PRJ_EOS_PRESSURE] = rho * PRJ_EOS_ENERGY_SCALE * T;
-    eos_quantities[PRJ_EOS_GAMMA] = gamma;
-    eos_quantities[PRJ_EOS_TEMPERATURE] = T;
+    prj_eos_missing_table_filename_fail();
 }
 
 static int prj_eos_pressure_try(prj_eos *eos, double rho, double eint, double ye,
     double *pressure)
 {
-    double gamma;
-
     if (pressure == 0 || !isfinite(rho) || !isfinite(eint) || !isfinite(ye) ||
         rho <= 0.0 || eint < 0.0) {
         return 0;
     }
-#if PRJ_EOS_T3
-    (void)eos;
-    *pressure = prj_eos_t3_pressure(rho);
-    return 1;
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+    {
+        double temperature;
+        double gamma;
+        (void)eos;
+        eos_rey(rho, eint, ye, &temperature, pressure, &gamma);
+        return isfinite(*pressure) && *pressure >= 0.0;
+    }
 #endif
     if (eos != 0 && eos->kind == PRJ_EOS_KIND_TABLE && eos->filename[0] != '\0') {
         double e_table;
@@ -1063,9 +1016,7 @@ static int prj_eos_pressure_try(prj_eos *eos, double rho, double eint, double ye
         return isfinite(*pressure) && *pressure >= 0.0;
     }
 
-    gamma = prj_eos_gamma_value();
-    *pressure = (gamma - 1.0) * rho * eint;
-    return isfinite(*pressure) && *pressure >= 0.0;
+    return 0;
 }
 
 double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye, enum prj_eos_call_ctx ctx)
@@ -1087,8 +1038,15 @@ double prj_eos_low_temp_eint(prj_eos *eos, double rho, double ye, enum prj_eos_c
     int off_y_rp;
     int off_yp_rp;
 
-    /* The internal-energy offset only exists for the tabulated EOS; for the
-     * ideal-gas EOS the floor is applied directly so there is no boundary. */
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+    (void)eos;
+    (void)rho;
+    (void)ye;
+    (void)ctx;
+    return 0.0;
+#endif
+
+    /* The internal-energy offset only exists for the tabulated provider. */
     if (eos == 0 || eos->kind != PRJ_EOS_KIND_TABLE || eos->filename[0] == '\0' ||
         prj_eos_prepare_table(eos, 0) != 0 || eos->table_loaded != 1) {
         return 0.0;
@@ -2236,10 +2194,6 @@ void prj_eos_cons2prim(prj_eos *eos, double *U, double *W)
     v1 = U[PRJ_CONS_MOM1] / rho;
     v2 = U[PRJ_CONS_MOM2] / rho;
     v3 = U[PRJ_CONS_MOM3] / rho;
-#if PRJ_STATIC_MATTER
-    v1 = v2 = v3 = 0.0;
-    U[PRJ_CONS_MOM1] = U[PRJ_CONS_MOM2] = U[PRJ_CONS_MOM3] = 0.0;
-#endif
     kinetic = 0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
 #if PRJ_MHD
     magnetic = 0.5 * (U[PRJ_CONS_B1] * U[PRJ_CONS_B1] +

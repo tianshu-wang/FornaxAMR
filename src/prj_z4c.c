@@ -2553,7 +2553,7 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
     int bidx;
     int use_full_dynamic_gr;
 
-    if (!prj_z4c_runtime_enabled(mesh)) {
+    if (!prj_z4c_runtime_enabled(mesh) || PRJ_FIX_Z4C) {
         return;
     }
     if (state_stage < 0 || state_stage >= PRJ_BLOCK_NSTAGES ||
@@ -2580,15 +2580,6 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
             prj_z4c_fail("prj_z4c_compute_rhs: missing stage storage");
         }
         prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
-#if PRJ_FIXED_SPACETIME
-        (void)rad;
-        (void)tau_cm;
-        (void)use_full_dynamic_gr;
-        (void)z;
-        (void)W_mhd;
-        (void)W_rad;
-        continue;
-#endif
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
@@ -2731,7 +2722,7 @@ void prj_z4c_apply_sommerfeld_rhs(prj_mesh *mesh, const prj_mpi *mpi,
 {
     int bidx;
 
-    if (!prj_z4c_runtime_enabled(mesh) || bc == 0) {
+    if (!prj_z4c_runtime_enabled(mesh) || PRJ_FIX_Z4C || bc == 0) {
         return;
     }
     if (state_stage < 0 || state_stage >= PRJ_BLOCK_NSTAGES ||
@@ -2784,10 +2775,16 @@ void prj_z4c_update_linear(prj_mesh *mesh, const prj_mpi *mpi,
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
                     for (var = 0; var < PRJ_NZ4C; ++var) {
-                        dst[Z4CIDX(var, i, j, k)] =
-                            a_w * a_src[Z4CIDX(var, i, j, k)] +
-                            b_w * b_src[Z4CIDX(var, i, j, k)] +
-                            dtau_cm * rhs[Z4CIDX(var, i, j, k)];
+                        if (PRJ_FIX_Z4C) {
+                            const double *fixed = prj_block_z4c_stage_const(block, 0);
+                            dst[Z4CIDX(var, i, j, k)] =
+                                fixed[Z4CIDX(var, i, j, k)];
+                        } else {
+                            dst[Z4CIDX(var, i, j, k)] =
+                                a_w * a_src[Z4CIDX(var, i, j, k)] +
+                                b_w * b_src[Z4CIDX(var, i, j, k)] +
+                                dtau_cm * rhs[Z4CIDX(var, i, j, k)];
+                        }
                     }
                 }
             }
@@ -2803,13 +2800,18 @@ void prj_z4c_update_linear_cell(prj_block *block,
     const double *a_src = prj_block_z4c_stage_const(block, a_stage);
     const double *b_src = prj_block_z4c_stage_const(block, b_stage);
     const double *rhs = prj_block_z4c_rhs_stage_const(block, rhs_stage);
+    const double *fixed = prj_block_z4c_stage_const(block, 0);
     int var;
 
     for (var = 0; var < PRJ_NZ4C; ++var) {
-        dst[Z4CIDX(var, i, j, k)] =
-            a_w * a_src[Z4CIDX(var, i, j, k)] +
-            b_w * b_src[Z4CIDX(var, i, j, k)] +
-            dtau_cm * rhs[Z4CIDX(var, i, j, k)];
+        if (PRJ_FIX_Z4C) {
+            dst[Z4CIDX(var, i, j, k)] = fixed[Z4CIDX(var, i, j, k)];
+        } else {
+            dst[Z4CIDX(var, i, j, k)] =
+                a_w * a_src[Z4CIDX(var, i, j, k)] +
+                b_w * b_src[Z4CIDX(var, i, j, k)] +
+                dtau_cm * rhs[Z4CIDX(var, i, j, k)];
+        }
     }
 }
 
@@ -2821,9 +2823,10 @@ void prj_z4c_finalize_stage(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc, int 
     prj_z4c_enforce_range(mesh, mpi, stage, 0, PRJ_BLOCK_SIZE, 0, PRJ_BLOCK_SIZE,
         0, PRJ_BLOCK_SIZE);
     prj_z4c_fill_ghosts(mesh, mpi, bc, stage);
-    prj_z4c_enforce_range(mesh, mpi, stage, -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C,
-        -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C,
-        -PRJ_NGHOST_Z4C, PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C);
+    prj_z4c_enforce_range(mesh, mpi, stage, -PRJ_NGHOST_Z4C,
+        PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C, -PRJ_NGHOST_Z4C,
+        PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C, -PRJ_NGHOST_Z4C,
+        PRJ_BLOCK_SIZE + PRJ_NGHOST_Z4C);
 }
 
 void prj_z4c_save_stage(prj_mesh *mesh, const prj_mpi *mpi, int dst_stage, int src_stage)
@@ -2854,6 +2857,10 @@ void prj_z4c_blend_with_saved(prj_mesh *mesh, prj_mpi *mpi, const prj_bc *bc,
     double current_weight = 1.0 - saved_weight;
 
     if (!prj_z4c_runtime_enabled(mesh)) {
+        return;
+    }
+    if (PRJ_FIX_Z4C) {
+        prj_z4c_fill_ghosts(mesh, mpi, bc, 0);
         return;
     }
     for (bidx = 0; bidx < mesh->nblocks; ++bidx) {

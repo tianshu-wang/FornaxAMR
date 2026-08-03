@@ -1,12 +1,6 @@
 #ifndef PRJ_BOUNDARY_H
 #define PRJ_BOUNDARY_H
 
-enum {
-    PRJ_BOUNDARY_PHYS_FACE_ONLY = 0,
-    PRJ_BOUNDARY_PHYS_ALL = 1,
-    PRJ_BOUNDARY_PHYS_EDGE_CORNER = 2
-};
-
 void prj_boundary_get_prim(const prj_mesh *mesh, const prj_block *block, int stage,
     double x1, double x2, double x3, double *w);
 void prj_boundary_get_eosvar(const prj_mesh *mesh, const prj_block *block,

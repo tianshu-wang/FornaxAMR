@@ -1,2 +1,1 @@
-include tests/rad/grav_redshift_15.mk
-NEGROUP := 25
+$(error Radiation benchmark pending USER problem migration)

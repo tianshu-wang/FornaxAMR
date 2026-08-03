@@ -75,6 +75,15 @@ typedef struct prj_eos_rty_interp_result {
     int tabulated;
 } prj_eos_rty_interp_result;
 
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+/* Problem-supplied EOS. Derivative order is rho, temperature, electron fraction. */
+void eos_rty(double rho, double temperature, double ye,
+    double *eint, double *pressure, double *gamma, double *eta,
+    double deint[3], double dpressure[3]);
+void eos_rey(double rho, double eint, double ye,
+    double *temperature, double *pressure, double *gamma);
+#endif
+
 void prj_eos_init(prj_eos *eos, const prj_mpi *mpi);
 void prj_eos_rty(prj_eos *eos, double rho, double T, double ye, double *eos_quantities,
     enum prj_eos_call_ctx ctx);

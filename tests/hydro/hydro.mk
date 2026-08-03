@@ -1,5 +1,7 @@
 # Build flags shared by the tests/hydro/ pure-hydro tests (KH, shock tube).
 # Select with:  make SETUP_MK=tests/hydro/hydro.mk
+PROBLEM ?= kh
+EOS := USER
 GRAVITY := 0
 RADIATION_M1 := 0
 MHD := 0

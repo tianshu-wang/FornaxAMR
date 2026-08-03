@@ -19,12 +19,14 @@ void prj_src_geom(prj_eos *eos, double *W_mhd, double *W_rad,
     (void)rad_rhs;
 }
 
-void prj_src_user(const prj_mesh *mesh, const prj_block *block,
-    prj_eos *eos, double *W_mhd, double *W_rad,
+void prj_src_user(prj_eos *eos, double *W_mhd, double *W_rad,
     double *mhd_rhs, double *rad_rhs)
 {
     (void)eos;
-    prj_problem_user_source(mesh, block, W_mhd, W_rad, mhd_rhs, rad_rhs);
+    (void)W_mhd;
+    (void)W_rad;
+    (void)mhd_rhs;
+    (void)rad_rhs;
 }
 
 void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
@@ -342,44 +344,6 @@ void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
     (void)rad_rhs;
 #endif
 }
-
-double prj_src_spherical_average_inv_r(double r0, double r1)
-{
-    double denom = r1 * r1 * r1 - r0 * r0 * r0;
-    return denom > 0.0 ? 1.5 * (r1 * r1 - r0 * r0) / denom : 0.0;
-}
-
-#if PRJ_SPHERICAL_1D && PRJ_USE_RADIATION_M1
-static void prj_src_radiation_spherical_1d(const prj_rad *rad,
-    const prj_block *block, const double *W_rad, double *rad_rhs)
-{
-    int i, j, k, field, group;
-
-    if (rad == 0 || block == 0 || W_rad == 0 || rad_rhs == 0) return;
-    for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
-        double r0 = block->xmin[0] + (double)i * block->dx[0];
-        double r1 = r0 + block->dx[0];
-        double radial_average_inv_r = prj_src_spherical_average_inv_r(r0, r1);
-        for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
-            for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {
-                for (field = 0; field < PRJ_NRAD; ++field) {
-                    for (group = 0; group < PRJ_NEGROUP; ++group) {
-                        double P[3][3];
-                        double E = W_rad[WIDX(PRJ_RAD_PRIM_E(field, group), i, j, k)];
-                        double F1 = W_rad[WIDX(PRJ_RAD_PRIM_F1(field, group), i, j, k)];
-                        double F2 = W_rad[WIDX(PRJ_RAD_PRIM_F2(field, group), i, j, k)];
-                        double F3 = W_rad[WIDX(PRJ_RAD_PRIM_F3(field, group), i, j, k)];
-
-                        prj_rad_m1_pressure(rad, E, F1, F2, F3, P);
-                        rad_rhs[RADVIDX(PRJ_RAD_CONS_F1(field, group), i, j, k)] +=
-                            radial_average_inv_r * (P[1][1] + P[2][2]);
-                    }
-                }
-            }
-        }
-    }
-}
-#endif
 
 #if PRJ_DYNAMIC_GR
 static void prj_src_gr_fail(const char *op, int status, int i, int j, int k)
@@ -783,10 +747,7 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
         }
     }
     prj_src_geom(eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
-#if PRJ_SPHERICAL_1D && PRJ_USE_RADIATION_M1
-    prj_src_radiation_spherical_1d(rad, block, W_rad, rad_rhs);
-#endif
-    prj_src_user(mesh, block, eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
+    prj_src_user(eos, W_mhd, W_rad, mhd_rhs, rad_rhs);
 #if PRJ_DYNAMIC_GR
     if (full_dynamic_gr) {
         prj_src_gr_z4c(eos, rad, mesh, block, z4c_stage, W_mhd, W_rad,
@@ -804,14 +765,4 @@ void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     if (!full_dynamic_gr)
 #endif
     prj_src_radiation_vel_grad(rad, block, W_rad, rad_rhs);
-#if PRJ_PRESCRIBED_MATTER
-    {
-        int pv, pi, pj, pk;
-        for (pv = 0; pv < PRJ_NHYDRO; ++pv)
-            for (pi = 0; pi < PRJ_BLOCK_SIZE; ++pi)
-                for (pj = 0; pj < PRJ_BLOCK_SIZE; ++pj)
-                    for (pk = 0; pk < PRJ_BLOCK_SIZE; ++pk)
-                        mhd_rhs[MHDVIDX(pv, pi, pj, pk)] = 0.0;
-    }
-#endif
 }

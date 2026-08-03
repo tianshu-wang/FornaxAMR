@@ -1,3 +1,5 @@
+PROBLEM := magnetized_sedov
+EOS := USER
 GRAVITY := 0
 RADIATION_M1 := 0
 MHD := 1

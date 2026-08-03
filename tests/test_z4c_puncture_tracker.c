@@ -85,7 +85,9 @@ int main(int argc, char **argv)
             3U * (size_t)mesh.z4c_puncture_count + 3U * (size_t)p;
 
         for (d = 0; d < 3; ++d) {
-            if (!close_enough(stage1[d], 0.9 * initial[p][d])) {
+            double expected = PRJ_FIX_Z4C ? initial[p][d] : 0.9 * initial[p][d];
+
+            if (!close_enough(stage1[d], expected)) {
                 fprintf(stderr, "tracker interpolation/update mismatch\n");
                 status = 3;
                 goto done;
@@ -101,11 +103,34 @@ int main(int argc, char **argv)
             goto done;
         }
         for (d = 0; d < 3; ++d) {
-            if (!close_enough(position[d], 0.975 * initial[p][d])) {
+            double expected = PRJ_FIX_Z4C ? initial[p][d] : 0.975 * initial[p][d];
+
+            if (!close_enough(position[d], expected)) {
                 fprintf(stderr, "tracker stage blend mismatch\n");
                 status = 5;
                 goto done;
             }
+        }
+    }
+    {
+        const int ti = 2;
+        const int tj = 3;
+        const int tk = 4;
+        double *z0 = prj_block_z4c_stage(block, 0);
+        double *z1 = prj_block_z4c_stage(block, 1);
+        double *rhs0 = prj_block_z4c_rhs_stage(block, 0);
+        double expected;
+
+        z0[Z4CIDX(PRJ_Z4C_BETAX, ti, tj, tk)] = 7.0;
+        z1[Z4CIDX(PRJ_Z4C_BETAX, ti, tj, tk)] = -2.0;
+        rhs0[Z4CIDX(PRJ_Z4C_BETAX, ti, tj, tk)] = 3.0;
+        prj_z4c_update_linear_cell(block, 1, 0, 1.0, 0, 0.0,
+            0, 0.5, ti, tj, tk);
+        expected = PRJ_FIX_Z4C ? 7.0 : 8.5;
+        if (!close_enough(z1[Z4CIDX(PRJ_Z4C_BETAX, ti, tj, tk)], expected)) {
+            fprintf(stderr, "Z4c field freeze/update mismatch\n");
+            status = 6;
+            goto done;
         }
     }
 done:

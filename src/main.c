@@ -36,64 +36,6 @@ static void prj_write_timer_report(const prj_timer *timer, int rank)
 }
 #endif
 
-static prj_problem_init_fn prj_select_problem(const char *name)
-{
-    if (strcmp(name, "sedov") == 0) {
-        return prj_problem_sedov;
-    }
-    if (strcmp(name, "magnetized_sedov") == 0) {
-        return prj_problem_sedov;
-    }
-    if (strcmp(name, "cc") == 0) {
-        return prj_problem_cc;
-    }
-    if (strcmp(name, "magnetized_cc") == 0) {
-        return prj_problem_cc;
-    }
-    if (strcmp(name, "ccsn") == 0) {
-        return prj_problem_ccsn;
-    }
-    if (strcmp(name, "magnetized_ccsn") == 0) {
-        return prj_problem_ccsn;
-    }
-    if (strcmp(name, "sedov_offcenter") == 0) {
-        return prj_problem_sedov_offcenter;
-    }
-    if (strcmp(name, "shock1d") == 0) {
-        return prj_problem_shock1d;
-    }
-    if (strcmp(name, "kh") == 0) {
-        return prj_problem_kh;
-    }
-    if (strcmp(name, "shock_tube") == 0) {
-        return prj_problem_shocktube;
-    }
-    if (strcmp(name, "rad_free_streaming") == 0) {
-        return prj_problem_rad_free_streaming;
-    }
-    if (strcmp(name, "rad_diffusive_source") == 0) {
-        return prj_problem_rad_diffusive_source;
-    }
-    if (strcmp(name, "rad_picket_fence") == 0) {
-        return prj_problem_rad_picket_fence;
-    }
-    if (strcmp(name, "rad_sphere") == 0) return prj_problem_rad_sphere;
-    if (strcmp(name, "rad_doppler") == 0) return prj_problem_rad_doppler;
-    if (strcmp(name, "rad_grav_redshift") == 0) return prj_problem_rad_grav_redshift;
-    if (strcmp(name, "rad_shock") == 0) return prj_problem_rad_shock;
-    if (strcmp(name, "z4c_one_puncture") == 0 ||
-        strcmp(name, "z4c_single_puncture") == 0 ||
-        strcmp(name, "single_puncture") == 0) {
-        return prj_problem_z4c_one_puncture;
-    }
-    if (strcmp(name, "z4c_two_puncture") == 0 ||
-        strcmp(name, "z4c_equal_mass_punctures") == 0 ||
-        strcmp(name, "two_puncture") == 0) {
-        return prj_problem_z4c_two_puncture;
-    }
-    return prj_problem_general;
-}
-
 static void prj_prepare_restart_problem(prj_sim *sim, prj_mpi *mpi)
 {
     if (sim == 0) {
@@ -285,6 +227,29 @@ static void prj_print_config(const prj_sim *sim, int rank)
     fprintf(stderr, "eos: %s\n",
         prj_eos_label(sim)
     );
+    fprintf(stderr, "eos provider: %s\n",
+#if PRJ_EOS_PROVIDER == PRJ_PROVIDER_USER
+        "user"
+#else
+        "table"
+#endif
+    );
+#if PRJ_NRAD > 0
+    fprintf(stderr, "opacity provider: %s\n",
+#if PRJ_OPAC_PROVIDER == PRJ_PROVIDER_USER
+        "user"
+#else
+        "table"
+#endif
+    );
+    fprintf(stderr, "inelastic scattering: %s\n",
+#if PRJ_USE_INELASTIC_SCATTERING
+        "on"
+#else
+        "off"
+#endif
+    );
+#endif
     fprintf(stderr, "amr: %s\n",
         prj_amr_label(sim)
     );
@@ -315,8 +280,7 @@ int main(int argc, char *argv[])
     prj_sim sim;
     prj_mpi mpi;
     prj_timer timer;
-    prj_problem_init_fn init_fn;
-    int init_with_mpi = 0;
+    int init_with_mpi = PRJ_PROBLEM_INIT_WITH_MPI;
     char *param_file = 0;
     double saved_amr_refine_thresh[PRJ_AMR_N];
     double saved_amr_derefine_thresh[PRJ_AMR_N];
@@ -361,7 +325,11 @@ int main(int argc, char *argv[])
         fprintf(stderr, "param_file is missing\n");
         return 1;
     }
-    init_fn = prj_select_problem(sim.problem_name);
+    if (strcmp(sim.problem_name, PRJ_PROBLEM_NAME) != 0) {
+        fprintf(stderr, "parameter problem '%s' does not match compiled problem '%s'\n",
+            sim.problem_name, PRJ_PROBLEM_NAME);
+        return 1;
+    }
     if (sim.restart_from_latest != 0) {
         if (prj_io_find_latest_restart("output", sim.restart_file_name,
                 sizeof(sim.restart_file_name), &restart_latest_id) != 0) {
@@ -383,10 +351,6 @@ int main(int argc, char *argv[])
         sim.mesh.max_level = max_level_override;
     }
 
-    init_with_mpi = (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn ||
-        init_fn == prj_problem_sedov ||
-        init_fn == prj_problem_z4c_one_puncture ||
-        init_fn == prj_problem_z4c_two_puncture);
     prj_mpi_init(&argc, &argv, &mpi);
     prj_timeint_init(&PRJ_TIMEINT_TABLEAU_NAME);
     if (sim.restart_from_latest != 0 && mpi.rank == 0) {
@@ -395,7 +359,7 @@ int main(int argc, char *argv[])
     if (sim.restart_from_file == 0) {
         prj_print_config(&sim, mpi.rank);
         prj_eos_init(&sim.eos, &mpi);
-        init_fn(&sim, &mpi);
+        PRJ_PROBLEM_INIT(&sim, &mpi);
         if (!init_with_mpi) {
             prj_mpi_decompose(&sim.mesh, &mpi);
             prj_mpi_prepare(&sim.mesh, &mpi);
@@ -462,7 +426,10 @@ int main(int argc, char *argv[])
  #endif
 
     if (sim.restart_from_file == 0 &&
-        (init_fn == prj_problem_cc || init_fn == prj_problem_ccsn) &&
+        (strcmp(sim.problem_name, "cc") == 0 ||
+         strcmp(sim.problem_name, "magnetized_cc") == 0 ||
+         strcmp(sim.problem_name, "ccsn") == 0 ||
+         strcmp(sim.problem_name, "magnetized_ccsn") == 0) &&
         sim.perturbation_gaussian_norm != 0.0) {
         prj_set_perturbation(&sim.mesh, &sim.eos, &mpi,
             sim.perturbation_gaussian_norm, sim.perturbation_seed);

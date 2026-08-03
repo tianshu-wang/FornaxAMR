@@ -1,5 +1,6 @@
-PROBLEM := shock1d
+PROBLEM := z4c_one_puncture
 EOS := USER
-GRAVITY := 1
+GRAVITY := 0
 RADIATION_M1 := 0
+DYNAMIC_GR := 1
 DUMP_SINGLE_PRECISION := 1

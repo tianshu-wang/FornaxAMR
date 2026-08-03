@@ -1,3 +1,1 @@
-include tests/rad/shock_case1.mk
-RAD_TEST_ABSORPTION := 0.2
-MACHINE_CPPFLAGS := $(filter-out -DRAD_SHOCK_CASE=1,$(MACHINE_CPPFLAGS)) -DRAD_SHOCK_CASE=2
+$(error Radiation benchmark pending USER problem migration)

@@ -1,5 +1,1 @@
-include tests/rad/doppler_15.mk
-GRAVITY := 1
-RAD_TEST_PROBLEM := 6
-USER_STATIC_METRIC := 1
-MACHINE_CPPFLAGS += -DRAD_TEST_VARIANT=1
+$(error Radiation benchmark pending USER problem migration)
