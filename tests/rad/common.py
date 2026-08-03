@@ -28,16 +28,18 @@ def load_line(path, ngroup):
                 for v in (1, 2, 3)
             ])
             temp = np.asarray(eos[bid, 1]).reshape(bs, bs, bs)[:, jc, kc]
+            pressure = np.asarray(eos[bid, 0]).reshape(bs, bs, bs)[:, jc, kc]
             eg = []
             fg = []
             for g in range(ngroup):
                 eg.append(np.asarray(data[bid, 6 + 4*g]).reshape(bs, bs, bs)[:, jc, kc] * scale)
                 fg.append(np.asarray(data[bid, 7 + 4*g]).reshape(bs, bs, bs)[:, jc, kc] * scale)
-            rows.append((x, rho, vel, temp, np.asarray(eg), np.asarray(fg)))
+            rows.append((x, rho, vel, temp, pressure, np.asarray(eg), np.asarray(fg)))
     order = np.argsort(np.concatenate([r[0] for r in rows]))
     return dict(time=time, x=np.concatenate([r[0] for r in rows])[order],
         rho=np.concatenate([r[1] for r in rows])[order],
         vel=np.concatenate([r[2] for r in rows], axis=1)[:, order],
         temp=np.concatenate([r[3] for r in rows])[order],
-        E=np.concatenate([r[4] for r in rows], axis=1)[:, order],
-        F=np.concatenate([r[5] for r in rows], axis=1)[:, order])
+        pressure=np.concatenate([r[4] for r in rows])[order],
+        E=np.concatenate([r[5] for r in rows], axis=1)[:, order],
+        F=np.concatenate([r[6] for r in rows], axis=1)[:, order])

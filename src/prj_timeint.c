@@ -821,6 +821,19 @@ static void prj_timeint_observer_time_derivative_from_cons(prj_eos *eos,
 static inline double prj_timeint_flux_div_var(const prj_block *block,
     int v, int i, int j, int k)
 {
+#if PRJ_PRESCRIBED_MATTER
+    if (v < PRJ_NHYDRO) return 0.0;
+#endif
+#if PRJ_SPHERICAL_1D && PRJ_NRAD > 0
+    if (v >= PRJ_NHYDRO) {
+        double r0 = block->xmin[0] + (double)i * block->dx[0];
+        double r1 = r0 + block->dx[0];
+        double shell_vol = (r1 * r1 * r1 - r0 * r0 * r0) / 3.0;
+
+        return -(r1 * r1 * block->flux[X1DIR][VIDX(v, i + 1, j, k)] -
+            r0 * r0 * block->flux[X1DIR][VIDX(v, i, j, k)]) / shell_vol;
+    }
+#endif
     return -(block->area[X1DIR] *
             (block->flux[X1DIR][VIDX(v, i + 1, j, k)] -
                 block->flux[X1DIR][VIDX(v, i, j, k)]) +
@@ -1152,7 +1165,7 @@ static void prj_timeint_update_cell_stage1_mhd_rad(const prj_mesh *mesh, prj_rad
     double fluxdiv[PRJ_NVAR_CONS];
     int v;
 
-    prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
+    prj_flux_div(block, i, j, k, fluxdiv);
     prj_timeint_cell_prim(block->W_mhd, i, j, k, w);
     prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, w, u, PRJ_EOS_CTX_MAIN);
     prj_timeint_update_dt_src(mesh, grav, block, u, i, j, k, mpi, dt_src);
@@ -1273,7 +1286,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
         double fluxdiv[PRJ_NVAR_CONS];
         int v;
 
-        prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
+        prj_flux_div(block, i, j, k, fluxdiv);
         prj_timeint_cell_prim(block->W_mhd, i, j, k, w);
         prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, w, u0,
             PRJ_EOS_CTX_MAIN);
@@ -1439,7 +1452,7 @@ static void prj_timeint_update_cell_stage2_mhd_rad(const prj_mesh *mesh, prj_rad
     double *W_stage1 = prj_block_prim_stage(block, 1);
     int v;
 
-    prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
+    prj_flux_div(block, i, j, k, fluxdiv);
     prj_timeint_cell_prim(block->W_mhd, i, j, k, w);
     prj_eos_cell_prim2cons(eos, mesh, block, 0, i, j, k, w, u, PRJ_EOS_CTX_MAIN);
     prj_timeint_cell_prim(W_stage1, i, j, k, w);
@@ -2881,7 +2894,7 @@ void prj_timeint_step_ex(prj_mesh *mesh, const prj_coord *coord, const prj_bc *b
                     double u[PRJ_NVAR_CONS];
                     int v;
 
-                    prj_flux_div(block->flux, block->area, block->vol, i, j, k, fluxdiv);
+                    prj_flux_div(block, i, j, k, fluxdiv);
                     prj_timeint_imex_cons_from_stage(eos, mesh, block, stage, i, j, k, u);
                     prj_timeint_update_dt_src_values(mesh, grav, block,
                         u[PRJ_CONS_RHO], u[PRJ_CONS_MOM1], u[PRJ_CONS_MOM2],

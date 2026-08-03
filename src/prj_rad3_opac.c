@@ -139,15 +139,30 @@ static void prj_rad3_build_egroups(prj_rad *rad)
 
 static double prj_rad_planck_integrand(double x)
 {
-    if (x < 1.0e-6) return x * x;
+    if (x < 1.0e-6) {
+#if PRJ_RAD_FERMI_DIRAC
+        return 0.5 * x * x * x;
+#else
+        return x * x;
+#endif
+    }
     if (x > 80.0) return 0.0;
+#if PRJ_RAD_FERMI_DIRAC
+    return x * x * x / (exp(x) + 1.0);
+#else
     return x * x * x / expm1(x);
+#endif
 }
 
 static double prj_rad_planck_fraction(double elo, double ehi, double temp)
 {
     const int n = 128;
-    const double norm = 6.4939394022668291491; /* pi^4/15 */
+    const double norm =
+#if PRJ_RAD_FERMI_DIRAC
+        5.6821969769834755055; /* 7 pi^4 / 120 */
+#else
+        6.4939394022668291491; /* pi^4 / 15 */
+#endif
     double a;
     double b;
     double h;
@@ -191,9 +206,12 @@ static void prj_rad3_analytic_values(const prj_rad *rad, double rho, double temp
             ss = 2.5e-6;
 #elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_PICKET_FENCE
             ka = (g & 1) ? 20.0 : 2.0;
+#elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_BENCHMARK_LTE
+            ka = rho > PRJ_RAD_TEST_RHO_CUTOFF ? PRJ_RAD_TEST_ABSORPTION : 0.0;
 #endif
 #if PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_ABSORPTION || \
-    PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_PICKET_FENCE
+    PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_PICKET_FENCE || \
+    PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_BENCHMARK_LTE
             if (ka > 0.0 && temp > 0.0) {
                 double f = prj_rad_planck_fraction(rad->eedge[nu][g],
                     rad->eedge[nu][g + 1], temp);
@@ -207,6 +225,9 @@ static void prj_rad3_analytic_values(const prj_rad *rad, double rho, double temp
                     temp / PRJ_KB_MEV;
 #endif
                 ee = PRJ_CLIGHT * ka * PRJ_ARAD * temp_k * temp_k * temp_k * temp_k * f / RAD_SCALE;
+#if PRJ_RAD_FERMI_DIRAC
+                ee *= 7.0 / 8.0;
+#endif
                 if (f > 1.0e-300 && fp > 0.0) {
                     slope = 4.0 + log(fp / f) / log(tp / temp);
                 }

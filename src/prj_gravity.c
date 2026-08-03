@@ -848,6 +848,28 @@ static void prj_gravity_fill_block_fields(const prj_mesh *mesh, prj_block *block
         return;
     }
 
+#if PRJ_USER_STATIC_METRIC
+    for (i = -PRJ_NGHOST; i < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++i) {
+        for (j = -PRJ_NGHOST; j < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++j) {
+            for (k = -PRJ_NGHOST; k < PRJ_BLOCK_SIZE + PRJ_NGHOST; ++k) {
+                double pos[3];
+                double alpha, gamma_rr, dphi_dr;
+                cache_idx = prj_block_cache_index(i, j, k);
+                pos[0] = block->xmin[0] + ((double)i + 0.5) * block->dx[0];
+                pos[1] = block->xmin[1] + ((double)j + 0.5) * block->dx[1];
+                pos[2] = block->xmin[2] + ((double)k + 0.5) * block->dx[2];
+                prj_problem_static_metric(pos, &alpha, &gamma_rr, &dphi_dr);
+                (void)gamma_rr;
+                block->lapse[cache_idx] = alpha;
+                block->grav[0][cache_idx] = -dphi_dr;
+                block->grav[1][cache_idx] = 0.0;
+                block->grav[2][cache_idx] = 0.0;
+            }
+        }
+    }
+    return;
+#endif
+
     /* Build the gravitational potential on the grid, then take grav = -grad(Phi)
        with the same finite-difference stencil used for the multipole terms.
        The multipole pass (l >= 1) owns and scales Phi; the monopole (l = 0)

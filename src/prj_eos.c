@@ -68,7 +68,7 @@ static int prj_eos_rec_to_compact(int rec)
 
 static double prj_eos_gamma_value(void)
 {
-    return 5.0 / 3.0;
+    return PRJ_IDEAL_GAMMA;
 }
 
 static double prj_eos_exp10(double x)

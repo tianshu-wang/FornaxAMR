@@ -2580,6 +2580,15 @@ void prj_z4c_compute_rhs(prj_mesh *mesh, const prj_mpi *mpi,
             prj_z4c_fail("prj_z4c_compute_rhs: missing stage storage");
         }
         prj_fill(rhs, (size_t)PRJ_NZ4C * (size_t)PRJ_BLOCK_NCELLS_Z4C, 0.0);
+#if PRJ_FIXED_SPACETIME
+        (void)rad;
+        (void)tau_cm;
+        (void)use_full_dynamic_gr;
+        (void)z;
+        (void)W_mhd;
+        (void)W_rad;
+        continue;
+#endif
         for (i = 0; i < PRJ_BLOCK_SIZE; ++i) {
             for (j = 0; j < PRJ_BLOCK_SIZE; ++j) {
                 for (k = 0; k < PRJ_BLOCK_SIZE; ++k) {

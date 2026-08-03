@@ -2520,14 +2520,32 @@ void prj_flux_update(prj_eos *eos, prj_rad *rad, const prj_mesh *mesh,
     }
 }
 
-void prj_flux_div(double *flux[3], double area[3], double vol, int i, int j, int k, double *fluxdiv)
+void prj_flux_div(const prj_block *block, int i, int j, int k, double *fluxdiv)
 {
     int v;
 
     for (v = 0; v < PRJ_NVAR_CONS; ++v) {
+#if PRJ_PRESCRIBED_MATTER
+        if (v < PRJ_NHYDRO) {
+            fluxdiv[v] = 0.0;
+            continue;
+        }
+#endif
+#if PRJ_SPHERICAL_1D && PRJ_NRAD > 0
+        if (v >= PRJ_NHYDRO) {
+            double r0 = block->xmin[0] + (double)i * block->dx[0];
+            double r1 = r0 + block->dx[0];
+            double shell_vol = (r1 * r1 * r1 - r0 * r0 * r0) / 3.0;
+
+            fluxdiv[v] = -(r1 * r1 *
+                block->flux[X1DIR][VIDX(v, i + 1, j, k)] - r0 * r0 *
+                block->flux[X1DIR][VIDX(v, i, j, k)]) / shell_vol;
+            continue;
+        }
+#endif
         fluxdiv[v] =
-            -(area[X1DIR] * (flux[X1DIR][VIDX(v, i + 1, j, k)] - flux[X1DIR][VIDX(v, i, j, k)]) +
-                area[X2DIR] * (flux[X2DIR][VIDX(v, i, j + 1, k)] - flux[X2DIR][VIDX(v, i, j, k)]) +
-                area[X3DIR] * (flux[X3DIR][VIDX(v, i, j, k + 1)] - flux[X3DIR][VIDX(v, i, j, k)])) / vol;
+            -(block->area[X1DIR] * (block->flux[X1DIR][VIDX(v, i + 1, j, k)] - block->flux[X1DIR][VIDX(v, i, j, k)]) +
+                block->area[X2DIR] * (block->flux[X2DIR][VIDX(v, i, j + 1, k)] - block->flux[X2DIR][VIDX(v, i, j, k)]) +
+                block->area[X3DIR] * (block->flux[X3DIR][VIDX(v, i, j, k + 1)] - block->flux[X3DIR][VIDX(v, i, j, k)])) / block->vol;
     }
 }

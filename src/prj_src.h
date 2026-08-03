@@ -11,6 +11,7 @@ void prj_src_monopole_gravity(const prj_rad *rad, const prj_block *block,
     double *restrict mhd_rhs, double *restrict rad_rhs);
 void prj_src_radiation_vel_grad(const prj_rad *rad, const prj_block *block,
     double *restrict W_rad, double *restrict rad_rhs);
+double prj_src_spherical_average_inv_r(double r0, double r1);
 void prj_src_update(prj_eos *eos, const prj_rad *rad, const prj_grav *grav,
     const prj_mesh *mesh, const prj_block *block, int z4c_stage,
     double *restrict W_mhd, double *restrict W_rad,

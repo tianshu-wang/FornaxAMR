@@ -77,6 +77,10 @@ static prj_problem_init_fn prj_select_problem(const char *name)
     if (strcmp(name, "rad_picket_fence") == 0) {
         return prj_problem_rad_picket_fence;
     }
+    if (strcmp(name, "rad_sphere") == 0) return prj_problem_rad_sphere;
+    if (strcmp(name, "rad_doppler") == 0) return prj_problem_rad_doppler;
+    if (strcmp(name, "rad_grav_redshift") == 0) return prj_problem_rad_grav_redshift;
+    if (strcmp(name, "rad_shock") == 0) return prj_problem_rad_shock;
     if (strcmp(name, "z4c_one_puncture") == 0 ||
         strcmp(name, "z4c_single_puncture") == 0 ||
         strcmp(name, "single_puncture") == 0) {

@@ -9,6 +9,7 @@
 #define RAD_EOS_SCALE 0.95655684e18
 #define RAD_R 2.0e9
 #define RAD_KS 2.5e-6
+#define RAD_GNEWT 6.67430e-8
 #ifndef RAD_SCALE
 #define RAD_SCALE 1.0e25
 #endif
@@ -159,5 +160,35 @@ void prj_problem_user_source(const prj_mesh *mesh, const prj_block *block,
     }
 #else
     (void)mesh; (void)block; (void)rad_rhs;
+#endif
+}
+
+void prj_problem_static_metric(const double position[3], double *lapse,
+    double *gamma_rr, double *dphi_dr)
+{
+#if PRJ_USER_STATIC_METRIC
+    const double rstar = 1.0e6;
+    const double rho = 9.0e14;
+    const double mass = (4.0 / 3.0) * M_PI * rho * rstar * rstar * rstar;
+    double r = fabs(position[0]);
+    double phi;
+    double grad;
+
+    if (r <= rstar) {
+        phi = -RAD_GNEWT * mass * (3.0 * rstar * rstar - r * r) /
+            (2.0 * rstar * rstar * rstar);
+        grad = RAD_GNEWT * mass * r / (rstar * rstar * rstar);
+    } else {
+        phi = -RAD_GNEWT * mass / r;
+        grad = RAD_GNEWT * mass / (r * r);
+    }
+    *lapse = sqrt(1.0 + 2.0 * phi / (PRJ_CLIGHT * PRJ_CLIGHT));
+    *gamma_rr = 1.0 - 2.0 * phi / (PRJ_CLIGHT * PRJ_CLIGHT);
+    *dphi_dr = grad;
+#else
+    (void)position;
+    *lapse = 1.0;
+    *gamma_rr = 1.0;
+    *dphi_dr = 0.0;
 #endif
 }

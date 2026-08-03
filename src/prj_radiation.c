@@ -3696,7 +3696,35 @@ static void prj_rad_energy_update_impl(prj_rad *rad, prj_eos *eos, double *u, do
 
 void prj_rad_energy_update(prj_rad *rad, prj_eos *eos, double *u, double dt, double lapse, double *final_temperature, double *kappa_out)
 {
+#if PRJ_PRESCRIBED_MATTER
+    double eos_q[PRJ_EOS_NQUANT];
+    double kappa[PRJ_NRAD * PRJ_NEGROUP];
+    double eta[PRJ_NRAD * PRJ_NEGROUP];
+    double rho = u[PRJ_CONS_RHO];
+    double ye = u[PRJ_CONS_YE] / rho;
+    double v1 = u[PRJ_CONS_MOM1] / rho;
+    double v2 = u[PRJ_CONS_MOM2] / rho;
+    double v3 = u[PRJ_CONS_MOM3] / rho;
+    double eint = u[PRJ_CONS_ETOT] / rho -
+        0.5 * (v1 * v1 + v2 * v2 + v3 * v3);
+    int field, group;
+
+    prj_eos_rey(eos, rho, eint, ye, eos_q, PRJ_EOS_CTX_MAIN);
+    prj_rad3_opac_lookup(rad, rho, eos_q[PRJ_EOS_TEMPERATURE], ye,
+        kappa, 0, 0, eta);
+    for (field = 0; field < PRJ_NRAD; ++field) {
+        for (group = 0; group < PRJ_NEGROUP; ++group) {
+            int q = field * PRJ_NEGROUP + group;
+            int e = PRJ_CONS_RAD_E(field, group);
+            u[e] = (u[e] + dt * lapse * eta[q]) /
+                (1.0 + dt * lapse * PRJ_CLIGHT * kappa[q]);
+        }
+    }
+    if (final_temperature) *final_temperature = eos_q[PRJ_EOS_TEMPERATURE];
+    if (kappa_out) memcpy(kappa_out, kappa, sizeof(kappa));
+#else
     prj_rad_energy_update_impl(rad, eos, u, dt, lapse, final_temperature, 0, kappa_out, 0);
+#endif
 }
 
 #if PRJ_USE_RADIATION_FSA
@@ -3717,7 +3745,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     double delta[PRJ_NRAD * PRJ_NEGROUP];
     double rho;
     double Ye;
-#if !PRJ_STATIC_MATTER
+#if !PRJ_STATIC_MATTER && !PRJ_PRESCRIBED_MATTER
     double inv_c2;
     double dmom[3];
     double e_unchanged;
@@ -3732,7 +3760,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
     Ye = u[PRJ_CONS_YE] / rho;
     prj_rad3_opac_lookup(rad, rho, temperature, Ye, 0, sigma, delta, 0);
 
-#if !PRJ_STATIC_MATTER
+#if !PRJ_STATIC_MATTER && !PRJ_PRESCRIBED_MATTER
     inv_c2 = 1.0 / (PRJ_CLIGHT * PRJ_CLIGHT);
     dmom[0] = 0.0;
     dmom[1] = 0.0;
@@ -3758,7 +3786,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
                 F_old[d] = u[fi[d]];
                 double dF = F_old[d] * factor;
                 u[fi[d]] = F_old[d] + dF;
-#if !PRJ_STATIC_MATTER
+#if !PRJ_STATIC_MATTER && !PRJ_PRESCRIBED_MATTER
                 dmom[d] += dF * inv_c2;
 #endif
             }
@@ -3779,7 +3807,7 @@ void prj_rad_momentum_update(prj_rad *rad, prj_eos *eos, double *u, double dt, d
         }
     }
 
-#if !PRJ_STATIC_MATTER
+#if !PRJ_STATIC_MATTER && !PRJ_PRESCRIBED_MATTER
     /* dmom/detot accumulate radiation-flux changes in RAD_SCALE*erg units;
        multiply back to erg for the gas momentum/energy back-reaction. */
     u[PRJ_CONS_MOM1] -= dmom[0] * RAD_SCALE;

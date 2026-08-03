@@ -7,6 +7,6 @@ void prj_flux_fill_transport_opacity_active(prj_mesh *mesh, prj_rad *rad,
     const prj_mpi *mpi, int stage);
 void prj_flux_fill_transport_opacity_halo(prj_mesh *mesh, prj_rad *rad,
     const prj_mpi *mpi, int stage);
-void prj_flux_div(double *flux[3], double area[3], double vol, int i, int j, int k, double *fluxdiv);
+void prj_flux_div(const prj_block *block, int i, int j, int k, double *fluxdiv);
 
 #endif

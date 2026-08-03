@@ -17,12 +17,16 @@ int main(void)
     double det[PRJ_RAD3_OPAC_NGROUPS], dey[PRJ_RAD3_OPAC_NGROUPS];
     double lte_sum = 0.0;
     double test_temp;
+    double test_rho = 1.0;
     prj_rad3_opac_interp_result interp;
     int q;
     memset(&rad, 0, sizeof(rad));
 #if PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_ABSORPTION
     rad.emin[0] = 1.0e-8;
     rad.emax[0] = 1.0e-2;
+#elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_BENCHMARK_LTE && PRJ_RAD_FERMI_DIRAC
+    rad.emin[0] = 1.0;
+    rad.emax[0] = 50.0;
 #else
     rad.emin[0] = 1.0e-14;
     rad.emax[0] = 1.0e-5;
@@ -32,13 +36,18 @@ int main(void)
     test_temp = 1000.0;
 #elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_ABSORPTION
     test_temp = 8.617333262145e-5;
+#elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_BENCHMARK_LTE && PRJ_RAD_FERMI_DIRAC
+    test_temp = 5.0;
 #else
     test_temp = 8.617333262145e-8;
 #endif
-    prj_rad3_opac_lookup(&rad, 1.0, test_temp, 0.5, k, s, d, e);
-    prj_rad3_opac_lookup_ke(&rad, 1.0, test_temp, 0.5,
+#if PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_BENCHMARK_LTE
+    test_rho = PRJ_RAD_TEST_RHO_CUTOFF + 9.0e14;
+#endif
+    prj_rad3_opac_lookup(&rad, test_rho, test_temp, 0.5, k, s, d, e);
+    prj_rad3_opac_lookup_ke(&rad, test_rho, test_temp, 0.5,
         k, e, dkt, dky, det, dey);
-    prj_rad3_opac_lookup_interp(&rad, 1.0, test_temp, 0.5, &interp);
+    prj_rad3_opac_lookup_interp(&rad, test_rho, test_temp, 0.5, &interp);
     for (q = 0; q < PRJ_RAD3_OPAC_NGROUPS; ++q) {
         assert(isfinite(k[q]) && isfinite(s[q]) && isfinite(d[q]) && isfinite(e[q]));
         assert(isfinite(dkt[q]) && isfinite(dky[q]) && isfinite(det[q]) && isfinite(dey[q]));
@@ -50,6 +59,8 @@ int main(void)
     assert(k[0] == 1.0 && s[0] == 0.0);
 #elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_CONSTANT_SCATTERING
     assert(k[0] == 0.0 && s[0] == 2.5e-6 && e[0] == 0.0);
+#elif PRJ_RAD_MICROPHYSICS == PRJ_RAD_MICROPHYSICS_BENCHMARK_LTE
+    assert(fabs(k[0] - PRJ_RAD_TEST_ABSORPTION) < 1.0e-14);
 #endif
     {
         double dk[3], ds[3], dd[3], de[3];
@@ -69,11 +80,75 @@ int main(void)
     {
         double temp_k = PRJ_EOS_T3 ? test_temp : test_temp / 8.617333262145e-11;
         double expected = 7.5657e-15 * pow(temp_k, 4.0) / RAD_SCALE;
-        assert(fabs(lte_sum / expected - 1.0) < 5.0e-3);
+        double lte_tol = 5.0e-3;
+#if PRJ_RAD_FERMI_DIRAC
+        expected *= 7.0 / 8.0;
+        lte_tol = 1.5e-2;
+#endif
+        assert(fabs(lte_sum / expected - 1.0) < lte_tol);
     }
 #else
     (void)lte_sum;
 #endif
+#if PRJ_SPHERICAL_1D && PRJ_NRAD > 0
+    {
+        prj_block block;
+        double div[PRJ_NVAR_CONS];
+        int d;
+        memset(&block, 0, sizeof(block));
+        block.dx[0] = block.dx[1] = block.dx[2] = 1.0;
+        block.area[0] = block.area[1] = block.area[2] = 1.0;
+        block.vol = 1.0;
+        for (d = 0; d < 3; ++d)
+            block.flux[d] = calloc((size_t)PRJ_NVAR_CONS * PRJ_BLOCK_NFACES,
+                sizeof(*block.flux[d]));
+        block.flux[0][VIDX(PRJ_CONS_RAD_E(0, 0), 1, 0, 0)] = 1.0;
+        prj_flux_div(&block, 0, 0, 0, div);
+        assert(fabs(div[PRJ_CONS_RAD_E(0, 0)] + 3.0) < 1.0e-14);
+        for (d = 0; d < 3; ++d) free(block.flux[d]);
+        assert(fabs(prj_src_spherical_average_inv_r(0.0, 1.0) - 1.5) < 1.0e-14);
+    }
+#endif
+#if PRJ_USER_STATIC_METRIC
+    {
+        double pos[3] = {1.0e6, 0.0, 0.0};
+        double alpha, grr, grad;
+        prj_problem_static_metric(pos, &alpha, &grr, &grad);
+        assert(alpha > 0.0 && alpha < 1.0 && grr > 1.0 && grad > 0.0);
+    }
+#endif
+    {
+        prj_eos eos;
+        double q[PRJ_EOS_NQUANT];
+        memset(&eos, 0, sizeof(eos));
+        prj_eos_rty(&eos, 2.0, 1.0, 0.5, q, PRJ_EOS_CTX_MAIN);
+        assert(fabs(q[PRJ_EOS_GAMMA] - PRJ_IDEAL_GAMMA) < 1.0e-14);
+    }
+#if PRJ_PRESCRIBED_MATTER
+    {
+        prj_eos eos;
+        double u[PRJ_NVAR_CONS] = {0.0};
+        double hydro[PRJ_NHYDRO];
+        double final_temp;
+        int v;
+        memset(&eos, 0, sizeof(eos));
+        u[PRJ_CONS_RHO] = test_rho;
+        u[PRJ_CONS_ETOT] = test_rho * 1.0e18;
+        u[PRJ_CONS_YE] = 0.5 * test_rho;
+        for (v = 0; v < PRJ_NHYDRO; ++v) hydro[v] = u[v];
+        prj_rad_energy_update(&rad, &eos, u, 1.0e-12, 1.0, &final_temp, 0);
+        for (v = 0; v < PRJ_NHYDRO; ++v) assert(u[v] == hydro[v]);
+        assert(isfinite(final_temp) && u[PRJ_CONS_RAD_E(0, 0)] >= 0.0);
+    }
+#endif
+    {
+        double ux = 0.69;
+        double lor = sqrt(1.0 + ux * ux);
+        double beta = ux / lor;
+        double f = 4.0 * beta / (3.0 + beta * beta);
+        double recovered = (2.0 - sqrt(4.0 - 3.0 * f * f)) / f;
+        assert(fabs(recovered - beta) < 1.0e-14);
+    }
     prj_rad3_opac_free(&rad);
 
     {
